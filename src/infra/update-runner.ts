@@ -1,10 +1,10 @@
-import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import { compareSemverStrings } from "./update-check.js";
 import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
+import { detectGlobalInstallManagerForRoot, globalInstallArgs } from "./update-global.js";
 import { trimLogTail } from "./restart-sentinel.js";
 
 export type UpdateStepResult = {
@@ -210,52 +210,6 @@ async function detectPackageManager(root: string) {
   return "npm";
 }
 
-async function tryRealpath(value: string): Promise<string> {
-  try {
-    return await fs.realpath(value);
-  } catch {
-    return path.resolve(value);
-  }
-}
-
-async function detectGlobalInstallManager(
-  runCommand: CommandRunner,
-  pkgRoot: string,
-  timeoutMs: number,
-): Promise<"npm" | "pnpm" | "bun" | null> {
-  const pkgReal = await tryRealpath(pkgRoot);
-
-  const candidates: Array<{
-    manager: "npm" | "pnpm";
-    argv: string[];
-  }> = [
-    { manager: "npm", argv: ["npm", "root", "-g"] },
-    { manager: "pnpm", argv: ["pnpm", "root", "-g"] },
-  ];
-
-  for (const { manager, argv } of candidates) {
-    const res = await runCommand(argv, { timeoutMs }).catch(() => null);
-    if (!res) continue;
-    if (res.code !== 0) continue;
-    const globalRoot = res.stdout.trim();
-    if (!globalRoot) continue;
-
-    const globalReal = await tryRealpath(globalRoot);
-    const expected = path.join(globalReal, "clawdbot");
-    if (path.resolve(expected) === path.resolve(pkgReal)) return manager;
-  }
-
-  // Bun doesn't have an officially stable "global root" command across versions,
-  // so we check the common global install path (best-effort).
-  const bunInstall = process.env.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
-  const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
-  const bunGlobalReal = await tryRealpath(bunGlobalRoot);
-  const bunExpected = path.join(bunGlobalReal, "clawdbot");
-  if (path.resolve(bunExpected) === path.resolve(pkgReal)) return "bun";
-
-  return null;
-}
-
 type RunStepOptions = {
   runCommand: CommandRunner;
   name: string;
@@ -322,13 +276,6 @@ function normalizeTag(tag?: string) {
   const trimmed = tag?.trim();
   if (!trimmed) return "latest";
   return trimmed.startsWith("clawdbot@") ? trimmed.slice("clawdbot@".length) : trimmed;
-}
-
-function globalUpdateArgs(manager: "pnpm" | "npm" | "bun", tag?: string) {
-  const spec = `clawdbot@${normalizeTag(tag)}`;
-  if (manager === "pnpm") return ["pnpm", "add", "-g", spec];
-  if (manager === "bun") return ["bun", "add", "-g", spec];
-  return ["npm", "i", "-g", spec];
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
@@ -604,12 +551,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   }
 
   const beforeVersion = await readPackageVersion(pkgRoot);
-  const globalManager = await detectGlobalInstallManager(runCommand, pkgRoot, timeoutMs);
+  const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const spec = `clawdbot@${normalizeTag(opts.tag)}`;
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalUpdateArgs(globalManager, opts.tag),
+      argv: globalInstallArgs(globalManager, spec),
       cwd: pkgRoot,
       timeoutMs,
       progress,

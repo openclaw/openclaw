@@ -7,7 +7,7 @@ read_when:
 
 # Development channels
 
-Last updated: 2026-01-20
+Last updated: 2026-01-21
 
 Clawdbot ships three update channels:
 
@@ -37,6 +37,13 @@ clawdbot update --channel dev
 ```
 
 This updates via the corresponding npm dist-tag (`latest`, `beta`, `dev`).
+
+When you **explicitly** switch channels with `--channel`, Clawdbot also aligns
+the install method:
+
+- `dev` ensures a git checkout (default `~/clawdbot`, override with `CLAWDBOT_GIT_DIR`),
+  updates it, and installs the global CLI from that checkout.
+- `stable`/`beta` installs from npm using the matching dist-tag.
 
 Tip: if you want stable + dev in parallel, keep two clones and point your gateway at the stable one.
 

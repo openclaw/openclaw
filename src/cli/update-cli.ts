@@ -1,5 +1,6 @@
 import { confirm, isCancel, spinner } from "@clack/prompts";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 
@@ -19,6 +20,13 @@ import {
   type UpdateStepProgress,
 } from "../infra/update-runner.js";
 import {
+  detectGlobalInstallManagerByPresence,
+  detectGlobalInstallManagerForRoot,
+  globalInstallArgs,
+  resolveGlobalPackageRoot,
+  type GlobalInstallManager,
+} from "../infra/update-global.js";
+import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
@@ -26,6 +34,7 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../infra/update-channels.js";
+import { trimLogTail } from "../infra/restart-sentinel.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { formatCliCommand } from "./command-format.js";
@@ -39,6 +48,7 @@ import {
   resolveUpdateAvailability,
 } from "../commands/status.update.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../plugins/update.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -58,12 +68,14 @@ const STEP_LABELS: Record<string, string> = {
   "upstream check": "Upstream branch exists",
   "git fetch": "Fetching latest changes",
   "git rebase": "Rebasing onto upstream",
+  "git clone": "Cloning git checkout",
   "deps install": "Installing dependencies",
   build: "Building",
   "ui:build": "Building UI",
   "clawdbot doctor": "Running doctor checks",
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
+  "global install": "Installing global package",
 };
 
 const UPDATE_QUIPS = [
@@ -88,6 +100,10 @@ const UPDATE_QUIPS = [
   "Molting complete. Please don't look at my soft shell phase.",
   "Version bump! Same chaos energy, fewer crashes (probably).",
 ];
+
+const MAX_LOG_CHARS = 8000;
+const CLAWDBOT_REPO_URL = "https://github.com/clawdbot/clawdbot.git";
+const DEFAULT_GIT_DIR = path.join(os.homedir(), "clawdbot");
 
 function normalizeTag(value?: string | null): string | null {
   if (!value) return null;
@@ -131,6 +147,146 @@ async function isGitCheckout(root: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function isClawdbotPackage(root: string): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { name?: string };
+    return parsed?.name === "clawdbot";
+  } catch {
+    return false;
+  }
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isEmptyDir(targetPath: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(targetPath);
+    return entries.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+function resolveGitInstallDir(): string {
+  const override = process.env.CLAWDBOT_GIT_DIR?.trim();
+  if (override) return path.resolve(override);
+  return DEFAULT_GIT_DIR;
+}
+
+function resolveNodeRunner(): string {
+  const base = path.basename(process.execPath).toLowerCase();
+  if (base === "node" || base === "node.exe") return process.execPath;
+  return "node";
+}
+
+async function runUpdateStep(params: {
+  name: string;
+  argv: string[];
+  cwd?: string;
+  timeoutMs: number;
+  progress?: UpdateStepProgress;
+}): Promise<UpdateStepResult> {
+  const command = params.argv.join(" ");
+  params.progress?.onStepStart?.({
+    name: params.name,
+    command,
+    index: 0,
+    total: 0,
+  });
+  const started = Date.now();
+  const res = await runCommandWithTimeout(params.argv, {
+    cwd: params.cwd,
+    timeoutMs: params.timeoutMs,
+  });
+  const durationMs = Date.now() - started;
+  const stderrTail = trimLogTail(res.stderr, MAX_LOG_CHARS);
+  params.progress?.onStepComplete?.({
+    name: params.name,
+    command,
+    index: 0,
+    total: 0,
+    durationMs,
+    exitCode: res.code,
+    stderrTail,
+  });
+  return {
+    name: params.name,
+    command,
+    cwd: params.cwd ?? process.cwd(),
+    durationMs,
+    exitCode: res.code,
+    stdoutTail: trimLogTail(res.stdout, MAX_LOG_CHARS),
+    stderrTail,
+  };
+}
+
+async function ensureGitCheckout(params: {
+  dir: string;
+  timeoutMs: number;
+  progress?: UpdateStepProgress;
+}): Promise<UpdateStepResult | null> {
+  const dirExists = await pathExists(params.dir);
+  if (!dirExists) {
+    return await runUpdateStep({
+      name: "git clone",
+      argv: ["git", "clone", CLAWDBOT_REPO_URL, params.dir],
+      timeoutMs: params.timeoutMs,
+      progress: params.progress,
+    });
+  }
+
+  if (!(await isGitCheckout(params.dir))) {
+    const empty = await isEmptyDir(params.dir);
+    if (!empty) {
+      throw new Error(
+        `CLAWDBOT_GIT_DIR points at a non-git directory: ${params.dir}. Set CLAWDBOT_GIT_DIR to an empty folder or a clawdbot checkout.`,
+      );
+    }
+    return await runUpdateStep({
+      name: "git clone",
+      argv: ["git", "clone", CLAWDBOT_REPO_URL, params.dir],
+      cwd: params.dir,
+      timeoutMs: params.timeoutMs,
+      progress: params.progress,
+    });
+  }
+
+  if (!(await isClawdbotPackage(params.dir))) {
+    throw new Error(`CLAWDBOT_GIT_DIR does not look like a clawdbot checkout: ${params.dir}.`);
+  }
+
+  return null;
+}
+
+async function resolveGlobalManager(params: {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  timeoutMs: number;
+}): Promise<GlobalInstallManager> {
+  const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
+    const res = await runCommandWithTimeout(argv, options);
+    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
+  };
+  if (params.installKind === "package") {
+    const detected = await detectGlobalInstallManagerForRoot(
+      runCommand,
+      params.root,
+      params.timeoutMs,
+    );
+    if (detected) return detected;
+  }
+  const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
+  return byPresence ?? "npm";
 }
 
 function formatGitStatusLine(params: {
@@ -394,6 +550,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       cwd: process.cwd(),
     })) ?? process.cwd();
 
+  const updateStatus = await checkUpdateStatus({
+    root,
+    timeoutMs: timeoutMs ?? 3500,
+    fetchGit: false,
+    includeRegistry: false,
+  });
+
   const configSnapshot = await readConfigFileSnapshot();
   let activeConfig = configSnapshot.valid ? configSnapshot.config : null;
   const storedChannel = configSnapshot.valid
@@ -413,13 +576,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  const gitCheckout = await isGitCheckout(root);
-  const defaultChannel = gitCheckout ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
+  const installKind = updateStatus.installKind;
+  const switchToGit = requestedChannel === "dev" && installKind !== "git";
+  const switchToPackage =
+    requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
+  const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+  const defaultChannel =
+    updateInstallKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
   const channel = requestedChannel ?? storedChannel ?? defaultChannel;
   const explicitTag = normalizeTag(opts.tag);
   let tag = explicitTag ?? channelToNpmTag(channel);
-  if (!gitCheckout) {
-    const currentVersion = await readPackageVersion(root);
+  if (updateInstallKind !== "git") {
+    const currentVersion = switchToPackage ? null : await readPackageVersion(root);
     const targetVersion = explicitTag
       ? await resolveTargetVersion(tag, timeoutMs)
       : await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
@@ -487,14 +655,114 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const { progress, stop } = createUpdateProgress(showProgress);
 
-  const result = await runGatewayUpdate({
-    cwd: root,
-    argv1: process.argv[1],
-    timeoutMs,
-    progress,
-    channel,
-    tag,
-  });
+  const startedAt = Date.now();
+  let result: UpdateRunResult;
+
+  if (switchToPackage) {
+    const manager = await resolveGlobalManager({
+      root,
+      installKind,
+      timeoutMs: timeoutMs ?? 20 * 60_000,
+    });
+    const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
+      const res = await runCommandWithTimeout(argv, options);
+      return { stdout: res.stdout, stderr: res.stderr, code: res.code };
+    };
+    const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, timeoutMs ?? 20 * 60_000);
+    const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
+    const updateStep = await runUpdateStep({
+      name: "global update",
+      argv: globalInstallArgs(manager, `clawdbot@${tag}`),
+      timeoutMs: timeoutMs ?? 20 * 60_000,
+      progress,
+    });
+    const steps = [updateStep];
+    let afterVersion = beforeVersion;
+    if (pkgRoot) {
+      afterVersion = await readPackageVersion(pkgRoot);
+      const entryPath = path.join(pkgRoot, "dist", "entry.js");
+      if (await pathExists(entryPath)) {
+        const doctorStep = await runUpdateStep({
+          name: "clawdbot doctor",
+          argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
+          timeoutMs: timeoutMs ?? 20 * 60_000,
+          progress,
+        });
+        steps.push(doctorStep);
+      }
+    }
+    const failedStep = steps.find((step) => step.exitCode !== 0);
+    result = {
+      status: failedStep ? "error" : "ok",
+      mode: manager,
+      root: pkgRoot ?? root,
+      reason: failedStep ? failedStep.name : undefined,
+      before: { version: beforeVersion },
+      after: { version: afterVersion },
+      steps,
+      durationMs: Date.now() - startedAt,
+    };
+  } else {
+    const updateRoot = switchToGit ? resolveGitInstallDir() : root;
+    const cloneStep = switchToGit
+      ? await ensureGitCheckout({
+          dir: updateRoot,
+          timeoutMs: timeoutMs ?? 20 * 60_000,
+          progress,
+        })
+      : null;
+    if (cloneStep && cloneStep.exitCode !== 0) {
+      result = {
+        status: "error",
+        mode: "git",
+        root: updateRoot,
+        reason: cloneStep.name,
+        steps: [cloneStep],
+        durationMs: Date.now() - startedAt,
+      };
+      stop();
+      printResult(result, { ...opts, hideSteps: showProgress });
+      defaultRuntime.exit(1);
+      return;
+    }
+    const updateResult = await runGatewayUpdate({
+      cwd: updateRoot,
+      argv1: switchToGit ? undefined : process.argv[1],
+      timeoutMs,
+      progress,
+      channel,
+      tag,
+    });
+    const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
+    if (switchToGit && updateResult.status === "ok") {
+      const manager = await resolveGlobalManager({
+        root,
+        installKind,
+        timeoutMs: timeoutMs ?? 20 * 60_000,
+      });
+      const installStep = await runUpdateStep({
+        name: "global install",
+        argv: globalInstallArgs(manager, updateRoot),
+        cwd: updateRoot,
+        timeoutMs: timeoutMs ?? 20 * 60_000,
+        progress,
+      });
+      steps.push(installStep);
+      const failedStep = [installStep].find((step) => step.exitCode !== 0);
+      result = {
+        ...updateResult,
+        status: updateResult.status === "ok" && !failedStep ? "ok" : "error",
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    } else {
+      result = {
+        ...updateResult,
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+  }
 
   stop();
 
