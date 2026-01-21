@@ -188,31 +188,54 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   return updated;
 }
 
-function normalizeSecurity(value?: ExecSecurity): ExecSecurity {
+function normalizeSecurity(value: ExecSecurity | undefined, fallback: ExecSecurity): ExecSecurity {
   if (value === "allowlist" || value === "full" || value === "deny") return value;
-  return DEFAULT_SECURITY;
+  return fallback;
 }
 
-function normalizeAsk(value?: ExecAsk): ExecAsk {
+function normalizeAsk(value: ExecAsk | undefined, fallback: ExecAsk): ExecAsk {
   if (value === "always" || value === "off" || value === "on-miss") return value;
-  return DEFAULT_ASK;
+  return fallback;
 }
 
-export function resolveExecApprovals(agentId?: string): ExecApprovalsResolved {
+export type ExecApprovalsDefaultOverrides = {
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  askFallback?: ExecSecurity;
+  autoAllowSkills?: boolean;
+};
+
+export function resolveExecApprovals(
+  agentId?: string,
+  overrides?: ExecApprovalsDefaultOverrides,
+): ExecApprovalsResolved {
   const file = ensureExecApprovals();
   const defaults = file.defaults ?? {};
   const agentKey = agentId ?? "default";
   const agent = file.agents?.[agentKey] ?? {};
+  const fallbackSecurity = overrides?.security ?? DEFAULT_SECURITY;
+  const fallbackAsk = overrides?.ask ?? DEFAULT_ASK;
+  const fallbackAskFallback = overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
+  const fallbackAutoAllowSkills = overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
-    security: normalizeSecurity(defaults.security),
-    ask: normalizeAsk(defaults.ask),
-    askFallback: normalizeSecurity(defaults.askFallback ?? DEFAULT_ASK_FALLBACK),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS),
+    security: normalizeSecurity(defaults.security, fallbackSecurity),
+    ask: normalizeAsk(defaults.ask, fallbackAsk),
+    askFallback: normalizeSecurity(
+      defaults.askFallback ?? fallbackAskFallback,
+      fallbackAskFallback,
+    ),
+    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
   };
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
-    security: normalizeSecurity(agent.security ?? resolvedDefaults.security),
-    ask: normalizeAsk(agent.ask ?? resolvedDefaults.ask),
-    askFallback: normalizeSecurity(agent.askFallback ?? resolvedDefaults.askFallback),
+    security: normalizeSecurity(
+      agent.security ?? resolvedDefaults.security,
+      resolvedDefaults.security,
+    ),
+    ask: normalizeAsk(agent.ask ?? resolvedDefaults.ask, resolvedDefaults.ask),
+    askFallback: normalizeSecurity(
+      agent.askFallback ?? resolvedDefaults.askFallback,
+      resolvedDefaults.askFallback,
+    ),
     autoAllowSkills: Boolean(agent.autoAllowSkills ?? resolvedDefaults.autoAllowSkills),
   };
   const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];

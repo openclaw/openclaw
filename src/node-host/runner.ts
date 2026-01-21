@@ -545,7 +545,7 @@ async function handleInvoke(
   const rawCommand = typeof params.rawCommand === "string" ? params.rawCommand.trim() : "";
   const cmdText = rawCommand || formatCommand(argv);
   const agentId = params.agentId?.trim() || undefined;
-  const approvals = resolveExecApprovals(agentId);
+  const approvals = resolveExecApprovals(agentId, { security: "allowlist" });
   const security = approvals.agent.security;
   const ask = approvals.agent.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;

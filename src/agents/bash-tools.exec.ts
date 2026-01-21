@@ -400,7 +400,7 @@ export function createExecTool(
         host = "gateway";
       }
 
-      const configuredSecurity = defaults?.security ?? "deny";
+      const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
       if (elevatedRequested) {
@@ -447,7 +447,10 @@ export function createExecTool(
       applyPathPrepend(env, defaultPathPrepend);
 
       if (host === "node") {
-        const approvals = resolveExecApprovals(defaults?.agentId);
+        const approvals = resolveExecApprovals(
+          defaults?.agentId,
+          host === "node" ? { security: "allowlist" } : undefined,
+        );
         const hostSecurity = minSecurity(security, approvals.agent.security);
         const hostAsk = maxAsk(ask, approvals.agent.ask);
         const askFallback = approvals.agent.askFallback;
@@ -616,7 +619,7 @@ export function createExecTool(
       }
 
       if (host === "gateway") {
-        const approvals = resolveExecApprovals(defaults?.agentId);
+        const approvals = resolveExecApprovals(defaults?.agentId, { security: "allowlist" });
         const hostSecurity = minSecurity(security, approvals.agent.security);
         const hostAsk = maxAsk(ask, approvals.agent.ask);
         const askFallback = approvals.agent.askFallback;

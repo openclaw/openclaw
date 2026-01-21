@@ -37,6 +37,7 @@ Docs: https://docs.clawd.bot
 - Gateway: preserve restart wake routing + thread replies across restarts. (#1337) — thanks @John-Rood.
 - Gateway: reschedule per-agent heartbeats on config hot reload without restarting the runner.
 - Config: log invalid config issues once per run and keep invalid-config errors stackless.
+- Exec: default gateway/node exec security to allowlist when unset (sandbox stays deny).
 - UI: keep config form enums typed, preserve empty strings, protect sensitive defaults, and deepen config search. (#1315) — thanks @MaudeBot.
 - UI: preserve ordered list numbering in chat markdown. (#1341) — thanks @bradleypriest.
 - UI: allow Control UI to read gatewayUrl from URL params for remote WebSocket targets. (#1342) — thanks @ameno-.
