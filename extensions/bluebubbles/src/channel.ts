@@ -66,7 +66,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   threading: {
     buildToolContext: ({ context, hasRepliedRef }) => ({
       currentChannelId: context.To?.trim() || undefined,
-      currentThreadTs: context.ReplyToId,
+      currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
       hasRepliedRef,
     }),
   },

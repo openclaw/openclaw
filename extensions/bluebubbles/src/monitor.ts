@@ -1110,11 +1110,10 @@ async function processMessage(
   const placeholder = buildMessagePlaceholder(message);
   const rawBody = text || placeholder;
 
-  // Cache messages (including fromMe) so later replies can resolve sender/body even when
-  // BlueBubbles webhook payloads omit nested reply metadata.
   const cacheMessageId = message.messageId?.trim();
   let messageShortId: string | undefined;
-  if (cacheMessageId) {
+  const cacheInboundMessage = () => {
+    if (!cacheMessageId) return;
     const cacheEntry = rememberBlueBubblesReplyCache({
       accountId: account.accountId,
       messageId: cacheMessageId,
@@ -1126,9 +1125,13 @@ async function processMessage(
       timestamp: message.timestamp ?? Date.now(),
     });
     messageShortId = cacheEntry.shortId;
-  }
+  };
 
-  if (message.fromMe) return;
+  if (message.fromMe) {
+    // Cache from-me messages so reply context can resolve sender/body.
+    cacheInboundMessage();
+    return;
+  }
 
   if (!rawBody) {
     logVerbose(core, runtime, `drop: empty text sender=${message.senderId}`);
@@ -1370,6 +1373,10 @@ async function processMessage(
     return;
   }
 
+  // Cache allowed inbound messages so later replies can resolve sender/body without
+  // surfacing dropped content (allowlist/mention/command gating).
+  cacheInboundMessage();
+
   const baseUrl = account.config.serverUrl?.trim();
   const password = account.config.password?.trim();
   const maxBytes =
@@ -1610,6 +1617,7 @@ async function processMessage(
     ConversationLabel: fromLabel,
     // Use short ID for token savings (agent can use this to reference the message)
     ReplyToId: replyToShortId || replyToId,
+    ReplyToIdFull: replyToId,
     ReplyToBody: replyToBody,
     ReplyToSender: replyToSender,
     GroupSubject: groupSubject,
@@ -1620,6 +1628,7 @@ async function processMessage(
     Surface: "bluebubbles",
     // Use short ID for token savings (agent can use this to reference the message)
     MessageSid: messageShortId || message.messageId,
+    MessageSidFull: message.messageId,
     Timestamp: message.timestamp,
     OriginatingChannel: "bluebubbles",
     OriginatingTo: `bluebubbles:${outboundTarget}`,
@@ -1634,6 +1643,11 @@ async function processMessage(
       cfg: config,
       dispatcherOptions: {
         deliver: async (payload) => {
+          const rawReplyToId = typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+          // Resolve short ID (e.g., "5") to full UUID
+          const replyToMessageGuid = rawReplyToId
+            ? resolveBlueBubblesMessageId(rawReplyToId)
+            : "";
           const mediaList = payload.mediaUrls?.length
             ? payload.mediaUrls
             : payload.mediaUrl
@@ -1649,7 +1663,7 @@ async function processMessage(
                 to: outboundTarget,
                 mediaUrl,
                 caption: caption ?? undefined,
-                replyToId: payload.replyToId ?? null,
+                replyToId: replyToMessageGuid || null,
                 accountId: account.accountId,
               });
               const cachedBody = (caption ?? "").trim() || "<media:attachment>";
@@ -1668,12 +1682,6 @@ async function processMessage(
           if (!chunks.length && payload.text) chunks.push(payload.text);
           if (!chunks.length) return;
           for (const chunk of chunks) {
-            const rawReplyToId =
-              typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
-            // Resolve short ID (e.g., "5") to full UUID
-            const replyToMessageGuid = rawReplyToId
-              ? resolveBlueBubblesMessageId(rawReplyToId)
-              : "";
             const result = await sendMessageBlueBubbles(outboundTarget, chunk, {
               cfg: config,
               accountId: account.accountId,

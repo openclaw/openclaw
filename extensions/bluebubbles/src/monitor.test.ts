@@ -1243,6 +1243,7 @@ describe("BlueBubbles webhook monitor", () => {
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       // ReplyToId uses short ID "1" (first cached message) for token savings
       expect(callArgs.ctx.ReplyToId).toBe("1");
+      expect(callArgs.ctx.ReplyToIdFull).toBe("cache-msg-0");
       expect(callArgs.ctx.ReplyToBody).toBe("original message (cached)");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
       // Body uses just the short ID (no sender) for token savings
@@ -1812,6 +1813,7 @@ describe("BlueBubbles webhook monitor", () => {
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       // MessageSid should be short ID "1" instead of full UUID
       expect(callArgs.ctx.MessageSid).toBe("1");
+      expect(callArgs.ctx.MessageSidFull).toBe("msg-uuid-12345");
     });
 
     it("resolves short ID back to UUID", async () => {
