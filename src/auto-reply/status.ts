@@ -259,9 +259,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     "on";
 
   const runtime = (() => {
+    const sessionKey = args.sessionKey?.trim();
+    if (args.config && sessionKey) {
+      const runtimeStatus = resolveSandboxRuntimeStatus({
+        cfg: args.config,
+        sessionKey,
+      });
+      const sandboxMode = runtimeStatus.mode ?? "off";
+      if (sandboxMode === "off") return { label: "direct" };
+      const runtime = runtimeStatus.sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+      return { label: `${runtime}/${sandboxMode}` };
+    }
+
     const sandboxMode = args.agent?.sandbox?.mode ?? "off";
     if (sandboxMode === "off") return { label: "direct" };
-    const sessionKey = args.sessionKey?.trim();
     const sandboxed = (() => {
       if (!sessionKey) return false;
       if (sandboxMode === "all") return true;
