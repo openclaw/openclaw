@@ -15,6 +15,9 @@ extension URLSessionWebSocketTask: WebSocketTasking {}
 
 public struct WebSocketTaskBox: @unchecked Sendable {
     public let task: any WebSocketTasking
+    public init(task: any WebSocketTasking) {
+        self.task = task
+    }
 
     public var state: URLSessionTask.State { self.task.state }
 

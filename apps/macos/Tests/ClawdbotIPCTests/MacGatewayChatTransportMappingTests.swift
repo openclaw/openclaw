@@ -21,6 +21,7 @@ import Testing
             features: [:],
             snapshot: snapshot,
             canvashosturl: nil,
+            auth: nil,
             policy: [:])
 
         let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.snapshot(hello))
