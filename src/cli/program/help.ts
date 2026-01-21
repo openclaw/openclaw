@@ -80,7 +80,8 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     ([cmd, desc]) => `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`,
   ).join("\n");
 
-  program.addHelpText("afterAll", () => {
+  program.addHelpText("afterAll", ({ command }) => {
+    if (command !== program) return "";
     const docs = formatDocsLink("/cli", "docs.clawd.bot/cli");
     return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted("Docs:")} ${docs}\n`;
   });

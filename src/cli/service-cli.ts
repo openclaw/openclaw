@@ -20,13 +20,40 @@ import {
 } from "./node-cli/daemon.js";
 
 export function registerServiceCli(program: Command) {
+  const formatExample = (cmd: string, desc: string) =>
+    `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`;
+
+  const formatGroup = (label: string, examples: Array<[string, string]>) =>
+    `${theme.muted(label)}\n${examples.map(([cmd, desc]) => formatExample(cmd, desc)).join("\n")}`;
+
+  const gatewayExamples: Array<[string, string]> = [
+    ["clawdbot service gateway status", "Show gateway service status + probe."],
+    [
+      "clawdbot service gateway install --port 18789 --token <token>",
+      "Install the Gateway service on port 18789.",
+    ],
+    ["clawdbot service gateway restart", "Restart the Gateway service."],
+  ];
+
+  const nodeExamples: Array<[string, string]> = [
+    ["clawdbot service node status", "Show node host service status."],
+    [
+      "clawdbot service node install --host gateway.local --port 18789 --tls",
+      "Install the node host service with TLS.",
+    ],
+    ["clawdbot service node restart", "Restart the node host service."],
+  ];
+
   const service = program
     .command("service")
     .description("Manage Gateway and node host services (launchd/systemd/schtasks)")
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/service", "docs.clawd.bot/cli/service")}\n`,
+        `\n${theme.heading("Examples:")}\n${formatGroup("Gateway:", gatewayExamples)}\n\n${formatGroup(
+          "Node:",
+          nodeExamples,
+        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/service", "docs.clawd.bot/cli/service")}\n`,
     );
 
   const gateway = service.command("gateway").description("Manage the Gateway service");
