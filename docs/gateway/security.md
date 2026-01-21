@@ -270,6 +270,12 @@ Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
 protect local WS access.
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 
+Local device pairing:
+- Device pairing is auto‑approved for **local** connects (loopback or the
+  gateway host’s own tailnet address) to keep same‑host clients smooth.
+- Other tailnet peers are **not** treated as local; they still need pairing
+  approval.
+
 Auth modes:
 - `gateway.auth.mode: "token"`: shared bearer token (recommended for most setups).
 - `gateway.auth.mode: "password"`: password auth (prefer setting via env: `CLAWDBOT_GATEWAY_PASSWORD`).

@@ -195,6 +195,8 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local auto-approval
   is enabled.
+- **Local** connects include loopback and the gateway host’s own tailnet address
+  (so same‑host tailnet binds can still auto‑approve).
 - All WS clients must include `device` identity during `connect` (operator + node).
 - Non-local connections must sign the server-provided `connect.challenge` nonce.
 

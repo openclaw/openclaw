@@ -32,6 +32,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Core concepts
 
 - [Architecture](/concepts/architecture)
+- [Network hub](/network)
 - [Agent runtime](/concepts/agent)
 - [Agent workspace](/concepts/agent-workspace)
 - [Memory](/concepts/memory)
