@@ -14,14 +14,19 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.20
 
+### Highlights
+- Installer: npm packages now ship pnpm patch files again, fixing `curl | bash` installs.
+
 ### Changes
-- Agents: add auto-notify on completion for the coding-agent skill.
+- Agents: add auto-notify-on-completion guidance for coding-agent background runs.
+- Build: remove the legacy Peekaboo submodule pointer (SPM release already in use).
 
 ### Fixes
-- Slack: clean up thread landing behavior for tool notifications. (#1360) — thanks @SocialNerd42069.
-- Slack: handle Bolt ESM/CJS import fallbacks for Node 25.x.
-- Responses: avoid duplicate assistant texts when whitespace varies.
-
+- Installer: ship pnpm patch files in the npm tarball so postinstall patches apply correctly.
+- Agents: suppress duplicate assistant text blocks that only differ in trailing whitespace; add a regression test.
+- Slack: fix Bolt ESM/CJS import resolution on Node 25.x and remove duplicate thread metadata. (#1360) — thanks @SocialNerd42069.
+- CLI: fix a duplicate UpdateStepResult import that broke `pnpm build`.
+- macOS: mark Tailscale IP fallback helpers nonisolated to fix Swift 6.2 build failures.
 ## 2026.1.19-3
 
 ### Changes

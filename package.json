@@ -55,6 +55,7 @@
     "README-header.png",
     "CHANGELOG.md",
     "LICENSE",
+    "patches/**",
     "scripts/postinstall.js",
     "scripts/format-staged.js",
     "scripts/setup-git-hooks.js",

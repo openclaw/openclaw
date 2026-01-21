@@ -178,7 +178,7 @@ final class TailscaleService {
         }
     }
 
-    private static func isTailnetIPv4(_ address: String) -> Bool {
+    private nonisolated static func isTailnetIPv4(_ address: String) -> Bool {
         let parts = address.split(separator: ".")
         guard parts.count == 4 else { return false }
         let octets = parts.compactMap { Int($0) }
@@ -188,7 +188,7 @@ final class TailscaleService {
         return a == 100 && b >= 64 && b <= 127
     }
 
-    private static func detectTailnetIPv4() -> String? {
+    private nonisolated static func detectTailnetIPv4() -> String? {
         var addrList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
         defer { freeifaddrs(addrList) }
