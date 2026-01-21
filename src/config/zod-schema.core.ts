@@ -217,17 +217,7 @@ export const QueueModeBySurfaceSchema = z
   .optional();
 
 export const DebounceMsBySurfaceSchema = z
-  .object({
-    whatsapp: z.number().int().nonnegative().optional(),
-    telegram: z.number().int().nonnegative().optional(),
-    discord: z.number().int().nonnegative().optional(),
-    slack: z.number().int().nonnegative().optional(),
-    signal: z.number().int().nonnegative().optional(),
-    imessage: z.number().int().nonnegative().optional(),
-    msteams: z.number().int().nonnegative().optional(),
-    webchat: z.number().int().nonnegative().optional(),
-  })
-  .strict()
+  .record(z.string(), z.number().int().nonnegative())
   .optional();
 
 export const QueueSchema = z
@@ -235,6 +225,7 @@ export const QueueSchema = z
     mode: QueueModeSchema.optional(),
     byChannel: QueueModeBySurfaceSchema,
     debounceMs: z.number().int().nonnegative().optional(),
+    debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),
   })

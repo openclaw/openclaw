@@ -11,8 +11,7 @@ const resolveChannelOverride = (params: {
   channel: string;
 }): number | undefined => {
   if (!params.byChannel) return undefined;
-  const channelKey = params.channel as keyof InboundDebounceByProvider;
-  return resolveMs(params.byChannel[channelKey]);
+  return resolveMs(params.byChannel[params.channel]);
 };
 
 export function resolveInboundDebounceMs(params: {
