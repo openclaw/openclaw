@@ -70,7 +70,6 @@ const routeSessions: RouteSpec = {
   match: (path) => path[0] === "sessions",
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
-    const verbose = getVerboseFlag(argv);
     const store = getFlagValue(argv, "--store");
     if (store === null) return false;
     const active = getFlagValue(argv, "--active");
