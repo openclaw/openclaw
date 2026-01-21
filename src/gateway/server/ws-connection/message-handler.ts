@@ -25,7 +25,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect } from "../../auth.js";
 import { loadConfig } from "../../../config/config.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
-import { isLoopbackAddress } from "../../net.js";
+import { isLocalGatewayAddress } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import {
   type ConnectParams,
@@ -347,7 +347,7 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, "device signature expired");
             return;
           }
-          const nonceRequired = !isLoopbackAddress(remoteAddr);
+          const nonceRequired = !isLocalGatewayAddress(remoteAddr);
           const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
           if (nonceRequired && !providedNonce) {
             setHandshakeState("failed");
@@ -524,7 +524,7 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: remoteAddr,
-              silent: isLoopbackAddress(remoteAddr),
+              silent: isLocalGatewayAddress(remoteAddr),
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -656,7 +656,7 @@ export function attachGatewayWsMessageHandler(params: {
         if (presenceKey) {
           upsertPresence(presenceKey, {
             host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
-            ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
+            ip: isLocalGatewayAddress(remoteAddr) ? undefined : remoteAddr,
             version: connectParams.client.version,
             platform: connectParams.client.platform,
             deviceFamily: connectParams.client.deviceFamily,
