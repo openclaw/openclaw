@@ -143,23 +143,44 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   const models = [...(byProvider.get(provider) ?? new Set<string>())].sort();
   const total = models.length;
 
+  if (total === 0) {
+    const lines: string[] = [
+      `Models (${provider}) — none`,
+      "",
+      "Browse: /models",
+      "Switch: /model <provider/model>",
+    ];
+    return { reply: { text: lines.join("\n") }, shouldContinue: false };
+  }
+
   const effectivePageSize = all ? total : pageSize;
-  const startIndex = (page - 1) * effectivePageSize;
+  const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
+  const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
+
+  if (!all && page !== safePage) {
+    const lines: string[] = [
+      `Page out of range: ${page} (valid: 1-${pageCount})`,
+      "",
+      `Try: /models ${provider} ${safePage}`,
+      `All: /models ${provider} all`,
+    ];
+    return { reply: { text: lines.join("\n") }, shouldContinue: false };
+  }
+
+  const startIndex = (safePage - 1) * effectivePageSize;
   const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
   const pageModels = models.slice(startIndex, endIndexExclusive);
 
-  const header = `Models (${provider}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total}`;
+  const header = `Models (${provider}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`;
 
   const lines: string[] = [header];
   for (const id of pageModels) {
     lines.push(`- ${provider}/${id}`);
   }
 
-  const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
-
   lines.push("", "Switch: /model <provider/model>");
-  if (!all && page < pageCount) {
-    lines.push(`More: /models ${provider} ${page + 1}`);
+  if (!all && safePage < pageCount) {
+    lines.push(`More: /models ${provider} ${safePage + 1}`);
   }
   if (!all) {
     lines.push(`All: /models ${provider} all`);

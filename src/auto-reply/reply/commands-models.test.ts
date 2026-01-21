@@ -74,9 +74,18 @@ describe("/models command", () => {
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Models (anthropic)");
+    expect(result.reply?.text).toContain("page 1/");
     expect(result.reply?.text).toContain("anthropic/claude-opus-4-5");
     expect(result.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result.reply?.text).toContain("All: /models anthropic all");
+  });
+
+  it("errors on out-of-range pages", async () => {
+    const params = buildParams("/models anthropic 4", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Page out of range");
+    expect(result.reply?.text).toContain("valid: 1-");
   });
 
   it("handles unknown providers", async () => {
