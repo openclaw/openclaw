@@ -8,7 +8,9 @@ import {
   listChannelPairingRequests,
   type PairingChannel,
 } from "../pairing/pairing-store.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -70,18 +72,35 @@ export function registerPairingCli(program: Command) {
       const channel = parseChannel(channelRaw, channels);
       const requests = await listChannelPairingRequests(channel);
       if (opts.json) {
-        console.log(JSON.stringify({ channel, requests }, null, 2));
+        defaultRuntime.log(JSON.stringify({ channel, requests }, null, 2));
         return;
       }
       if (requests.length === 0) {
-        console.log(`No pending ${channel} pairing requests.`);
+        defaultRuntime.log(theme.muted(`No pending ${channel} pairing requests.`));
         return;
       }
-      for (const r of requests) {
-        const meta = r.meta ? JSON.stringify(r.meta) : "";
-        const idLabel = resolvePairingIdLabel(channel);
-        console.log(`${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`);
-      }
+      const idLabel = resolvePairingIdLabel(channel);
+      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      defaultRuntime.log(
+        `${theme.heading("Pairing requests")} ${theme.muted(`(${requests.length})`)}`,
+      );
+      defaultRuntime.log(
+        renderTable({
+          width: tableWidth,
+          columns: [
+            { key: "Code", header: "Code", minWidth: 10 },
+            { key: "ID", header: idLabel, minWidth: 12, flex: true },
+            { key: "Meta", header: "Meta", minWidth: 8, flex: true },
+            { key: "Requested", header: "Requested", minWidth: 12 },
+          ],
+          rows: requests.map((r) => ({
+            Code: r.code,
+            ID: r.id,
+            Meta: r.meta ? JSON.stringify(r.meta) : "",
+            Requested: r.createdAt,
+          })),
+        }).trimEnd(),
+      );
     });
 
   pairing
@@ -113,11 +132,13 @@ export function registerPairingCli(program: Command) {
         throw new Error(`No pending pairing request found for code: ${String(resolvedCode)}`);
       }
 
-      console.log(`Approved ${channel} sender ${approved.id}.`);
+      defaultRuntime.log(
+        `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
+      );
 
       if (!opts.notify) return;
       await notifyApproved(channel, approved.id).catch((err) => {
-        console.log(`Failed to notify requester: ${String(err)}`);
+        defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
       });
     });
 }

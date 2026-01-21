@@ -8,6 +8,7 @@ import { resolveMessageChannelSelection } from "../infra/outbound/channel-select
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { renderTable } from "../terminal/table.js";
 
 function parseLimit(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -22,9 +23,11 @@ function parseLimit(value: unknown): number | null {
   return parsed;
 }
 
-function formatEntry(entry: { kind: string; id: string; name?: string | undefined }): string {
-  const name = entry.name?.trim();
-  return name ? `${entry.id}\t${name}` : entry.id;
+function buildRows(entries: Array<{ id: string; name?: string | undefined }>) {
+  return entries.map((entry) => ({
+    ID: entry.id,
+    Name: entry.name?.trim() ?? "",
+  }));
 }
 
 export function registerDirectoryCli(program: Command) {
@@ -77,10 +80,21 @@ export function registerDirectoryCli(program: Command) {
           return;
         }
         if (!result) {
-          defaultRuntime.log("not available");
+          defaultRuntime.log(theme.muted("Not available."));
           return;
         }
-        defaultRuntime.log(formatEntry(result));
+        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+        defaultRuntime.log(`${theme.heading("Self")}`);
+        defaultRuntime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "ID", header: "ID", minWidth: 16, flex: true },
+              { key: "Name", header: "Name", minWidth: 18, flex: true },
+            ],
+            rows: buildRows([result]),
+          }).trimEnd(),
+        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -111,9 +125,22 @@ export function registerDirectoryCli(program: Command) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        for (const entry of result) {
-          defaultRuntime.log(formatEntry(entry));
+        if (result.length === 0) {
+          defaultRuntime.log(theme.muted("No peers found."));
+          return;
         }
+        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+        defaultRuntime.log(`${theme.heading("Peers")} ${theme.muted(`(${result.length})`)}`);
+        defaultRuntime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "ID", header: "ID", minWidth: 16, flex: true },
+              { key: "Name", header: "Name", minWidth: 18, flex: true },
+            ],
+            rows: buildRows(result),
+          }).trimEnd(),
+        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -143,9 +170,22 @@ export function registerDirectoryCli(program: Command) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        for (const entry of result) {
-          defaultRuntime.log(formatEntry(entry));
+        if (result.length === 0) {
+          defaultRuntime.log(theme.muted("No groups found."));
+          return;
         }
+        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+        defaultRuntime.log(`${theme.heading("Groups")} ${theme.muted(`(${result.length})`)}`);
+        defaultRuntime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "ID", header: "ID", minWidth: 16, flex: true },
+              { key: "Name", header: "Name", minWidth: 18, flex: true },
+            ],
+            rows: buildRows(result),
+          }).trimEnd(),
+        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

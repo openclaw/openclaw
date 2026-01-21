@@ -7,7 +7,9 @@ import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { getWideAreaZonePath, WIDE_AREA_DISCOVERY_DOMAIN } from "../infra/widearea-dns.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 
 type RunOpts = { allowFailure?: boolean; inherit?: boolean };
@@ -112,14 +114,28 @@ export function registerDnsCli(program: Command) {
       const tailnetIPv6 = pickPrimaryTailnetIPv6();
       const zonePath = getWideAreaZonePath();
 
-      console.log(`Domain: ${WIDE_AREA_DISCOVERY_DOMAIN}`);
-      console.log(`Zone file (gateway-owned): ${zonePath}`);
-      console.log(
-        `Detected tailnet IP: ${tailnetIPv4 ?? "—"}${tailnetIPv6 ? ` (v6 ${tailnetIPv6})` : ""}`,
+      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      defaultRuntime.log(theme.heading("DNS setup"));
+      defaultRuntime.log(
+        renderTable({
+          width: tableWidth,
+          columns: [
+            { key: "Key", header: "Key", minWidth: 18 },
+            { key: "Value", header: "Value", minWidth: 24, flex: true },
+          ],
+          rows: [
+            { Key: "Domain", Value: WIDE_AREA_DISCOVERY_DOMAIN },
+            { Key: "Zone file", Value: zonePath },
+            {
+              Key: "Tailnet IP",
+              Value: `${tailnetIPv4 ?? "—"}${tailnetIPv6 ? ` (v6 ${tailnetIPv6})` : ""}`,
+            },
+          ],
+        }).trimEnd(),
       );
-      console.log("");
-      console.log("Recommended ~/.clawdbot/clawdbot.json:");
-      console.log(
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Recommended ~/.clawdbot/clawdbot.json:"));
+      defaultRuntime.log(
         JSON.stringify(
           {
             gateway: { bind: "auto" },
@@ -129,14 +145,16 @@ export function registerDnsCli(program: Command) {
           2,
         ),
       );
-      console.log("");
-      console.log("Tailscale admin (DNS → Nameservers):");
-      console.log(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`);
-      console.log(`- Restrict to domain (Split DNS): clawdbot.internal`);
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
+      defaultRuntime.log(
+        theme.muted(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`),
+      );
+      defaultRuntime.log(theme.muted("- Restrict to domain (Split DNS): clawdbot.internal"));
 
       if (!opts.apply) {
-        console.log("");
-        console.log("Run with --apply to install CoreDNS and configure it.");
+        defaultRuntime.log("");
+        defaultRuntime.log(theme.muted("Run with --apply to install CoreDNS and configure it."));
         return;
       }
 
@@ -205,16 +223,18 @@ export function registerDnsCli(program: Command) {
         fs.writeFileSync(zonePath, zoneLines.join("\n"), "utf-8");
       }
 
-      console.log("");
-      console.log("Starting CoreDNS (sudo)…");
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Starting CoreDNS (sudo)…"));
       run("sudo", ["brew", "services", "restart", "coredns"], {
         inherit: true,
       });
 
       if (cfg.discovery?.wideArea?.enabled !== true) {
-        console.log("");
-        console.log(
-          "Note: enable discovery.wideArea.enabled in ~/.clawdbot/clawdbot.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
+        defaultRuntime.log("");
+        defaultRuntime.log(
+          theme.muted(
+            "Note: enable discovery.wideArea.enabled in ~/.clawdbot/clawdbot.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
+          ),
         );
       }
     });

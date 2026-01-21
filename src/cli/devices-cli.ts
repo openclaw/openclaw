@@ -3,6 +3,8 @@ import type { Command } from "commander";
 import { callGateway } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { defaultRuntime } from "../runtime.js";
+import { renderTable } from "../terminal/table.js";
+import { theme } from "../terminal/theme.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -96,11 +98,11 @@ function parseDevicePairingList(value: unknown): DevicePairingList {
 }
 
 function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
-  if (!tokens || tokens.length === 0) return "tokens: none";
+  if (!tokens || tokens.length === 0) return "none";
   const parts = tokens
     .map((t) => `${t.role}${t.revokedAtMs ? " (revoked)" : ""}`)
     .sort((a, b) => a.localeCompare(b));
-  return `tokens: ${parts.join(", ")}`;
+  return parts.join(", ");
 }
 
 export function registerDevicesCli(program: Command) {
@@ -118,32 +120,59 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         if (list.pending?.length) {
-          defaultRuntime.log("Pending:");
-          for (const req of list.pending) {
-            const name = req.displayName || req.deviceId;
-            const repair = req.isRepair ? " (repair)" : "";
-            const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
-            const age =
-              typeof req.ts === "number" ? ` · ${formatAge(Date.now() - req.ts)} ago` : "";
-            const role = req.role ? ` · role: ${req.role}` : "";
-            defaultRuntime.log(`- ${req.requestId}: ${name}${repair}${role}${ip}${age}`);
-          }
+          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          defaultRuntime.log(
+            `${theme.heading("Pending")} ${theme.muted(`(${list.pending.length})`)}`,
+          );
+          defaultRuntime.log(
+            renderTable({
+              width: tableWidth,
+              columns: [
+                { key: "Request", header: "Request", minWidth: 10 },
+                { key: "Device", header: "Device", minWidth: 16, flex: true },
+                { key: "Role", header: "Role", minWidth: 8 },
+                { key: "IP", header: "IP", minWidth: 12 },
+                { key: "Age", header: "Age", minWidth: 8 },
+                { key: "Flags", header: "Flags", minWidth: 8 },
+              ],
+              rows: list.pending.map((req) => ({
+                Request: req.requestId,
+                Device: req.displayName || req.deviceId,
+                Role: req.role ?? "",
+                IP: req.remoteIp ?? "",
+                Age: typeof req.ts === "number" ? `${formatAge(Date.now() - req.ts)} ago` : "",
+                Flags: req.isRepair ? "repair" : "",
+              })),
+            }).trimEnd(),
+          );
         }
         if (list.paired?.length) {
-          defaultRuntime.log("Paired:");
-          for (const device of list.paired) {
-            const name = device.displayName || device.deviceId;
-            const roles = device.roles?.length ? `roles: ${device.roles.join(", ")}` : "roles: -";
-            const scopes = device.scopes?.length
-              ? `scopes: ${device.scopes.join(", ")}`
-              : "scopes: -";
-            const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
-            const tokens = formatTokenSummary(device.tokens);
-            defaultRuntime.log(`- ${name} · ${roles} · ${scopes} · ${tokens}${ip}`);
-          }
+          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          defaultRuntime.log(
+            `${theme.heading("Paired")} ${theme.muted(`(${list.paired.length})`)}`,
+          );
+          defaultRuntime.log(
+            renderTable({
+              width: tableWidth,
+              columns: [
+                { key: "Device", header: "Device", minWidth: 16, flex: true },
+                { key: "Roles", header: "Roles", minWidth: 12, flex: true },
+                { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
+                { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
+                { key: "IP", header: "IP", minWidth: 12 },
+              ],
+              rows: list.paired.map((device) => ({
+                Device: device.displayName || device.deviceId,
+                Roles: device.roles?.length ? device.roles.join(", ") : "",
+                Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
+                Tokens: formatTokenSummary(device.tokens),
+                IP: device.remoteIp ?? "",
+              })),
+            }).trimEnd(),
+          );
         }
         if (!list.pending?.length && !list.paired?.length) {
-          defaultRuntime.log("No device pairing entries.");
+          defaultRuntime.log(theme.muted("No device pairing entries."));
         }
       }),
   );
@@ -160,7 +189,7 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
-        defaultRuntime.log(`device approved: ${deviceId ?? "ok"}`);
+        defaultRuntime.log(`${theme.success("Approved")} ${theme.command(deviceId ?? "ok")}`);
       }),
   );
 
@@ -176,7 +205,7 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         const deviceId = (result as { deviceId?: string })?.deviceId;
-        defaultRuntime.log(`device rejected: ${deviceId ?? "ok"}`);
+        defaultRuntime.log(`${theme.warn("Rejected")} ${theme.command(deviceId ?? "ok")}`);
       }),
   );
 
