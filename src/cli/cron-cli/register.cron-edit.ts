@@ -38,14 +38,15 @@ export function registerCronEditCommand(cron: Command) {
       .option(
         "--deliver",
         "Deliver agent output (required when using last-route delivery without --to)",
-        false,
       )
+      .option("--no-deliver", "Disable delivery")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
-      .option("--best-effort-deliver", "Do not fail job if delivery fails", false)
+      .option("--best-effort-deliver", "Do not fail job if delivery fails")
+      .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .option("--post-prefix <prefix>", "Prefix for summary system event")
       .action(async (id, opts) => {
         try {
@@ -105,35 +106,49 @@ export function registerCronEditCommand(cron: Command) {
             };
           }
 
-          const payloadChosen = [opts.systemEvent, opts.message].filter(Boolean).length;
-          if (payloadChosen > 1) throw new Error("Choose at most one payload change");
-          if (opts.systemEvent) {
+          const hasSystemEventPatch = typeof opts.systemEvent === "string";
+          const model =
+            typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
+          const thinking =
+            typeof opts.thinking === "string" && opts.thinking.trim()
+              ? opts.thinking.trim()
+              : undefined;
+          const timeoutSeconds = opts.timeoutSeconds
+            ? Number.parseInt(String(opts.timeoutSeconds), 10)
+            : undefined;
+          const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
+          const hasAgentTurnPatch =
+            typeof opts.message === "string" ||
+            Boolean(model) ||
+            Boolean(thinking) ||
+            hasTimeoutSeconds ||
+            typeof opts.deliver === "boolean" ||
+            typeof opts.channel === "string" ||
+            typeof opts.to === "string" ||
+            typeof opts.bestEffortDeliver === "boolean";
+          if (hasSystemEventPatch && hasAgentTurnPatch) {
+            throw new Error("Choose at most one payload change");
+          }
+          if (hasSystemEventPatch) {
             patch.payload = {
               kind: "systemEvent",
               text: String(opts.systemEvent),
             };
-          } else if (opts.message) {
-            const model =
-              typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
-            const thinking =
-              typeof opts.thinking === "string" && opts.thinking.trim()
-                ? opts.thinking.trim()
-                : undefined;
-            const timeoutSeconds = opts.timeoutSeconds
-              ? Number.parseInt(String(opts.timeoutSeconds), 10)
-              : undefined;
-            patch.payload = {
-              kind: "agentTurn",
-              message: String(opts.message),
-              model,
-              thinking,
-              timeoutSeconds:
-                timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
-              deliver: opts.deliver ? true : undefined,
-              channel: typeof opts.channel === "string" ? opts.channel : undefined,
-              to: typeof opts.to === "string" ? opts.to : undefined,
-              bestEffortDeliver: opts.bestEffortDeliver ? true : undefined,
-            };
+          } else if (hasAgentTurnPatch) {
+            const payload: Record<string, unknown> = { kind: "agentTurn" };
+            if (typeof opts.message === "string") payload.message = String(opts.message);
+            if (model) payload.model = model;
+            if (thinking) payload.thinking = thinking;
+            if (hasTimeoutSeconds) {
+              payload.timeoutSeconds = timeoutSeconds;
+            }
+            if (typeof opts.deliver === "boolean") payload.deliver = opts.deliver;
+            if (typeof opts.channel === "string") payload.channel = opts.channel;
+            if (typeof opts.to === "string") payload.to = opts.to;
+            if (typeof opts.bestEffortDeliver === "boolean") {
+              payload.bestEffortDeliver = opts.bestEffortDeliver;
+            }
+            patch.payload = payload;
           }
 
           if (typeof opts.postPrefix === "string") {

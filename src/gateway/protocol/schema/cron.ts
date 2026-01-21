@@ -52,6 +52,30 @@ export const CronPayloadSchema = Type.Union([
   ),
 ]);
 
+export const CronPayloadPatchSchema = Type.Union([
+  Type.Object(
+    {
+      kind: Type.Literal("systemEvent"),
+      text: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("agentTurn"),
+      message: Type.Optional(NonEmptyString),
+      model: Type.Optional(Type.String()),
+      thinking: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      deliver: Type.Optional(Type.Boolean()),
+      channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+      to: Type.Optional(Type.String()),
+      bestEffortDeliver: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 export const CronIsolationSchema = Type.Object(
   {
     postToMainPrefix: Type.Optional(Type.String()),
@@ -120,18 +144,35 @@ export const CronAddParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const CronJobPatchSchema = Type.Object(
+  {
+    name: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    description: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
+    deleteAfterRun: Type.Optional(Type.Boolean()),
+    schedule: Type.Optional(CronScheduleSchema),
+    sessionTarget: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("isolated")])),
+    wakeMode: Type.Optional(Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")])),
+    payload: Type.Optional(CronPayloadPatchSchema),
+    isolation: Type.Optional(CronIsolationSchema),
+    state: Type.Optional(Type.Partial(CronJobStateSchema)),
+  },
+  { additionalProperties: false },
+);
+
 export const CronUpdateParamsSchema = Type.Union([
   Type.Object(
     {
       id: NonEmptyString,
-      patch: Type.Partial(CronAddParamsSchema),
+      patch: CronJobPatchSchema,
     },
     { additionalProperties: false },
   ),
   Type.Object(
     {
       jobId: NonEmptyString,
-      patch: Type.Partial(CronAddParamsSchema),
+      patch: CronJobPatchSchema,
     },
     { additionalProperties: false },
   ),

@@ -122,7 +122,7 @@ describe("gateway server cron", () => {
       data: {
         name: "wrapped",
         schedule: { atMs },
-        payload: { text: "hello" },
+        payload: { kind: "systemEvent", text: "hello" },
       },
     });
     expect(addRes.ok).toBe(true);
@@ -166,7 +166,7 @@ describe("gateway server cron", () => {
       id: jobId,
       patch: {
         schedule: { atMs },
-        payload: { text: "updated" },
+        payload: { kind: "systemEvent", text: "updated" },
       },
     });
     expect(updateRes.ok).toBe(true);
@@ -175,6 +175,96 @@ describe("gateway server cron", () => {
       | undefined;
     expect(updated?.schedule?.kind).toBe("at");
     expect(updated?.payload?.kind).toBe("systemEvent");
+
+    ws.close();
+    await server.close();
+    await rmTempDir(dir);
+    testState.cronStorePath = undefined;
+  });
+
+  test("merges agentTurn payload patches", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const addRes = await rpcReq(ws, "cron.add", {
+      name: "patch merge",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello", model: "opus" },
+    });
+    expect(addRes.ok).toBe(true);
+    const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+    const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+    expect(jobId.length > 0).toBe(true);
+
+    const updateRes = await rpcReq(ws, "cron.update", {
+      id: jobId,
+      patch: {
+        payload: { kind: "agentTurn", deliver: true, channel: "telegram", to: "19098680" },
+      },
+    });
+    expect(updateRes.ok).toBe(true);
+    const updated = updateRes.payload as
+      | {
+          payload?: {
+            kind?: unknown;
+            message?: unknown;
+            model?: unknown;
+            deliver?: unknown;
+            channel?: unknown;
+            to?: unknown;
+          };
+        }
+      | undefined;
+    expect(updated?.payload?.kind).toBe("agentTurn");
+    expect(updated?.payload?.message).toBe("hello");
+    expect(updated?.payload?.model).toBe("opus");
+    expect(updated?.payload?.deliver).toBe(true);
+    expect(updated?.payload?.channel).toBe("telegram");
+    expect(updated?.payload?.to).toBe("19098680");
+
+    ws.close();
+    await server.close();
+    await rmTempDir(dir);
+    testState.cronStorePath = undefined;
+  });
+
+  test("rejects payload kind changes without required fields", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const addRes = await rpcReq(ws, "cron.add", {
+      name: "patch reject",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+    expect(addRes.ok).toBe(true);
+    const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+    const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+    expect(jobId.length > 0).toBe(true);
+
+    const updateRes = await rpcReq(ws, "cron.update", {
+      id: jobId,
+      patch: {
+        payload: { kind: "agentTurn", deliver: true },
+      },
+    });
+    expect(updateRes.ok).toBe(false);
 
     ws.close();
     await server.close();
@@ -210,7 +300,7 @@ describe("gateway server cron", () => {
       jobId,
       patch: {
         schedule: { atMs },
-        payload: { text: "updated" },
+        payload: { kind: "systemEvent", text: "updated" },
       },
     });
     expect(updateRes.ok).toBe(true);

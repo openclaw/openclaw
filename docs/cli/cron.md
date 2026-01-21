@@ -14,3 +14,16 @@ Related:
 
 Tip: run `clawdbot cron --help` for the full command surface.
 
+## Common edits
+
+Update delivery settings without changing the message:
+
+```bash
+clawdbot cron edit <job-id> --deliver --channel telegram --to "123456789"
+```
+
+Disable delivery for an isolated job:
+
+```bash
+clawdbot cron edit <job-id> --no-deliver
+```

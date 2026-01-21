@@ -25,6 +25,20 @@ export type CronPayload =
       bestEffortDeliver?: boolean;
     };
 
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | {
+      kind: "agentTurn";
+      message?: string;
+      model?: string;
+      thinking?: string;
+      timeoutSeconds?: number;
+      deliver?: boolean;
+      channel?: CronMessageChannel;
+      to?: string;
+      bestEffortDeliver?: boolean;
+    };
+
 export type CronIsolation = {
   postToMainPrefix?: string;
   /**
@@ -72,6 +86,7 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
   state?: Partial<CronJobState>;
 };
 
-export type CronJobPatch = Partial<
-  Omit<CronJob, "id" | "createdAtMs" | "state"> & { state: CronJobState }
->;
+export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
+  payload?: CronPayloadPatch;
+  state?: Partial<CronJobState>;
+};

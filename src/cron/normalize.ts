@@ -51,12 +51,6 @@ function coerceSchedule(schedule: UnknownRecord) {
 
 function coercePayload(payload: UnknownRecord) {
   const next: UnknownRecord = { ...payload };
-  const kind = typeof payload.kind === "string" ? payload.kind : undefined;
-  if (!kind) {
-    if (typeof payload.text === "string") next.kind = "systemEvent";
-    else if (typeof payload.message === "string") next.kind = "agentTurn";
-  }
-
   // Back-compat: older configs used `provider` for delivery channel.
   migrateLegacyCronPayload(next);
   return next;

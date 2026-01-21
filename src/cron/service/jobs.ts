@@ -1,7 +1,13 @@
 import crypto from "node:crypto";
 
 import { computeNextRunAtMs } from "../schedule.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type {
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronPayload,
+  CronPayloadPatch,
+} from "../types.js";
 import {
   normalizeOptionalAgentId,
   normalizeOptionalText,
@@ -103,13 +109,62 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.schedule) job.schedule = patch.schedule;
   if (patch.sessionTarget) job.sessionTarget = patch.sessionTarget;
   if (patch.wakeMode) job.wakeMode = patch.wakeMode;
-  if (patch.payload) job.payload = patch.payload;
+  if (patch.payload) job.payload = mergeCronPayload(job.payload, patch.payload);
   if (patch.isolation) job.isolation = patch.isolation;
   if (patch.state) job.state = { ...job.state, ...patch.state };
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
   assertSupportedJobSpec(job);
+}
+
+function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
+  if (patch.kind !== existing.kind) {
+    return buildPayloadFromPatch(patch);
+  }
+
+  if (patch.kind === "systemEvent") {
+    const text = typeof patch.text === "string" ? patch.text : existing.text;
+    return { kind: "systemEvent", text };
+  }
+
+  const next: CronPayload = { ...existing };
+  if (typeof patch.message === "string") next.message = patch.message;
+  if (typeof patch.model === "string") next.model = patch.model;
+  if (typeof patch.thinking === "string") next.thinking = patch.thinking;
+  if (typeof patch.timeoutSeconds === "number") next.timeoutSeconds = patch.timeoutSeconds;
+  if (typeof patch.deliver === "boolean") next.deliver = patch.deliver;
+  if (typeof patch.channel === "string") next.channel = patch.channel;
+  if (typeof patch.to === "string") next.to = patch.to;
+  if (typeof patch.bestEffortDeliver === "boolean") {
+    next.bestEffortDeliver = patch.bestEffortDeliver;
+  }
+  return next;
+}
+
+function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
+  if (patch.kind === "systemEvent") {
+    if (typeof patch.text !== "string" || patch.text.length === 0) {
+      throw new Error('cron.update payload.kind="systemEvent" requires text');
+    }
+    return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (typeof patch.message !== "string" || patch.message.length === 0) {
+    throw new Error('cron.update payload.kind="agentTurn" requires message');
+  }
+
+  return {
+    kind: "agentTurn",
+    message: patch.message,
+    model: patch.model,
+    thinking: patch.thinking,
+    timeoutSeconds: patch.timeoutSeconds,
+    deliver: patch.deliver,
+    channel: patch.channel,
+    to: patch.to,
+    bestEffortDeliver: patch.bestEffortDeliver,
+  };
 }
 
 export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {

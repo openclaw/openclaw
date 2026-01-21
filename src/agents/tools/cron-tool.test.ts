@@ -65,7 +65,7 @@ describe("cron tool", () => {
         data: {
           name: "wake-up",
           schedule: { atMs: 123 },
-          payload: { text: "hello" },
+          payload: { kind: "systemEvent", text: "hello" },
         },
       },
     });
@@ -105,7 +105,7 @@ describe("cron tool", () => {
       job: {
         name: "reminder",
         schedule: { atMs: 123 },
-        payload: { text: "Reminder: the thing." },
+        payload: { kind: "systemEvent", text: "Reminder: the thing." },
       },
     });
 
