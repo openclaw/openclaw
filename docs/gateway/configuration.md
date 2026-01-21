@@ -1414,7 +1414,7 @@ Each `agents.defaults.models` entry can include:
 - `alias` (optional model shortcut, e.g. `/opus`).
 - `params` (optional provider-specific API params passed through to the model request).
 
-`params` is also applied to streaming runs (embedded agent + compaction). Supported keys today: `temperature`, `maxTokens`, `cacheControlTtl` (`"5m"`, Anthropic API + OpenRouter Anthropic models only; ignored for Anthropic OAuth/Claude Code tokens). These merge with call-time options; caller-supplied values win. `temperature` is an advanced knob—leave unset unless you know the model’s defaults and need a change. Clawdbot includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API; keep it if you override provider headers.
+`params` is also applied to streaming runs (embedded agent + compaction). Supported keys today: `temperature`, `maxTokens`, `cacheControlTtl` (`"5m"` or `"1h"`, Anthropic API + OpenRouter Anthropic models only; ignored for Anthropic OAuth/Claude Code tokens). These merge with call-time options; caller-supplied values win. `temperature` is an advanced knob—leave unset unless you know the model’s defaults and need a change. Clawdbot includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API; keep it if you override provider headers.
 
 Example:
 
