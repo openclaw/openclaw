@@ -29,6 +29,7 @@ Docs: https://docs.clawd.bot
 - Model catalog: avoid caching import failures, log transient discovery errors, and keep partial results. (#1332) — thanks @dougvk.
 - Doctor: clarify plugin auto-enable hint text in the startup banner.
 - Gateway: clarify unauthorized handshake responses with token/password mismatch guidance.
+- Gateway: preserve restart wake routing + thread replies across restarts. (#1337) — thanks @John-Rood.
 - Gateway: reschedule per-agent heartbeats on config hot reload without restarting the runner.
 - UI: keep config form enums typed, preserve empty strings, protect sensitive defaults, and deepen config search. (#1315) — thanks @MaudeBot.
 - UI: preserve ordered list numbering in chat markdown. (#1341) — thanks @bradleypriest.
