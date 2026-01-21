@@ -634,11 +634,12 @@ extension GatewayEndpointStore {
 
     static func _testResolveLocalGatewayHost(
         bindMode: String?,
-        tailscaleIP: String?) -> String
+        tailscaleIP: String?,
+        customBindHost: String? = nil) -> String
     {
         self.resolveLocalGatewayHost(
             bindMode: bindMode,
-            customBindHost: nil,
+            customBindHost: customBindHost,
             tailscaleIP: tailscaleIP)
     }
 }

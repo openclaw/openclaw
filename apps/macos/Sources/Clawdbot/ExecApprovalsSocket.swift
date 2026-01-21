@@ -319,7 +319,7 @@ private enum ExecHostExecutor {
             security: context.security,
             allowlistMatch: context.allowlistMatch,
             skillAllow: context.skillAllow),
-           approvalDecision == nil
+            approvalDecision == nil
         {
             let decision = ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(

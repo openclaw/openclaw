@@ -139,4 +139,40 @@ import Testing
         let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
         #expect(resolved.mode == .remote)
     }
+
+    @Test func resolveLocalGatewayHostPrefersTailnetForAuto() {
+        let host = GatewayEndpointStore._testResolveLocalGatewayHost(
+            bindMode: "auto",
+            tailscaleIP: "100.64.1.2")
+        #expect(host == "100.64.1.2")
+    }
+
+    @Test func resolveLocalGatewayHostFallsBackToLoopbackForAuto() {
+        let host = GatewayEndpointStore._testResolveLocalGatewayHost(
+            bindMode: "auto",
+            tailscaleIP: nil)
+        #expect(host == "127.0.0.1")
+    }
+
+    @Test func resolveLocalGatewayHostPrefersTailnetForTailnetMode() {
+        let host = GatewayEndpointStore._testResolveLocalGatewayHost(
+            bindMode: "tailnet",
+            tailscaleIP: "100.64.1.5")
+        #expect(host == "100.64.1.5")
+    }
+
+    @Test func resolveLocalGatewayHostFallsBackToLoopbackForTailnetMode() {
+        let host = GatewayEndpointStore._testResolveLocalGatewayHost(
+            bindMode: "tailnet",
+            tailscaleIP: nil)
+        #expect(host == "127.0.0.1")
+    }
+
+    @Test func resolveLocalGatewayHostUsesCustomBindHost() {
+        let host = GatewayEndpointStore._testResolveLocalGatewayHost(
+            bindMode: "custom",
+            tailscaleIP: "100.64.1.9",
+            customBindHost: "192.168.1.10")
+        #expect(host == "192.168.1.10")
+    }
 }

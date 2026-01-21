@@ -263,7 +263,8 @@ extension ConfigSettings {
         let subsections = self.resolveSubsections(for: section)
         let resolved: (ConfigSchemaNode, ConfigPath) = {
             if case let .key(key) = subsection,
-               let match = subsections.first(where: { $0.key == key }) {
+               let match = subsections.first(where: { $0.key == key })
+            {
                 return (match.node, match.path)
             }
             return (self.resolvedSchemaNode(section.node), defaultPath)
