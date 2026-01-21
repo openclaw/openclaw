@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
+- macOS: exec approvals now respect wildcard agent allowlists (`*`).
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 
 ## 2026.1.20

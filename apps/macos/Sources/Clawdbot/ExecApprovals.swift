@@ -276,12 +276,13 @@ enum ExecApprovalsStore {
             ? agentId!.trimmingCharacters(in: .whitespacesAndNewlines)
             : "default"
         let agentEntry = file.agents?[key] ?? ExecApprovalsAgent()
+        let wildcardEntry = file.agents?["*"] ?? ExecApprovalsAgent()
         let resolvedAgent = ExecApprovalsResolvedDefaults(
-            security: agentEntry.security ?? resolvedDefaults.security,
-            ask: agentEntry.ask ?? resolvedDefaults.ask,
-            askFallback: agentEntry.askFallback ?? resolvedDefaults.askFallback,
-            autoAllowSkills: agentEntry.autoAllowSkills ?? resolvedDefaults.autoAllowSkills)
-        let allowlist = (agentEntry.allowlist ?? [])
+            security: agentEntry.security ?? wildcardEntry.security ?? resolvedDefaults.security,
+            ask: agentEntry.ask ?? wildcardEntry.ask ?? resolvedDefaults.ask,
+            askFallback: agentEntry.askFallback ?? wildcardEntry.askFallback ?? resolvedDefaults.askFallback,
+            autoAllowSkills: agentEntry.autoAllowSkills ?? wildcardEntry.autoAllowSkills ?? resolvedDefaults.autoAllowSkills)
+        let allowlist = ((wildcardEntry.allowlist ?? []) + (agentEntry.allowlist ?? []))
             .map { entry in
                 ExecAllowlistEntry(
                     pattern: entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines),
