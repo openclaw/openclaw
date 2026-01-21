@@ -76,7 +76,7 @@ bash pty:true workdir:~/project background:true command:"codex exec --full-auto 
 # Monitor progress
 process action:log sessionId:XXX
 
-# Check if done  
+# Check if done
 process action:poll sessionId:XXX
 
 # Send input (if agent asks a question)
@@ -217,15 +217,55 @@ git worktree remove /tmp/issue-99
 
 ## ⚠️ Rules
 
-1. **Always use pty:true** — coding agents need a terminal!
-2. **Respect tool choice** — if user asks for Codex, use Codex. NEVER offer to build it yourself!
-3. **Be patient** — don't kill sessions because they're "slow"
-4. **Monitor with process:log** — check progress without interfering
-5. **--full-auto for building** — auto-approves changes
-6. **vanilla for reviewing** — no special flags needed
-7. **Parallel is OK** — run many Codex processes at once for batch work
-8. **NEVER start Codex in ~/clawd/** — it'll read your soul docs and get weird ideas about the org chart!
-9. **NEVER checkout branches in ~/Projects/clawdbot/** — that's the LIVE Clawdbot instance!
+1. **Always use pty:true** - coding agents need a terminal!
+2. **Respect tool choice** - if user asks for Codex, use Codex.
+   - Orchestrator mode: do NOT hand-code patches yourself.
+   - If an agent fails/hangs, respawn it or ask the user for direction, but don't silently take over.
+3. **Be patient** - don't kill sessions because they're "slow"
+4. **Monitor with process:log** - check progress without interfering
+5. **--full-auto for building** - auto-approves changes
+6. **vanilla for reviewing** - no special flags needed
+7. **Parallel is OK** - run many Codex processes at once for batch work
+8. **NEVER start Codex in ~/clawd/** - it'll read your soul docs and get weird ideas about the org chart!
+9. **NEVER checkout branches in ~/Projects/clawdbot/** - that's the LIVE Clawdbot instance!
+
+---
+
+## Progress Updates (Critical)
+
+When you spawn coding agents in the background, keep the user in the loop.
+
+- Send 1 short message when you start (what's running + where).
+- Then only update again when something changes:
+  - a milestone completes (build finished, tests passed)
+  - the agent asks a question / needs input
+  - you hit an error or need user action
+  - the agent finishes (include what changed + where)
+- If you kill a session, immediately say you killed it and why.
+
+This prevents the user from seeing only "Agent failed before reply" and having no idea what happened.
+
+---
+
+## Auto-Notify on Completion
+
+For long-running background tasks, append a wake trigger to your prompt so Clawdbot gets notified immediately when the agent finishes (instead of waiting for the next heartbeat):
+
+```
+... your task here.
+
+When completely finished, run this command to notify me:
+clawdbot gateway wake --text "Done: [brief summary of what was built]" --mode now
+```
+
+**Example:**
+```bash
+bash pty:true workdir:~/project background:true command:"codex --yolo exec 'Build a REST API for todos.
+
+When completely finished, run: clawdbot gateway wake --text \"Done: Built todos REST API with CRUD endpoints\" --mode now'"
+```
+
+This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 minutes.
 
 ---
 

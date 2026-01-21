@@ -476,10 +476,11 @@ export async function prepareSlackMessage(params: {
     Surface: "slack" as const,
     MessageSid: message.ts,
     ReplyToId: message.thread_ts ?? message.ts,
+    // Preserve thread context for routed tool notifications (thread replies only).
+    MessageThreadId: isThreadReply ? threadTs : undefined,
     ParentSessionKey: threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
-    MessageThreadId: isThreadReply ? threadTs : undefined,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
     MediaPath: media?.path,

@@ -86,6 +86,35 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
+  it("does not duplicate assistantTexts when message_end repeats with trailing whitespace changes", () => {
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+    });
+
+    const assistantMessageWithNewline = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world\n" }],
+    } as AssistantMessage;
+
+    const assistantMessageTrimmed = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessageWithNewline });
+    handler?.({ type: "message_end", message: assistantMessageTrimmed });
+
+    expect(subscription.assistantTexts).toEqual(["Hello world"]);
+  });
   it("does not duplicate assistantTexts when message_end repeats with reasoning blocks", () => {
     let handler: SessionEventHandler | undefined;
     const session: StubSession = {

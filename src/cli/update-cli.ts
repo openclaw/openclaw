@@ -17,6 +17,7 @@ import {
   runGatewayUpdate,
   type UpdateRunResult,
   type UpdateStepInfo,
+  type UpdateStepResult,
   type UpdateStepProgress,
   type UpdateStepResult,
 } from "../infra/update-runner.js";
