@@ -103,6 +103,7 @@ final class TailscaleService {
     }
 
     func checkTailscaleStatus() async {
+        let previousIP = self.tailscaleIP
         self.isInstalled = self.checkAppInstallation()
         if !self.isInstalled {
             self.isRunning = false
@@ -146,6 +147,10 @@ final class TailscaleService {
             }
             self.statusError = nil
             self.logger.info("Tailscale interface IP detected (fallback) ip=\(fallback, privacy: .public)")
+        }
+
+        if previousIP != self.tailscaleIP {
+            await GatewayEndpointStore.shared.refresh()
         }
     }
 
@@ -213,5 +218,9 @@ final class TailscaleService {
         }
 
         return nil
+    }
+
+    nonisolated static func fallbackTailnetIPv4() -> String? {
+        Self.detectTailnetIPv4()
     }
 }

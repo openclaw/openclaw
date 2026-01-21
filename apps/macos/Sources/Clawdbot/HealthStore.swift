@@ -235,8 +235,8 @@ final class HealthStore {
             let lower = error.lowercased()
             if lower.contains("connection refused") {
                 let port = GatewayEnvironment.gatewayPort()
-                return "The gateway control port (127.0.0.1:\(port)) isn’t listening — " +
-                    "restart Clawdbot to bring it back."
+                let host = GatewayConnectivityCoordinator.shared.localEndpointHostLabel ?? "127.0.0.1:\(port)"
+                return "The gateway control port (\(host)) isn’t listening — restart Clawdbot to bring it back."
             }
             if lower.contains("timeout") {
                 return "Timed out waiting for the control server; the gateway may be crashed or still starting."
