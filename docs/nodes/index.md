@@ -34,6 +34,81 @@ clawdbot nodes rename --node <idOrNameOrIp> --name "Kitchen iPad"
 Notes:
 - `nodes rename` stores a display name override in the gateway pairing store.
 
+## Remote node host (system.run)
+
+Use a **node host** when your Gateway runs on one machine and you want commands
+to execute on another. The model still talks to the **gateway**; the gateway
+forwards `exec` calls to the **node host** when `host=node` is selected.
+
+### What runs where
+- **Gateway host**: receives messages, runs the model, routes tool calls.
+- **Node host**: executes `system.run`/`system.which` on the node machine.
+- **Approvals**: enforced on the node host via `~/.clawdbot/exec-approvals.json`.
+
+### Start a node host (foreground)
+
+On the node machine:
+
+```bash
+clawdbot node start --host <gateway-host> --port 18789 --display-name "Build Node"
+```
+
+### Start a node host (service)
+
+```bash
+clawdbot node service install --host <gateway-host> --port 18789 --display-name "Build Node"
+clawdbot node service start
+```
+
+### Pair + name
+
+On the gateway host:
+
+```bash
+clawdbot nodes pending
+clawdbot nodes approve <requestId>
+clawdbot nodes list
+```
+
+Naming options:
+- `--display-name` on `clawdbot node start/service install` (persists in `~/.clawdbot/node.json` on the node).
+- `clawdbot nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
+
+### Allowlist the commands
+
+Exec approvals are **per node host**. Add allowlist entries from the gateway:
+
+```bash
+clawdbot approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
+clawdbot approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
+```
+
+Approvals live on the node host at `~/.clawdbot/exec-approvals.json`.
+
+### Point exec at the node
+
+Configure defaults (gateway config):
+
+```bash
+clawdbot config set tools.exec.host node
+clawdbot config set tools.exec.security allowlist
+clawdbot config set tools.exec.node "<id-or-name>"
+```
+
+Or per session:
+
+```
+/exec host=node security=allowlist node=<id-or-name>
+```
+
+Once set, any `exec` call with `host=node` runs on the node host (subject to the
+node allowlist/approvals).
+
+Related:
+- [Node host CLI](/cli/node)
+- [Exec tool](/tools/exec)
+- [Exec approvals](/tools/exec-approvals)
+
 ## Invoking commands
 
 Low-level (raw RPC):
