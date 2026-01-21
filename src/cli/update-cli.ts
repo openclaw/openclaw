@@ -671,41 +671,45 @@ export function registerUpdateCli(program: Command) {
     .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
-    .addHelpText(
-      "after",
-      () =>
-        `
-What this does:
+    .addHelpText("after", () => {
+      const examples = [
+        ["clawdbot update", "Update a source checkout (git)"],
+        ["clawdbot update --channel beta", "Switch to beta channel (git + npm)"],
+        ["clawdbot update --channel dev", "Switch to dev channel (git + npm)"],
+        ["clawdbot update --tag beta", "One-off update to a dist-tag or version"],
+        ["clawdbot update --restart", "Update and restart the daemon"],
+        ["clawdbot update --json", "Output result as JSON"],
+        ["clawdbot update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["clawdbot --update", "Shorthand for clawdbot update"],
+      ] as const;
+      const fmtExamples = examples
+        .map(([cmd, desc]) => `  ${theme.command(cmd)} ${theme.muted(`# ${desc}`)}`)
+        .join("\n");
+      return `
+${theme.heading("What this does:")}
   - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
   - npm installs: updates via detected package manager
 
-Switch channels:
+${theme.heading("Switch channels:")}
   - Use --channel stable|beta|dev to persist the update channel in config
   - Run clawdbot update status to see the active channel and source
   - Use --tag <dist-tag|version> for a one-off npm update without persisting
 
-Non-interactive:
+${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
   - Combine with --channel/--tag/--restart/--json/--timeout as needed
 
-Examples:
-  clawdbot update                   # Update a source checkout (git)
-  clawdbot update --channel beta    # Switch to beta channel (git + npm)
-  clawdbot update --channel dev     # Switch to dev channel (git + npm)
-  clawdbot update --tag beta        # One-off update to a dist-tag or version
-  clawdbot update --restart         # Update and restart the daemon
-  clawdbot update --json            # Output result as JSON
-  clawdbot update --yes             # Non-interactive (accept downgrade prompts)
-  clawdbot --update                 # Shorthand for clawdbot update
+${theme.heading("Examples:")}
+${fmtExamples}
 
-Notes:
+${theme.heading("Notes:")}
   - Switch channels with --channel stable|beta|dev
   - For global installs: auto-updates via detected package manager when possible (see docs/install/updating.md)
   - Downgrades require confirmation (can break configuration)
   - Skips update if the working directory has uncommitted changes
 
-${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`,
-    )
+${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`;
+    })
     .action(async (opts) => {
       try {
         await updateCommand({
