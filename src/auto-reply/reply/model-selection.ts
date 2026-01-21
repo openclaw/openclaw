@@ -54,9 +54,8 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
   if (Math.abs(aLen - bLen) > maxDistance) return null;
 
   // Standard DP with early exit. O(maxDistance * minLen) in common cases.
-  const prev = new Array<number>(bLen + 1);
-  const curr = new Array<number>(bLen + 1);
-  for (let j = 0; j <= bLen; j++) prev[j] = j;
+  const prev = Array.from({ length: bLen + 1 }, (_, idx) => idx);
+  const curr = Array.from({ length: bLen + 1 }, () => 0);
 
   for (let i = 1; i <= aLen; i++) {
     curr[0] = i;

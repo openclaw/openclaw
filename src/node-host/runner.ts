@@ -589,7 +589,7 @@ async function handleInvoke(
     ? analyzeShellCommand({ command: rawCommand, cwd: params.cwd ?? undefined, env })
     : analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
   const cfg = loadConfig();
-  const agentExec = resolveAgentConfig(cfg, agentId)?.tools?.exec;
+  const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
   const allowlistMatches: ExecAllowlistEntry[] = [];
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();

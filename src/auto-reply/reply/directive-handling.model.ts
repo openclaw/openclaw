@@ -16,7 +16,6 @@ import {
   resolveProfileOverride,
 } from "./directive-handling.auth.js";
 import {
-  buildModelPickerItems,
   type ModelPickerCatalogEntry,
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";

@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
-import { HANDSHAKE_TIMEOUT_MS } from "./server-constants.js";
+import { getHandshakeTimeoutMs } from "./server-constants.js";
 import {
   connectReq,
   getFreePort,
@@ -28,10 +28,21 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
 describe("gateway server auth/connect", () => {
   test("closes silent handshakes after timeout", { timeout: 60_000 }, async () => {
     vi.useRealTimers();
-    const { server, ws } = await startServerWithClient();
-    const closed = await waitForWsClose(ws, HANDSHAKE_TIMEOUT_MS + 2_000);
-    expect(closed).toBe(true);
-    await server.close();
+    const prevHandshakeTimeout = process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS;
+    process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS = "250";
+    try {
+      const { server, ws } = await startServerWithClient();
+      const handshakeTimeoutMs = getHandshakeTimeoutMs();
+      const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2_000);
+      expect(closed).toBe(true);
+      await server.close();
+    } finally {
+      if (prevHandshakeTimeout === undefined) {
+        delete process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS;
+      } else {
+        process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+      }
+    }
   });
 
   test("connect (req) handshake returns hello-ok payload", async () => {
