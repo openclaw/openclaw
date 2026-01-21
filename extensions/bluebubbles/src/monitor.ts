@@ -376,6 +376,8 @@ function buildMessagePlaceholder(message: NormalizedWebhookMessage): string {
   return "";
 }
 
+const REPLY_BODY_TRUNCATE_LENGTH = 60;
+
 function formatReplyContext(message: {
   replyToId?: string;
   replyToShortId?: string;
@@ -383,15 +385,20 @@ function formatReplyContext(message: {
   replyToSender?: string;
 }): string | null {
   if (!message.replyToId && !message.replyToBody && !message.replyToSender) return null;
-  const sender = message.replyToSender?.trim() || "unknown sender";
   // Prefer short ID for token savings
   const displayId = message.replyToShortId || message.replyToId;
-  const idPart = displayId ? ` id:${displayId}` : "";
-  const body = message.replyToBody?.trim();
-  if (!body) {
-    return `[Replying to ${sender}${idPart}]\n[/Replying]`;
+  // Only include sender if we don't have an ID (fallback)
+  const label = displayId ? `id:${displayId}` : (message.replyToSender?.trim() || "unknown");
+  const rawBody = message.replyToBody?.trim();
+  if (!rawBody) {
+    return `[Replying to ${label}]\n[/Replying]`;
   }
-  return `[Replying to ${sender}${idPart}]\n${body}\n[/Replying]`;
+  // Truncate long reply bodies for token savings
+  const body =
+    rawBody.length > REPLY_BODY_TRUNCATE_LENGTH
+      ? `${rawBody.slice(0, REPLY_BODY_TRUNCATE_LENGTH)}…`
+      : rawBody;
+  return `[Replying to ${label}]\n${body}\n[/Replying]`;
 }
 
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
@@ -1661,8 +1668,12 @@ async function processMessage(
           if (!chunks.length && payload.text) chunks.push(payload.text);
           if (!chunks.length) return;
           for (const chunk of chunks) {
-            const replyToMessageGuid =
+            const rawReplyToId =
               typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+            // Resolve short ID (e.g., "5") to full UUID
+            const replyToMessageGuid = rawReplyToId
+              ? resolveBlueBubblesMessageId(rawReplyToId)
+              : "";
             const result = await sendMessageBlueBubbles(outboundTarget, chunk, {
               cfg: config,
               accountId: account.accountId,

@@ -1175,8 +1175,8 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToId).toBe("msg-0");
       expect(callArgs.ctx.ReplyToBody).toBe("original message");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
-      // Body still uses the full UUID since it wasn't cached
-      expect(callArgs.ctx.Body).toContain("[Replying to +15550000000 id:msg-0]");
+      // Body uses just the ID (no sender) for token savings
+      expect(callArgs.ctx.Body).toContain("[Replying to id:msg-0]");
       expect(callArgs.ctx.Body).toContain("original message");
     });
 
@@ -1245,8 +1245,8 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToId).toBe("1");
       expect(callArgs.ctx.ReplyToBody).toBe("original message (cached)");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
-      // Body uses short ID for token savings
-      expect(callArgs.ctx.Body).toContain("[Replying to +15550000000 id:1]");
+      // Body uses just the short ID (no sender) for token savings
+      expect(callArgs.ctx.Body).toContain("[Replying to id:1]");
       expect(callArgs.ctx.Body).toContain("original message (cached)");
     });
 
