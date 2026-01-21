@@ -311,7 +311,31 @@ export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLog
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors) return "unknown validation error";
-  return ajv.errorsText(errors, { separator: "; " });
+
+  const parts: string[] = [];
+
+  for (const err of errors) {
+    const keyword = typeof err?.keyword === "string" ? err.keyword : "";
+    const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
+
+    if (keyword === "additionalProperties") {
+      const params = err?.params as { additionalProperty?: unknown } | undefined;
+      const additionalProperty = params?.additionalProperty;
+      if (typeof additionalProperty === "string" && additionalProperty.trim()) {
+        const where = instancePath ? `at ${instancePath}` : "at root";
+        parts.push(`${where}: unexpected property '${additionalProperty}'`);
+        continue;
+      }
+    }
+
+    const message = typeof err?.message === "string" ? err.message : "validation error";
+    const where = instancePath ? `at ${instancePath}: ` : "";
+    parts.push(`${where}${message}`);
+  }
+
+  // De-dupe while preserving order.
+  const unique = Array.from(new Set(parts));
+  return unique.join("; ");
 }
 
 export {
