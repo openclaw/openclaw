@@ -51,6 +51,8 @@ export type GatewayControlUiConfig = {
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/clawdbot"). */
   basePath?: string;
+  /** Allow token-only auth over insecure HTTP (default: false). */
+  allowInsecureAuth?: boolean;
 };
 
 export type GatewayAuthMode = "token" | "password";

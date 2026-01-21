@@ -11,6 +11,7 @@ import {
   startServerWithClient,
   testState,
 } from "./test-helpers.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 installGatewayTestHooks();
 
@@ -125,6 +126,52 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
     await server.close();
+  });
+
+  test("rejects control ui without device identity by default", async () => {
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    const res = await connectReq(ws, {
+      token: "secret",
+      device: null,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "1.0.0",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("secure context");
+    ws.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
+  test("allows control ui without device identity when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    const res = await connectReq(ws, {
+      token: "secret",
+      device: null,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "1.0.0",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+    expect(res.ok).toBe(true);
+    ws.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
   });
 
   test("accepts device token auth for paired device", async () => {

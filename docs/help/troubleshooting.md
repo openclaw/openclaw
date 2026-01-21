@@ -38,6 +38,11 @@ Almost always a Node/npm PATH issue. Start here:
 - [Gateway troubleshooting](/gateway/troubleshooting)
 - [Gateway authentication](/gateway/authentication)
 
+### Control UI fails on HTTP (device identity required)
+
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Control UI](/web/control-ui#insecure-http)
+
 ### Service says running, but RPC probe fails
 
 - [Gateway troubleshooting](/gateway/troubleshooting)

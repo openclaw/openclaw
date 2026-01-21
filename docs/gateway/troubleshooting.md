@@ -31,6 +31,19 @@ See also: [Health checks](/gateway/health) and [Logging](/logging).
 
 ## Common Issues
 
+### Control UI fails on HTTP ("device identity required" / "connect failed")
+
+If you open the dashboard over plain HTTP (e.g. `http://<lan-ip>:18789/` or
+`http://<tailscale-ip>:18789/`), the browser runs in a **non-secure context** and
+blocks WebCrypto, so device identity can’t be generated.
+
+**Fix:**
+- Prefer HTTPS via [Tailscale Serve](/gateway/tailscale).
+- Or open locally on the gateway host: `http://127.0.0.1:18789/`.
+- If you must stay on HTTP, enable `gateway.controlUi.allowInsecureAuth: true` and
+  use a gateway token (token-only; no device identity/pairing). See
+  [Control UI](/web/control-ui#insecure-http).
+
 ### CI Secrets Scan Failed
 
 This means `detect-secrets` found new candidates not yet in the baseline.
