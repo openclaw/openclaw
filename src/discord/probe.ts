@@ -1,3 +1,4 @@
+import { resolveFetch } from "../infra/fetch.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
@@ -90,10 +91,14 @@ async function fetchWithTimeout(
   fetcher: typeof fetch,
   headers?: HeadersInit,
 ): Promise<Response> {
+  const fetchImpl = resolveFetch(fetcher);
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(url, { signal: controller.signal, headers });
+    return await fetchImpl(url, { signal: controller.signal, headers });
   } finally {
     clearTimeout(timer);
   }
