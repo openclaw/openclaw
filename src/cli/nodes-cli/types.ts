@@ -83,6 +83,7 @@ export type PairedNode = {
   permissions?: Record<string, boolean>;
   createdAtMs?: number;
   approvedAtMs?: number;
+  lastConnectedAtMs?: number;
 };
 
 export type PairingList = {

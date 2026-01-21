@@ -15,6 +15,7 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
+import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
@@ -718,6 +719,13 @@ export function attachGatewayWsMessageHandler(params: {
         if (role === "node") {
           const context = buildRequestContext();
           const nodeSession = context.nodeRegistry.register(nextClient, { remoteIp: remoteAddr });
+          void updatePairedNodeMetadata(nodeSession.nodeId, {
+            lastConnectedAtMs: nodeSession.connectedAtMs,
+          }).catch((err) =>
+            logGateway.warn(
+              `failed to record last connect for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+            ),
+          );
           recordRemoteNodeInfo({
             nodeId: nodeSession.nodeId,
             displayName: nodeSession.displayName,

@@ -4,6 +4,8 @@ import { formatAge, formatPermissions, parseNodeList, parsePairingList } from ".
 import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
+import { renderTable } from "../../terminal/table.js";
+import { isRich, theme } from "../../terminal/theme.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -155,23 +157,65 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
           const { pending, paired } = parsePairingList(result);
           defaultRuntime.log(`Pending: ${pending.length} · Paired: ${paired.length}`);
+          const rich = isRich();
+          const heading = (text: string) => (rich ? theme.heading(text) : text);
+          const muted = (text: string) => (rich ? theme.muted(text) : text);
+          const warn = (text: string) => (rich ? theme.warn(text) : text);
+          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const now = Date.now();
+
           if (pending.length > 0) {
-            defaultRuntime.log("\nPending:");
-            for (const r of pending) {
-              const name = r.displayName || r.nodeId;
-              const repair = r.isRepair ? " (repair)" : "";
-              const ip = r.remoteIp ? ` · ${r.remoteIp}` : "";
-              const age = typeof r.ts === "number" ? ` · ${formatAge(Date.now() - r.ts)} ago` : "";
-              defaultRuntime.log(`- ${r.requestId}: ${name}${repair}${ip}${age}`);
-            }
+            const pendingRows = pending.map((r) => ({
+              Request: r.requestId,
+              Node: r.displayName?.trim() ? r.displayName.trim() : r.nodeId,
+              IP: r.remoteIp ?? "",
+              Requested:
+                typeof r.ts === "number"
+                  ? `${formatAge(Math.max(0, now - r.ts))} ago`
+                  : muted("unknown"),
+              Repair: r.isRepair ? warn("yes") : "",
+            }));
+            defaultRuntime.log("");
+            defaultRuntime.log(heading("Pending"));
+            defaultRuntime.log(
+              renderTable({
+                width: tableWidth,
+                columns: [
+                  { key: "Request", header: "Request", minWidth: 8 },
+                  { key: "Node", header: "Node", minWidth: 14, flex: true },
+                  { key: "IP", header: "IP", minWidth: 10 },
+                  { key: "Requested", header: "Requested", minWidth: 12 },
+                  { key: "Repair", header: "Repair", minWidth: 6 },
+                ],
+                rows: pendingRows,
+              }).trimEnd(),
+            );
           }
+
           if (paired.length > 0) {
-            defaultRuntime.log("\nPaired:");
-            for (const n of paired) {
-              const name = n.displayName || n.nodeId;
-              const ip = n.remoteIp ? ` · ${n.remoteIp}` : "";
-              defaultRuntime.log(`- ${n.nodeId}: ${name}${ip}`);
-            }
+            const pairedRows = paired.map((n) => ({
+              Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
+              Id: n.nodeId,
+              IP: n.remoteIp ?? "",
+              LastConnect:
+                typeof n.lastConnectedAtMs === "number"
+                  ? `${formatAge(Math.max(0, now - n.lastConnectedAtMs))} ago`
+                  : muted("unknown"),
+            }));
+            defaultRuntime.log("");
+            defaultRuntime.log(heading("Paired"));
+            defaultRuntime.log(
+              renderTable({
+                width: tableWidth,
+                columns: [
+                  { key: "Node", header: "Node", minWidth: 14, flex: true },
+                  { key: "Id", header: "ID", minWidth: 10 },
+                  { key: "IP", header: "IP", minWidth: 10 },
+                  { key: "LastConnect", header: "Last Connect", minWidth: 14 },
+                ],
+                rows: pairedRows,
+              }).trimEnd(),
+            );
           }
         });
       }),

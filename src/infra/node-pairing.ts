@@ -39,6 +39,7 @@ export type NodePairingPairedNode = {
   remoteIp?: string;
   createdAtMs: number;
   approvedAtMs: number;
+  lastConnectedAtMs?: number;
 };
 
 export type NodePairingList = {
@@ -295,6 +296,7 @@ export async function updatePairedNodeMetadata(
       commands: patch.commands ?? existing.commands,
       bins: patch.bins ?? existing.bins,
       permissions: patch.permissions ?? existing.permissions,
+      lastConnectedAtMs: patch.lastConnectedAtMs ?? existing.lastConnectedAtMs,
     };
 
     state.pairedByNodeId[normalized] = next;

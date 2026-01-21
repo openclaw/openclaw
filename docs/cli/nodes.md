@@ -23,10 +23,11 @@ clawdbot nodes approve <requestId>
 clawdbot nodes status
 ```
 
+`nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
+
 ## Invoke / run
 
 ```bash
 clawdbot nodes invoke --node <id|name|ip> --command <command> --params <json>
 clawdbot nodes run --node <id|name|ip> <command...>
 ```
-
