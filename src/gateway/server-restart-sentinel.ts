@@ -28,9 +28,30 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     return;
   }
 
+  const threadMarker = ":thread:";
+  const threadIndex = sessionKey.lastIndexOf(threadMarker);
+  const baseSessionKey = threadIndex === -1 ? sessionKey : sessionKey.slice(0, threadIndex);
+  const threadIdRaw =
+    threadIndex === -1 ? undefined : sessionKey.slice(threadIndex + threadMarker.length);
+  const sessionThreadId = threadIdRaw?.trim() || undefined;
+
   const { cfg, entry } = loadSessionEntry(sessionKey);
-  const parsedTarget = resolveAnnounceTargetFromKey(sessionKey);
-  const origin = mergeDeliveryContext(deliveryContextFromSession(entry), parsedTarget ?? undefined);
+  const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey);
+
+  // Prefer delivery context from sentinel (captured at restart) over session store
+  // Handles race condition where store wasn't flushed before restart
+  const sentinelContext = payload.deliveryContext;
+  let sessionDeliveryContext = deliveryContextFromSession(entry);
+  if (!sessionDeliveryContext && threadIndex !== -1 && baseSessionKey) {
+    const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
+    sessionDeliveryContext = deliveryContextFromSession(baseEntry);
+  }
+
+  const origin = mergeDeliveryContext(
+    sentinelContext,
+    mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
+  );
+
   const channelRaw = origin?.channel;
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
   const to = origin?.to;
@@ -51,6 +72,11 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     return;
   }
 
+  const threadId =
+    payload.threadId ??
+    sessionThreadId ??
+    (origin?.threadId != null ? String(origin.threadId) : undefined);
+
   try {
     await agentCommand(
       {
@@ -61,6 +87,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
         deliver: true,
         bestEffortDeliver: true,
         messageChannel: channel,
+        replyToId: threadId,
       },
       defaultRuntime,
       params.deps,

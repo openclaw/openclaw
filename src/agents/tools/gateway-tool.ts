@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/io.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -77,11 +79,42 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        // Extract channel + threadId for routing after restart
+        let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+        let threadId: string | undefined;
+        if (sessionKey) {
+          const threadMarker = ":thread:";
+          const threadIndex = sessionKey.lastIndexOf(threadMarker);
+          const baseSessionKey = threadIndex === -1 ? sessionKey : sessionKey.slice(0, threadIndex);
+          const threadIdRaw =
+            threadIndex === -1 ? undefined : sessionKey.slice(threadIndex + threadMarker.length);
+          threadId = threadIdRaw?.trim() || undefined;
+          try {
+            const cfg = loadConfig();
+            const storePath = resolveStorePath(cfg.session?.store);
+            const store = loadSessionStore(storePath);
+            let entry = store[sessionKey];
+            if (!entry?.deliveryContext && threadIndex !== -1 && baseSessionKey) {
+              entry = store[baseSessionKey];
+            }
+            if (entry?.deliveryContext) {
+              deliveryContext = {
+                channel: entry.deliveryContext.channel,
+                to: entry.deliveryContext.to,
+                accountId: entry.deliveryContext.accountId,
+              };
+            }
+          } catch {
+            // ignore: best-effort
+          }
+        }
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",
           ts: Date.now(),
           sessionKey,
+          deliveryContext,
+          threadId,
           message: note ?? reason ?? null,
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
