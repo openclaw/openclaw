@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 
 import type { ClawdbotConfig } from "../config/config.js";
@@ -154,10 +155,12 @@ async function downloadFile(
     await ensureDir(path.dirname(destPath));
     const file = fs.createWriteStream(destPath);
     const body = response.body;
+    // Node's Readable.fromWeb expects the node:stream/web type; cast through unknown for DOM streams.
+    const nodeStream = body as unknown as NodeJS.ReadableStream;
     const readable =
-      typeof (body as NodeJS.ReadableStream).pipe === "function"
-        ? (body as NodeJS.ReadableStream)
-        : Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+      typeof nodeStream.pipe === "function"
+        ? nodeStream
+        : Readable.fromWeb(body as unknown as NodeReadableStream);
     await pipeline(readable, file);
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
