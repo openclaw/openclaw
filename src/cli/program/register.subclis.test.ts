@@ -21,7 +21,7 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 
-const { registerSubCliCommands } = await import("./register.subclis.js");
+const { registerSubCliByName, registerSubCliCommands } = await import("./register.subclis.js");
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
@@ -77,5 +77,21 @@ describe("registerSubCliCommands", () => {
 
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
     expect(nodesAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces placeholder when registering a subcommand by name", async () => {
+    process.argv = ["node", "clawdbot", "acp", "--help"];
+    const program = new Command();
+    program.name("clawdbot");
+    registerSubCliCommands(program, process.argv);
+
+    await registerSubCliByName(program, "acp");
+
+    const names = program.commands.map((cmd) => cmd.name());
+    expect(names.filter((name) => name === "acp")).toHaveLength(1);
+
+    await program.parseAsync(["node", "clawdbot", "acp"], { from: "user" });
+    expect(registerAcpCli).toHaveBeenCalledTimes(1);
+    expect(acpAction).toHaveBeenCalledTimes(1);
   });
 });

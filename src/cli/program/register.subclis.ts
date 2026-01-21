@@ -19,9 +19,7 @@ const shouldRegisterPrimaryOnly = (argv: string[]) => {
 };
 
 const shouldEagerRegisterSubcommands = (argv: string[]) => {
-  if (isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_LAZY_SUBCOMMANDS)) return true;
-  if (hasHelpOrVersion(argv)) return true;
-  return false;
+  return isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_LAZY_SUBCOMMANDS);
 };
 
 const loadConfig = async (): Promise<ClawdbotConfig> => {
@@ -232,6 +230,15 @@ function removeCommand(program: Command, command: Command) {
   if (index >= 0) {
     commands.splice(index, 1);
   }
+}
+
+export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
+  const entry = entries.find((candidate) => candidate.name === name);
+  if (!entry) return false;
+  const existing = program.commands.find((cmd) => cmd.name() === entry.name);
+  if (existing) removeCommand(program, existing);
+  await entry.register(program);
+  return true;
 }
 
 function registerLazyCommand(program: Command, entry: SubCliEntry) {
