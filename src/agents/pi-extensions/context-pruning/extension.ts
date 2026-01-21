@@ -9,6 +9,17 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
     const runtime = getContextPruningRuntime(ctx.sessionManager);
     if (!runtime) return undefined;
 
+    if (runtime.settings.mode === "cache-ttl") {
+      const ttlMs = runtime.settings.ttlMs;
+      const lastTouch = runtime.lastCacheTouchAt ?? null;
+      if (!lastTouch || ttlMs <= 0) {
+        return undefined;
+      }
+      if (ttlMs > 0 && Date.now() - lastTouch < ttlMs) {
+        return undefined;
+      }
+    }
+
     const next = pruneContextMessages({
       messages: event.messages as AgentMessage[],
       settings: runtime.settings,

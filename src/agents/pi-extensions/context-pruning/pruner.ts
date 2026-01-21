@@ -211,34 +211,6 @@ export function pruneContextMessages(params: {
 
   const isToolPrunable = params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
 
-  if (settings.mode === "aggressive") {
-    let next: AgentMessage[] | null = null;
-
-    for (let i = pruneStartIndex; i < cutoffIndex; i++) {
-      const msg = messages[i];
-      if (!msg || msg.role !== "toolResult") continue;
-      if (!isToolPrunable(msg.toolName)) continue;
-      if (hasImageBlocks(msg.content)) {
-        continue;
-      }
-
-      const alreadyCleared =
-        msg.content.length === 1 &&
-        msg.content[0]?.type === "text" &&
-        msg.content[0].text === settings.hardClear.placeholder;
-      if (alreadyCleared) continue;
-
-      const cleared: ToolResultMessage = {
-        ...msg,
-        content: [asText(settings.hardClear.placeholder)],
-      };
-      if (!next) next = messages.slice();
-      next[i] = cleared as unknown as AgentMessage;
-    }
-
-    return next ?? messages;
-  }
-
   const totalCharsBefore = estimateContextChars(messages);
   let totalChars = totalCharsBefore;
   let ratio = totalChars / charWindow;

@@ -1,12 +1,15 @@
+import { parseDurationMs } from "../../../cli/parse-duration.js";
+
 export type ContextPruningToolMatch = {
   allow?: string[];
   deny?: string[];
 };
-
-export type ContextPruningMode = "off" | "adaptive" | "aggressive";
+export type ContextPruningMode = "off" | "cache-ttl";
 
 export type ContextPruningConfig = {
   mode?: ContextPruningMode;
+  /** TTL to consider cache expired (duration string, default unit: minutes). */
+  ttl?: string;
   keepLastAssistants?: number;
   softTrimRatio?: number;
   hardClearRatio?: number;
@@ -25,6 +28,7 @@ export type ContextPruningConfig = {
 
 export type EffectiveContextPruningSettings = {
   mode: Exclude<ContextPruningMode, "off">;
+  ttlMs: number;
   keepLastAssistants: number;
   softTrimRatio: number;
   hardClearRatio: number;
@@ -42,7 +46,8 @@ export type EffectiveContextPruningSettings = {
 };
 
 export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
-  mode: "adaptive",
+  mode: "cache-ttl",
+  ttlMs: 5 * 60 * 1000,
   keepLastAssistants: 3,
   softTrimRatio: 0.3,
   hardClearRatio: 0.5,
@@ -62,10 +67,18 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
 export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningSettings | null {
   if (!raw || typeof raw !== "object") return null;
   const cfg = raw as ContextPruningConfig;
-  if (cfg.mode !== "adaptive" && cfg.mode !== "aggressive") return null;
+  if (cfg.mode !== "cache-ttl") return null;
 
   const s: EffectiveContextPruningSettings = structuredClone(DEFAULT_CONTEXT_PRUNING_SETTINGS);
   s.mode = cfg.mode;
+
+  if (typeof cfg.ttl === "string") {
+    try {
+      s.ttlMs = parseDurationMs(cfg.ttl, { defaultUnit: "m" });
+    } catch {
+      // keep default ttl
+    }
+  }
 
   if (typeof cfg.keepLastAssistants === "number" && Number.isFinite(cfg.keepLastAssistants)) {
     s.keepLastAssistants = Math.max(0, Math.floor(cfg.keepLastAssistants));
@@ -94,7 +107,7 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
     }
   }
   if (cfg.hardClear) {
-    if (s.mode === "adaptive" && typeof cfg.hardClear.enabled === "boolean") {
+    if (typeof cfg.hardClear.enabled === "boolean") {
       s.hardClear.enabled = cfg.hardClear.enabled;
     }
     if (typeof cfg.hardClear.placeholder === "string" && cfg.hardClear.placeholder.trim()) {

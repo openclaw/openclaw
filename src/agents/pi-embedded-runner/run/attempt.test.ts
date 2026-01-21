@@ -36,8 +36,10 @@ describe("injectHistoryImagesIntoMessages", () => {
     const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[0, [image]]]));
 
     expect(didMutate).toBe(false);
-    const content = messages[0]?.content as unknown[] | undefined;
-    expect(content).toBeDefined();
+    const content = messages[0]?.content;
+    if (!Array.isArray(content)) {
+      throw new Error("expected array content");
+    }
     expect(content).toHaveLength(2);
   });
 
