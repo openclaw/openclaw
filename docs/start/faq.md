@@ -59,14 +59,14 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I use Brave for browser control?](#how-do-i-use-brave-for-browser-control)
 - [Remote gateways + nodes](#remote-gateways-nodes)
   - [How do commands propagate between Telegram, the gateway, and nodes?](#how-do-commands-propagate-between-telegram-the-gateway-and-nodes)
-  - [Do nodes run a gateway daemon?](#do-nodes-run-a-gateway-daemon)
+  - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
   - [What’s a minimal “sane” config for a first install?](#whats-a-minimal-sane-config-for-a-first-install)
   - [How do I set up Tailscale on a VPS and connect from my Mac?](#how-do-i-set-up-tailscale-on-a-vps-and-connect-from-my-mac)
   - [How do I connect a Mac node to a remote Gateway (Tailscale Serve)?](#how-do-i-connect-a-mac-node-to-a-remote-gateway-tailscale-serve)
 - [Env vars and .env loading](#env-vars-and-env-loading)
   - [How does Clawdbot load environment variables?](#how-does-clawdbot-load-environment-variables)
-  - [“I started the Gateway via a daemon and my env vars disappeared.” What now?](#i-started-the-gateway-via-a-daemon-and-my-env-vars-disappeared-what-now)
+  - [“I started the Gateway via the service and my env vars disappeared.” What now?](#i-started-the-gateway-via-the-service-and-my-env-vars-disappeared-what-now)
   - [I set `COPILOT_GITHUB_TOKEN`, but models status shows “Shell env: off.” Why?](#i-set-copilot_github_token-but-models-status-shows-shell-env-off-why)
 - [Sessions & multiple chats](#sessions-multiple-chats)
   - [How do I start a fresh conversation?](#how-do-i-start-a-fresh-conversation)
@@ -100,8 +100,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [OAuth vs API key: what’s the difference?](#oauth-vs-api-key-whats-the-difference)
 - [Gateway: ports, “already running”, and remote mode](#gateway-ports-already-running-and-remote-mode)
   - [What port does the Gateway use?](#what-port-does-the-gateway-use)
-  - [Why does `clawdbot daemon status` say `Runtime: running` but `RPC probe: failed`?](#why-does-clawdbot-daemon-status-say-runtime-running-but-rpc-probe-failed)
-  - [Why does `clawdbot daemon status` show `Config (cli)` and `Config (daemon)` different?](#why-does-clawdbot-daemon-status-show-config-cli-and-config-daemon-different)
+  - [Why does `clawdbot gateway status` say `Runtime: running` but `RPC probe: failed`?](#why-does-clawdbot-gateway-status-say-runtime-running-but-rpc-probe-failed)
+  - [Why does `clawdbot gateway status` show `Config (cli)` and `Config (service)` different?](#why-does-clawdbot-gateway-status-show-config-cli-and-config-service-different)
   - [What does “another gateway instance is already listening” mean?](#what-does-another-gateway-instance-is-already-listening-mean)
   - [How do I run Clawdbot in remote mode (client connects to a Gateway elsewhere)?](#how-do-i-run-clawdbot-in-remote-mode-client-connects-to-a-gateway-elsewhere)
   - [The Control UI says “unauthorized” (or keeps reconnecting). What now?](#the-control-ui-says-unauthorized-or-keeps-reconnecting-what-now)
@@ -110,8 +110,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What does “invalid handshake” / code 1008 mean?](#what-does-invalid-handshake--code-1008-mean)
 - [Logging and debugging](#logging-and-debugging)
   - [Where are logs?](#where-are-logs)
-  - [How do I start/stop/restart the Gateway daemon?](#how-do-i-startstoprestart-the-gateway-daemon)
-  - [ELI5: `clawdbot daemon restart` vs `clawdbot gateway`](#eli5-clawdbot-daemon-restart-vs-clawdbot-gateway)
+  - [How do I start/stop/restart the Gateway service?](#how-do-i-startstoprestart-the-gateway-service)
+  - [ELI5: `clawdbot gateway restart` vs `clawdbot gateway`](#eli5-clawdbot-gateway-restart-vs-clawdbot-gateway)
   - [What’s the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
 - [Media & attachments](#media-attachments)
   - [My skill generated an image/PDF, but nothing was sent](#my-skill-generated-an-imagepdf-but-nothing-was-sent)
@@ -129,7 +129,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    ```bash
    clawdbot status
    ```
-   Fast local summary: OS + update, gateway/daemon reachability, agents/sessions, provider config + runtime issues (when gateway is reachable).
+   Fast local summary: OS + update, gateway/service reachability, agents/sessions, provider config + runtime issues (when gateway is reachable).
 
 2) **Pasteable report (safe to share)**
    ```bash
@@ -139,9 +139,9 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 3) **Daemon + port state**
    ```bash
-   clawdbot daemon status
+   clawdbot gateway status
    ```
-   Shows supervisor runtime vs RPC reachability, the probe target URL, and which config the daemon likely used.
+   Shows supervisor runtime vs RPC reachability, the probe target URL, and which config the service likely used.
 
 4) **Deep probes**
    ```bash
@@ -335,7 +335,7 @@ cd clawdbot
 pnpm install
 pnpm build
 clawdbot doctor
-clawdbot daemon restart
+clawdbot gateway restart
 ```
 
 From git → npm:
@@ -343,7 +343,7 @@ From git → npm:
 ```bash
 npm install -g clawdbot@latest
 clawdbot doctor
-clawdbot daemon restart
+clawdbot gateway restart
 ```
 
 Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
@@ -748,7 +748,7 @@ pair devices you trust, and review [Security](/gateway/security).
 
 Docs: [Nodes](/nodes), [Bridge protocol](/gateway/bridge-protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
 
-### Do nodes run a gateway daemon?
+### Do nodes run a gateway service?
 
 No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect
 to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app).
@@ -840,11 +840,11 @@ You can also define inline env vars in config (applied only if missing from the 
 
 See [/environment](/environment) for full precedence and sources.
 
-### “I started the Gateway via a daemon and my env vars disappeared.” What now?
+### “I started the Gateway via a service and my env vars disappeared.” What now?
 
 Two common fixes:
 
-1) Put the missing keys in `~/.clawdbot/.env` so they’re picked up even when the daemon doesn’t inherit your shell env.
+1) Put the missing keys in `~/.clawdbot/.env` so they’re picked up even when the service doesn’t inherit your shell env.
 2) Enable shell import (opt‑in convenience):
 
 ```json5
@@ -867,7 +867,7 @@ This runs your login shell and imports only missing expected keys (never overrid
 does **not** mean your env vars are missing — it just means Clawdbot won’t load
 your login shell automatically.
 
-If the Gateway runs as a daemon (launchd/systemd), it won’t inherit your shell
+If the Gateway runs as a service (launchd/systemd), it won’t inherit your shell
 environment. Fix by doing one of these:
 
 1) Put the token in `~/.clawdbot/.env`:
@@ -1345,24 +1345,24 @@ Precedence:
 --port > CLAWDBOT_GATEWAY_PORT > gateway.port > default 18789
 ```
 
-### Why does `clawdbot daemon status` say `Runtime: running` but `RPC probe: failed`?
+### Why does `clawdbot gateway status` say `Runtime: running` but `RPC probe: failed`?
 
 Because “running” is the **supervisor’s** view (launchd/systemd/schtasks). The RPC probe is the CLI actually connecting to the gateway WebSocket and calling `status`.
 
-Use `clawdbot daemon status` and trust these lines:
+Use `clawdbot gateway status` and trust these lines:
 - `Probe target:` (the URL the probe actually used)
 - `Listening:` (what’s actually bound on the port)
 - `Last gateway error:` (common root cause when the process is alive but the port isn’t listening)
 
-### Why does `clawdbot daemon status` show `Config (cli)` and `Config (daemon)` different?
+### Why does `clawdbot gateway status` show `Config (cli)` and `Config (service)` different?
 
-You’re editing one config file while the daemon is running another (often a `--profile` / `CLAWDBOT_STATE_DIR` mismatch).
+You’re editing one config file while the service is running another (often a `--profile` / `CLAWDBOT_STATE_DIR` mismatch).
 
 Fix:
 ```bash
-clawdbot daemon install --force
+clawdbot gateway install --force
 ```
-Run that from the same `--profile` / environment you want the daemon to use.
+Run that from the same `--profile` / environment you want the service to use.
 
 ### What does “another gateway instance is already listening” mean?
 
@@ -1431,7 +1431,7 @@ Yes, but you must isolate:
 Quick setup (recommended):
 - Use `clawdbot --profile <name> …` per instance (auto-creates `~/.clawdbot-<name>`).
 - Set a unique `gateway.port` in each profile config (or pass `--port` for manual runs).
-- Install a per-profile daemon: `clawdbot --profile <name> daemon install`.
+- Install a per-profile service: `clawdbot --profile <name> gateway install`.
 
 Profiles also suffix service names (`com.clawdbot.<profile>`, `clawdbot-gateway-<profile>.service`, `Clawdbot Gateway (<profile>)`).
 Full guide: [Multiple gateways](/gateway/multiple-gateways).
@@ -1484,23 +1484,23 @@ Service/supervisor logs (when the gateway runs via launchd/systemd):
 
 See [Troubleshooting](/gateway/troubleshooting#log-locations) for more.
 
-### How do I start/stop/restart the Gateway daemon?
+### How do I start/stop/restart the Gateway service?
 
-Use the daemon helpers:
+Use the gateway helpers:
 
 ```bash
-clawdbot daemon status
-clawdbot daemon restart
+clawdbot gateway status
+clawdbot gateway restart
 ```
 
 If you run the gateway manually, `clawdbot gateway --force` can reclaim the port. See [Gateway](/gateway).
 
-### ELI5: `clawdbot daemon restart` vs `clawdbot gateway`
+### ELI5: `clawdbot gateway restart` vs `clawdbot gateway`
 
-- `clawdbot daemon restart`: restarts the **background service** (launchd/systemd).
+- `clawdbot gateway restart`: restarts the **background service** (launchd/systemd).
 - `clawdbot gateway`: runs the gateway **in the foreground** for this terminal session.
 
-If you installed the daemon, use the daemon commands. Use `clawdbot gateway` when
+If you installed the service, use the gateway commands. Use `clawdbot gateway` when
 you want a one-off, foreground run.
 
 ### What’s the fastest way to get more details when something fails?

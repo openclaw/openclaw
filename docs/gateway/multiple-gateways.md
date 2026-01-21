@@ -31,10 +31,10 @@ clawdbot --profile rescue setup
 clawdbot --profile rescue gateway --port 19001
 ```
 
-Per-profile daemons:
+Per-profile services:
 ```bash
-clawdbot --profile main daemon install
-clawdbot --profile rescue daemon install
+clawdbot --profile main gateway install
+clawdbot --profile rescue gateway install
 ```
 
 ## Rescue-bot guide
@@ -55,7 +55,7 @@ Port spacing: leave at least 20 ports between base ports so the derived bridge/b
 # Main bot (existing or fresh, without --profile param)
 # Runs on port 18789 + Chrome CDC/Canvas/... Ports 
 clawdbot onboard
-clawdbot daemon install
+clawdbot gateway install
 
 # Rescue bot (isolated profile + ports)
 clawdbot --profile rescue onboard
@@ -65,8 +65,8 @@ clawdbot --profile rescue onboard
 #   better choose completely different base port, like 19789,
 # - rest of the onboarding is the same as normal
 
-# To install the daemon (if not happened automatically during onboarding)
-clawdbot --profile rescue daemon install
+# To install the service (if not happened automatically during onboarding)
+clawdbot --profile rescue gateway install
 ```
 
 ## Port mapping (derived)

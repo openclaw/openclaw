@@ -68,12 +68,12 @@ Then:
 
 ```bash
 clawdbot doctor
-clawdbot daemon restart
+clawdbot gateway restart
 clawdbot health
 ```
 
 Notes:
-- If your Gateway runs as a service, `clawdbot daemon restart` is preferred over killing PIDs.
+- If your Gateway runs as a service, `clawdbot gateway restart` is preferred over killing PIDs.
 - If you’re pinned to a specific version, see “Rollback / pinning” below.
 
 ## Update (`clawdbot update`)
@@ -148,9 +148,9 @@ Details: [Doctor](/gateway/doctor)
 CLI (works regardless of OS):
 
 ```bash
-clawdbot daemon status
-clawdbot daemon stop
-clawdbot daemon restart
+clawdbot gateway status
+clawdbot gateway stop
+clawdbot gateway restart
 clawdbot gateway --port 18789
 clawdbot logs --follow
 ```
@@ -159,7 +159,7 @@ If you’re supervised:
 - macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/com.clawdbot.gateway` (use `com.clawdbot.<profile>` if set)
 - Linux systemd user service: `systemctl --user restart clawdbot-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart clawdbot-gateway[-<profile>].service`
-  - `launchctl`/`systemctl` only work if the service is installed; otherwise run `clawdbot daemon install`.
+  - `launchctl`/`systemctl` only work if the service is installed; otherwise run `clawdbot gateway install`.
 
 Runbook + exact service labels: [Gateway runbook](/gateway)
 
@@ -183,7 +183,7 @@ Then restart + re-run doctor:
 
 ```bash
 clawdbot doctor
-clawdbot daemon restart
+clawdbot gateway restart
 ```
 
 ### Pin (source) by date
@@ -200,7 +200,7 @@ Then reinstall deps + restart:
 ```bash
 pnpm install
 pnpm build
-clawdbot daemon restart
+clawdbot gateway restart
 ```
 
 If you want to go back to latest later:

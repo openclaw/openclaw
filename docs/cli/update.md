@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `clawdbot update` (safe-ish source update + optional daemon restart)"
+summary: "CLI reference for `clawdbot update` (safe-ish source update + optional gateway restart)"
 read_when:
   - You want to update a source checkout safely
   - You need to understand `--update` shorthand behavior
@@ -26,7 +26,7 @@ clawdbot --update
 
 ## Options
 
-- `--restart`: restart the Gateway daemon after a successful update.
+- `--restart`: restart the Gateway service after a successful update.
 - `--channel <stable|beta|dev>`: set the update channel (git + npm; persisted in config).
 - `--tag <dist-tag|version>`: override the npm dist-tag or version for this update only.
 - `--json`: print machine-readable `UpdateRunResult` JSON.

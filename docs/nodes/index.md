@@ -13,7 +13,7 @@ A **node** is a companion device (iOS/Android today) that connects to the Gatewa
 macOS can also run in **node mode**: the menubar app connects to the Gateway’s bridge and exposes its local canvas/camera commands as a node (so `clawdbot nodes …` works against this Mac).
 
 Notes:
-- Nodes are **peripherals**, not gateways. They don’t run the gateway daemon.
+- Nodes are **peripherals**, not gateways. They don’t run the gateway service.
 - Telegram/WhatsApp/etc. messages land on the **gateway**, not on nodes.
 
 ## Pairing + status

@@ -32,7 +32,7 @@ clawdbot onboard --install-daemon
 Or:
 
 ```
-clawdbot daemon install
+clawdbot gateway install
 ```
 
 Or:
@@ -41,7 +41,7 @@ Or:
 clawdbot configure
 ```
 
-Select **Gateway daemon** when prompted.
+Select **Gateway service** when prompted.
 
 Repair/migrate:
 
@@ -108,7 +108,7 @@ wsl --install -d Ubuntu-24.04
 
 Reboot if Windows asks.
 
-### 2) Enable systemd (required for daemon install)
+### 2) Enable systemd (required for gateway install)
 
 In your WSL terminal:
 
