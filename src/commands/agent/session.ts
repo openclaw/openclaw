@@ -12,6 +12,7 @@ import {
   evaluateSessionFreshness,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveChannelResetConfig,
   resolveExplicitAgentSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -99,7 +100,15 @@ export function resolveSession(opts: {
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
 
   const resetType = resolveSessionResetType({ sessionKey });
-  const resetPolicy = resolveSessionResetPolicy({ sessionCfg, resetType });
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg,
+    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel,
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    resetOverride: channelReset,
+  });
   const fresh = sessionEntry
     ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
         .fresh

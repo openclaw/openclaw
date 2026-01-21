@@ -2453,6 +2453,9 @@ Controls session scoping, reset policy, reset triggers, and where the session st
       dm: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 }
     },
+    resetByChannel: {
+      discord: { mode: "idle", idleMinutes: 10080 }
+    },
     resetTriggers: ["/new", "/reset"],
     // Default is already per-agent under ~/.clawdbot/agents/<agentId>/sessions/sessions.json
     // You can override with {agentId} templating:
@@ -2488,7 +2491,7 @@ Fields:
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
 - `resetByType`: per-session overrides for `dm`, `group`, and `thread`.
   - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, Clawdbot stays in idle-only mode for backward compatibility.
-- `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
+- `resetByChannel`: channel-specific reset policy overrides (keyed by channel id, applies to all session types for that channel; overrides `reset`/`resetByType`).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
 - `sendPolicy.rules[]`: match by `channel`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.

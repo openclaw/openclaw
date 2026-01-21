@@ -11,7 +11,7 @@ Docs: https://docs.clawd.bot
 - Nodes: expose node PATH in status/describe and bootstrap PATH for node-host execution.
 - CLI: flatten node service commands under `clawdbot node` and remove `service node` docs.
 - CLI: move gateway service commands under `clawdbot gateway` and add `gateway probe` for reachability.
-- Queue: allow per-channel debounce overrides and plugin defaults. (#1190) Thanks @cheeeee.
+- Sessions: add per-channel reset overrides via `session.resetByChannel`. (#1353) Thanks @cash-echo-bot.
 
 ### Fixes
 - Embedded runner: persist injected history images so attachments aren’t reloaded each turn. (#1374) Thanks @Nicell.

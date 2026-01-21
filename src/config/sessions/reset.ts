@@ -1,5 +1,6 @@
-import type { SessionConfig } from "../types.base.js";
+import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 
 export type SessionResetMode = "daily" | "idle";
 export type SessionResetType = "dm" | "group" | "thread";
@@ -67,13 +68,13 @@ export function resolveDailyResetAtMs(now: number, atHour: number): number {
 export function resolveSessionResetPolicy(params: {
   sessionCfg?: SessionConfig;
   resetType: SessionResetType;
-  idleMinutesOverride?: number;
+  resetOverride?: SessionResetConfig;
 }): SessionResetPolicy {
   const sessionCfg = params.sessionCfg;
-  const baseReset = sessionCfg?.reset;
-  const typeReset = sessionCfg?.resetByType?.[params.resetType];
+  const baseReset = params.resetOverride ?? sessionCfg?.reset;
+  const typeReset = params.resetOverride ? undefined : sessionCfg?.resetByType?.[params.resetType];
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
-  const legacyIdleMinutes = sessionCfg?.idleMinutes;
+  const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
@@ -81,11 +82,7 @@ export function resolveSessionResetPolicy(params: {
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
-  const idleMinutesRaw =
-    params.idleMinutesOverride ??
-    typeReset?.idleMinutes ??
-    baseReset?.idleMinutes ??
-    legacyIdleMinutes;
+  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes ?? legacyIdleMinutes;
 
   let idleMinutes: number | undefined;
   if (idleMinutesRaw != null) {
@@ -98,6 +95,19 @@ export function resolveSessionResetPolicy(params: {
   }
 
   return { mode, atHour, idleMinutes };
+}
+
+export function resolveChannelResetConfig(params: {
+  sessionCfg?: SessionConfig;
+  channel?: string | null;
+}): SessionResetConfig | undefined {
+  const resetByChannel = params.sessionCfg?.resetByChannel;
+  if (!resetByChannel) return undefined;
+  const normalized = normalizeMessageChannel(params.channel);
+  const fallback = params.channel?.trim().toLowerCase();
+  const key = normalized ?? fallback;
+  if (!key) return undefined;
+  return resetByChannel[key] ?? resetByChannel[key.toLowerCase()];
 }
 
 export function evaluateSessionFreshness(params: {

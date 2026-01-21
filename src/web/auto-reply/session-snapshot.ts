@@ -2,6 +2,7 @@ import type { loadConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
+  resolveChannelResetConfig,
   resolveThreadFlag,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -13,7 +14,7 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 export function getSessionSnapshot(
   cfg: ReturnType<typeof loadConfig>,
   from: string,
-  isHeartbeat = false,
+  _isHeartbeat = false,
   ctx?: {
     sessionKey?: string | null;
     isGroup?: boolean;
@@ -34,6 +35,7 @@ export function getSessionSnapshot(
     );
   const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
   const entry = store[key];
+
   const isThread = resolveThreadFlag({
     sessionKey: key,
     messageThreadId: ctx?.messageThreadId ?? null,
@@ -42,11 +44,14 @@ export function getSessionSnapshot(
     parentSessionKey: ctx?.parentSessionKey ?? null,
   });
   const resetType = resolveSessionResetType({ sessionKey: key, isGroup: ctx?.isGroup, isThread });
-  const idleMinutesOverride = isHeartbeat ? sessionCfg?.heartbeatIdleMinutes : undefined;
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg,
+    channel: entry?.lastChannel ?? entry?.channel,
+  });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,
     resetType,
-    idleMinutesOverride,
+    resetOverride: channelReset,
   });
   const now = Date.now();
   const freshness = entry
