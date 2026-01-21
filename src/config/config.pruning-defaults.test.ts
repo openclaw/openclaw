@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "./test-helpers.js";
 
 describe("config pruning defaults", () => {
-  it("defaults contextPruning mode to adaptive", async () => {
+  it("does not enable contextPruning by default", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
@@ -18,7 +18,7 @@ describe("config pruning defaults", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("adaptive");
+      expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
     });
   });
 

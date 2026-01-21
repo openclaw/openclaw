@@ -157,24 +157,7 @@ export function applyLoggingDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
 }
 
 export function applyContextPruningDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
-  const defaults = cfg.agents?.defaults;
-  if (!defaults) return cfg;
-  const contextPruning = defaults?.contextPruning;
-  if (contextPruning?.mode) return cfg;
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        contextPruning: {
-          ...contextPruning,
-          mode: "adaptive",
-        },
-      },
-    },
-  };
+  return cfg;
 }
 
 export function applyCompactionDefaults(cfg: ClawdbotConfig): ClawdbotConfig {

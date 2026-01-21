@@ -135,12 +135,15 @@ describe("context-pruning", () => {
   });
 
   it("never prunes tool results before the first user message", () => {
-    const settings = computeEffectiveSettings({
-      mode: "aggressive",
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
       keepLastAssistants: 0,
-      hardClear: { placeholder: "[cleared]" },
-    });
-    if (!settings) throw new Error("expected settings");
+      softTrimRatio: 0.0,
+      hardClearRatio: 0.0,
+      minPrunableToolChars: 0,
+      hardClear: { enabled: true, placeholder: "[cleared]" },
+      softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+    };
 
     const messages: AgentMessage[] = [
       makeAssistant("bootstrap tool calls"),
@@ -170,7 +173,7 @@ describe("context-pruning", () => {
     expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
   });
 
-  it("mode aggressive clears eligible tool results before cutoff", () => {
+  it("hard-clear removes eligible tool results before cutoff", () => {
     const messages: AgentMessage[] = [
       makeUser("u1"),
       makeAssistant("a1"),
@@ -195,9 +198,11 @@ describe("context-pruning", () => {
 
     const settings = {
       ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      mode: "aggressive",
       keepLastAssistants: 1,
-      hardClear: { enabled: false, placeholder: "[cleared]" },
+      softTrimRatio: 10.0,
+      hardClearRatio: 0.0,
+      minPrunableToolChars: 0,
+      hardClear: { enabled: true, placeholder: "[cleared]" },
     };
 
     const ctx = {
@@ -258,6 +263,7 @@ describe("context-pruning", () => {
       },
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
+      lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
     });
 
     const messages: AgentMessage[] = [

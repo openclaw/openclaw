@@ -5,6 +5,7 @@ Docs: https://docs.clawd.bot
 ## 2026.1.21
 
 ### Changes
+- Caching: make tool-result pruning TTL-aware so cache reuse stays stable and token usage drops.
 - CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
 - CLI: exec approvals mutations render tables instead of raw JSON.
 - Exec approvals: support wildcard agent allowlists (`*`) across all agents.

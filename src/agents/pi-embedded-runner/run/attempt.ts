@@ -49,6 +49,7 @@ import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
+import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
@@ -684,6 +685,17 @@ export async function runEmbeddedAttempt(
             messages: activeSession.messages,
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
+
+          const shouldTrackCacheTtl =
+            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+            isCacheTtlEligibleProvider(params.provider, params.modelId);
+          if (shouldTrackCacheTtl) {
+            appendCacheTtlTimestamp(sessionManager, {
+              timestamp: Date.now(),
+              provider: params.provider,
+              modelId: params.modelId,
+            });
+          }
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
