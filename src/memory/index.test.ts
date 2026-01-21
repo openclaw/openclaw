@@ -153,6 +153,7 @@ describe("memory index", () => {
     expect(second.manager).not.toBeNull();
     if (!second.manager) throw new Error("manager missing");
     manager = second.manager;
+    await second.manager.sync({ reason: "test" });
     const results = await second.manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
   });
@@ -250,6 +251,7 @@ describe("memory index", () => {
     const status = manager.status();
     if (!status.fts?.available) return;
 
+    await manager.sync({ force: true });
     const results = await manager.search("zebra");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
@@ -298,6 +300,7 @@ describe("memory index", () => {
     const status = manager.status();
     if (!status.fts?.available) return;
 
+    await manager.sync({ force: true });
     const results = await manager.search("alpha beta id123");
     expect(results.length).toBeGreaterThan(0);
     const paths = results.map((r) => r.path);
@@ -351,6 +354,7 @@ describe("memory index", () => {
     const status = manager.status();
     if (!status.fts?.available) return;
 
+    await manager.sync({ force: true });
     const results = await manager.search("alpha beta id123");
     expect(results.length).toBeGreaterThan(0);
     const paths = results.map((r) => r.path);

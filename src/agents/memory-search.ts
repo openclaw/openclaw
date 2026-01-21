@@ -49,6 +49,10 @@ export type ResolvedMemorySearchConfig = {
     watch: boolean;
     watchDebounceMs: number;
     intervalMinutes: number;
+    sessions: {
+      deltaBytes: number;
+      deltaMessages: number;
+    };
   };
   query: {
     maxResults: number;
@@ -71,6 +75,8 @@ const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
+const DEFAULT_SESSION_DELTA_BYTES = 100_000;
+const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
 const DEFAULT_HYBRID_ENABLED = true;
@@ -172,6 +178,16 @@ function mergeConfig(
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
     intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    sessions: {
+      deltaBytes:
+        overrides?.sync?.sessions?.deltaBytes ??
+        defaults?.sync?.sessions?.deltaBytes ??
+        DEFAULT_SESSION_DELTA_BYTES,
+      deltaMessages:
+        overrides?.sync?.sessions?.deltaMessages ??
+        defaults?.sync?.sessions?.deltaMessages ??
+        DEFAULT_SESSION_DELTA_MESSAGES,
+    },
   };
   const query = {
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
@@ -208,6 +224,8 @@ function mergeConfig(
   const normalizedVectorWeight = sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
   const normalizedTextWeight = sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
   const candidateMultiplier = clampInt(hybrid.candidateMultiplier, 1, 20);
+  const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
+  const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
   return {
     enabled,
     sources,
@@ -221,7 +239,13 @@ function mergeConfig(
     local,
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
-    sync,
+    sync: {
+      ...sync,
+      sessions: {
+        deltaBytes,
+        deltaMessages,
+      },
+    },
     query: {
       ...query,
       minScore,

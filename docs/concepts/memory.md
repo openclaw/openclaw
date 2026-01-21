@@ -194,7 +194,7 @@ Local mode:
 
 - File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
 - Index storage: per-agent SQLite at `~/.clawdbot/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
-- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval.
+- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
 - Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, Clawdbot automatically resets and reindexes the entire store.
 
 ### Hybrid search (BM25 + vector)
@@ -299,10 +299,28 @@ agents: {
 
 Notes:
 - Session indexing is **opt-in** (off by default).
-- Session updates are debounced and indexed lazily on the next `memory_search` (or manual `clawdbot memory index`).
+- Session updates are debounced and **indexed asynchronously** once they cross delta thresholds (best-effort).
+- `memory_search` never blocks on indexing; results can be slightly stale until background sync finishes.
 - Results still include snippets only; `memory_get` remains limited to memory files.
 - Session indexing is isolated per agent (only that agent’s session logs are indexed).
 - Session logs live on disk (`~/.clawdbot/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
+
+Delta thresholds (defaults shown):
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      sync: {
+        sessions: {
+          deltaBytes: 100000,   // ~100 KB
+          deltaMessages: 50     // JSONL lines
+        }
+      }
+    }
+  }
+}
+```
 
 ### SQLite vector acceleration (sqlite-vec)
 

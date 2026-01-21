@@ -13,6 +13,8 @@ Docs: https://docs.clawd.bot
 - macOS: exec approvals now respect wildcard agent allowlists (`*`).
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 - Agents: add diagnostics cache trace config and fix cache trace logging edge cases. (#1370) — thanks @parubets.
+- Agents: scrub Anthropic refusal test token from prompts and add a live refusal regression probe.
+- Memory: make session memory indexing async and delta-gated to avoid blocking searches.
 
 ## 2026.1.20
 

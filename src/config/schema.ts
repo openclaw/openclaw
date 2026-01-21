@@ -220,6 +220,8 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.onSearch": "Index on Search (Lazy)",
   "agents.defaults.memorySearch.sync.watch": "Watch Memory Files",
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
+  "agents.defaults.memorySearch.sync.sessions.deltaBytes": "Session Delta Bytes",
+  "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
@@ -474,8 +476,12 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
-    "Lazy sync: reindex on first search after a change.",
+    "Lazy sync: schedule a reindex on search after changes.",
   "agents.defaults.memorySearch.sync.watch": "Watch memory files for changes (chokidar).",
+  "agents.defaults.memorySearch.sync.sessions.deltaBytes":
+    "Minimum appended bytes before session transcripts trigger reindex (default: 100000).",
+  "agents.defaults.memorySearch.sync.sessions.deltaMessages":
+    "Minimum appended JSONL lines before session transcripts trigger reindex (default: 50).",
   "plugins.enabled": "Enable plugin/extension loading (default: true).",
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
