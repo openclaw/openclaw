@@ -6,6 +6,7 @@ export const GATEWAY_CLIENT_IDS = {
   GATEWAY_CLIENT: "gateway-client",
   MACOS_APP: "clawdbot-macos",
   IOS_APP: "clawdbot-ios",
+  ANDROID_APP: "clawdbot-android",
   NODE_HOST: "node-host",
   TEST: "test",
   FINGERPRINT: "fingerprint",
