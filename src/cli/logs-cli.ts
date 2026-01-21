@@ -1,13 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
+import { createSafeStreamWriter } from "../terminal/stream-writer.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
-import { addGatewayClientOptions } from "./gateway-rpc.js";
+import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
 type LogsTailPayload = {
   file?: string;
@@ -44,15 +44,10 @@ async function fetchLogs(
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  const payload = await callGateway<LogsTailPayload>({
-    url: opts.url,
-    token: opts.token,
-    method: "logs.tail",
-    params: { cursor, limit, maxBytes },
-    expectFinal: Boolean(opts.expectFinal),
-    timeoutMs: Number(opts.timeout ?? 10_000),
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
+  const payload = await callGatewayFromCli("logs.tail", opts, {
+    cursor,
+    limit,
+    maxBytes,
   });
   if (!payload || typeof payload !== "object") {
     throw new Error("Unexpected logs.tail response");
@@ -110,25 +105,28 @@ function formatLogLine(
   return [head, messageValue].filter(Boolean).join(" ").trim();
 }
 
-function writeLine(text: string, stream: NodeJS.WriteStream) {
-  // Avoid feeding CLI output back into the log file via console capture.
-  clearActiveProgressLine();
-  stream.write(`${text}\n`);
-}
+function createLogWriters() {
+  const writer = createSafeStreamWriter({
+    beforeWrite: () => clearActiveProgressLine(),
+    onBrokenPipe: (err, stream) => {
+      const code = err.code ?? "EPIPE";
+      const target = stream === process.stdout ? "stdout" : "stderr";
+      const message = `clawdbot logs: output ${target} closed (${code}). Stopping tail.`;
+      try {
+        clearActiveProgressLine();
+        process.stderr.write(`${message}\n`);
+      } catch {
+        // ignore secondary failures while reporting the broken pipe
+      }
+    },
+  });
 
-function logLine(text: string) {
-  writeLine(text, process.stdout);
-}
-
-function errorLine(text: string) {
-  writeLine(text, process.stderr);
-}
-
-function emitJsonLine(payload: Record<string, unknown>, toStdErr = false) {
-  const text = `${JSON.stringify(payload)}\n`;
-  clearActiveProgressLine();
-  if (toStdErr) process.stderr.write(text);
-  else process.stdout.write(text);
+  return {
+    logLine: (text: string) => writer.writeLine(process.stdout, text),
+    errorLine: (text: string) => writer.writeLine(process.stderr, text),
+    emitJsonLine: (payload: Record<string, unknown>, toStdErr = false) =>
+      writer.write(toStdErr ? process.stderr : process.stdout, `${JSON.stringify(payload)}\n`),
+  };
 }
 
 function emitGatewayError(
@@ -136,6 +134,8 @@ function emitGatewayError(
   opts: LogsCliOptions,
   mode: "json" | "text",
   rich: boolean,
+  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
+  errorLine: (text: string) => boolean,
 ) {
   const details = buildGatewayConnectionDetails({ url: opts.url });
   const message = "Gateway not reachable. Is it running and accessible?";
@@ -143,21 +143,25 @@ function emitGatewayError(
   const errorText = err instanceof Error ? err.message : String(err);
 
   if (mode === "json") {
-    emitJsonLine(
-      {
-        type: "error",
-        message,
-        error: errorText,
-        details,
-        hint,
-      },
-      true,
-    );
+    if (
+      !emitJsonLine(
+        {
+          type: "error",
+          message,
+          error: errorText,
+          details,
+          hint,
+        },
+        true,
+      )
+    ) {
+      return;
+    }
     return;
   }
 
-  errorLine(colorize(rich, theme.error, message));
-  errorLine(details.message);
+  if (!errorLine(colorize(rich, theme.error, message))) return;
+  if (!errorLine(details.message)) return;
   errorLine(colorize(rich, theme.muted, hint));
 }
 
@@ -180,6 +184,7 @@ export function registerLogsCli(program: Command) {
   addGatewayClientOptions(logs);
 
   logs.action(async (opts: LogsCliOptions) => {
+    const { logLine, errorLine, emitJsonLine } = createLogWriters();
     const interval = parsePositiveInt(opts.interval, 1000);
     let cursor: number | undefined;
     let first = true;
@@ -192,58 +197,84 @@ export function registerLogsCli(program: Command) {
       try {
         payload = await fetchLogs(opts, cursor);
       } catch (err) {
-        emitGatewayError(err, opts, jsonMode ? "json" : "text", rich);
+        emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
         process.exit(1);
         return;
       }
       const lines = Array.isArray(payload.lines) ? payload.lines : [];
       if (jsonMode) {
         if (first) {
-          emitJsonLine({
-            type: "meta",
-            file: payload.file,
-            cursor: payload.cursor,
-            size: payload.size,
-          });
+          if (
+            !emitJsonLine({
+              type: "meta",
+              file: payload.file,
+              cursor: payload.cursor,
+              size: payload.size,
+            })
+          ) {
+            return;
+          }
         }
         for (const line of lines) {
           const parsed = parseLogLine(line);
           if (parsed) {
-            emitJsonLine({ type: "log", ...parsed });
+            if (!emitJsonLine({ type: "log", ...parsed })) {
+              return;
+            }
           } else {
-            emitJsonLine({ type: "raw", raw: line });
+            if (!emitJsonLine({ type: "raw", raw: line })) {
+              return;
+            }
           }
         }
         if (payload.truncated) {
-          emitJsonLine({
-            type: "notice",
-            message: "Log tail truncated (increase --max-bytes).",
-          });
+          if (
+            !emitJsonLine({
+              type: "notice",
+              message: "Log tail truncated (increase --max-bytes).",
+            })
+          ) {
+            return;
+          }
         }
         if (payload.reset) {
-          emitJsonLine({
-            type: "notice",
-            message: "Log cursor reset (file rotated).",
-          });
+          if (
+            !emitJsonLine({
+              type: "notice",
+              message: "Log cursor reset (file rotated).",
+            })
+          ) {
+            return;
+          }
         }
       } else {
         if (first && payload.file) {
           const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
-          logLine(`${prefix} ${payload.file}`);
+          if (!logLine(`${prefix} ${payload.file}`)) {
+            return;
+          }
         }
         for (const line of lines) {
-          logLine(
-            formatLogLine(line, {
-              pretty,
-              rich,
-            }),
-          );
+          if (
+            !logLine(
+              formatLogLine(line, {
+                pretty,
+                rich,
+              }),
+            )
+          ) {
+            return;
+          }
         }
         if (payload.truncated) {
-          errorLine("Log tail truncated (increase --max-bytes).");
+          if (!errorLine("Log tail truncated (increase --max-bytes).")) {
+            return;
+          }
         }
         if (payload.reset) {
-          errorLine("Log cursor reset (file rotated).");
+          if (!errorLine("Log cursor reset (file rotated).")) {
+            return;
+          }
         }
       }
       cursor =
