@@ -1,8 +1,10 @@
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
+  buildModelAliasIndex,
   normalizeProviderId,
   resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import type { ReplyPayload } from "../types.js";
@@ -89,6 +91,11 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     defaultModel: resolvedDefault.model,
   });
 
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: resolvedDefault.provider,
+  });
+
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
@@ -97,21 +104,53 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     byProvider.set(key, set);
   };
 
+  const addRawModelRef = (raw?: string) => {
+    const trimmed = raw?.trim();
+    if (!trimmed) return;
+    const resolved = resolveModelRefFromString({
+      raw: trimmed,
+      defaultProvider: resolvedDefault.provider,
+      aliasIndex,
+    });
+    if (!resolved) return;
+    add(resolved.ref.provider, resolved.ref.model);
+  };
+
+  const addModelConfigEntries = () => {
+    const modelConfig = params.cfg.agents?.defaults?.model;
+    if (typeof modelConfig === "string") {
+      addRawModelRef(modelConfig);
+    } else if (modelConfig && typeof modelConfig === "object") {
+      addRawModelRef(modelConfig.primary);
+      for (const fallback of modelConfig.fallbacks ?? []) {
+        addRawModelRef(fallback);
+      }
+    }
+
+    const imageConfig = params.cfg.agents?.defaults?.imageModel;
+    if (typeof imageConfig === "string") {
+      addRawModelRef(imageConfig);
+    } else if (imageConfig && typeof imageConfig === "object") {
+      addRawModelRef(imageConfig.primary);
+      for (const fallback of imageConfig.fallbacks ?? []) {
+        addRawModelRef(fallback);
+      }
+    }
+  };
+
   for (const entry of allowed.allowedCatalog) {
     add(entry.provider, entry.id);
   }
 
   // Include config-only allowlist keys that aren't in the curated catalog.
   for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
-    const rawKey = String(raw ?? "").trim();
-    if (!rawKey) continue;
-    const slash = rawKey.indexOf("/");
-    if (slash === -1) continue;
-    const p = normalizeProviderId(rawKey.slice(0, slash));
-    const m = rawKey.slice(slash + 1).trim();
-    if (!p || !m) continue;
-    add(p, m);
+    addRawModelRef(raw);
   }
+
+  // Ensure configured defaults/fallbacks/image models show up even when the
+  // curated catalog doesn't know about them (custom providers, dev builds, etc.).
+  add(resolvedDefault.provider, resolvedDefault.model);
+  addModelConfigEntries();
 
   const providers = [...byProvider.keys()].sort();
 
