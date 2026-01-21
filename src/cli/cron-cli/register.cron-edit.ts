@@ -10,6 +10,15 @@ import {
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 
+const assignIf = (
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+  shouldAssign: boolean,
+) => {
+  if (shouldAssign) target[key] = value;
+};
+
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     cron
@@ -136,18 +145,19 @@ export function registerCronEditCommand(cron: Command) {
             };
           } else if (hasAgentTurnPatch) {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
-            if (typeof opts.message === "string") payload.message = String(opts.message);
-            if (model) payload.model = model;
-            if (thinking) payload.thinking = thinking;
-            if (hasTimeoutSeconds) {
-              payload.timeoutSeconds = timeoutSeconds;
-            }
-            if (typeof opts.deliver === "boolean") payload.deliver = opts.deliver;
-            if (typeof opts.channel === "string") payload.channel = opts.channel;
-            if (typeof opts.to === "string") payload.to = opts.to;
-            if (typeof opts.bestEffortDeliver === "boolean") {
-              payload.bestEffortDeliver = opts.bestEffortDeliver;
-            }
+            assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
+            assignIf(payload, "model", model, Boolean(model));
+            assignIf(payload, "thinking", thinking, Boolean(thinking));
+            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            assignIf(payload, "deliver", opts.deliver, typeof opts.deliver === "boolean");
+            assignIf(payload, "channel", opts.channel, typeof opts.channel === "string");
+            assignIf(payload, "to", opts.to, typeof opts.to === "string");
+            assignIf(
+              payload,
+              "bestEffortDeliver",
+              opts.bestEffortDeliver,
+              typeof opts.bestEffortDeliver === "boolean",
+            );
             patch.payload = payload;
           }
 
