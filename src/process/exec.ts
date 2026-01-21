@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 
 import { danger, shouldLogVerbose } from "../globals.js";
@@ -61,12 +62,28 @@ export async function runCommandWithTimeout(
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
 
+  const shouldSuppressNpmFund = (() => {
+    const cmd = path.basename(argv[0] ?? "");
+    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") return true;
+    if (cmd === "node" || cmd === "node.exe") {
+      const script = argv[1] ?? "";
+      return script.includes("npm-cli.js");
+    }
+    return false;
+  })();
+
+  const resolvedEnv = env ? { ...process.env, ...env } : { ...process.env };
+  if (shouldSuppressNpmFund) {
+    if (resolvedEnv.NPM_CONFIG_FUND == null) resolvedEnv.NPM_CONFIG_FUND = "false";
+    if (resolvedEnv.npm_config_fund == null) resolvedEnv.npm_config_fund = "false";
+  }
+
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), {
       stdio: [hasInput ? "pipe" : "inherit", "pipe", "pipe"],
       cwd,
-      env: env ? { ...process.env, ...env } : process.env,
+      env: resolvedEnv,
       windowsVerbatimArguments,
     });
     let stdout = "";
