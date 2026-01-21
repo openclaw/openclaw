@@ -59,6 +59,42 @@ type StatusArgs = {
   now?: number;
 };
 
+function resolveRuntimeLabel(
+  args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
+): string {
+  const sessionKey = args.sessionKey?.trim();
+  if (args.config && sessionKey) {
+    const runtimeStatus = resolveSandboxRuntimeStatus({
+      cfg: args.config,
+      sessionKey,
+    });
+    const sandboxMode = runtimeStatus.mode ?? "off";
+    if (sandboxMode === "off") return "direct";
+    const runtime = runtimeStatus.sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+    return `${runtime}/${sandboxMode}`;
+  }
+
+  const sandboxMode = args.agent?.sandbox?.mode ?? "off";
+  if (sandboxMode === "off") return "direct";
+  const sandboxed = (() => {
+    if (!sessionKey) return false;
+    if (sandboxMode === "all") return true;
+    if (args.config) {
+      return resolveSandboxRuntimeStatus({
+        cfg: args.config,
+        sessionKey,
+      }).sandboxed;
+    }
+    const sessionScope = args.sessionScope ?? "per-sender";
+    const mainKey = resolveMainSessionKey({
+      session: { scope: sessionScope },
+    });
+    return sessionKey !== mainKey.trim();
+  })();
+  const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+  return `${runtime}/${sandboxMode}`;
+}
+
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
   if (total == null) {
@@ -258,41 +294,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.agent?.elevatedDefault ??
     "on";
 
-  const runtime = (() => {
-    const sessionKey = args.sessionKey?.trim();
-    if (args.config && sessionKey) {
-      const runtimeStatus = resolveSandboxRuntimeStatus({
-        cfg: args.config,
-        sessionKey,
-      });
-      const sandboxMode = runtimeStatus.mode ?? "off";
-      if (sandboxMode === "off") return { label: "direct" };
-      const runtime = runtimeStatus.sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
-      return { label: `${runtime}/${sandboxMode}` };
-    }
-
-    const sandboxMode = args.agent?.sandbox?.mode ?? "off";
-    if (sandboxMode === "off") return { label: "direct" };
-    const sandboxed = (() => {
-      if (!sessionKey) return false;
-      if (sandboxMode === "all") return true;
-      if (args.config) {
-        return resolveSandboxRuntimeStatus({
-          cfg: args.config,
-          sessionKey,
-        }).sandboxed;
-      }
-      const sessionScope = args.sessionScope ?? "per-sender";
-      const mainKey = resolveMainSessionKey({
-        session: { scope: sessionScope },
-      });
-      return sessionKey !== mainKey.trim();
-    })();
-    const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
-    return {
-      label: `${runtime}/${sandboxMode}`,
-    };
-  })();
+  const runtime = { label: resolveRuntimeLabel(args) };
 
   const updatedAt = entry?.updatedAt;
   const sessionLine = [
