@@ -3,6 +3,7 @@ import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
 import { resolveSlackAccount } from "../slack/accounts.js";
+import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
 import { resolveTelegramAccount } from "../telegram/accounts.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
@@ -150,11 +151,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       },
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const channelId = context.From?.trim() || context.To?.trim() || undefined;
+        return {
+          currentChannelId: channelId,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
     },
   },
   discord: {
@@ -221,18 +225,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveReplyToMode: ({ cfg, accountId }) =>
         resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off",
       allowTagsWhenOff: true,
-      buildToolContext: ({ cfg, accountId, context, hasRepliedRef }) => {
-        const configuredReplyToMode = resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off";
-        const effectiveReplyToMode = context.ThreadLabel ? "all" : configuredReplyToMode;
-        return {
-          currentChannelId: context.To?.startsWith("channel:")
-            ? context.To.slice("channel:".length)
-            : undefined,
-          currentThreadTs: context.ReplyToId,
-          replyToMode: effectiveReplyToMode,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: (params) => buildSlackThreadingToolContext(params),
     },
   },
   signal: {
@@ -259,11 +252,16 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           .filter(Boolean),
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const isDirect = context.ChatType?.toLowerCase() === "direct";
+        const channelId =
+          (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
+        return {
+          currentChannelId: channelId,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
     },
   },
   imessage: {
@@ -286,11 +284,16 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveRequireMention: resolveIMessageGroupRequireMention,
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const isDirect = context.ChatType?.toLowerCase() === "direct";
+        const channelId =
+          (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
+        return {
+          currentChannelId: channelId,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
     },
   },
 };
