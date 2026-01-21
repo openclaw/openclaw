@@ -1,3 +1,7 @@
+type FetchWithPreconnect = typeof fetch & {
+  preconnect: (url: string, init?: { credentials?: RequestCredentials }) => void;
+};
+
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
     const signal = init?.signal;
@@ -25,7 +29,11 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
       });
     }
     return response;
-  }) as typeof fetch;
+  }) as FetchWithPreconnect;
+
+  wrapped.preconnect =
+    typeof fetchImpl.preconnect === "function" ? fetchImpl.preconnect.bind(fetchImpl) : () => {};
+
   return Object.assign(wrapped, fetchImpl);
 }
 
