@@ -21,7 +21,7 @@ handle_sudo_error() {
     echo -e "\n${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}⚠️  Password Required for Log Access${NC}"
     echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
-    echo -e "vtlog needs to use sudo to show complete log data (Apple hides sensitive info by default)."
+    echo -e "clawlog needs to use sudo to show complete log data (Apple hides sensitive info by default)."
     echo -e "\nTo avoid password prompts, configure passwordless sudo for the log command:"
     echo -e "See: ${BLUE}apple/docs/logging-private-fix.md${NC}\n"
     echo -e "Quick fix:"
@@ -51,7 +51,7 @@ show_usage() {
 clawlog - Clawdbot Logging Utility
 
 USAGE:
-    vtlog [OPTIONS]
+    clawlog [OPTIONS]
 
 DESCRIPTION:
     View Clawdbot logs with full details (bypasses Apple's privacy redaction).
@@ -69,10 +69,10 @@ LOG CATEGORIES (examples):
     • shell               - ShellExecutor
 
 QUICK START:
-    vtlog -n 100             Show last 100 lines from all components
-    vtlog -f                 Follow logs in real-time
-    vtlog -e                 Show only errors
-    vtlog -c ServerManager   Show logs from ServerManager only
+    clawlog -n 100             Show last 100 lines from all components
+    clawlog -f                 Follow logs in real-time
+    clawlog -e                 Show only errors
+    clawlog -c ServerManager   Show logs from ServerManager only
 
 OPTIONS:
     -h, --help              Show this help message
@@ -91,15 +91,15 @@ OPTIONS:
     --json                  Output in JSON format
 
 EXAMPLES:
-    vtlog                   Show last 50 lines from past 5 minutes (default)
-    vtlog -f                Stream logs continuously
-    vtlog -n 100            Show last 100 lines
-    vtlog -e                Show only recent errors
-    vtlog -l 30m -n 200     Show last 200 lines from past 30 minutes
-    vtlog -c ServerManager  Show recent ServerManager logs
-    vtlog -s "fail"         Search for "fail" in recent logs
-    vtlog --server -e       Show recent server errors
-    vtlog -f -d             Stream debug logs continuously
+    clawlog                   Show last 50 lines from past 5 minutes (default)
+    clawlog -f                Stream logs continuously
+    clawlog -n 100            Show last 100 lines
+    clawlog -e                Show only recent errors
+    clawlog -l 30m -n 200     Show last 200 lines from past 30 minutes
+    clawlog -c ServerManager  Show recent ServerManager logs
+    clawlog -s "fail"         Search for "fail" in recent logs
+    clawlog --server -e       Show recent server errors
+    clawlog -f -d             Stream debug logs continuously
 
 CATEGORIES:
     Common categories include:
