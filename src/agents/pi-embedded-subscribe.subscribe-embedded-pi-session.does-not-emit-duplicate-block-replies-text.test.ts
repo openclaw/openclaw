@@ -113,7 +113,7 @@ describe("subscribeEmbeddedPiSession", () => {
     handler?.({ type: "message_end", message: assistantMessageWithNewline });
     handler?.({ type: "message_end", message: assistantMessageTrimmed });
 
-    expect(subscription.assistantTexts).toEqual(["Hello world\n"]);
+    expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
   it("does not duplicate assistantTexts when message_end repeats with reasoning blocks", () => {
     let handler: SessionEventHandler | undefined;
