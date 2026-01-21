@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -36,6 +37,53 @@ const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+// SSRF protection: block private/internal IP addresses and cloud metadata endpoints
+const PRIVATE_IPV4_PATTERNS = [
+  /^127\./, // loopback
+  /^10\./, // private class A
+  /^192\.168\./, // private class C
+  /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // private class B
+  /^0\./, // "this" network
+  /^169\.254\./, // link-local (includes cloud metadata at 169.254.169.254)
+];
+const PRIVATE_IPV6_PREFIXES = ["::1", "fe80:", "fec0:", "fc", "fd"];
+
+function isPrivateIpAddress(address: string): boolean {
+  if (address.includes(":")) {
+    const lower = address.toLowerCase();
+    if (lower === "::1") return true;
+    return PRIVATE_IPV6_PREFIXES.some((prefix) => lower.startsWith(prefix));
+  }
+  return PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(address));
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  return (
+    lower === "localhost" ||
+    lower.endsWith(".localhost") ||
+    lower.endsWith(".local") ||
+    lower.endsWith(".internal") ||
+    lower === "metadata.google.internal"
+  );
+}
+
+async function assertPublicHostname(hostname: string): Promise<void> {
+  if (isBlockedHostname(hostname)) {
+    throw new Error(`Blocked hostname: ${hostname}`);
+  }
+
+  const results = await lookup(hostname, { all: true });
+  if (results.length === 0) {
+    throw new Error(`Unable to resolve hostname: ${hostname}`);
+  }
+  for (const entry of results) {
+    if (isPrivateIpAddress(entry.address)) {
+      throw new Error(`Blocked: resolves to private/internal IP address`);
+    }
+  }
+}
 
 const WebFetchSchema = Type.Object({
   url: Type.String({ description: "HTTP or HTTPS URL to fetch." }),
@@ -275,6 +323,9 @@ async function runWebFetch(params: {
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
+
+  // SSRF protection: verify hostname resolves to public IP
+  await assertPublicHostname(parsedUrl.hostname);
 
   const start = Date.now();
   let res: Response;
