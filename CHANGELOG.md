@@ -4,7 +4,14 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.21
 
+### Changes
+- CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
+- Exec approvals: support wildcard agent allowlists (`*`) across all agents.
+- Nodes: expose node PATH in status/describe and bootstrap PATH for node-host execution.
+
 ### Fixes
+- Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
+- macOS: exec approvals now respect wildcard agent allowlists (`*`).
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 - Configure: restrict the model allowlist picker to OAuth-compatible Anthropic models and preselect Opus 4.5.
 

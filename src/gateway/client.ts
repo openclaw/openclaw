@@ -53,6 +53,7 @@ export type GatewayClientOptions = {
   caps?: string[];
   commands?: string[];
   permissions?: Record<string, boolean>;
+  pathEnv?: string;
   deviceIdentity?: DeviceIdentity;
   minProtocol?: number;
   maxProtocol?: number;
@@ -232,6 +233,7 @@ export class GatewayClient {
         this.opts.permissions && typeof this.opts.permissions === "object"
           ? this.opts.permissions
           : undefined,
+      pathEnv: this.opts.pathEnv,
       auth,
       role,
       scopes,
