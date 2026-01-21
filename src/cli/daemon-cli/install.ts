@@ -43,7 +43,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   };
 
   if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; daemon install is disabled.");
+    fail("Nix mode detected; service install is disabled.");
     return;
   }
 
@@ -84,7 +84,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
         defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("clawdbot daemon install --force")}`,
+          `Reinstall with: ${formatCliCommand("clawdbot gateway install --force")}`,
         );
       }
       return;

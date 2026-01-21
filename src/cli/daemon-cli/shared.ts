@@ -123,7 +123,7 @@ export function renderRuntimeHints(
     }
   })();
   if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("clawdbot daemon install", env)}`);
+    hints.push(`Service not installed. Run: ${formatCliCommand("clawdbot gateway install", env)}`);
     if (fileLog) hints.push(`File logs: ${fileLog}`);
     return hints;
   }
@@ -146,7 +146,7 @@ export function renderRuntimeHints(
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const base = [
-    formatCliCommand("clawdbot daemon install", env),
+    formatCliCommand("clawdbot gateway install", env),
     formatCliCommand("clawdbot gateway", env),
   ];
   const profile = env.CLAWDBOT_PROFILE;

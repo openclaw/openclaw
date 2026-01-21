@@ -60,7 +60,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
-    defaultRuntime.log(`${label("Daemon env:")} ${daemonEnvLines.join(" ")}`);
+    defaultRuntime.log(`${label("Service env:")} ${daemonEnvLines.join(" ")}`);
   }
   spacer();
 
@@ -89,11 +89,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
     if (status.config.daemon) {
       const daemonCfg = `${status.config.daemon.path}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
-      defaultRuntime.log(`${label("Config (daemon):")} ${infoText(daemonCfg)}`);
+      defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
       if (!status.config.daemon.valid && status.config.daemon.issues?.length) {
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
-            `${errorText("Daemon config issue:")} ${issue.path || "<root>"}: ${issue.message}`,
+            `${errorText("Service config issue:")} ${issue.path || "<root>"}: ${issue.message}`,
           );
         }
       }
@@ -101,12 +101,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     if (status.config.mismatch) {
       defaultRuntime.error(
         errorText(
-          "Root cause: CLI and daemon are using different config paths (likely a profile/state-dir mismatch).",
+          "Root cause: CLI and service are using different config paths (likely a profile/state-dir mismatch).",
         ),
       );
       defaultRuntime.error(
         errorText(
-          `Fix: rerun \`${formatCliCommand("clawdbot daemon install --force")}\` from the same --profile / CLAWDBOT_STATE_DIR you expect.`,
+          `Fix: rerun \`${formatCliCommand("clawdbot gateway install --force")}\` from the same --profile / CLAWDBOT_STATE_DIR you expect.`,
         ),
       );
     }
@@ -209,7 +209,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       ),
     );
     defaultRuntime.error(
-      errorText(`Then reinstall: ${formatCliCommand("clawdbot daemon install")}`),
+      errorText(`Then reinstall: ${formatCliCommand("clawdbot gateway install")}`),
     );
     spacer();
   }

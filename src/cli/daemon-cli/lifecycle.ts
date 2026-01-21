@@ -33,7 +33,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   };
 
   if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; daemon uninstall is disabled.");
+    fail("Nix mode detected; service uninstall is disabled.");
     return;
   }
 
@@ -200,7 +200,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 }
 
 /**
- * Restart the gateway daemon service.
+ * Restart the gateway service service.
  * @returns `true` if restart succeeded, `false` if the service was not loaded.
  * Throws/exits on check or restart failures.
  */

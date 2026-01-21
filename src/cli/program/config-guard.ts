@@ -4,7 +4,19 @@ import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 
-const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status", "service"]);
+const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
+const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
+  "status",
+  "probe",
+  "health",
+  "discover",
+  "call",
+  "install",
+  "uninstall",
+  "start",
+  "stop",
+  "restart",
+]);
 let didRunDoctorConfigFlow = false;
 
 function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
@@ -25,7 +37,13 @@ export async function ensureConfigReady(params: {
 
   const snapshot = await readConfigFileSnapshot();
   const commandName = params.commandPath?.[0];
-  const allowInvalid = commandName ? ALLOWED_INVALID_COMMANDS.has(commandName) : false;
+  const subcommandName = params.commandPath?.[1];
+  const allowInvalid = commandName
+    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+      (commandName === "gateway" &&
+        subcommandName &&
+        ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
+    : false;
   const issues = snapshot.exists && !snapshot.valid ? formatConfigIssues(snapshot.issues) : [];
   const legacyIssues =
     snapshot.legacyIssues.length > 0

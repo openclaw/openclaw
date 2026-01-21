@@ -37,14 +37,6 @@ const entries: SubCliEntry[] = [
     },
   },
   {
-    name: "daemon",
-    description: "Manage the gateway daemon",
-    register: async (program) => {
-      const mod = await import("../daemon-cli.js");
-      mod.registerDaemonCli(program);
-    },
-  },
-  {
     name: "gateway",
     description: "Gateway control",
     register: async (program) => {

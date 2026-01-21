@@ -139,16 +139,16 @@ export async function maybeRepairGatewayDaemon(params: {
         return;
       }
     }
-    note("Gateway daemon not installed.", "Gateway");
+    note("Gateway service not installed.", "Gateway");
     if (params.cfg.gateway?.mode !== "remote") {
       const install = await params.prompter.confirmSkipInNonInteractive({
-        message: "Install gateway daemon now?",
+        message: "Install gateway service now?",
         initialValue: true,
       });
       if (install) {
         const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
           {
-            message: "Gateway daemon runtime",
+            message: "Gateway service runtime",
             options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
             initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
           },
@@ -171,7 +171,7 @@ export async function maybeRepairGatewayDaemon(params: {
             environment,
           });
         } catch (err) {
-          note(`Gateway daemon install failed: ${String(err)}`, "Gateway");
+          note(`Gateway service install failed: ${String(err)}`, "Gateway");
           note(gatewayInstallErrorHint(), "Gateway");
         }
       }
@@ -193,7 +193,7 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (serviceRuntime?.status !== "running") {
     const start = await params.prompter.confirmSkipInNonInteractive({
-      message: "Start gateway daemon now?",
+      message: "Start gateway service now?",
       initialValue: true,
     });
     if (start) {
@@ -208,14 +208,14 @@ export async function maybeRepairGatewayDaemon(params: {
   if (process.platform === "darwin") {
     const label = resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE);
     note(
-      `LaunchAgent loaded; stopping requires "${formatCliCommand("clawdbot daemon stop")}" or launchctl bootout gui/$UID/${label}.`,
+      `LaunchAgent loaded; stopping requires "${formatCliCommand("clawdbot gateway stop")}" or launchctl bootout gui/$UID/${label}.`,
       "Gateway",
     );
   }
 
   if (serviceRuntime?.status === "running") {
     const restart = await params.prompter.confirmSkipInNonInteractive({
-      message: "Restart gateway daemon now?",
+      message: "Restart gateway service now?",
       initialValue: true,
     });
     if (restart) {
