@@ -679,6 +679,15 @@ What this does:
   - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
   - npm installs: updates via detected package manager
 
+Switch channels:
+  - Use --channel stable|beta|dev to persist the update channel in config
+  - Run clawdbot update status to see the active channel and source
+  - Use --tag <dist-tag|version> for a one-off npm update without persisting
+
+Non-interactive:
+  - Use --yes to accept downgrade prompts
+  - Combine with --channel/--tag/--restart/--json/--timeout as needed
+
 Examples:
   clawdbot update                   # Update a source checkout (git)
   clawdbot update --channel beta    # Switch to beta channel (git + npm)
