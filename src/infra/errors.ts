@@ -20,3 +20,13 @@ export function formatErrorMessage(err: unknown): string {
     return Object.prototype.toString.call(err);
   }
 }
+
+export function formatUncaughtError(err: unknown): string {
+  if (extractErrorCode(err) === "INVALID_CONFIG") {
+    return formatErrorMessage(err);
+  }
+  if (err instanceof Error) {
+    return err.stack ?? err.message ?? err.name;
+  }
+  return formatErrorMessage(err);
+}

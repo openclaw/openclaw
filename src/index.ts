@@ -28,6 +28,7 @@ import {
   PortInUseError,
 } from "./infra/ports.js";
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
+import { formatUncaughtError } from "./infra/errors.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
@@ -82,15 +83,12 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    console.error("[clawdbot] Uncaught exception:", error.stack ?? error.message);
+    console.error("[clawdbot] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
 
   void program.parseAsync(process.argv).catch((err) => {
-    console.error(
-      "[clawdbot] CLI failed:",
-      err instanceof Error ? (err.stack ?? err.message) : err,
-    );
+    console.error("[clawdbot] CLI failed:", formatUncaughtError(err));
     process.exit(1);
   });
 }
