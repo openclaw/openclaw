@@ -4,6 +4,9 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.20
 
+### Highlights
+- Nostr: add the Nostr channel plugin with profile management + onboarding defaults. (#1323) https://docs.clawd.bot/channels/nostr
+
 ### Changes
 - Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.clawd.bot/web/control-ui
 - Control UI: drop the legacy list view. (#1345) https://docs.clawd.bot/web/control-ui
