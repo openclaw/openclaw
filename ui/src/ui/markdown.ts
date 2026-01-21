@@ -5,7 +5,6 @@ import { truncateText } from "./format";
 marked.setOptions({
   gfm: true,
   breaks: true,
-  headerIds: false,
   mangle: false,
 });
 
@@ -37,7 +36,7 @@ const allowedTags = [
   "ul",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title"];
+const allowedAttrs = ["class", "href", "rel", "target", "title", "start"];
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
