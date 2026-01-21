@@ -34,6 +34,7 @@ Docs: https://docs.clawd.bot
 - CLI: keep `clawdbot logs` output resilient to broken pipes while preserving progress output.
 - Model catalog: avoid caching import failures, log transient discovery errors, and keep partial results. (#1332) — thanks @dougvk.
 - Doctor: clarify plugin auto-enable hint text in the startup banner.
+- Gateway: allow mobile node client ids for iOS + Android handshake validation. (#1354) — thanks @vignesh07.
 - Gateway: clarify unauthorized handshake responses with token/password mismatch guidance.
 - Gateway: clarify connect/validation errors for gateway params. (#1347) — thanks @vignesh07.
 - Gateway: preserve restart wake routing + thread replies across restarts. (#1337) — thanks @John-Rood.

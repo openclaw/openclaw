@@ -529,7 +529,7 @@ class NodeRuntime(context: Context) {
       caps = buildCapabilities(),
       commands = buildInvokeCommands(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "node-host", clientMode = "node"),
+      client = buildClientInfo(clientId = "clawdbot-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )
   }
