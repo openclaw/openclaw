@@ -101,6 +101,87 @@ function formatCliError(err: unknown): string {
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 
+function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
+  const rich = isRich();
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+
+  const file = snapshot.file ?? { version: 1 };
+  const defaults = file.defaults ?? {};
+  const defaultsParts = [
+    defaults.security ? `security=${defaults.security}` : null,
+    defaults.ask ? `ask=${defaults.ask}` : null,
+    defaults.askFallback ? `askFallback=${defaults.askFallback}` : null,
+    typeof defaults.autoAllowSkills === "boolean"
+      ? `autoAllowSkills=${defaults.autoAllowSkills ? "on" : "off"}`
+      : null,
+  ].filter(Boolean) as string[];
+  const agents = file.agents ?? {};
+  const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
+    [];
+  const now = Date.now();
+  for (const [agentId, agent] of Object.entries(agents)) {
+    const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+    for (const entry of allowlist) {
+      const pattern = entry?.pattern?.trim() ?? "";
+      if (!pattern) continue;
+      const lastUsedAt = typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
+      allowlistRows.push({
+        Target: targetLabel,
+        Agent: agentId,
+        Pattern: pattern,
+        LastUsed: lastUsedAt ? `${formatAge(Math.max(0, now - lastUsedAt))} ago` : muted("unknown"),
+      });
+    }
+  }
+
+  const summaryRows = [
+    { Field: "Target", Value: targetLabel },
+    { Field: "Path", Value: snapshot.path },
+    { Field: "Exists", Value: snapshot.exists ? "yes" : "no" },
+    { Field: "Hash", Value: snapshot.hash },
+    { Field: "Version", Value: String(file.version ?? 1) },
+    { Field: "Socket", Value: file.socket?.path ?? "default" },
+    { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
+    { Field: "Agents", Value: String(Object.keys(agents).length) },
+    { Field: "Allowlist", Value: String(allowlistRows.length) },
+  ];
+
+  defaultRuntime.log(heading("Approvals"));
+  defaultRuntime.log(
+    renderTable({
+      width: tableWidth,
+      columns: [
+        { key: "Field", header: "Field", minWidth: 8 },
+        { key: "Value", header: "Value", minWidth: 24, flex: true },
+      ],
+      rows: summaryRows,
+    }).trimEnd(),
+  );
+
+  if (allowlistRows.length === 0) {
+    defaultRuntime.log("");
+    defaultRuntime.log(muted("No allowlist entries."));
+    return;
+  }
+
+  defaultRuntime.log("");
+  defaultRuntime.log(heading("Allowlist"));
+  defaultRuntime.log(
+    renderTable({
+      width: tableWidth,
+      columns: [
+        { key: "Target", header: "Target", minWidth: 10 },
+        { key: "Agent", header: "Agent", minWidth: 8 },
+        { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+        { key: "LastUsed", header: "Last Used", minWidth: 10 },
+      ],
+      rows: allowlistRows,
+    }).trimEnd(),
+  );
+}
+
 async function saveSnapshot(
   opts: ExecApprovalsCliOpts,
   nodeId: string | null,
@@ -168,98 +249,13 @@ export function registerExecApprovalsCli(program: Command) {
           return;
         }
 
-        const rich = isRich();
-        const heading = (text: string) => (rich ? theme.heading(text) : text);
-        const muted = (text: string) => (rich ? theme.muted(text) : text);
+        const muted = (text: string) => (isRich() ? theme.muted(text) : text);
         if (source === "local") {
           defaultRuntime.log(muted("Showing local approvals."));
           defaultRuntime.log("");
         }
-        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-
-        const file = snapshot.file ?? { version: 1 };
-        const defaults = file.defaults ?? {};
-        const defaultsParts = [
-          defaults.security ? `security=${defaults.security}` : null,
-          defaults.ask ? `ask=${defaults.ask}` : null,
-          defaults.askFallback ? `askFallback=${defaults.askFallback}` : null,
-          typeof defaults.autoAllowSkills === "boolean"
-            ? `autoAllowSkills=${defaults.autoAllowSkills ? "on" : "off"}`
-            : null,
-        ].filter(Boolean) as string[];
-        const agents = file.agents ?? {};
         const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
-        const allowlistRows: Array<{
-          Target: string;
-          Agent: string;
-          Pattern: string;
-          LastUsed: string;
-        }> = [];
-        const now = Date.now();
-        for (const [agentId, agent] of Object.entries(agents)) {
-          const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
-          for (const entry of allowlist) {
-            const pattern = entry?.pattern?.trim() ?? "";
-            if (!pattern) continue;
-            const lastUsedAt = typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
-            allowlistRows.push({
-              Target: targetLabel,
-              Agent: agentId,
-              Pattern: pattern,
-              LastUsed: lastUsedAt
-                ? `${formatAge(Math.max(0, now - lastUsedAt))} ago`
-                : muted("unknown"),
-            });
-          }
-        }
-
-        const summaryRows = [
-          { Field: "Target", Value: targetLabel },
-          { Field: "Path", Value: snapshot.path },
-          { Field: "Exists", Value: snapshot.exists ? "yes" : "no" },
-          { Field: "Hash", Value: snapshot.hash },
-          { Field: "Version", Value: String(file.version ?? 1) },
-          { Field: "Socket", Value: file.socket?.path ?? "default" },
-          {
-            Field: "Defaults",
-            Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none",
-          },
-          { Field: "Agents", Value: String(Object.keys(agents).length) },
-          { Field: "Allowlist", Value: String(allowlistRows.length) },
-        ];
-
-        defaultRuntime.log(heading("Approvals"));
-        defaultRuntime.log(
-          renderTable({
-            width: tableWidth,
-            columns: [
-              { key: "Field", header: "Field", minWidth: 8 },
-              { key: "Value", header: "Value", minWidth: 24, flex: true },
-            ],
-            rows: summaryRows,
-          }).trimEnd(),
-        );
-
-        if (allowlistRows.length === 0) {
-          defaultRuntime.log("");
-          defaultRuntime.log(muted("No allowlist entries."));
-          return;
-        }
-
-        defaultRuntime.log("");
-        defaultRuntime.log(heading("Allowlist"));
-        defaultRuntime.log(
-          renderTable({
-            width: tableWidth,
-            columns: [
-              { key: "Target", header: "Target", minWidth: 10 },
-              { key: "Agent", header: "Agent", minWidth: 8 },
-              { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
-              { key: "LastUsed", header: "Last Used", minWidth: 10 },
-            ],
-            rows: allowlistRows,
-          }).trimEnd(),
-        );
+        renderApprovalsSnapshot(snapshot, targetLabel);
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
@@ -310,11 +306,12 @@ export function registerExecApprovalsCli(program: Command) {
           source === "local"
             ? saveSnapshotLocal(file)
             : await saveSnapshot(opts, nodeId, file, snapshot.hash);
-        const payload = opts.json ? JSON.stringify(next) : JSON.stringify(next, null, 2);
-        if (!opts.json) {
-          defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(next));
+          return;
         }
-        defaultRuntime.log(payload);
+        defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
+        renderApprovalsSnapshot(next, targetLabel);
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
@@ -348,7 +345,7 @@ export function registerExecApprovalsCli(program: Command) {
     .description("Add a glob pattern to an allowlist")
     .option("--node <node>", "Target node id/name/IP")
     .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "main")')
+    .option("--agent <id>", 'Agent id (defaults to "*")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
       try {
         const trimmed = pattern.trim();
@@ -383,11 +380,12 @@ export function registerExecApprovalsCli(program: Command) {
           source === "local"
             ? saveSnapshotLocal(file)
             : await saveSnapshot(opts, nodeId, file, snapshot.hash);
-        const payload = opts.json ? JSON.stringify(next) : JSON.stringify(next, null, 2);
-        if (!opts.json) {
-          defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(next));
+          return;
         }
-        defaultRuntime.log(payload);
+        defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
+        renderApprovalsSnapshot(next, targetLabel);
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
@@ -400,7 +398,7 @@ export function registerExecApprovalsCli(program: Command) {
     .description("Remove a glob pattern from an allowlist")
     .option("--node <node>", "Target node id/name/IP")
     .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "main")')
+    .option("--agent <id>", 'Agent id (defaults to "*")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
       try {
         const trimmed = pattern.trim();
@@ -447,11 +445,12 @@ export function registerExecApprovalsCli(program: Command) {
           source === "local"
             ? saveSnapshotLocal(file)
             : await saveSnapshot(opts, nodeId, file, snapshot.hash);
-        const payload = opts.json ? JSON.stringify(next) : JSON.stringify(next, null, 2);
-        if (!opts.json) {
-          defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(next));
+          return;
         }
-        defaultRuntime.log(payload);
+        defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
+        renderApprovalsSnapshot(next, targetLabel);
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
