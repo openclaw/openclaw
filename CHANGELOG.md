@@ -15,6 +15,7 @@ Docs: https://docs.clawd.bot
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
 - macOS: exec approvals now respect wildcard agent allowlists (`*`).
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
+- Typing: start instant typing indicators at run start so DMs and mentions show immediately.
 - Configure: restrict the model allowlist picker to OAuth-compatible Anthropic models and preselect Opus 4.5.
 - Configure: seed model fallbacks from the allowlist selection when multiple models are chosen.
 - Model picker: list the full catalog when no model allowlist is configured.

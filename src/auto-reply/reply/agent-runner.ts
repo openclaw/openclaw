@@ -196,6 +196,8 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
+  await typingSignals.signalRunStart();
+
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
