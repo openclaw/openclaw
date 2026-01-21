@@ -571,7 +571,14 @@ public actor GatewayChannelActor {
             id: id,
             method: method,
             params: paramsObject)
-        let data = try self.encoder.encode(frame)
+        let data: Data
+        do {
+            data = try self.encoder.encode(frame)
+        } catch {
+            self.logger.error(
+                "gateway request encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
         let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GatewayFrame, Error>) in
             self.pending[id] = cont
             Task { [weak self] in

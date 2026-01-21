@@ -486,8 +486,10 @@ actor MacNodeRuntime {
             return false
         }()
 
-        let approvedByAsk = params.approved == true
-        if requiresAsk, !approvedByAsk {
+        let decisionFromParams = Self.parseApprovalDecision(params.approvalDecision)
+        var approvedByAsk = params.approved == true || decisionFromParams != nil
+        var persistAllowlist = decisionFromParams == .allowAlways
+        if decisionFromParams == .deny {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
@@ -495,11 +497,53 @@ actor MacNodeRuntime {
                     runId: runId,
                     host: "node",
                     command: displayCommand,
-                    reason: "approval-required"))
+                    reason: "user-denied"))
             return Self.errorResponse(
                 req,
                 code: .unavailable,
-                message: "SYSTEM_RUN_DENIED: approval required")
+                message: "SYSTEM_RUN_DENIED: user denied")
+        }
+        if requiresAsk, !approvedByAsk {
+            let decision = await MainActor.run {
+                ExecApprovalsPromptPresenter.prompt(
+                    ExecApprovalPromptRequest(
+                        command: displayCommand,
+                        cwd: params.cwd,
+                        host: "node",
+                        security: security.rawValue,
+                        ask: ask.rawValue,
+                        agentId: agentId,
+                        resolvedPath: resolution?.resolvedPath))
+            }
+            switch decision {
+            case .deny:
+                await self.emitExecEvent(
+                    "exec.denied",
+                    payload: ExecEventPayload(
+                        sessionKey: sessionKey,
+                        runId: runId,
+                        host: "node",
+                        command: displayCommand,
+                        reason: "user-denied"))
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "SYSTEM_RUN_DENIED: user denied")
+            case .allowAlways:
+                approvedByAsk = true
+                persistAllowlist = true
+            case .allowOnce:
+                approvedByAsk = true
+            }
+        }
+        if persistAllowlist, security == .allowlist {
+            let pattern = resolution?.resolvedPath
+                ?? resolution?.rawExecutable
+                ?? command.first
+                ?? ""
+            if !pattern.isEmpty {
+                ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
+            }
         }
 
         if security == .allowlist, allowlistMatch == nil, !skillAllow, !approvedByAsk {
@@ -761,6 +805,12 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+    }
+
+    private static func parseApprovalDecision(_ raw: String?) -> ExecApprovalDecision? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return ExecApprovalDecision(rawValue: trimmed)
     }
 
     private static let blockedEnvKeys: Set<String> = [
