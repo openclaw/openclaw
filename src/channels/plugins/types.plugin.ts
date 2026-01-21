@@ -48,6 +48,11 @@ export type ChannelPlugin<ResolvedAccount = any> = {
   id: ChannelId;
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;
+  defaults?: {
+    queue?: {
+      debounceMs?: number;
+    };
+  };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
   // CLI onboarding wizard hooks for this channel.
   onboarding?: ChannelOnboardingAdapter;
