@@ -10,8 +10,8 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
  * Parameters for starting a Claude Code session.
  */
 export interface ClaudeCodeSessionParams {
-  /** Project identifier (e.g., "juzi" or "juzi @experimental") */
-  project: string;
+  /** Project identifier (e.g., "juzi" or "juzi @experimental"). Required unless workingDir is provided. */
+  project?: string;
 
   /** Initial prompt to send to Claude Code */
   prompt?: string;
@@ -19,7 +19,7 @@ export interface ClaudeCodeSessionParams {
   /** Resume a specific session by token */
   resumeToken?: string;
 
-  /** Override working directory (resolved from project if not provided) */
+  /** Working directory. Required unless project is provided. */
   workingDir?: string;
 
   /** Model to use (opus, sonnet, haiku) */
@@ -174,6 +174,12 @@ export interface ClaudeCodeSessionData {
 
   /** Current question if any */
   currentQuestion?: string;
+
+  /** Whether this is a resumed session (skip old history in events) */
+  isResume?: boolean;
+
+  /** Timestamp when session started (for filtering old events on resume) */
+  sessionStartTime?: number;
 }
 
 /**

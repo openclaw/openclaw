@@ -108,6 +108,18 @@ export class SessionParser {
   }
 
   /**
+   * Skip to end of file (ignore existing content, only read new events).
+   * Useful when resuming a session where we don't want to replay history.
+   */
+  skipToEnd(): void {
+    if (!fs.existsSync(this.sessionFile)) {
+      return;
+    }
+    const stat = fs.statSync(this.sessionFile);
+    this.lastPosition = stat.size;
+  }
+
+  /**
    * Parse a single raw event dict into a SessionEvent.
    */
   private parseEvent(raw: Record<string, unknown>): SessionEvent | undefined {

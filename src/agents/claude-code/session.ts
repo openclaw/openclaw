@@ -81,16 +81,26 @@ function generateSessionId(): string {
 export async function startSession(params: ClaudeCodeSessionParams): Promise<SessionStartResult> {
   const sessionId = generateSessionId();
 
-  // Resolve project directory
+  // Resolve project directory (either workingDir or project must be provided)
   let workingDir: string;
   let projectName: string;
   let branch: string;
 
   if (params.workingDir) {
     workingDir = params.workingDir;
-    projectName = path.basename(workingDir);
     branch = getGitBranch(workingDir);
-  } else {
+
+    // Detect if this is a worktree and extract project name properly
+    // Worktree paths look like: /path/to/project/.worktrees/branch
+    const worktreeMatch = workingDir.match(/^(.+)\/\.worktrees\/([^/]+)\/?$/);
+    if (worktreeMatch) {
+      // It's a worktree - use parent project name only (branch shown in ctx: line)
+      projectName = path.basename(worktreeMatch[1]);
+    } else {
+      // Regular directory
+      projectName = path.basename(workingDir);
+    }
+  } else if (params.project) {
     const resolved = resolveProject(params.project);
     if (!resolved) {
       return {
@@ -101,6 +111,11 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
     workingDir = resolved.workingDir;
     projectName = resolved.displayName;
     branch = resolved.branch;
+  } else {
+    return {
+      success: false,
+      error: "Either project or workingDir must be provided",
+    };
   }
 
   // Check if directory exists
@@ -186,6 +201,8 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
     recentActions: [],
     phaseStatus: "Starting",
     branch,
+    isResume: !!params.resumeToken, // Track if this is a resumed session
+    sessionStartTime: Date.now(), // Record start time for filtering old events
   };
 
   // Register session
@@ -287,7 +304,10 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
       const sessionFile = findSessionFile(session.resumeToken);
       if (sessionFile) {
         session.sessionFile = sessionFile;
-        session.parser = new SessionParser(sessionFile);
+        const parser = new SessionParser(sessionFile);
+        // Don't skip to end - we'll filter by timestamp instead
+        // This ensures we catch new events even if Claude writes before we start watching
+        session.parser = parser;
         log.info(`[${session.id}] Found session file: ${sessionFile}`);
       }
     }
@@ -314,7 +334,9 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
             session.resumeToken = tokenMatch[1];
           }
           // Create parser for this session file
-          session.parser = new SessionParser(session.sessionFile);
+          const parser = new SessionParser(session.sessionFile);
+          // Don't skip to end - we'll filter by timestamp instead
+          session.parser = parser;
           log.info(`[${session.id}] Found session file: ${session.sessionFile}`);
         }
       }
@@ -324,6 +346,9 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
     if (session.sessionFile && session.parser) {
       const parser = session.parser as SessionParser;
       const newEvents = parser.parseNew();
+      if (newEvents.length > 0) {
+        log.debug(`[${session.id}] Parsed ${newEvents.length} new events`);
+      }
       for (const event of newEvents) {
         processEvent(session, event);
       }
@@ -340,6 +365,22 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
  * Process a session event.
  */
 function processEvent(session: ClaudeCodeSessionData, event: SessionEvent): void {
+  // For resumed sessions, skip events that happened before we started
+  // This filters out old history while still catching new events
+  if (session.isResume && session.sessionStartTime) {
+    const eventTime = event.timestamp.getTime();
+    // Allow 5 second buffer before session start to catch events written during startup
+    if (eventTime < session.sessionStartTime - 5000) {
+      log.debug(
+        `[${session.id}] Skipping old event (${event.type}) from ${event.timestamp.toISOString()}`,
+      );
+      return; // Skip old event
+    }
+    log.debug(
+      `[${session.id}] Processing new event (${event.type}) from ${event.timestamp.toISOString()}`,
+    );
+  }
+
   session.eventCount++;
   session.events.push(event);
 

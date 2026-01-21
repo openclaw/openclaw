@@ -330,21 +330,31 @@ export function findSessionFile(resumeToken: string): string | undefined {
  * Literal - becomes --
  */
 export function decodeClaudeProjectPath(encoded: string): string {
-  // Replace -- with placeholder, then - with /, then placeholder back to -
+  // Claude Code encoding: / → -, . → -
+  // So /. (hidden dir like /.worktrees) becomes --
+  // We need to decode: -- → /., then - → /
   const PLACEHOLDER = "\x00";
   let decoded = encoded.replace(/--/g, PLACEHOLDER);
   decoded = decoded.replace(/-/g, "/");
-  decoded = decoded.replace(new RegExp(PLACEHOLDER, "g"), "-");
+  decoded = decoded.replace(new RegExp(PLACEHOLDER, "g"), "/.");
   return decoded;
 }
 
 /**
  * Encode a path for Claude Code project directory.
+ *
+ * Claude Code encodes paths:
+ * - `-` → `--` (escape existing dashes)
+ * - `/` → `-`
+ * - `.` → `-`
+ *
+ * Example: `/Users/dydo/juzi/.worktrees/exp` → `-Users-dydo-juzi--worktrees-exp`
  */
 export function encodeClaudeProjectPath(dir: string): string {
-  // Replace - with --, then / with -
+  // Replace - with --, then / with -, then . with -
   let encoded = dir.replace(/-/g, "--");
   encoded = encoded.replace(/\//g, "-");
+  encoded = encoded.replace(/\./g, "-");
   return encoded;
 }
 

@@ -598,9 +598,7 @@ export const handleClaudeCommand: CommandHandler = async (params, _allowTextComm
       const chatIdMatch = fromField.match(/telegram:(?:group:)?(-?\d+)/);
       const planChatId = chatIdMatch?.[1];
       const planThreadId =
-        typeof params.ctx.MessageThreadId === "number"
-          ? params.ctx.MessageThreadId
-          : undefined;
+        typeof params.ctx.MessageThreadId === "number" ? params.ctx.MessageThreadId : undefined;
       const planAccountId = params.ctx.AccountId;
 
       // Build planning request for DyDo (with chat context for bubbles)
