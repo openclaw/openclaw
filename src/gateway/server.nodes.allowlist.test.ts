@@ -172,4 +172,55 @@ describe("gateway node command allowlist", () => {
     ws.close();
     await server.close();
   });
+
+  test("accepts node invoke result with null payloadJSON", async () => {
+    const { server, ws, port } = await startServerWithClient();
+    await connectOk(ws);
+
+    let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
+    const invokeReqP = new Promise<{ id?: string; nodeId?: string }>((resolve) => {
+      resolveInvoke = resolve;
+    });
+    const nodeClient = await connectNodeClient({
+      port,
+      commands: ["canvas.snapshot"],
+      instanceId: "node-null-payloadjson",
+      displayName: "node-null-payloadjson",
+      onEvent: (evt) => {
+        if (evt.event === "node.invoke.request") {
+          const payload = evt.payload as { id?: string; nodeId?: string };
+          resolveInvoke?.(payload);
+        }
+      },
+    });
+
+    const listRes = await rpcReq<{ nodes?: Array<{ nodeId: string }> }>(ws, "node.list", {});
+    const nodeId = listRes.payload?.nodes?.[0]?.nodeId ?? "";
+    expect(nodeId).toBeTruthy();
+
+    const invokeResP = rpcReq(ws, "node.invoke", {
+      nodeId,
+      command: "canvas.snapshot",
+      params: { format: "png" },
+      idempotencyKey: "allowlist-null-payloadjson",
+    });
+
+    const payload = await invokeReqP;
+    const requestId = payload?.id ?? "";
+    const nodeIdFromReq = payload?.nodeId ?? "node-null-payloadjson";
+
+    await nodeClient.request("node.invoke.result", {
+      id: requestId,
+      nodeId: nodeIdFromReq,
+      ok: true,
+      payloadJSON: null,
+    });
+
+    const invokeRes = await invokeResP;
+    expect(invokeRes.ok).toBe(true);
+
+    nodeClient.stop();
+    ws.close();
+    await server.close();
+  });
 });
