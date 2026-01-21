@@ -23,6 +23,35 @@ public actor GatewayNodeSession {
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
     private var onInvoke: (@Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)?
+
+    static func invokeWithTimeout(
+        request: BridgeInvokeRequest,
+        timeoutMs: Int?,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse
+    ) async -> BridgeInvokeResponse {
+        let timeout = max(0, timeoutMs ?? 0)
+        guard timeout > 0 else {
+            return await onInvoke(request)
+        }
+
+        return await withTaskGroup(of: BridgeInvokeResponse.self) { group in
+            group.addTask { await onInvoke(request) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)
+                return BridgeInvokeResponse(
+                    id: request.id,
+                    ok: false,
+                    error: ClawdbotNodeError(
+                        code: .unavailable,
+                        message: "node invoke timed out")
+                )
+            }
+
+            let first = await group.next()!
+            group.cancelAll()
+            return first
+        }
+    }
     private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
     private var canvasHostUrl: String?
 
@@ -167,7 +196,11 @@ public actor GatewayNodeSession {
             let request = try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
             guard let onInvoke else { return }
             let req = BridgeInvokeRequest(id: request.id, command: request.command, paramsJSON: request.paramsJSON)
-            let response = await onInvoke(req)
+            let response = await Self.invokeWithTimeout(
+                request: req,
+                timeoutMs: request.timeoutMs,
+                onInvoke: onInvoke
+            )
             await self.sendInvokeResult(request: request, response: response)
         } catch {
             self.logger.error("node invoke decode failed: \(error.localizedDescription, privacy: .public)")
