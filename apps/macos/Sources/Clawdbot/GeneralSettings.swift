@@ -29,25 +29,6 @@ struct GeneralSettings: View {
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
-                if !self.state.onboardingSeen {
-                    Button {
-                        DebugActions.restartOnboarding()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Label("Complete onboarding to finish setup", systemImage: "arrow.counterclockwise")
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(Color.accentColor)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 2)
-                }
-
                 VStack(alignment: .leading, spacing: 12) {
                     SettingsToggleRow(
                         title: "Clawdbot active",
@@ -82,8 +63,6 @@ struct GeneralSettings: View {
                         title: "Allow Camera",
                         subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
                         binding: self.$cameraEnabled)
-
-                    SystemRunSettingsView()
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Location Access")

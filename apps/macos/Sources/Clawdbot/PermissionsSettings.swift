@@ -8,6 +8,8 @@ struct PermissionsSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            SystemRunSettingsView()
+
             Text("Allow these so Clawdbot can notify and capture when needed.")
                 .padding(.top, 4)
 
@@ -46,24 +48,6 @@ struct PermissionStatusList: View {
             .padding(.top, 2)
             .help("Refresh status")
 
-            if (self.status[.accessibility] ?? false) == false || (self.status[.screenRecording] ?? false) == false {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(
-                        "Note: macOS may require restarting Clawdbot after enabling Accessibility or Screen Recording.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Button {
-                        LaunchdManager.startClawdbot()
-                    } label: {
-                        Label("Restart Clawdbot", systemImage: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                .padding(.top, 4)
-            }
         }
     }
 
