@@ -44,6 +44,15 @@ function formatNodeVersions(node: {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+function formatPathEnv(raw?: string): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(":").filter(Boolean);
+  if (parts.length <= 3) return trimmed;
+  return `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
+}
+
 function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) return undefined;
   const value =
@@ -126,11 +135,13 @@ export function registerNodesStatusCommands(nodes: Command) {
             const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
+            const pathEnv = formatPathEnv(n.pathEnv);
             const detailParts = [
               n.deviceFamily ? `device: ${n.deviceFamily}` : null,
               n.modelIdentifier ? `hw: ${n.modelIdentifier}` : null,
               perms ? `perms: ${perms}` : null,
               versions,
+              pathEnv ? `path: ${pathEnv}` : null,
             ].filter(Boolean) as string[];
             const caps = Array.isArray(n.caps)
               ? n.caps.map(String).filter(Boolean).sort().join(", ")
@@ -201,6 +212,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
           const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
+          const pathEnv = typeof obj.pathEnv === "string" ? obj.pathEnv : null;
           const versions = formatNodeVersions(
             obj as {
               platform?: string;
@@ -223,6 +235,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             model ? { Field: "Model", Value: model } : null,
             perms ? { Field: "Perms", Value: perms } : null,
             versions ? { Field: "Version", Value: versions } : null,
+            pathEnv ? { Field: "PATH", Value: pathEnv } : null,
             { Field: "Status", Value: status },
             { Field: "Caps", Value: caps ? caps.join(", ") : "?" },
           ].filter(Boolean) as Array<{ Field: string; Value: string }>;

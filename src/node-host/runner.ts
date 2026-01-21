@@ -25,6 +25,7 @@ import {
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadConfig } from "../config/config.js";
+import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
@@ -102,6 +103,7 @@ type NodeInvokeRequestPayload = {
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
+const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const execHostEnforced = process.env.CLAWDBOT_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
@@ -287,8 +289,16 @@ function resolveEnvPath(env?: Record<string, string>): string[] {
     (env as Record<string, string>)?.Path ??
     process.env.PATH ??
     process.env.Path ??
-    "";
+    DEFAULT_NODE_PATH;
   return raw.split(path.delimiter).filter(Boolean);
+}
+
+function ensureNodePathEnv(): string {
+  ensureClawdbotCliOnPath({ pathEnv: process.env.PATH ?? "" });
+  const current = process.env.PATH ?? "";
+  if (current.trim()) return current;
+  process.env.PATH = DEFAULT_NODE_PATH;
+  return DEFAULT_NODE_PATH;
 }
 
 function resolveExecutable(bin: string, env?: Record<string, string>) {
@@ -369,6 +379,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
+  const pathEnv = ensureNodePathEnv();
+  // eslint-disable-next-line no-console
+  console.log(`node host PATH: ${pathEnv}`);
 
   const client = new GatewayClient({
     url,
@@ -389,6 +402,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       "system.execApprovals.get",
       "system.execApprovals.set",
     ],
+    pathEnv,
     permissions: undefined,
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gateway.tlsFingerprint,

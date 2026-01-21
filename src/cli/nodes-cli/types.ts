@@ -53,6 +53,7 @@ export type NodeListNode = {
   remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  pathEnv?: string;
   caps?: string[];
   commands?: string[];
   permissions?: Record<string, boolean>;

@@ -17,6 +17,7 @@ export type NodeSession = {
   caps: string[];
   commands: string[];
   permissions?: Record<string, boolean>;
+  pathEnv?: string;
   connectedAtMs: number;
 };
 
@@ -51,6 +52,10 @@ export class NodeRegistry {
       typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"
         ? ((connect as { permissions?: Record<string, boolean> }).permissions ?? undefined)
         : undefined;
+    const pathEnv =
+      typeof (connect as { pathEnv?: string }).pathEnv === "string"
+        ? (connect as { pathEnv?: string }).pathEnv
+        : undefined;
     const session: NodeSession = {
       nodeId,
       connId: client.connId,
@@ -66,6 +71,7 @@ export class NodeRegistry {
       caps,
       commands,
       permissions,
+      pathEnv,
       connectedAtMs: Date.now(),
     };
     this.nodesById.set(nodeId, session);
