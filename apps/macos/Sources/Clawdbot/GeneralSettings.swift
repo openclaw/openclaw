@@ -187,13 +187,14 @@ struct GeneralSettings: View {
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Picker("", selection: self.$state.connectionMode) {
+            Picker("Mode", selection: self.$state.connectionMode) {
                 Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
                 Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                 Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 380, alignment: .leading)
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 260, alignment: .leading)
 
             if self.state.connectionMode == .unconfigured {
                 Text("Pick Local or Remote to start the Gateway.")
