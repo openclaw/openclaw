@@ -62,6 +62,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const tokenRaw = params.get("token");
   const passwordRaw = params.get("password");
   const sessionRaw = params.get("session");
+  const gatewayUrlRaw = params.get("gatewayUrl");
   let shouldCleanUrl = false;
 
   if (tokenRaw != null) {
@@ -92,6 +93,15 @@ export function applySettingsFromUrl(host: SettingsHost) {
         lastActiveSessionKey: session,
       });
     }
+  }
+
+  if (gatewayUrlRaw != null) {
+    const gatewayUrl = gatewayUrlRaw.trim();
+    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
+      applySettings(host, { ...host.settings, gatewayUrl });
+    }
+    params.delete("gatewayUrl");
+    shouldCleanUrl = true;
   }
 
   if (!shouldCleanUrl) return;
