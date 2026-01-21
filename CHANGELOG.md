@@ -4,17 +4,9 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.21
 
-### Changes
-- CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
-- Exec approvals: support wildcard agent allowlists (`*`) across all agents.
-
 ### Fixes
-- Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
-- macOS: exec approvals now respect wildcard agent allowlists (`*`).
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
-- Agents: add diagnostics cache trace config and fix cache trace logging edge cases. (#1370) — thanks @parubets.
-- Agents: scrub Anthropic refusal test token from prompts and add a live refusal regression probe.
-- Memory: make session memory indexing async and delta-gated to avoid blocking searches.
+- Configure: restrict the model allowlist picker to OAuth-compatible Anthropic models and preselect Opus 4.5.
 
 ## 2026.1.20
 
@@ -98,7 +90,6 @@ Docs: https://docs.clawd.bot
 - **BREAKING:** Reject invalid/unknown config entries and refuse to start the gateway for safety. Run `clawdbot doctor --fix` to repair, then update plugins (`clawdbot plugins update`) if you use any.
 
 ### Fixes
-- Models: limit `/model list` chat output to configured models when no allowlist is set.
 - Discovery: shorten Bonjour DNS-SD service type to `_clawdbot-gw._tcp` and update discovery clients/docs.
 - Diagnostics: export OTLP logs, correct queue depth tracking, and document message-flow telemetry.
 - Diagnostics: emit message-flow diagnostics across channels via shared dispatch. (#1244)

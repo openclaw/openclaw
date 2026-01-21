@@ -4,9 +4,20 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
-import { applyPrimaryModel, promptDefaultModel } from "./model-picker.js";
+import {
+  applyModelAllowlist,
+  applyPrimaryModel,
+  promptDefaultModel,
+  promptModelAllowlist,
+} from "./model-picker.js";
 
 type GatewayAuthChoice = "off" | "token" | "password";
+
+const ANTHROPIC_OAUTH_MODEL_KEYS = [
+  "anthropic/claude-opus-4-5",
+  "anthropic/claude-sonnet-4-5",
+  "anthropic/claude-haiku-4-5",
+];
 
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
@@ -51,19 +62,34 @@ export async function promptAuthConfig(
       setDefaultModel: true,
     });
     next = applied.config;
-    // Auth choice already set a sensible default model; skip the model picker.
-    return next;
+  } else {
+    const modelSelection = await promptDefaultModel({
+      config: next,
+      prompter,
+      allowKeep: true,
+      ignoreAllowlist: true,
+      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+    });
+    if (modelSelection.model) {
+      next = applyPrimaryModel(next, modelSelection.model);
+    }
   }
 
-  const modelSelection = await promptDefaultModel({
+  const anthropicOAuth =
+    authChoice === "claude-cli" ||
+    authChoice === "setup-token" ||
+    authChoice === "token" ||
+    authChoice === "oauth";
+
+  const allowlistSelection = await promptModelAllowlist({
     config: next,
     prompter,
-    allowKeep: true,
-    ignoreAllowlist: true,
-    preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+    allowedKeys: anthropicOAuth ? ANTHROPIC_OAUTH_MODEL_KEYS : undefined,
+    initialSelections: anthropicOAuth ? ["anthropic/claude-opus-4-5"] : undefined,
+    message: anthropicOAuth ? "Anthropic OAuth models" : undefined,
   });
-  if (modelSelection.model) {
-    next = applyPrimaryModel(next, modelSelection.model);
+  if (allowlistSelection.models) {
+    next = applyModelAllowlist(next, allowlistSelection.models);
   }
 
   return next;

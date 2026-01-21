@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { makePrompter } from "./onboarding/__tests__/test-utils.js";
-import { promptDefaultModel } from "./model-picker.js";
+import { applyModelAllowlist, promptDefaultModel, promptModelAllowlist } from "./model-picker.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 vi.mock("../agents/model-catalog.js", () => ({
@@ -63,5 +63,110 @@ describe("promptDefaultModel", () => {
     expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
       true,
     );
+  });
+});
+
+describe("promptModelAllowlist", () => {
+  it("filters internal router models from the selection list", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openrouter",
+        id: "auto",
+        name: "OpenRouter Auto",
+      },
+      {
+        provider: "openrouter",
+        id: "meta-llama/llama-3.3-70b:free",
+        name: "Llama 3.3 70B",
+      },
+    ]);
+
+    const multiselect = vi.fn(async (params) =>
+      params.options.map((option: { value: string }) => option.value),
+    );
+    const prompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as ClawdbotConfig;
+
+    await promptModelAllowlist({ config, prompter });
+
+    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    expect(options.some((opt: { value: string }) => opt.value === "openrouter/auto")).toBe(false);
+    expect(
+      options.some(
+        (opt: { value: string }) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free",
+      ),
+    ).toBe(true);
+  });
+
+  it("filters to allowed keys when provided", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+      },
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+      },
+    ]);
+
+    const multiselect = vi.fn(async (params) =>
+      params.options.map((option: { value: string }) => option.value),
+    );
+    const prompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as ClawdbotConfig;
+
+    await promptModelAllowlist({
+      config,
+      prompter,
+      allowedKeys: ["anthropic/claude-opus-4-5"],
+    });
+
+    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    expect(options.map((opt: { value: string }) => opt.value)).toEqual([
+      "anthropic/claude-opus-4-5",
+    ]);
+  });
+});
+
+describe("applyModelAllowlist", () => {
+  it("preserves existing entries for selected models", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.2": { alias: "gpt" },
+            "anthropic/claude-opus-4-5": { alias: "opus" },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const next = applyModelAllowlist(config, ["openai/gpt-5.2"]);
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.2": { alias: "gpt" },
+    });
+  });
+
+  it("clears the allowlist when no models remain", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.2": { alias: "gpt" },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const next = applyModelAllowlist(config, []);
+    expect(next.agents?.defaults?.models).toBeUndefined();
   });
 });
