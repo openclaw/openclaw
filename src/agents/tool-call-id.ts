@@ -2,46 +2,70 @@ import { createHash } from "node:crypto";
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-export function sanitizeToolCallId(id: string): string {
-  if (!id || typeof id !== "string") return "defaulttoolid";
+export type ToolCallIdMode = "standard" | "strict";
 
-  // Some providers (e.g. Mistral via OpenRouter) require strictly alphanumeric tool call IDs.
-  // Strip all non-alphanumeric characters to ensure maximum compatibility.
-  const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
+/**
+ * Sanitize a tool call ID to be compatible with various providers.
+ *
+ * - "standard" mode: allows [a-zA-Z0-9_-], better readability (default)
+ * - "strict" mode: only [a-zA-Z0-9], required for Mistral via OpenRouter
+ */
+export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "standard"): string {
+  if (!id || typeof id !== "string") {
+    return mode === "strict" ? "defaulttoolid" : "default_tool_id";
+  }
 
-  return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
+  if (mode === "strict") {
+    // Some providers (e.g. Mistral via OpenRouter) require strictly alphanumeric tool call IDs.
+    const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
+    return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
+  }
+
+  // Standard mode: allow underscores and hyphens for better readability in logs
+  const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const trimmed = sanitized.replace(/^[^a-zA-Z0-9_-]+/, "");
+  return trimmed.length > 0 ? trimmed : "sanitized_tool_id";
 }
 
-export function isValidCloudCodeAssistToolId(id: string): boolean {
+export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "standard"): boolean {
   if (!id || typeof id !== "string") return false;
-  // Strictly alphanumeric for maximum provider compatibility (e.g. Mistral via OpenRouter).
-  return /^[a-zA-Z0-9]+$/.test(id);
+  if (mode === "strict") {
+    // Strictly alphanumeric for providers like Mistral via OpenRouter
+    return /^[a-zA-Z0-9]+$/.test(id);
+  }
+  // Standard mode allows underscores and hyphens
+  return /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
 function shortHash(text: string): string {
   return createHash("sha1").update(text).digest("hex").slice(0, 8);
 }
 
-function makeUniqueToolId(params: { id: string; used: Set<string> }): string {
+function makeUniqueToolId(params: {
+  id: string;
+  used: Set<string>;
+  mode: ToolCallIdMode;
+}): string {
   const MAX_LEN = 40;
 
-  const base = sanitizeToolCallId(params.id).slice(0, MAX_LEN);
+  const base = sanitizeToolCallId(params.id, params.mode).slice(0, MAX_LEN);
   if (!params.used.has(base)) return base;
 
-  // Use alphanumeric-only suffixes to maintain strict compatibility.
   const hash = shortHash(params.id);
-  const maxBaseLen = MAX_LEN - hash.length;
+  // Use separator based on mode: underscore for standard (readable), none for strict
+  const separator = params.mode === "strict" ? "" : "_";
+  const maxBaseLen = MAX_LEN - separator.length - hash.length;
   const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
-  const candidate = `${clippedBase}${hash}`;
+  const candidate = `${clippedBase}${separator}${hash}`;
   if (!params.used.has(candidate)) return candidate;
 
   for (let i = 2; i < 1000; i += 1) {
-    const suffix = `x${i}`;
+    const suffix = params.mode === "strict" ? `x${i}` : `_${i}`;
     const next = `${candidate.slice(0, MAX_LEN - suffix.length)}${suffix}`;
     if (!params.used.has(next)) return next;
   }
 
-  const ts = `t${Date.now()}`;
+  const ts = params.mode === "strict" ? `t${Date.now()}` : `_${Date.now()}`;
   return `${candidate.slice(0, MAX_LEN - ts.length)}${ts}`;
 }
 
@@ -100,18 +124,27 @@ function rewriteToolResultIds(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
-export function sanitizeToolCallIdsForCloudCodeAssist(messages: AgentMessage[]): AgentMessage[] {
-  // Some providers (e.g. Mistral via OpenRouter) require strictly alphanumeric tool IDs.
-  // Use ^[a-zA-Z0-9]+$ pattern for maximum compatibility across all providers.
-  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `ab`).
-  // Fix by applying a stable, transcript-wide mapping and de-duping via hash suffix.
+/**
+ * Sanitize tool call IDs for provider compatibility.
+ *
+ * @param messages - The messages to sanitize
+ * @param mode - "standard" (default, allows _-) or "strict" (alphanumeric only for Mistral/OpenRouter)
+ */
+export function sanitizeToolCallIdsForCloudCodeAssist(
+  messages: AgentMessage[],
+  mode: ToolCallIdMode = "standard",
+): AgentMessage[] {
+  // Standard mode: allows [a-zA-Z0-9_-] for better readability in session logs
+  // Strict mode: only [a-zA-Z0-9] for providers like Mistral via OpenRouter
+  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `a_b` or `ab`).
+  // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.
   const map = new Map<string, string>();
   const used = new Set<string>();
 
   const resolve = (id: string) => {
     const existing = map.get(id);
     if (existing) return existing;
-    const next = makeUniqueToolId({ id, used });
+    const next = makeUniqueToolId({ id, used, mode });
     map.set(id, next);
     used.add(next);
     return next;

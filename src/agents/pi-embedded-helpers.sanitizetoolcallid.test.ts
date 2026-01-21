@@ -1,24 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeToolCallId } from "./pi-embedded-helpers.js";
-import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
-  name: DEFAULT_AGENTS_FILENAME,
-  path: "/tmp/AGENTS.md",
-  content: "",
-  missing: false,
-  ...overrides,
-});
 describe("sanitizeToolCallId", () => {
-  it("keeps valid alphanumeric tool call IDs", () => {
-    expect(sanitizeToolCallId("callabc123")).toBe("callabc123");
+  describe("standard mode (default)", () => {
+    it("keeps valid alphanumeric tool call IDs", () => {
+      expect(sanitizeToolCallId("callabc123")).toBe("callabc123");
+    });
+    it("keeps underscores and hyphens for readability", () => {
+      expect(sanitizeToolCallId("call_abc-123")).toBe("call_abc-123");
+      expect(sanitizeToolCallId("call_abc_def")).toBe("call_abc_def");
+    });
+    it("replaces invalid characters with underscores", () => {
+      expect(sanitizeToolCallId("call_abc|item:456")).toBe("call_abc_item_456");
+    });
+    it("returns default for empty IDs", () => {
+      expect(sanitizeToolCallId("")).toBe("default_tool_id");
+    });
   });
-  it("strips non-alphanumeric characters (Mistral/OpenRouter compatibility)", () => {
-    expect(sanitizeToolCallId("call_abc-123")).toBe("callabc123");
-    expect(sanitizeToolCallId("call_abc|item:456")).toBe("callabcitem456");
-    expect(sanitizeToolCallId("whatsapp_login_1768799841527_1")).toBe("whatsapplogin17687998415271");
-  });
-  it("returns default for empty IDs", () => {
-    expect(sanitizeToolCallId("")).toBe("defaulttoolid");
+
+  describe("strict mode (for Mistral/OpenRouter)", () => {
+    it("strips all non-alphanumeric characters", () => {
+      expect(sanitizeToolCallId("call_abc-123", "strict")).toBe("callabc123");
+      expect(sanitizeToolCallId("call_abc|item:456", "strict")).toBe("callabcitem456");
+      expect(sanitizeToolCallId("whatsapp_login_1768799841527_1", "strict")).toBe(
+        "whatsapplogin17687998415271",
+      );
+    });
+    it("returns default for empty IDs", () => {
+      expect(sanitizeToolCallId("", "strict")).toBe("defaulttoolid");
+    });
   });
 });
