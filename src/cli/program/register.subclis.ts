@@ -18,7 +18,7 @@ const shouldRegisterPrimaryOnly = (argv: string[]) => {
   return true;
 };
 
-const shouldEagerRegisterSubcommands = (argv: string[]) => {
+const shouldEagerRegisterSubcommands = (_argv: string[]) => {
   return isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_LAZY_SUBCOMMANDS);
 };
 
