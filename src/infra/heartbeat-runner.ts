@@ -89,7 +89,7 @@ function resolveActiveHoursTimezone(cfg: ClawdbotConfig, raw?: string): string {
   }
 }
 
-function parseActiveHoursTime(raw?: string, opts: { allow24: boolean }): number | null {
+function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
   if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) return null;
   const [hourStr, minuteStr] = raw.split(":");
   const hour = Number(hourStr);
@@ -131,8 +131,8 @@ function isWithinActiveHours(
   const active = heartbeat?.activeHours;
   if (!active) return true;
 
-  const startMin = parseActiveHoursTime(active.start, { allow24: false });
-  const endMin = parseActiveHoursTime(active.end, { allow24: true });
+  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
+  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
   if (startMin === null || endMin === null) return true;
   if (startMin === endMin) return true;
 

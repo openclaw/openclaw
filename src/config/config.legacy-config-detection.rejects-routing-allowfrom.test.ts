@@ -220,12 +220,18 @@ describe("legacy config detection", () => {
   });
   it("keeps gateway.bind tailnet", async () => {
     vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
+    const { migrateLegacyConfig, validateConfigObject } = await import("./config.js");
     const res = migrateLegacyConfig({
       gateway: { bind: "tailnet" as const },
     });
     expect(res.changes).not.toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
-    expect(res.config?.gateway?.bind).toBe("tailnet");
+    expect(res.config).toBeNull();
+
+    const validated = validateConfigObject({ gateway: { bind: "tailnet" as const } });
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.config.gateway?.bind).toBe("tailnet");
+    }
   });
   it('rejects telegram.dmPolicy="open" without allowFrom "*"', async () => {
     vi.resetModules();
