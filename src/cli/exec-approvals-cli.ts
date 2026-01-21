@@ -5,7 +5,8 @@ import type { Command } from "commander";
 import type { ExecApprovalsAgent, ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { isRich, theme } from "../terminal/theme.js";
+import { renderTable } from "../terminal/table.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -23,6 +24,17 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   stdin?: boolean;
   agent?: string;
 };
+
+function formatAge(msAgo: number) {
+  const s = Math.max(0, Math.floor(msAgo / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  return `${d}d`;
+}
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -109,8 +121,87 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       const nodeId = await resolveTargetNodeId(opts);
       const snapshot = await loadSnapshot(opts, nodeId);
-      const payload = opts.json ? JSON.stringify(snapshot) : JSON.stringify(snapshot, null, 2);
-      defaultRuntime.log(payload);
+      if (opts.json) {
+        defaultRuntime.log(JSON.stringify(snapshot));
+        return;
+      }
+
+      const rich = isRich();
+      const heading = (text: string) => (rich ? theme.heading(text) : text);
+      const muted = (text: string) => (rich ? theme.muted(text) : text);
+      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+
+      const file = snapshot.file ?? { version: 1 };
+      const defaults = file.defaults ?? {};
+      const defaultsParts = [
+        defaults.security ? `security=${defaults.security}` : null,
+        defaults.ask ? `ask=${defaults.ask}` : null,
+        defaults.askFallback ? `askFallback=${defaults.askFallback}` : null,
+        typeof defaults.autoAllowSkills === "boolean"
+          ? `autoAllowSkills=${defaults.autoAllowSkills ? "on" : "off"}`
+          : null,
+      ].filter(Boolean) as string[];
+      const agents = file.agents ?? {};
+      const allowlistRows: Array<{ Agent: string; Pattern: string; LastUsed: string }> = [];
+      const now = Date.now();
+      for (const [agentId, agent] of Object.entries(agents)) {
+        const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+        for (const entry of allowlist) {
+          const pattern = entry?.pattern?.trim() ?? "";
+          if (!pattern) continue;
+          const lastUsedAt = typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
+          allowlistRows.push({
+            Agent: agentId,
+            Pattern: pattern,
+            LastUsed: lastUsedAt
+              ? `${formatAge(Math.max(0, now - lastUsedAt))} ago`
+              : muted("unknown"),
+          });
+        }
+      }
+
+      const summaryRows = [
+        { Field: "Path", Value: snapshot.path },
+        { Field: "Exists", Value: snapshot.exists ? "yes" : "no" },
+        { Field: "Hash", Value: snapshot.hash },
+        { Field: "Version", Value: String(file.version ?? 1) },
+        { Field: "Socket", Value: file.socket?.path ?? "default" },
+        { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
+        { Field: "Agents", Value: String(Object.keys(agents).length) },
+        { Field: "Allowlist", Value: String(allowlistRows.length) },
+      ];
+
+      defaultRuntime.log(heading("Approvals"));
+      defaultRuntime.log(
+        renderTable({
+          width: tableWidth,
+          columns: [
+            { key: "Field", header: "Field", minWidth: 8 },
+            { key: "Value", header: "Value", minWidth: 24, flex: true },
+          ],
+          rows: summaryRows,
+        }).trimEnd(),
+      );
+
+      if (allowlistRows.length === 0) {
+        defaultRuntime.log("");
+        defaultRuntime.log(muted("No allowlist entries."));
+        return;
+      }
+
+      defaultRuntime.log("");
+      defaultRuntime.log(heading("Allowlist"));
+      defaultRuntime.log(
+        renderTable({
+          width: tableWidth,
+          columns: [
+            { key: "Agent", header: "Agent", minWidth: 8 },
+            { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+            { key: "LastUsed", header: "Last Used", minWidth: 10 },
+          ],
+          rows: allowlistRows,
+        }).trimEnd(),
+      );
     });
   nodesCallOpts(getCmd);
 
