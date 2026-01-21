@@ -300,6 +300,30 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("skips outside active hours", async () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "UTC",
+          heartbeat: {
+            every: "30m",
+            activeHours: { start: "08:00", end: "24:00", timezone: "user" },
+          },
+        },
+      },
+    };
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      deps: { nowMs: () => Date.UTC(2025, 0, 1, 7, 0, 0) },
+    });
+
+    expect(res.status).toBe("skipped");
+    if (res.status === "skipped") {
+      expect(res.reason).toBe("quiet-hours");
+    }
+  });
+
   it("uses the last non-empty payload for delivery", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");

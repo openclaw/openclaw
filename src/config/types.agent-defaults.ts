@@ -162,6 +162,15 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /** Optional active-hours window (local time); heartbeats run only inside this window. */
+    activeHours?: {
+      /** Start time (24h, HH:MM). Inclusive. */
+      start?: string;
+      /** End time (24h, HH:MM). Exclusive. Use "24:00" for end-of-day. */
+      end?: string;
+      /** Timezone for the window ("user", "local", or IANA TZ id). Default: "user". */
+      timezone?: string;
+    };
     /** Heartbeat model override (provider/model). */
     model?: string;
     /** Delivery target (last|whatsapp|telegram|discord|slack|msteams|signal|imessage|none). */
