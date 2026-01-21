@@ -235,6 +235,17 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
     });
   }
 
+  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
+    findings.push({
+      checkId: "gateway.control_ui.insecure_auth",
+      severity: "warn",
+      title: "Control UI allows insecure HTTP auth",
+      detail:
+        "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
+      remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
+    });
+  }
+
   const token =
     typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
   if (auth.mode === "token" && token && token.length < 24) {
