@@ -179,6 +179,8 @@ export const registerTelegramHandlers = ({
     const callback = ctx.callbackQuery;
     if (!callback) return;
     if (shouldSkipUpdate(ctx)) return;
+    // Answer immediately to prevent Telegram from retrying while we process
+    await bot.api.answerCallbackQuery(callback.id).catch(() => {});
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
@@ -323,8 +325,6 @@ export const registerTelegramHandlers = ({
       });
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
-    } finally {
-      await bot.api.answerCallbackQuery(callback.id).catch(() => {});
     }
   });
 
