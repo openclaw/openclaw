@@ -73,6 +73,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Do sessions reset automatically if I never send `/new`?](#do-sessions-reset-automatically-if-i-never-send-new)
   - [How do I completely reset Clawdbot but keep it installed?](#how-do-i-completely-reset-clawdbot-but-keep-it-installed)
   - [I’m getting “context too large” errors — how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
+  - [Why am I seeing “LLM request rejected: messages.N.content.X.tool_use.input: Field required”?](#why-am-i-seeing-llm-request-rejected-messagesncontentxtool_useinput-field-required)
   - [Why am I getting heartbeat messages every 30 minutes?](#why-am-i-getting-heartbeat-messages-every-30-minutes)
   - [Do I need to add a “bot account” to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
   - [Why doesn’t Clawdbot reply in a group?](#why-doesnt-clawdbot-reply-in-a-group)
@@ -950,6 +951,14 @@ If it keeps happening:
 - Use a model with a larger context window.
 
 Docs: [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning), [Session management](/concepts/session).
+
+### Why am I seeing “LLM request rejected: messages.N.content.X.tool_use.input: Field required”?
+
+This is a provider validation error: the model emitted a `tool_use` block without the required
+`input`. It usually means the session history is stale or corrupted (often after long threads
+or a tool/schema change).
+
+Fix: start a fresh session with `/new` (standalone message).
 
 ### Why am I getting heartbeat messages every 30 minutes?
 
