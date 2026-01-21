@@ -13,6 +13,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -26,6 +27,7 @@ import {
 } from "../infra/skills-remote.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
+import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -198,6 +200,10 @@ export async function startGatewayServer(
   }
 
   const cfgAtStart = loadConfig();
+  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
+  if (diagnosticsEnabled) {
+    startDiagnosticHeartbeat();
+  }
   setGatewaySigusr1RestartPolicy({ allowExternal: cfgAtStart.commands?.restart === true });
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
@@ -533,5 +539,12 @@ export async function startGatewayServer(
     httpServer,
   });
 
-  return { close };
+  return {
+    close: async (opts) => {
+      if (diagnosticsEnabled) {
+        stopDiagnosticHeartbeat();
+      }
+      await close(opts);
+    },
+  };
 }

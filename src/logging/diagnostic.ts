@@ -338,6 +338,7 @@ export function startDiagnosticHeartbeat() {
       }
     }
   }, 30_000);
+  heartbeatInterval.unref?.();
 }
 
 export function stopDiagnosticHeartbeat() {

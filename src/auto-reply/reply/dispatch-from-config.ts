@@ -1,5 +1,11 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  logMessageProcessed,
+  logMessageQueued,
+  logSessionStateChange,
+} from "../../logging/diagnostic.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -21,8 +27,55 @@ export async function dispatchReplyFromConfig(params: {
   replyResolver?: typeof getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+  const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
+  const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
+  const chatId = ctx.To ?? ctx.From;
+  const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const sessionKey = ctx.SessionKey;
+  const startTime = diagnosticsEnabled ? Date.now() : 0;
+  const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+
+  const recordProcessed = (
+    outcome: "completed" | "skipped" | "error",
+    opts?: {
+      reason?: string;
+      error?: string;
+    },
+  ) => {
+    if (!diagnosticsEnabled) return;
+    logMessageProcessed({
+      channel,
+      chatId,
+      messageId,
+      sessionKey,
+      durationMs: Date.now() - startTime,
+      outcome,
+      reason: opts?.reason,
+      error: opts?.error,
+    });
+  };
+
+  const markProcessing = () => {
+    if (!canTrackSession || !sessionKey) return;
+    logMessageQueued({ sessionKey, channel, source: "dispatch" });
+    logSessionStateChange({
+      sessionKey,
+      state: "processing",
+      reason: "message_start",
+    });
+  };
+
+  const markIdle = (reason: string) => {
+    if (!canTrackSession || !sessionKey) return;
+    logSessionStateChange({
+      sessionKey,
+      state: "idle",
+      reason,
+    });
+  };
 
   if (shouldSkipDuplicateInbound(ctx)) {
+    recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
@@ -68,95 +121,107 @@ export async function dispatchReplyFromConfig(params: {
     }
   };
 
-  const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
-  if (fastAbort.handled) {
-    const payload = {
-      text: formatAbortReplyText(fastAbort.stoppedSubagents),
-    } satisfies ReplyPayload;
+  markProcessing();
+
+  try {
+    const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
+    if (fastAbort.handled) {
+      const payload = {
+        text: formatAbortReplyText(fastAbort.stoppedSubagents),
+      } satisfies ReplyPayload;
+      let queuedFinal = false;
+      let routedFinalCount = 0;
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        const result = await routeReply({
+          payload,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: ctx.MessageThreadId,
+          cfg,
+        });
+        queuedFinal = result.ok;
+        if (result.ok) routedFinalCount += 1;
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else {
+        queuedFinal = dispatcher.sendFinalReply(payload);
+      }
+      await dispatcher.waitForIdle();
+      const counts = dispatcher.getQueuedCounts();
+      counts.final += routedFinalCount;
+      recordProcessed("completed", { reason: "fast_abort" });
+      markIdle("message_completed");
+      return { queuedFinal, counts };
+    }
+
+    const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
+      ctx,
+      {
+        ...params.replyOptions,
+        onToolResult: (payload: ReplyPayload) => {
+          if (shouldRouteToOriginating) {
+            // Fire-and-forget for streaming tool results when routing.
+            void sendPayloadAsync(payload);
+          } else {
+            // Synchronous dispatch to preserve callback timing.
+            dispatcher.sendToolResult(payload);
+          }
+        },
+        onBlockReply: (payload: ReplyPayload, context) => {
+          if (shouldRouteToOriginating) {
+            // Await routed sends so upstream can enforce ordering/timeouts.
+            return sendPayloadAsync(payload, context?.abortSignal);
+          } else {
+            // Synchronous dispatch to preserve callback timing.
+            dispatcher.sendBlockReply(payload);
+          }
+        },
+      },
+      cfg,
+    );
+
+    const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+
     let queuedFinal = false;
     let routedFinalCount = 0;
-    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-      const result = await routeReply({
-        payload,
-        channel: originatingChannel,
-        to: originatingTo,
-        sessionKey: ctx.SessionKey,
-        accountId: ctx.AccountId,
-        threadId: ctx.MessageThreadId,
-        cfg,
-      });
-      queuedFinal = result.ok;
-      if (result.ok) routedFinalCount += 1;
-      if (!result.ok) {
-        logVerbose(
-          `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
-        );
+    for (const reply of replies) {
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        // Route final reply to originating channel.
+        const result = await routeReply({
+          payload: reply,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: ctx.MessageThreadId,
+          cfg,
+        });
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        queuedFinal = result.ok || queuedFinal;
+        if (result.ok) routedFinalCount += 1;
+      } else {
+        queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
       }
-    } else {
-      queuedFinal = dispatcher.sendFinalReply(payload);
     }
     await dispatcher.waitForIdle();
+
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    recordProcessed("completed");
+    markIdle("message_completed");
     return { queuedFinal, counts };
+  } catch (err) {
+    recordProcessed("error", { error: String(err) });
+    markIdle("message_error");
+    throw err;
   }
-
-  const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
-    ctx,
-    {
-      ...params.replyOptions,
-      onToolResult: (payload: ReplyPayload) => {
-        if (shouldRouteToOriginating) {
-          // Fire-and-forget for streaming tool results when routing.
-          void sendPayloadAsync(payload);
-        } else {
-          // Synchronous dispatch to preserve callback timing.
-          dispatcher.sendToolResult(payload);
-        }
-      },
-      onBlockReply: (payload: ReplyPayload, context) => {
-        if (shouldRouteToOriginating) {
-          // Await routed sends so upstream can enforce ordering/timeouts.
-          return sendPayloadAsync(payload, context?.abortSignal);
-        } else {
-          // Synchronous dispatch to preserve callback timing.
-          dispatcher.sendBlockReply(payload);
-        }
-      },
-    },
-    cfg,
-  );
-
-  const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
-
-  let queuedFinal = false;
-  let routedFinalCount = 0;
-  for (const reply of replies) {
-    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-      // Route final reply to originating channel.
-      const result = await routeReply({
-        payload: reply,
-        channel: originatingChannel,
-        to: originatingTo,
-        sessionKey: ctx.SessionKey,
-        accountId: ctx.AccountId,
-        threadId: ctx.MessageThreadId,
-        cfg,
-      });
-      if (!result.ok) {
-        logVerbose(
-          `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
-        );
-      }
-      queuedFinal = result.ok || queuedFinal;
-      if (result.ok) routedFinalCount += 1;
-    } else {
-      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-    }
-  }
-  await dispatcher.waitForIdle();
-
-  const counts = dispatcher.getQueuedCounts();
-  counts.final += routedFinalCount;
-  return { queuedFinal, counts };
 }

@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 
 import { webhookCallback } from "grammy";
 import type { ClawdbotConfig } from "../config/config.js";
+import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -34,6 +35,7 @@ export async function startTelegramWebhook(opts: {
   const port = opts.port ?? 8787;
   const host = opts.host ?? "0.0.0.0";
   const runtime = opts.runtime ?? defaultRuntime;
+  const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
@@ -45,7 +47,9 @@ export async function startTelegramWebhook(opts: {
     secretToken: opts.secret,
   });
 
-  startDiagnosticHeartbeat();
+  if (diagnosticsEnabled) {
+    startDiagnosticHeartbeat();
+  }
 
   const server = createServer((req, res) => {
     if (req.url === healthPath) {
@@ -59,24 +63,30 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     const startTime = Date.now();
-    logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
+    if (diagnosticsEnabled) {
+      logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
+    }
     const handled = handler(req, res);
     if (handled && typeof (handled as Promise<void>).catch === "function") {
       void (handled as Promise<void>)
         .then(() => {
-          logWebhookProcessed({
-            channel: "telegram",
-            updateType: "telegram-post",
-            durationMs: Date.now() - startTime,
-          });
+          if (diagnosticsEnabled) {
+            logWebhookProcessed({
+              channel: "telegram",
+              updateType: "telegram-post",
+              durationMs: Date.now() - startTime,
+            });
+          }
         })
         .catch((err) => {
           const errMsg = formatErrorMessage(err);
-          logWebhookError({
-            channel: "telegram",
-            updateType: "telegram-post",
-            error: errMsg,
-          });
+          if (diagnosticsEnabled) {
+            logWebhookError({
+              channel: "telegram",
+              updateType: "telegram-post",
+              error: errMsg,
+            });
+          }
           runtime.log?.(`webhook handler failed: ${errMsg}`);
           if (!res.headersSent) res.writeHead(500);
           res.end();
@@ -98,7 +108,9 @@ export async function startTelegramWebhook(opts: {
   const shutdown = () => {
     server.close();
     void bot.stop();
-    stopDiagnosticHeartbeat();
+    if (diagnosticsEnabled) {
+      stopDiagnosticHeartbeat();
+    }
   };
   if (opts.abortSignal) {
     opts.abortSignal.addEventListener("abort", shutdown, { once: true });

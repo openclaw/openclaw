@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
   })),
 }));
+const diagnosticMocks = vi.hoisted(() => ({
+  logMessageQueued: vi.fn(),
+  logMessageProcessed: vi.fn(),
+  logSessionStateChange: vi.fn(),
+}));
 
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
@@ -34,6 +39,12 @@ vi.mock("./abort.js", () => ({
   },
 }));
 
+vi.mock("../../logging/diagnostic.js", () => ({
+  logMessageQueued: diagnosticMocks.logMessageQueued,
+  logMessageProcessed: diagnosticMocks.logMessageProcessed,
+  logSessionStateChange: diagnosticMocks.logSessionStateChange,
+}));
+
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
 
@@ -50,6 +61,9 @@ function createDispatcher(): ReplyDispatcher {
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     resetInboundDedupe();
+    diagnosticMocks.logMessageQueued.mockReset();
+    diagnosticMocks.logMessageProcessed.mockReset();
+    diagnosticMocks.logSessionStateChange.mockReset();
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
@@ -185,5 +199,75 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits diagnostics when enabled", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const cfg = { diagnostics: { enabled: true } } as ClawdbotConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-1",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      state: "processing",
+      reason: "message_start",
+    });
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        outcome: "completed",
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("marks diagnostics skipped for duplicate inbound messages", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const cfg = { diagnostics: { enabled: true } } as ClawdbotConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550123",
+      MessageSid: "msg-dup",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        outcome: "skipped",
+        reason: "duplicate",
+      }),
+    );
   });
 });
