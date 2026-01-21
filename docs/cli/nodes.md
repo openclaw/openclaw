@@ -36,4 +36,19 @@ filter to nodes that connected within a duration (e.g. `24h`, `7d`).
 ```bash
 clawdbot nodes invoke --node <id|name|ip> --command <command> --params <json>
 clawdbot nodes run --node <id|name|ip> <command...>
+clawdbot nodes run --raw "git status"
+clawdbot nodes run --agent main --node <id|name|ip> --raw "git status"
 ```
+
+### Exec-style defaults
+
+`nodes run` mirrors the model’s exec behavior (defaults + approvals):
+
+- Reads `tools.exec.*` (plus `agents.list[].tools.exec.*` overrides).
+- Uses exec approvals (`exec.approval.request`) before invoking `system.run`.
+- `--node` can be omitted when `tools.exec.node` is set.
+
+Flags:
+- `--raw <command>`: run a shell string (`/bin/sh -lc` or `cmd.exe /c`).
+- `--agent <id>`: agent-scoped approvals/allowlists (defaults to configured agent).
+- `--ask <off|on-miss|always>`, `--security <deny|allowlist|full>`: overrides.

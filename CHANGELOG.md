@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 - CLI: exec approvals mutations render tables instead of raw JSON.
 - Exec approvals: support wildcard agent allowlists (`*`) across all agents.
 - Nodes: expose node PATH in status/describe and bootstrap PATH for node-host execution.
+- Nodes: run always uses exec approvals + defaults, with raw shell mode and ask/security overrides. https://docs.clawd.bot/cli/nodes
 - CLI: flatten node service commands under `clawdbot node` and remove `service node` docs.
 - CLI: move gateway service commands under `clawdbot gateway` and add `gateway probe` for reachability.
 - Sessions: add per-channel reset overrides via `session.resetByChannel`. (#1353) Thanks @cash-echo-bot.

@@ -210,14 +210,33 @@ export function resolveExecApprovals(
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
   const file = ensureExecApprovals();
+  return resolveExecApprovalsFromFile({
+    file,
+    agentId,
+    overrides,
+    path: resolveExecApprovalsPath(),
+    socketPath: expandHome(file.socket?.path ?? resolveExecApprovalsSocketPath()),
+    token: file.socket?.token ?? "",
+  });
+}
+
+export function resolveExecApprovalsFromFile(params: {
+  file: ExecApprovalsFile;
+  agentId?: string;
+  overrides?: ExecApprovalsDefaultOverrides;
+  path?: string;
+  socketPath?: string;
+  token?: string;
+}): ExecApprovalsResolved {
+  const file = normalizeExecApprovals(params.file);
   const defaults = file.defaults ?? {};
-  const agentKey = agentId ?? "default";
+  const agentKey = params.agentId ?? "default";
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
-  const fallbackSecurity = overrides?.security ?? DEFAULT_SECURITY;
-  const fallbackAsk = overrides?.ask ?? DEFAULT_ASK;
-  const fallbackAskFallback = overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
-  const fallbackAutoAllowSkills = overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
+  const fallbackSecurity = params.overrides?.security ?? DEFAULT_SECURITY;
+  const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
+  const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
+  const fallbackAutoAllowSkills = params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(defaults.security, fallbackSecurity),
     ask: normalizeAsk(defaults.ask, fallbackAsk),
@@ -246,9 +265,11 @@ export function resolveExecApprovals(
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
   return {
-    path: resolveExecApprovalsPath(),
-    socketPath: expandHome(file.socket?.path ?? resolveExecApprovalsSocketPath()),
-    token: file.socket?.token ?? "",
+    path: params.path ?? resolveExecApprovalsPath(),
+    socketPath: expandHome(
+      params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
+    ),
+    token: params.token ?? file.socket?.token ?? "",
     defaults: resolvedDefaults,
     agent: resolvedAgent,
     allowlist,
