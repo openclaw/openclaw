@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { CONFIG_DIR, ensureDir, resolveUserPath } from "../utils.js";
 import {
   hasBinary,
   loadWorkspaceSkillEntries,
@@ -13,6 +15,7 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import { resolveSkillKey } from "./skills/frontmatter.js";
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -112,9 +115,161 @@ function buildInstallCommand(
       if (!spec.package) return { argv: null, error: "missing uv package" };
       return { argv: ["uv", "tool", "install", spec.package] };
     }
+    case "download": {
+      return { argv: null, error: "download install handled separately" };
+    }
     default:
       return { argv: null, error: "unsupported installer" };
   }
+}
+
+function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
+  if (spec.targetDir?.trim()) return resolveUserPath(spec.targetDir);
+  const key = resolveSkillKey(entry.skill, entry);
+  return path.join(CONFIG_DIR, "tools", key);
+}
+
+function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
+  const explicit = spec.archive?.trim().toLowerCase();
+  if (explicit) return explicit;
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) return "tar.gz";
+  if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2")) return "tar.bz2";
+  if (lower.endsWith(".zip")) return "zip";
+  return undefined;
+}
+
+async function downloadFile(
+  url: string,
+  destPath: string,
+  timeoutMs: number,
+): Promise<{ bytes: number }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs));
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok || !response.body) {
+      throw new Error(`Download failed (${response.status} ${response.statusText})`);
+    }
+    await ensureDir(path.dirname(destPath));
+    const file = fs.createWriteStream(destPath);
+    const body = response.body;
+    const readable =
+      typeof (body as NodeJS.ReadableStream).pipe === "function"
+        ? (body as NodeJS.ReadableStream)
+        : Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+    await pipeline(readable, file);
+    const stat = await fs.promises.stat(destPath);
+    return { bytes: stat.size };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function extractArchive(params: {
+  archivePath: string;
+  archiveType: string;
+  targetDir: string;
+  stripComponents?: number;
+  timeoutMs: number;
+}): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
+  if (archiveType === "zip") {
+    if (!hasBinary("unzip")) {
+      return { stdout: "", stderr: "unzip not found on PATH", code: null };
+    }
+    const argv = ["unzip", "-q", archivePath, "-d", targetDir];
+    return await runCommandWithTimeout(argv, { timeoutMs });
+  }
+
+  if (!hasBinary("tar")) {
+    return { stdout: "", stderr: "tar not found on PATH", code: null };
+  }
+  const argv = ["tar", "xf", archivePath, "-C", targetDir];
+  if (typeof stripComponents === "number" && Number.isFinite(stripComponents)) {
+    argv.push("--strip-components", String(Math.max(0, Math.floor(stripComponents))));
+  }
+  return await runCommandWithTimeout(argv, { timeoutMs });
+}
+
+async function installDownloadSpec(params: {
+  entry: SkillEntry;
+  spec: SkillInstallSpec;
+  timeoutMs: number;
+}): Promise<SkillInstallResult> {
+  const { entry, spec, timeoutMs } = params;
+  const url = spec.url?.trim();
+  if (!url) {
+    return {
+      ok: false,
+      message: "missing download url",
+      stdout: "",
+      stderr: "",
+      code: null,
+    };
+  }
+
+  let filename = "";
+  try {
+    const parsed = new URL(url);
+    filename = path.basename(parsed.pathname);
+  } catch {
+    filename = path.basename(url);
+  }
+  if (!filename) filename = "download";
+
+  const targetDir = resolveDownloadTargetDir(entry, spec);
+  await ensureDir(targetDir);
+
+  const archivePath = path.join(targetDir, filename);
+  let downloaded = 0;
+  try {
+    const result = await downloadFile(url, archivePath, timeoutMs);
+    downloaded = result.bytes;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, message, stdout: "", stderr: message, code: null };
+  }
+
+  const archiveType = resolveArchiveType(spec, filename);
+  const shouldExtract = spec.extract ?? Boolean(archiveType);
+  if (!shouldExtract) {
+    return {
+      ok: true,
+      message: `Downloaded to ${archivePath}`,
+      stdout: `downloaded=${downloaded}`,
+      stderr: "",
+      code: 0,
+    };
+  }
+
+  if (!archiveType) {
+    return {
+      ok: false,
+      message: "extract requested but archive type could not be detected",
+      stdout: "",
+      stderr: "",
+      code: null,
+    };
+  }
+
+  const extractResult = await extractArchive({
+    archivePath,
+    archiveType,
+    targetDir,
+    stripComponents: spec.stripComponents,
+    timeoutMs,
+  });
+  const success = extractResult.code === 0;
+  return {
+    ok: success,
+    message: success
+      ? `Downloaded and extracted to ${targetDir}`
+      : formatInstallFailureMessage(extractResult),
+    stdout: extractResult.stdout.trim(),
+    stderr: extractResult.stderr.trim(),
+    code: extractResult.code,
+  };
 }
 
 async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
@@ -166,6 +321,9 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       stderr: "",
       code: null,
     };
+  }
+  if (spec.kind === "download") {
+    return await installDownloadSpec({ entry, spec, timeoutMs });
   }
 
   const prefs = resolveSkillsInstallPreferences(params.config);
