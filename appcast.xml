@@ -16,7 +16,7 @@
 </ul>
 <h3>Changes</h3>
 <ul>
-<li>Skills: add auto-notify-on-completion guidance for coding-agent background runs.</li>
+<li>Agents: add auto-notify-on-completion guidance for coding-agent background runs.</li>
 <li>Build: remove the legacy Peekaboo submodule pointer (SPM release already in use).</li>
 </ul>
 <h3>Fixes</h3>
