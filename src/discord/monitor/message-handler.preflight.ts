@@ -15,6 +15,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
+import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { sendMessageDiscord } from "../send.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
@@ -100,9 +101,7 @@ export async function preflightDiscordMessage(
             },
           })
         : { allowed: false };
-      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
-        allowMatch.matchSource ?? "none"
-      }`;
+      const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
       const permitted = allowMatch.allowed;
       if (!permitted) {
         commandAuthorized = false;
@@ -262,9 +261,7 @@ export async function preflightDiscordMessage(
         scope: threadChannel ? "thread" : "channel",
       })
     : null;
-  const channelMatchMeta = `matchKey=${channelConfig?.matchKey ?? "none"} matchSource=${
-    channelConfig?.matchSource ?? "none"
-  }`;
+  const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
   if (isGuildMessage && channelConfig?.enabled === false) {
     logVerbose(
       `Blocked discord channel ${message.channelId} (channel disabled, ${channelMatchMeta})`,

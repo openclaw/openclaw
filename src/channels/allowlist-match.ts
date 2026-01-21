@@ -16,6 +16,8 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
   matchSource?: TSource;
 };
 
-export function formatAllowlistMatchMeta(match?: AllowlistMatch | null): string {
+export function formatAllowlistMatchMeta(
+  match?: { matchKey?: string; matchSource?: string } | null,
+): string {
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
