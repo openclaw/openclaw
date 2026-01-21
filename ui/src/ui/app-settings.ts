@@ -14,7 +14,7 @@ import { saveSettings, type UiSettings } from "./storage";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
-import { startLogsPolling, stopLogsPolling } from "./app-polling";
+import { startLogsPolling, stopLogsPolling, startDebugPolling, stopDebugPolling } from "./app-polling";
 import { refreshChat } from "./app-chat";
 import type { ClawdbotApp } from "./app";
 
@@ -116,6 +116,9 @@ export function setTab(host: SettingsHost, next: Tab) {
   if (next === "logs")
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  if (next === "debug")
+    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
+  else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   void refreshActiveTab(host);
   syncUrlWithTab(host, next, false);
 }
