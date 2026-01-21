@@ -210,7 +210,9 @@ export type ChannelThreadingAdapter = {
 
 export type ChannelThreadingContext = {
   Channel?: string;
+  From?: string;
   To?: string;
+  ChatType?: string;
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;

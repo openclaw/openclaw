@@ -24,18 +24,11 @@ export function buildThreadingToolContext(params: {
   const rawProvider = sessionCtx.Provider?.trim().toLowerCase();
   if (!rawProvider) return {};
   const provider = normalizeChannelId(rawProvider);
-  // WhatsApp context isolation keys off conversation id, not the bot's own number.
-  const threadingTo =
-    rawProvider === "whatsapp"
-      ? (sessionCtx.From ?? sessionCtx.To)
-      : rawProvider === "imessage" && sessionCtx.ChatType === "direct"
-        ? (sessionCtx.From ?? sessionCtx.To)
-        : sessionCtx.To;
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const dock = provider ? getChannelDock(provider) : undefined;
   if (!dock?.threading?.buildToolContext) {
     return {
-      currentChannelId: threadingTo?.trim() || undefined,
+      currentChannelId: sessionCtx.To?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       hasRepliedRef,
     };
@@ -46,7 +39,9 @@ export function buildThreadingToolContext(params: {
       accountId: sessionCtx.AccountId,
       context: {
         Channel: sessionCtx.Provider,
-        To: threadingTo,
+        From: sessionCtx.From,
+        To: sessionCtx.To,
+        ChatType: sessionCtx.ChatType,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
