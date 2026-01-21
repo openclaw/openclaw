@@ -46,7 +46,7 @@ export function pickProbeHostForBind(
   if (bindMode === "custom" && customBindHost?.trim()) {
     return customBindHost.trim();
   }
-  if (bindMode === "auto") return tailnetIPv4 ?? "127.0.0.1";
+  if (bindMode === "tailnet") return tailnetIPv4 ?? "127.0.0.1";
   return "127.0.0.1";
 }
 

@@ -1415,7 +1415,7 @@ Fix:
 - Start Tailscale on that host (so it has a 100.x address), or
 - Switch to `gateway.bind: "loopback"` / `"lan"`.
   
-Note: `tailnet` is legacy and is migrated to `auto` by Doctor. Prefer `gateway.bind: "auto"` when using Tailscale.
+Note: `tailnet` is explicit. `auto` prefers loopback; use `gateway.bind: "tailnet"` when you want a tailnet-only bind.
 
 ### Can I run multiple Gateways on the same host?
 

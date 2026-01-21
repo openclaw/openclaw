@@ -112,7 +112,7 @@ the Gateway likely refused to bind.
 - `gateway.mode` must be `local` for `clawdbot gateway` and the service.
 - If you set `gateway.mode=remote`, the **CLI defaults** to a remote URL. The service can still be running locally, but your CLI may be probing the wrong place. Use `clawdbot gateway status` to see the service’s resolved port + probe target (or pass `--url`).
 - `clawdbot gateway status` and `clawdbot doctor` surface the **last gateway error** from logs when the service looks running but the port is closed.
-- Non-loopback binds (`lan`/`tailnet`/`auto`) require auth:
+- Non-loopback binds (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) require auth:
   `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
 - `gateway.remote.token` is for remote CLI calls only; it does **not** enable local auth.
 - `gateway.token` is ignored; use `gateway.auth.token`.
@@ -127,7 +127,7 @@ the Gateway likely refused to bind.
 - Fix: run `clawdbot doctor` to update it (or `clawdbot gateway install --force` for a full rewrite).
 
 **If `Last gateway error:` mentions “refusing to bind … without auth”**
-- You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`auto`) but left auth off.
+- You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) but left auth off.
 - Fix: set `gateway.auth.mode` + `gateway.auth.token` (or export `CLAWDBOT_GATEWAY_TOKEN`) and restart the service.
 
 **If `clawdbot gateway status` says `bind=tailnet` but no tailnet interface was found**

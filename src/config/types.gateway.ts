@@ -1,4 +1,4 @@
-export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom";
+export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
   /** Enable TLS for the gateway server. */
@@ -189,9 +189,10 @@ export type GatewayConfig = {
   mode?: "local" | "remote";
   /**
    * Bind address policy for the Gateway WebSocket + Control UI HTTP server.
-   * - auto: Tailnet IPv4 if available, else 0.0.0.0 (fallback to all interfaces)
+   * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
    * - lan: 0.0.0.0 (all interfaces, no fallback)
    * - loopback: 127.0.0.1 (local-only)
+   * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
    * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
    * Default: loopback (127.0.0.1).
    */

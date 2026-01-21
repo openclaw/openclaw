@@ -172,7 +172,8 @@ export async function gatherDaemonStatus(
     | "auto"
     | "lan"
     | "loopback"
-    | "custom";
+    | "custom"
+    | "tailnet";
   const customBindHost = daemonCfg.gateway?.customBindHost;
   const bindHost = await resolveGatewayBindHost(bindMode, customBindHost);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();

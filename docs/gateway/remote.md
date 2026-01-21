@@ -112,7 +112,7 @@ Runbook: [macOS remote access](/platforms/mac/remote).
 Short version: **keep the Gateway loopback-only** unless you’re sure you need a bind.
 
 - **Loopback + SSH/Tailscale Serve** is the safest default (no public exposure).
-- **Non-loopback binds** (`lan`/`tailnet`/`auto`) must use auth tokens/passwords.
+- **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
 - `gateway.remote.token` is **only** for remote CLI calls — it does **not** enable local auth.
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate via identity headers when `gateway.auth.allowTailscale: true`.

@@ -310,7 +310,7 @@ Options:
 - `--minimax-api-key <key>`
 - `--opencode-zen-api-key <key>`
 - `--gateway-port <port>`
-- `--gateway-bind <loopback|lan|tailnet|auto>`
+- `--gateway-bind <loopback|lan|tailnet|auto|custom>`
 - `--gateway-auth <off|token|password>`
 - `--gateway-token <token>`
 - `--gateway-password <password>`
@@ -596,7 +596,7 @@ Run the WebSocket Gateway.
 
 Options:
 - `--port <port>`
-- `--bind <loopback|tailnet|lan|auto>`
+- `--bind <loopback|tailnet|lan|auto|custom>`
 - `--token <token>`
 - `--auth <token|password>`
 - `--password <password>`

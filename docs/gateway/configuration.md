@@ -2647,6 +2647,13 @@ Defaults:
 - bind: `loopback`
 - port: `18789` (single port for WS + HTTP)
 
+Bind modes:
+- `loopback`: `127.0.0.1` (local-only)
+- `lan`: `0.0.0.0` (all interfaces)
+- `tailnet`: Tailscale IPv4 address (100.64.0.0/10)
+- `auto`: prefer loopback, fall back to LAN if loopback cannot bind
+- `custom`: `gateway.customBindHost` (IPv4), fallback to LAN if unavailable
+
 ```json5
 {
   gateway: {
@@ -2677,7 +2684,7 @@ Notes:
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - OpenResponses endpoint: **disabled by default**; enable with `gateway.http.endpoints.responses.enabled: true`.
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
-- Non-loopback binds (`lan`/`tailnet`/`auto`) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
+- Non-loopback binds (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
 - The onboarding wizard generates a gateway token by default (even on loopback).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
 

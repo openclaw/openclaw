@@ -46,6 +46,25 @@ force `gateway.auth.mode: "password"`.
 
 Open: `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
+### Tailnet-only (bind to Tailnet IP)
+
+Use this when you want the Gateway to listen directly on the Tailnet IP (no Serve/Funnel).
+
+```json5
+{
+  gateway: {
+    bind: "tailnet",
+    auth: { mode: "token", token: "your-token" }
+  }
+}
+```
+
+Connect from another Tailnet device:
+- Control UI: `http://<tailscale-ip>:18789/`
+- WebSocket: `ws://<tailscale-ip>:18789`
+
+Note: loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+
 ### Public internet (Funnel + shared password)
 
 ```json5
@@ -73,6 +92,8 @@ clawdbot gateway --tailscale funnel --auth password
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password` to avoid public exposure.
 - Set `gateway.tailscale.resetOnExit` if you want Clawdbot to undo `tailscale serve`
   or `tailscale funnel` configuration on shutdown.
+- `gateway.bind: "tailnet"` is a direct Tailnet bind (no HTTPS, no Serve/Funnel).
+- `gateway.bind: "auto"` prefers loopback; use `tailnet` if you want Tailnet-only.
 - Serve/Funnel only expose the **Gateway control UI + WS**. Node **bridge** traffic
   uses the separate bridge port (default `18790`) and is **not** proxied by Serve.
 

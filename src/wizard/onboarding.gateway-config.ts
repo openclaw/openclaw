@@ -52,12 +52,13 @@ export async function configureGatewayForOnboarding(
           message: "Gateway bind",
           options: [
             { value: "loopback", label: "Loopback (127.0.0.1)" },
-            { value: "lan", label: "LAN" },
-            { value: "auto", label: "Auto" },
+            { value: "lan", label: "LAN (0.0.0.0)" },
+            { value: "tailnet", label: "Tailnet (Tailscale IP)" },
+            { value: "auto", label: "Auto (Loopback → LAN)" },
             { value: "custom", label: "Custom IP" },
           ],
-        })) as "loopback" | "lan" | "auto" | "custom")
-  ) as "loopback" | "lan" | "auto" | "custom";
+        })) as "loopback" | "lan" | "auto" | "custom" | "tailnet")
+  ) as "loopback" | "lan" | "auto" | "custom" | "tailnet";
 
   let customBindHost = quickstartGateway.customBindHost;
   if (bind === "custom") {

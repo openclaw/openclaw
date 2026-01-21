@@ -97,7 +97,7 @@ export type GatewayServerOptions = {
    * - loopback: 127.0.0.1
    * - lan: 0.0.0.0
    * - tailnet: bind only to the Tailscale IPv4 address (100.64.0.0/10)
-   * - auto: prefer tailnet, else LAN
+   * - auto: prefer loopback, else LAN
    */
   bind?: import("../config/config.js").GatewayBindMode;
   /**

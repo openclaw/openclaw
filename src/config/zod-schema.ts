@@ -270,7 +270,13 @@ export const ClawdbotSchema = z
         port: z.number().int().positive().optional(),
         mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
         bind: z
-          .union([z.literal("auto"), z.literal("lan"), z.literal("loopback"), z.literal("custom")])
+          .union([
+            z.literal("auto"),
+            z.literal("lan"),
+            z.literal("loopback"),
+            z.literal("custom"),
+            z.literal("tailnet"),
+          ])
           .optional(),
         controlUi: z
           .object({

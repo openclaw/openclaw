@@ -5,22 +5,19 @@ Docs: https://docs.clawd.bot
 ## 2026.1.21
 
 ### Changes
-- Caching: make tool-result pruning TTL-aware so cache reuse stays stable and token usage drops.
 - CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
 - CLI: exec approvals mutations render tables instead of raw JSON.
 - Exec approvals: support wildcard agent allowlists (`*`) across all agents.
 - Nodes: expose node PATH in status/describe and bootstrap PATH for node-host execution.
-- Nodes: run always uses exec approvals + defaults, with raw shell mode and ask/security overrides. https://docs.clawd.bot/cli/nodes
 - CLI: flatten node service commands under `clawdbot node` and remove `service node` docs.
 - CLI: move gateway service commands under `clawdbot gateway` and add `gateway probe` for reachability.
 - Sessions: add per-channel reset overrides via `session.resetByChannel`. (#1353) Thanks @cash-echo-bot.
 
 ### Fixes
-- Embedded runner: drop obsolete pi-mono transcript workarounds now handled upstream.
+- Gateway: keep auto bind loopback-first and add explicit tailnet binding to avoid Tailscale taking over local UI. (#1380)
 - Embedded runner: persist injected history images so attachments aren’t reloaded each turn. (#1374) Thanks @Nicell.
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
 - macOS: exec approvals now respect wildcard agent allowlists (`*`).
-- macOS: bundle and cache the model catalog instead of reading from a local pi-mono checkout.
 - macOS: allow SSH agent auth when no identity file is set. (#1384) Thanks @ameno-.
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 - Typing: start instant typing indicators at run start so DMs and mentions show immediately.

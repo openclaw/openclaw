@@ -237,7 +237,7 @@ The Gateway multiplexes **WebSocket + HTTP** on a single port:
 
 Bind mode controls where the Gateway listens:
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"auto"`) expand the attack surface. Only use them with `gateway.auth` enabled and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with `gateway.auth` enabled and a real firewall.
 
 Rules of thumb:
 - Prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback, and Tailscale handles access).

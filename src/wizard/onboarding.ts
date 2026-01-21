@@ -177,7 +177,11 @@ export async function runOnboardingWizard(
 
     const bindRaw = baseConfig.gateway?.bind;
     const bind =
-      bindRaw === "loopback" || bindRaw === "lan" || bindRaw === "auto" || bindRaw === "custom"
+      bindRaw === "loopback" ||
+      bindRaw === "lan" ||
+      bindRaw === "auto" ||
+      bindRaw === "custom" ||
+      bindRaw === "tailnet"
         ? bindRaw
         : "loopback";
 
@@ -213,10 +217,11 @@ export async function runOnboardingWizard(
   })();
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom") => {
+    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
       if (value === "loopback") return "Loopback (127.0.0.1)";
       if (value === "lan") return "LAN";
       if (value === "custom") return "Custom IP";
+      if (value === "tailnet") return "Tailnet (Tailscale IP)";
       return "Auto";
     };
     const formatAuth = (value: GatewayAuthChoice) => {
