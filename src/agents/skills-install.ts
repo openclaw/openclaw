@@ -34,6 +34,10 @@ export type SkillInstallResult = {
   code: number | null;
 };
 
+function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
+  return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
+}
+
 function summarizeInstallOutput(text: string): string | undefined {
   const raw = text.trim();
   if (!raw) return undefined;
@@ -154,13 +158,10 @@ async function downloadFile(
     }
     await ensureDir(path.dirname(destPath));
     const file = fs.createWriteStream(destPath);
-    const body = response.body;
-    // Node's Readable.fromWeb expects the node:stream/web type; cast through unknown for DOM streams.
-    const nodeStream = body as unknown as NodeJS.ReadableStream;
-    const readable =
-      typeof nodeStream.pipe === "function"
-        ? nodeStream
-        : Readable.fromWeb(body as unknown as NodeReadableStream);
+    const body = response.body as unknown;
+    const readable = isNodeReadableStream(body)
+      ? body
+      : Readable.fromWeb(body as NodeReadableStream);
     await pipeline(readable, file);
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
