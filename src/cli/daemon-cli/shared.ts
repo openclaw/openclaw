@@ -50,22 +50,28 @@ export function pickProbeHostForBind(
   return "127.0.0.1";
 }
 
-export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
-  if (!env) return [];
-  const allow = [
-    "CLAWDBOT_PROFILE",
-    "CLAWDBOT_STATE_DIR",
-    "CLAWDBOT_CONFIG_PATH",
-    "CLAWDBOT_GATEWAY_PORT",
-    "CLAWDBOT_NIX_MODE",
-  ];
-  const lines: string[] = [];
-  for (const key of allow) {
+const SAFE_DAEMON_ENV_KEYS = [
+  "CLAWDBOT_PROFILE",
+  "CLAWDBOT_STATE_DIR",
+  "CLAWDBOT_CONFIG_PATH",
+  "CLAWDBOT_GATEWAY_PORT",
+  "CLAWDBOT_NIX_MODE",
+];
+
+export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
+  if (!env) return {};
+  const filtered: Record<string, string> = {};
+  for (const key of SAFE_DAEMON_ENV_KEYS) {
     const value = env[key];
     if (!value?.trim()) continue;
-    lines.push(`${key}=${value.trim()}`);
+    filtered[key] = value.trim();
   }
-  return lines;
+  return filtered;
+}
+
+export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
+  const filtered = filterDaemonEnv(env);
+  return Object.entries(filtered).map(([key, value]) => `${key}=${value}`);
 }
 
 export function normalizeListenerAddress(raw: string): string {

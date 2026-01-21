@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 
 export type PortProcess = { pid: number; command?: string };
 
@@ -30,7 +31,8 @@ export function parseLsofOutput(output: string): PortProcess[] {
 
 export function listPortListeners(port: number): PortProcess[] {
   try {
-    const out = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
+    const lsof = resolveLsofCommandSync();
+    const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
       encoding: "utf-8",
     });
     return parseLsofOutput(out);

@@ -14,16 +14,39 @@ import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
-import { formatRuntimeStatus, renderRuntimeHints, safeDaemonEnv } from "./shared.js";
+import {
+  filterDaemonEnv,
+  formatRuntimeStatus,
+  renderRuntimeHints,
+  safeDaemonEnv,
+} from "./shared.js";
 import {
   type DaemonStatus,
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
 
+function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
+  const command = status.service.command;
+  if (!command?.environment) return status;
+  const safeEnv = filterDaemonEnv(command.environment);
+  const nextCommand = {
+    ...command,
+    environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
+  };
+  return {
+    ...status,
+    service: {
+      ...status.service,
+      command: nextCommand,
+    },
+  };
+}
+
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (opts.json) {
-    defaultRuntime.log(JSON.stringify(status, null, 2));
+    const sanitized = sanitizeDaemonStatusForJson(status);
+    defaultRuntime.log(JSON.stringify(sanitized, null, 2));
     return;
   }
 
