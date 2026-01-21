@@ -36,6 +36,30 @@ import type {
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
 
+export function createEditorSubmitHandler(params: {
+  editor: {
+    setText: (value: string) => void;
+    addToHistory: (value: string) => void;
+  };
+  handleCommand: (value: string) => Promise<void> | void;
+  sendMessage: (value: string) => Promise<void> | void;
+}) {
+  return (text: string) => {
+    const value = text.trim();
+    params.editor.setText("");
+    if (!value) return;
+
+    // Enable built-in editor prompt history navigation (up/down).
+    params.editor.addToHistory(value);
+
+    if (value.startsWith("/")) {
+      void params.handleCommand(value);
+      return;
+    }
+    void params.sendMessage(value);
+  };
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -473,16 +497,11 @@ export async function runTui(opts: TuiOptions) {
     });
 
   updateAutocompleteProvider();
-  editor.onSubmit = (text) => {
-    const value = text.trim();
-    editor.setText("");
-    if (!value) return;
-    if (value.startsWith("/")) {
-      void handleCommand(value);
-      return;
-    }
-    void sendMessage(value);
-  };
+  editor.onSubmit = createEditorSubmitHandler({
+    editor,
+    handleCommand,
+    sendMessage,
+  });
 
   editor.onEscape = () => {
     void abortActive();
