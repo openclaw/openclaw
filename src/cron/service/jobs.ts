@@ -124,11 +124,18 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
 
   if (patch.kind === "systemEvent") {
+    if (existing.kind !== "systemEvent") {
+      return buildPayloadFromPatch(patch);
+    }
     const text = typeof patch.text === "string" ? patch.text : existing.text;
     return { kind: "systemEvent", text };
   }
 
-  const next: CronPayload = { ...existing };
+  if (existing.kind !== "agentTurn") {
+    return buildPayloadFromPatch(patch);
+  }
+
+  const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
   if (typeof patch.message === "string") next.message = patch.message;
   if (typeof patch.model === "string") next.model = patch.model;
   if (typeof patch.thinking === "string") next.thinking = patch.thinking;
