@@ -27,8 +27,8 @@ struct ConfigSettings: View {
             await self.store.loadConfig()
         }
         .onAppear { self.ensureSelection() }
-        .onChange(of: self.store.configSchema) { _, _ in
-            self.ensureSelection()
+        .onChange(of: self.store.configSchemaLoading) { _, loading in
+            if !loading { self.ensureSelection() }
         }
     }
 }
@@ -215,25 +215,28 @@ extension ConfigSettings {
     @ViewBuilder
     private func subsectionNav(_ section: ConfigSection) -> some View {
         let subsections = self.resolveSubsections(for: section)
-        guard !subsections.isEmpty else { return }
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                self.subsectionButton(
-                    title: "All",
-                    isSelected: self.activeSubsection == .all)
-                {
-                    self.activeSubsection = .all
-                }
-                ForEach(subsections) { subsection in
+        if subsections.isEmpty {
+            EmptyView()
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
                     self.subsectionButton(
-                        title: subsection.label,
-                        isSelected: self.activeSubsection == .key(subsection.key))
+                        title: "All",
+                        isSelected: self.activeSubsection == .all)
                     {
-                        self.activeSubsection = .key(subsection.key)
+                        self.activeSubsection = .all
+                    }
+                    ForEach(subsections) { subsection in
+                        self.subsectionButton(
+                            title: subsection.label,
+                            isSelected: self.activeSubsection == .key(subsection.key))
+                        {
+                            self.activeSubsection = .key(subsection.key)
+                        }
                     }
                 }
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
         }
     }
 
