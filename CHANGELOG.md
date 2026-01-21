@@ -7,6 +7,11 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 
+## 2026.1.20-2
+
+### Fixes
+- Install: include headless node + ACP CLI build output in npm packages.
+
 ## 2026.1.20-1
 
 ### Fixes
