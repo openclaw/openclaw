@@ -110,7 +110,6 @@ const writeBuildStamp = () => {
 };
 
 if (!shouldBuild()) {
-  logRunner("Skipping build; dist is fresh.");
   runNode();
 } else {
   logRunner("Building TypeScript (dist is stale).");
