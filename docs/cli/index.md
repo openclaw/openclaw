@@ -825,9 +825,9 @@ Common options:
 - `--url`, `--token`, `--timeout`, `--json`
 
 Subcommands:
-- `nodes status`
+- `nodes status [--connected] [--last-connected <duration>]`
 - `nodes describe --node <id|name|ip>`
-- `nodes list`
+- `nodes list [--connected] [--last-connected <duration>]`
 - `nodes pending`
 - `nodes approve <requestId>`
 - `nodes reject <requestId>`
