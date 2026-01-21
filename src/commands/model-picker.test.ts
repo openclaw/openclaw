@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { makePrompter } from "./onboarding/__tests__/test-utils.js";
-import { applyModelAllowlist, promptDefaultModel, promptModelAllowlist } from "./model-picker.js";
+import {
+  applyModelAllowlist,
+  applyModelFallbacksFromSelection,
+  promptDefaultModel,
+  promptModelAllowlist,
+} from "./model-picker.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 vi.mock("../agents/model-catalog.js", () => ({
@@ -168,5 +173,42 @@ describe("applyModelAllowlist", () => {
 
     const next = applyModelAllowlist(config, []);
     expect(next.agents?.defaults?.models).toBeUndefined();
+  });
+});
+
+describe("applyModelFallbacksFromSelection", () => {
+  it("sets fallbacks from selection when the primary is included", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const next = applyModelFallbacksFromSelection(config, [
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-sonnet-4-5",
+    ]);
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-5",
+      fallbacks: ["anthropic/claude-sonnet-4-5"],
+    });
+  });
+
+  it("keeps existing fallbacks when the primary is not selected", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5", fallbacks: ["openai/gpt-5.2"] },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.2"]);
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-5",
+      fallbacks: ["openai/gpt-5.2"],
+    });
   });
 });

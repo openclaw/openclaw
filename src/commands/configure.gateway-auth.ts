@@ -6,6 +6,7 @@ import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-c
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import {
   applyModelAllowlist,
+  applyModelFallbacksFromSelection,
   applyPrimaryModel,
   promptDefaultModel,
   promptModelAllowlist,
@@ -90,6 +91,7 @@ export async function promptAuthConfig(
   });
   if (allowlistSelection.models) {
     next = applyModelAllowlist(next, allowlistSelection.models);
+    next = applyModelFallbacksFromSelection(next, allowlistSelection.models);
   }
 
   return next;

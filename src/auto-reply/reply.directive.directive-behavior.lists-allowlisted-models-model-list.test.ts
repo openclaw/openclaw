@@ -121,7 +121,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("uses configured models when no allowlist is set", async () => {
+  it("includes catalog models when no allowlist is set", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
@@ -153,7 +153,7 @@ describe("directive behavior", () => {
       expect(text).toContain("anthropic/claude-opus-4-5");
       expect(text).toContain("openai/gpt-4.1-mini");
       expect(text).toContain("minimax/MiniMax-M2.1");
-      expect(text).not.toContain("xai/grok-4");
+      expect(text).toContain("xai/grok-4");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
