@@ -7,6 +7,8 @@ describe("dns cli", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const program = buildProgram();
     await program.parseAsync(["dns", "setup"], { from: "user" });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Domain:"));
+    const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(output).toContain("DNS setup");
+    expect(output).toContain("clawdbot.internal");
   });
 });
