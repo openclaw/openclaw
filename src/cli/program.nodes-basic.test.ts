@@ -95,12 +95,14 @@ describe("cli program (nodes basics)", () => {
     const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
     expect(output).toContain("Known: 1 · Paired: 1 · Connected: 1");
     expect(output).toContain("iOS Node");
-    expect(output).toContain("Device");
-    expect(output).toContain("iPad (iPad16,6)");
+    expect(output).toContain("Detail");
+    expect(output).toContain("device: iPad");
+    expect(output).toContain("hw: iPad16,6");
     expect(output).toContain("Status");
     expect(output).toContain("paired");
     expect(output).toContain("Caps");
-    expect(output).toContain("camera, canvas");
+    expect(output).toContain("camera");
+    expect(output).toContain("canvas");
   });
 
   it("runs nodes status and shows unpaired nodes", async () => {
@@ -125,12 +127,12 @@ describe("cli program (nodes basics)", () => {
 
     const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
     expect(output).toContain("Known: 1 · Paired: 0 · Connected: 1");
-    expect(output).toContain("Peter's Tab S10");
-    expect(output).toContain("Ultra");
-    expect(output).toContain("Device");
-    expect(output).toContain("Android");
-    expect(output).toContain("SM-");
-    expect(output).toContain("X926B");
+    expect(output).toContain("Peter's Tab");
+    expect(output).toContain("S10 Ultra");
+    expect(output).toContain("Detail");
+    expect(output).toContain("device: Android");
+    expect(output).toContain("hw: samsung");
+    expect(output).toContain("SM-X926B");
     expect(output).toContain("Status");
     expect(output).toContain("unpaired");
     expect(output).toContain("connected");
@@ -184,7 +186,7 @@ describe("cli program (nodes basics)", () => {
     );
 
     const out = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
-    expect(out).toContain("Commands:");
+    expect(out).toContain("Commands");
     expect(out).toContain("canvas.eval");
   });
 

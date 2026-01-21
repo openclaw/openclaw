@@ -9,9 +9,10 @@ import {
   writeBase64ToFile,
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
-import { runNodesCommand } from "./cli-utils.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
+import { renderTable } from "../../terminal/table.js";
 
 const parseFacing = (value: string): CameraFacing => {
   const v = String(value ?? "")
@@ -52,16 +53,30 @@ export function registerNodesCameraCommands(nodes: Command) {
           }
 
           if (devices.length === 0) {
-            defaultRuntime.log("No cameras reported.");
+            const { muted } = getNodesTheme();
+            defaultRuntime.log(muted("No cameras reported."));
             return;
           }
 
-          for (const device of devices) {
-            const id = typeof device.id === "string" ? device.id : "";
-            const name = typeof device.name === "string" ? device.name : "Unknown Camera";
-            const position = typeof device.position === "string" ? device.position : "unspecified";
-            defaultRuntime.log(`${name} (${position})${id ? ` — ${id}` : ""}`);
-          }
+          const { heading, muted } = getNodesTheme();
+          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const rows = devices.map((device) => ({
+            Name: typeof device.name === "string" ? device.name : "Unknown Camera",
+            Position: typeof device.position === "string" ? device.position : muted("unspecified"),
+            ID: typeof device.id === "string" ? device.id : "",
+          }));
+          defaultRuntime.log(heading("Cameras"));
+          defaultRuntime.log(
+            renderTable({
+              width: tableWidth,
+              columns: [
+                { key: "Name", header: "Name", minWidth: 14, flex: true },
+                { key: "Position", header: "Position", minWidth: 10 },
+                { key: "ID", header: "ID", minWidth: 10, flex: true },
+              ],
+              rows,
+            }).trimEnd(),
+          );
         });
       }),
     { timeoutMs: 60_000 },

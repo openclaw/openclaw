@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
-import { runNodesCommand } from "./cli-utils.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -21,7 +21,8 @@ export function registerNodesInvokeCommands(nodes: Command) {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const command = String(opts.command ?? "").trim();
           if (!nodeId || !command) {
-            defaultRuntime.error("--node and --command required");
+            const { error } = getNodesTheme();
+            defaultRuntime.error(error("--node and --command required"));
             defaultRuntime.exit(1);
             return;
           }
@@ -108,16 +109,21 @@ export function registerNodesInvokeCommands(nodes: Command) {
           if (stdout) process.stdout.write(stdout);
           if (stderr) process.stderr.write(stderr);
           if (timedOut) {
-            defaultRuntime.error("run timed out");
+            const { error } = getNodesTheme();
+            defaultRuntime.error(error("run timed out"));
             defaultRuntime.exit(1);
             return;
           }
           if (exitCode !== null && exitCode !== 0) {
             const hint = unauthorizedHintForMessage(`${stderr}\n${stdout}`);
-            if (hint) defaultRuntime.error(hint);
+            if (hint) {
+              const { warn } = getNodesTheme();
+              defaultRuntime.error(warn(hint));
+            }
           }
           if (exitCode !== null && exitCode !== 0 && !success) {
-            defaultRuntime.error(`run exit ${exitCode}`);
+            const { error } = getNodesTheme();
+            defaultRuntime.error(error(`run exit ${exitCode}`));
             defaultRuntime.exit(1);
             return;
           }

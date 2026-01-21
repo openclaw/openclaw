@@ -1,11 +1,10 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { formatAge, formatPermissions, parseNodeList, parsePairingList } from "./format.js";
-import { runNodesCommand } from "./cli-utils.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 import { renderTable } from "../../terminal/table.js";
-import { isRich, theme } from "../../terminal/theme.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -56,11 +55,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
-          const rich = isRich();
-          const ok = (text: string) => (rich ? theme.success(text) : text);
-          const warn = (text: string) => (rich ? theme.warn(text) : text);
-          const muted = (text: string) => (rich ? theme.muted(text) : text);
+          const { ok, warn, muted } = getNodesTheme();
           const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const now = Date.now();
           const nodes = parseNodeList(result);
           const pairedCount = nodes.filter((n) => Boolean(n.paired)).length;
           const connectedCount = nodes.filter((n) => Boolean(n.connected)).length;
@@ -71,24 +68,30 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           const rows = nodes.map((n) => {
             const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
-            const device = (() => {
-              if (n.deviceFamily && n.modelIdentifier) {
-                return `${n.deviceFamily} (${n.modelIdentifier})`;
-              }
-              return n.deviceFamily ?? n.modelIdentifier ?? "";
-            })();
+            const perms = formatPermissions(n.permissions);
+            const versions = formatNodeVersions(n);
+            const detailParts = [
+              n.deviceFamily ? `device: ${n.deviceFamily}` : null,
+              n.modelIdentifier ? `hw: ${n.modelIdentifier}` : null,
+              perms ? `perms: ${perms}` : null,
+              versions,
+            ].filter(Boolean) as string[];
             const caps = Array.isArray(n.caps)
               ? n.caps.map(String).filter(Boolean).sort().join(", ")
               : "?";
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
+            const since =
+              typeof n.connectedAtMs === "number"
+                ? ` (${formatAge(Math.max(0, now - n.connectedAtMs))} ago)`
+                : "";
 
             return {
               Node: name,
               ID: n.nodeId,
               IP: n.remoteIp ?? "",
-              Device: device,
-              Status: `${paired} · ${connected}`,
+              Detail: detailParts.join(" · "),
+              Status: `${paired} · ${connected}${since}`,
               Caps: caps,
             };
           });
@@ -100,9 +103,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                 { key: "Node", header: "Node", minWidth: 14, flex: true },
                 { key: "ID", header: "ID", minWidth: 10 },
                 { key: "IP", header: "IP", minWidth: 10 },
-                { key: "Device", header: "Device", minWidth: 14, flex: true },
-                { key: "Status", header: "Status", minWidth: 16 },
-                { key: "Caps", header: "Caps", minWidth: 10, flex: true },
+                { key: "Detail", header: "Detail", minWidth: 18, flex: true },
+                { key: "Status", header: "Status", minWidth: 18 },
+                { key: "Caps", header: "Caps", minWidth: 12, flex: true },
               ],
               rows,
             }).trimEnd(),
@@ -133,6 +136,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               : {};
           const displayName = typeof obj.displayName === "string" ? obj.displayName : nodeId;
           const connected = Boolean(obj.connected);
+          const paired = Boolean(obj.paired);
           const caps = Array.isArray(obj.caps) ? obj.caps.map(String).filter(Boolean).sort() : null;
           const commands = Array.isArray(obj.commands)
             ? obj.commands.map(String).filter(Boolean).sort()
@@ -150,18 +154,38 @@ export function registerNodesStatusCommands(nodes: Command) {
             },
           );
 
-          const parts: string[] = ["Node:", displayName, nodeId];
-          if (ip) parts.push(ip);
-          if (family) parts.push(`device: ${family}`);
-          if (model) parts.push(`hw: ${model}`);
-          if (perms) parts.push(`perms: ${perms}`);
-          if (versions) parts.push(versions);
-          parts.push(connected ? "connected" : "disconnected");
-          parts.push(`caps: ${caps ? `[${caps.join(",")}]` : "?"}`);
-          defaultRuntime.log(parts.join(" · "));
-          defaultRuntime.log("Commands:");
+          const { heading, ok, warn, muted } = getNodesTheme();
+          const status = `${paired ? ok("paired") : warn("unpaired")} · ${
+            connected ? ok("connected") : muted("disconnected")
+          }`;
+          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const rows = [
+            { Field: "ID", Value: nodeId },
+            displayName ? { Field: "Name", Value: displayName } : null,
+            ip ? { Field: "IP", Value: ip } : null,
+            family ? { Field: "Device", Value: family } : null,
+            model ? { Field: "Model", Value: model } : null,
+            perms ? { Field: "Perms", Value: perms } : null,
+            versions ? { Field: "Version", Value: versions } : null,
+            { Field: "Status", Value: status },
+            { Field: "Caps", Value: caps ? caps.join(", ") : "?" },
+          ].filter(Boolean) as Array<{ Field: string; Value: string }>;
+
+          defaultRuntime.log(heading("Node"));
+          defaultRuntime.log(
+            renderTable({
+              width: tableWidth,
+              columns: [
+                { key: "Field", header: "Field", minWidth: 8 },
+                { key: "Value", header: "Value", minWidth: 24, flex: true },
+              ],
+              rows,
+            }).trimEnd(),
+          );
+          defaultRuntime.log("");
+          defaultRuntime.log(heading("Commands"));
           if (commands.length === 0) {
-            defaultRuntime.log("- (none reported)");
+            defaultRuntime.log(muted("- (none reported)"));
             return;
           }
           for (const c of commands) defaultRuntime.log(`- ${c}`);
@@ -182,10 +206,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
           const { pending, paired } = parsePairingList(result);
           defaultRuntime.log(`Pending: ${pending.length} · Paired: ${paired.length}`);
-          const rich = isRich();
-          const heading = (text: string) => (rich ? theme.heading(text) : text);
-          const muted = (text: string) => (rich ? theme.muted(text) : text);
-          const warn = (text: string) => (rich ? theme.warn(text) : text);
+          const { heading, muted, warn } = getNodesTheme();
           const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
           const now = Date.now();
 

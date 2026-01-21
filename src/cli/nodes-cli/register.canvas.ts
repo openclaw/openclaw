@@ -6,7 +6,7 @@ import { writeBase64ToFile } from "../nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
 import { parseTimeoutMs } from "../nodes-run.js";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
-import { runNodesCommand } from "./cli-utils.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -121,7 +121,10 @@ export function registerNodesCanvasCommands(nodes: Command) {
             params.placement = placement;
           }
           await invokeCanvas(opts, "canvas.present", params);
-          if (!opts.json) defaultRuntime.log("canvas present ok");
+          if (!opts.json) {
+            const { ok } = getNodesTheme();
+            defaultRuntime.log(ok("canvas present ok"));
+          }
         });
       }),
   );
@@ -135,7 +138,10 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("canvas hide", async () => {
           await invokeCanvas(opts, "canvas.hide", undefined);
-          if (!opts.json) defaultRuntime.log("canvas hide ok");
+          if (!opts.json) {
+            const { ok } = getNodesTheme();
+            defaultRuntime.log(ok("canvas hide ok"));
+          }
         });
       }),
   );
@@ -150,7 +156,10 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .action(async (url: string, opts: NodesRpcOpts) => {
         await runNodesCommand("canvas navigate", async () => {
           await invokeCanvas(opts, "canvas.navigate", { url });
-          if (!opts.json) defaultRuntime.log("canvas navigate ok");
+          if (!opts.json) {
+            const { ok } = getNodesTheme();
+            defaultRuntime.log(ok("canvas navigate ok"));
+          }
         });
       }),
   );
@@ -179,7 +188,10 @@ export function registerNodesCanvasCommands(nodes: Command) {
               ? (raw as { payload?: { result?: string } }).payload
               : undefined;
           if (payload?.result) defaultRuntime.log(payload.result);
-          else defaultRuntime.log("canvas eval ok");
+          else {
+            const { ok } = getNodesTheme();
+            defaultRuntime.log(ok("canvas eval ok"));
+          }
         });
       }),
   );
@@ -213,8 +225,11 @@ export function registerNodesCanvasCommands(nodes: Command) {
           }
           await invokeCanvas(opts, "canvas.a2ui.pushJSONL", { jsonl });
           if (!opts.json) {
+            const { ok } = getNodesTheme();
             defaultRuntime.log(
-              `canvas a2ui push ok (v0.8, ${messageCount} message${messageCount === 1 ? "" : "s"})`,
+              ok(
+                `canvas a2ui push ok (v0.8, ${messageCount} message${messageCount === 1 ? "" : "s"})`,
+              ),
             );
           }
         });
@@ -230,7 +245,10 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("canvas a2ui reset", async () => {
           await invokeCanvas(opts, "canvas.a2ui.reset", undefined);
-          if (!opts.json) defaultRuntime.log("canvas a2ui reset ok");
+          if (!opts.json) {
+            const { ok } = getNodesTheme();
+            defaultRuntime.log(ok("canvas a2ui reset ok"));
+          }
         });
       }),
   );
