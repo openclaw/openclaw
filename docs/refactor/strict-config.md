@@ -54,7 +54,7 @@ Allowed (diagnostic-only):
 - `clawdbot health`
 - `clawdbot help`
 - `clawdbot status`
-- `clawdbot daemon`
+- `clawdbot gateway status`
 
 Everything else must hard-fail with: “Config invalid. Run `clawdbot doctor --fix`.”
 

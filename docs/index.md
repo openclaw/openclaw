@@ -103,13 +103,13 @@ Runtime requirement: **Node ≥ 22**.
 npm install -g clawdbot@latest
 # or: pnpm add -g clawdbot@latest
 
-# Onboard + install the daemon (launchd/systemd user service)
+# Onboard + install the service (launchd/systemd user service)
 clawdbot onboard --install-daemon
 
 # Pair WhatsApp Web (shows QR)
 clawdbot channels login
 
-# Gateway runs via daemon after onboarding; manual run is still possible:
+# Gateway runs via the service after onboarding; manual run is still possible:
 clawdbot gateway --port 18789
 ```
 

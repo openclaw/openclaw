@@ -28,7 +28,6 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`health`](/cli/health)
 - [`sessions`](/cli/sessions)
 - [`gateway`](/cli/gateway)
-- [`daemon`](/cli/daemon)
 - [`logs`](/cli/logs)
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
@@ -137,14 +136,14 @@ clawdbot [--dev] [--profile <name>] <command>
     call
     health
     status
+    probe
     discover
-  daemon
-    status
     install
     uninstall
     start
     stop
     restart
+    run
   logs
   models
     list
@@ -175,14 +174,13 @@ clawdbot [--dev] [--profile <name>] <command>
   nodes
   devices
   node
+    run
+    status
+    install
+    uninstall
     start
-    daemon
-      status
-      install
-      uninstall
-      start
-      stop
-      restart
+    stop
+    restart
   approvals
     get
     set
@@ -615,25 +613,25 @@ Options:
 - `--raw-stream`
 - `--raw-stream-path <path>`
 
-### `daemon`
+### `gateway service`
 Manage the Gateway service (launchd/systemd/schtasks).
 
 Subcommands:
-- `daemon status` (probes the Gateway RPC by default)
-- `daemon install` (service install)
-- `daemon uninstall`
-- `daemon start`
-- `daemon stop`
-- `daemon restart`
+- `gateway status` (probes the Gateway RPC by default)
+- `gateway install` (service install)
+- `gateway uninstall`
+- `gateway start`
+- `gateway stop`
+- `gateway restart`
 
 Notes:
-- `daemon status` probes the Gateway RPC by default using the daemon’s resolved port/config (override with `--url/--token/--password`).
-- `daemon status` supports `--no-probe`, `--deep`, and `--json` for scripting.
-- `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named Clawdbot services are treated as first-class and aren't flagged as "extra".
-- `daemon status` prints which config path the CLI uses vs which config the daemon likely uses (service env), plus the resolved probe target URL.
-- `daemon install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
-- `daemon install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
-- `daemon install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
+- `gateway status` probes the Gateway RPC by default using the service’s resolved port/config (override with `--url/--token/--password`).
+- `gateway status` supports `--no-probe`, `--deep`, and `--json` for scripting.
+- `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named Clawdbot services are treated as first-class and aren't flagged as "extra".
+- `gateway status` prints which config path the CLI uses vs which config the service likely uses (service env), plus the resolved probe target URL.
+- `gateway install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
+- `gateway install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
+- `gateway install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
 
 ### `logs`
 Tail Gateway file logs via RPC.
@@ -652,13 +650,16 @@ clawdbot logs --no-color
 ```
 
 ### `gateway <subcommand>`
-Gateway RPC helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for each).
+Gateway CLI helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for RPC subcommands).
 
 Subcommands:
 - `gateway call <method> [--params <json>]`
 - `gateway health`
 - `gateway status`
+- `gateway probe`
 - `gateway discover`
+- `gateway install|uninstall|start|stop|restart`
+- `gateway run`
 
 Common RPCs:
 - `config.apply` (validate + write config + restart + wake)

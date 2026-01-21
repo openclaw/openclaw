@@ -97,7 +97,7 @@ It can set up:
 - `~/.clawdbot/clawdbot.json` config
 - model auth profiles
 - model provider config/login
-- Linux systemd **user** service (daemon)
+- Linux systemd **user** service (service)
 
 If you’re doing OAuth on a headless VM: do OAuth on a normal machine first, then copy the auth profile to the VM (see [Help](/help)).
 
@@ -125,7 +125,7 @@ export CLAWDBOT_GATEWAY_TOKEN="$(openssl rand -hex 32)"
 clawdbot gateway --bind lan --port 8080 --token "$CLAWDBOT_GATEWAY_TOKEN"
 ```
 
-For daemon runs, persist it in `~/.clawdbot/clawdbot.json`:
+For service runs, persist it in `~/.clawdbot/clawdbot.json`:
 
 ```json5
 {
@@ -159,7 +159,7 @@ Notes:
 
 Control UI details: [Control UI](/web/control-ui)
 
-## 6) Keep it running (daemon)
+## 6) Keep it running (service)
 
 On Linux, Clawdbot uses a systemd **user** service. After `--install-daemon`, verify:
 
@@ -180,7 +180,7 @@ More: [Linux](/platforms/linux)
 ```bash
 npm i -g clawdbot@latest
 clawdbot doctor
-clawdbot daemon restart
+clawdbot gateway restart
 clawdbot health
 ```
 

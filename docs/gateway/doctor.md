@@ -225,10 +225,10 @@ Notes:
 - `clawdbot doctor --yes` accepts the default repair prompts.
 - `clawdbot doctor --repair` applies recommended fixes without prompts.
 - `clawdbot doctor --repair --force` overwrites custom supervisor configs.
-- You can always force a full rewrite via `clawdbot daemon install --force`.
+- You can always force a full rewrite via `clawdbot gateway install --force`.
 
 ### 16) Gateway runtime + port diagnostics
-Doctor inspects the daemon runtime (PID, last exit status) and warns when the
+Doctor inspects the service runtime (PID, last exit status) and warns when the
 service is installed but not actually running. It also checks for port collisions
 on the gateway port (default `18789`) and reports likely causes (gateway already
 running, SSH tunnel).
@@ -236,7 +236,7 @@ running, SSH tunnel).
 ### 17) Gateway runtime best practices
 Doctor warns when the gateway service runs on Bun or a version-managed Node path
 (`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram channels require Node,
-and version-manager paths can break after upgrades because the daemon does not
+and version-manager paths can break after upgrades because the service does not
 load your shell init. Doctor offers to migrate to a system Node install when
 available (Homebrew/apt/choco).
 

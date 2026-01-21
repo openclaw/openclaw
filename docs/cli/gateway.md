@@ -25,6 +25,12 @@ Run a local Gateway process:
 clawdbot gateway
 ```
 
+Foreground alias:
+
+```bash
+clawdbot gateway run
+```
+
 Notes:
 - By default, the Gateway refuses to start unless `gateway.mode=local` is set in `~/.clawdbot/clawdbot.json`. Use `--allow-unconfigured` for ad-hoc/dev runs.
 - Binding beyond loopback without auth is blocked (safety guardrail).
@@ -75,15 +81,32 @@ clawdbot gateway health --url ws://127.0.0.1:18789
 
 ### `gateway status`
 
-`gateway status` is the “debug everything” command. It always probes:
+`gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional RPC probe.
+
+```bash
+clawdbot gateway status
+clawdbot gateway status --json
+```
+
+Options:
+- `--url <url>`: override the probe URL.
+- `--token <token>`: token auth for the probe.
+- `--password <password>`: password auth for the probe.
+- `--timeout <ms>`: probe timeout (default `10000`).
+- `--no-probe`: skip the RPC probe (service-only view).
+- `--deep`: scan system-level services too.
+
+### `gateway probe`
+
+`gateway probe` is the “debug everything” command. It always probes:
 - your configured remote gateway (if set), and
 - localhost (loopback) **even if remote is configured**.
 
 If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
 
 ```bash
-clawdbot gateway status
-clawdbot gateway status --json
+clawdbot gateway probe
+clawdbot gateway probe --json
 ```
 
 #### Remote over SSH (Mac app parity)
@@ -93,7 +116,7 @@ The macOS app “Remote over SSH” mode uses a local port-forward so the remote
 CLI equivalent:
 
 ```bash
-clawdbot gateway status --ssh user@gateway-host
+clawdbot gateway probe --ssh user@gateway-host
 ```
 
 Options:
@@ -113,6 +136,20 @@ Low-level RPC helper.
 clawdbot gateway call status
 clawdbot gateway call logs.tail --params '{"sinceMs": 60000}'
 ```
+
+## Manage the Gateway service
+
+```bash
+clawdbot gateway install
+clawdbot gateway start
+clawdbot gateway stop
+clawdbot gateway restart
+clawdbot gateway uninstall
+```
+
+Notes:
+- `gateway install` supports `--port`, `--runtime`, `--token`, `--force`, `--json`.
+- Lifecycle commands accept `--json` for scripting.
 
 ## Discover gateways (Bonjour)
 

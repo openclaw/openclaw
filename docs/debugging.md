@@ -100,7 +100,7 @@ CLAWDBOT_PROFILE=dev clawdbot gateway --dev --reset
 Tip: if a non‑dev gateway is already running (launchd/systemd), stop it first:
 
 ```bash
-clawdbot daemon stop
+clawdbot gateway stop
 ```
 
 ## Raw stream logging (Clawdbot)
