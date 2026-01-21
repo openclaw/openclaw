@@ -21,13 +21,20 @@ describe("config view", () => {
     uiHints: {},
     formMode: "form" as const,
     formValue: {},
+    originalValue: {},
+    searchQuery: "",
+    activeSection: null,
+    activeSubsection: null,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
     onFormPatch: vi.fn(),
+    onSearchChange: vi.fn(),
+    onSectionChange: vi.fn(),
     onReload: vi.fn(),
     onSave: vi.fn(),
     onApply: vi.fn(),
     onUpdate: vi.fn(),
+    onSubsectionChange: vi.fn(),
   });
 
   it("disables save when form is unsafe", () => {
