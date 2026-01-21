@@ -299,6 +299,7 @@ describe("discord guild/channel resolution", () => {
     expect(general?.allowed).toBe(true);
     expect(general?.requireMention).toBe(false);
     expect(general?.autoThread).toBeUndefined();
+    expect(general?.matchSource).toBe("direct");
 
     // Unknown channel should use wildcard
     const random = resolveDiscordChannelConfig({
@@ -310,6 +311,28 @@ describe("discord guild/channel resolution", () => {
     expect(random?.allowed).toBe(true);
     expect(random?.autoThread).toBe(true);
     expect(random?.requireMention).toBe(true);
+    expect(random?.matchSource).toBe("wildcard");
+  });
+
+  it("falls back to wildcard when thread channel and parent are missing", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {
+        "*": { allow: true, requireMention: false },
+      },
+    };
+    const thread = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-123",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-999",
+      parentName: "general",
+      parentSlug: "general",
+      scope: "thread",
+    });
+    expect(thread?.allowed).toBe(true);
+    expect(thread?.matchKey).toBe("*");
+    expect(thread?.matchSource).toBe("wildcard");
   });
 });
 
