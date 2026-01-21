@@ -1,3 +1,4 @@
+import ClawdbotKit
 import Foundation
 import Testing
 @testable import Clawdbot

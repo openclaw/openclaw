@@ -3,6 +3,8 @@ import SwiftUI
 import Testing
 @testable import Clawdbot
 
+private typealias SnapshotAnyCodable = Clawdbot.AnyCodable
+
 @Suite(.serialized)
 @MainActor
 struct ChannelsSettingsSmokeTests {
@@ -17,8 +19,11 @@ struct ChannelsSettingsSmokeTests {
                 "signal": "Signal",
                 "imessage": "iMessage",
             ],
+            channelDetailLabels: nil,
+            channelSystemImages: nil,
+            channelMeta: nil,
             channels: [
-                "whatsapp": AnyCodable([
+                "whatsapp": SnapshotAnyCodable([
                     "configured": true,
                     "linked": true,
                     "authAgeMs": 86_400_000,
@@ -37,7 +42,7 @@ struct ChannelsSettingsSmokeTests {
                     "lastEventAt": 1_700_000_060_000,
                     "lastError": "needs login",
                 ]),
-                "telegram": AnyCodable([
+                "telegram": SnapshotAnyCodable([
                     "configured": true,
                     "tokenSource": "env",
                     "running": true,
@@ -52,7 +57,7 @@ struct ChannelsSettingsSmokeTests {
                     ],
                     "lastProbeAt": 1_700_000_050_000,
                 ]),
-                "signal": AnyCodable([
+                "signal": SnapshotAnyCodable([
                     "configured": true,
                     "baseUrl": "http://127.0.0.1:8080",
                     "running": true,
@@ -65,7 +70,7 @@ struct ChannelsSettingsSmokeTests {
                     ],
                     "lastProbeAt": 1_700_000_050_000,
                 ]),
-                "imessage": AnyCodable([
+                "imessage": SnapshotAnyCodable([
                     "configured": false,
                     "running": false,
                     "lastError": "not configured",
@@ -100,15 +105,18 @@ struct ChannelsSettingsSmokeTests {
                 "signal": "Signal",
                 "imessage": "iMessage",
             ],
+            channelDetailLabels: nil,
+            channelSystemImages: nil,
+            channelMeta: nil,
             channels: [
-                "whatsapp": AnyCodable([
+                "whatsapp": SnapshotAnyCodable([
                     "configured": false,
                     "linked": false,
                     "running": false,
                     "connected": false,
                     "reconnectAttempts": 0,
                 ]),
-                "telegram": AnyCodable([
+                "telegram": SnapshotAnyCodable([
                     "configured": false,
                     "running": false,
                     "lastError": "bot missing",
@@ -120,7 +128,7 @@ struct ChannelsSettingsSmokeTests {
                     ],
                     "lastProbeAt": 1_700_000_100_000,
                 ]),
-                "signal": AnyCodable([
+                "signal": SnapshotAnyCodable([
                     "configured": false,
                     "baseUrl": "http://127.0.0.1:8080",
                     "running": false,
@@ -133,7 +141,7 @@ struct ChannelsSettingsSmokeTests {
                     ],
                     "lastProbeAt": 1_700_000_200_000,
                 ]),
-                "imessage": AnyCodable([
+                "imessage": SnapshotAnyCodable([
                     "configured": false,
                     "running": false,
                     "lastError": "not configured",

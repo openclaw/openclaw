@@ -3,13 +3,15 @@ import SwiftUI
 import Testing
 @testable import Clawdbot
 
+private typealias ProtoAnyCodable = ClawdbotProtocol.AnyCodable
+
 @Suite(.serialized)
 @MainActor
 struct OnboardingWizardStepViewTests {
     @Test func noteStepBuilds() {
         let step = WizardStep(
             id: "step-1",
-            type: AnyCodable("note"),
+            type: ProtoAnyCodable("note"),
             title: "Welcome",
             message: "Hello",
             options: nil,
@@ -22,17 +24,17 @@ struct OnboardingWizardStepViewTests {
     }
 
     @Test func selectStepBuilds() {
-        let options: [[String: AnyCodable]] = [
-            ["value": AnyCodable("local"), "label": AnyCodable("Local"), "hint": AnyCodable("This Mac")],
-            ["value": AnyCodable("remote"), "label": AnyCodable("Remote")],
+        let options: [[String: ProtoAnyCodable]] = [
+            ["value": ProtoAnyCodable("local"), "label": ProtoAnyCodable("Local"), "hint": ProtoAnyCodable("This Mac")],
+            ["value": ProtoAnyCodable("remote"), "label": ProtoAnyCodable("Remote")],
         ]
         let step = WizardStep(
             id: "step-2",
-            type: AnyCodable("select"),
+            type: ProtoAnyCodable("select"),
             title: "Mode",
             message: "Choose a mode",
             options: options,
-            initialvalue: AnyCodable("local"),
+            initialvalue: ProtoAnyCodable("local"),
             placeholder: nil,
             sensitive: nil,
             executor: nil)

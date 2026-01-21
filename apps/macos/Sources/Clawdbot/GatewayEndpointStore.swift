@@ -172,6 +172,10 @@ actor GatewayEndpointStore {
             return configToken
         }
 
+        if isRemote {
+            return nil
+        }
+
         if let token = launchdSnapshot?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {

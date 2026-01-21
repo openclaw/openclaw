@@ -11,16 +11,19 @@ struct CronJobEditorSmokeTests {
     }
 
     @Test func cronJobEditorBuildsBodyForNewJob() {
+        let channelsStore = ChannelsStore(isPreview: true)
         let view = CronJobEditor(
             job: nil,
             isSaving: .constant(false),
             error: .constant(nil),
+            channelsStore: channelsStore,
             onCancel: {},
             onSave: { _ in })
         _ = view.body
     }
 
     @Test func cronJobEditorBuildsBodyForExistingJob() {
+        let channelsStore = ChannelsStore(isPreview: true)
         let job = CronJob(
             id: "job-1",
             agentId: "ops",
@@ -54,31 +57,36 @@ struct CronJobEditorSmokeTests {
             job: job,
             isSaving: .constant(false),
             error: .constant(nil),
+            channelsStore: channelsStore,
             onCancel: {},
             onSave: { _ in })
         _ = view.body
     }
 
     @Test func cronJobEditorExercisesBuilders() {
+        let channelsStore = ChannelsStore(isPreview: true)
         var view = CronJobEditor(
             job: nil,
             isSaving: .constant(false),
             error: .constant(nil),
+            channelsStore: channelsStore,
             onCancel: {},
             onSave: { _ in })
         view.exerciseForTesting()
     }
 
     @Test func cronJobEditorIncludesDeleteAfterRunForAtSchedule() throws {
+        let channelsStore = ChannelsStore(isPreview: true)
         let view = CronJobEditor(
             job: nil,
             isSaving: .constant(false),
             error: .constant(nil),
+            channelsStore: channelsStore,
             onCancel: {},
             onSave: { _ in })
 
         var root: [String: Any] = [:]
-        view.applyDeleteAfterRun(to: &root, scheduleKind: .at, deleteAfterRun: true)
+        view.applyDeleteAfterRun(to: &root, scheduleKind: CronJobEditor.ScheduleKind.at, deleteAfterRun: true)
         let raw = root["deleteAfterRun"] as? Bool
         #expect(raw == true)
     }
