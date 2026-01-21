@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 - CLI: exec approvals mutations render tables instead of raw JSON.
 - Exec approvals: support wildcard agent allowlists (`*`) across all agents.
 - Nodes: expose node PATH in status/describe and bootstrap PATH for node-host execution.
+- CLI: flatten node service commands under `clawdbot node` and remove `service node` docs.
 
 ### Fixes
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.

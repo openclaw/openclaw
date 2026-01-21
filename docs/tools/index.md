@@ -181,7 +181,7 @@ Notes:
 - If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - `elevated` is gated by `tools.elevated` plus any `agents.list[].tools.elevated` override (both must allow) and is an alias for `host=gateway` + `security=full`.
 - `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
-- `host=node` can target a macOS companion app or a headless node host (`clawdbot node start`).
+- `host=node` can target a macOS companion app or a headless node host (`clawdbot node run`).
 - gateway/node approvals and allowlists: [Exec approvals](/tools/exec-approvals).
 
 ### `process`

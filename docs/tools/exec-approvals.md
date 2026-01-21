@@ -23,7 +23,7 @@ Exec approvals are enforced locally on the execution host:
 - **node host** → node runner (macOS companion app or headless node host)
 
 Planned macOS split:
-- **node service** forwards `system.run` to the **macOS app** over local IPC.
+- **node host service** forwards `system.run` to the **macOS app** over local IPC.
 - **macOS app** enforces approvals + executes the command in UI context.
 
 ## Settings and storage

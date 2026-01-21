@@ -30,7 +30,7 @@ read_when:
 - **Node identity:** use existing `nodeId`.
 - **Socket auth:** Unix socket + token (cross-platform); split later if needed.
 - **Node host state:** `~/.clawdbot/node.json` (node id + pairing token).
-- **macOS exec host:** run `system.run` inside the macOS app; node service forwards requests over local IPC.
+- **macOS exec host:** run `system.run` inside the macOS app; node host service forwards requests over local IPC.
 - **No XPC helper:** stick to Unix socket + token + peer checks.
 
 ## Key concepts

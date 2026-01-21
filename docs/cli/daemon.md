@@ -9,7 +9,7 @@ read_when:
 
 Manage the Gateway daemon (background service).
 
-Note: `clawdbot service gateway …` is the preferred surface; `daemon` remains
+Note: `clawdbot daemon …` is the preferred surface for Gateway service management; `daemon` remains
 as a legacy alias for compatibility.
 
 Related:

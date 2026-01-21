@@ -50,14 +50,14 @@ forwards `exec` calls to the **node host** when `host=node` is selected.
 On the node machine:
 
 ```bash
-clawdbot node start --host <gateway-host> --port 18789 --display-name "Build Node"
+clawdbot node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
 ### Start a node host (service)
 
 ```bash
-clawdbot node service install --host <gateway-host> --port 18789 --display-name "Build Node"
-clawdbot node service start
+clawdbot node install --host <gateway-host> --port 18789 --display-name "Build Node"
+clawdbot node start
 ```
 
 ### Pair + name
@@ -71,7 +71,7 @@ clawdbot nodes list
 ```
 
 Naming options:
-- `--display-name` on `clawdbot node start/service install` (persists in `~/.clawdbot/node.json` on the node).
+- `--display-name` on `clawdbot node run` / `clawdbot node install` (persists in `~/.clawdbot/node.json` on the node).
 - `clawdbot nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Allowlist the commands
@@ -281,7 +281,7 @@ or for running a minimal node alongside a server.
 Start it:
 
 ```bash
-clawdbot node start --host <gateway-host> --port 18790
+clawdbot node run --host <gateway-host> --port 18790
 ```
 
 Notes:

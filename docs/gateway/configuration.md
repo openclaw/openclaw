@@ -24,7 +24,7 @@ Unknown keys, malformed types, or invalid values cause the Gateway to **refuse t
 
 When validation fails:
 - The Gateway does not boot.
-- Only diagnostic commands are allowed (for example: `clawdbot doctor`, `clawdbot logs`, `clawdbot health`, `clawdbot status`, `clawdbot service`, `clawdbot help`).
+- Only diagnostic commands are allowed (for example: `clawdbot doctor`, `clawdbot logs`, `clawdbot health`, `clawdbot status`, `clawdbot daemon`, `clawdbot help`).
 - Run `clawdbot doctor` to see the exact issues.
 - Run `clawdbot doctor --fix` (or `--yes`) to apply migrations/repairs.
 

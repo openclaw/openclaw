@@ -29,7 +29,6 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`sessions`](/cli/sessions)
 - [`gateway`](/cli/gateway)
 - [`daemon`](/cli/daemon)
-- [`service`](/cli/service)
 - [`logs`](/cli/logs)
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
@@ -146,21 +145,6 @@ clawdbot [--dev] [--profile <name>] <command>
     start
     stop
     restart
-  service
-    gateway
-      status
-      install
-      uninstall
-      start
-      stop
-      restart
-    node
-      status
-      install
-      uninstall
-      start
-      stop
-      restart
   logs
   models
     list
@@ -544,7 +528,7 @@ Options:
 - `--debug` (alias for `--verbose`)
 
 Notes:
-- Overview includes Gateway + Node service status when available.
+- Overview includes Gateway + node host service status when available.
 
 ### Usage tracking
 Clawdbot can surface provider usage/quota when OAuth/API creds are available.
@@ -806,16 +790,13 @@ All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 [`clawdbot node`](/cli/node).
 
 Subcommands:
-- `node start --host <gateway-host> --port 18790`
-- `node service status`
-- `node service install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
-- `node service uninstall`
-- `node service start`
-- `node service stop`
-- `node service restart`
-
-Legacy alias:
-- `node daemon …` (same as `node service …`)
+- `node run --host <gateway-host> --port 18790`
+- `node status`
+- `node install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
+- `node uninstall`
+- `node run`
+- `node stop`
+- `node restart`
 
 ## Nodes
 

@@ -57,7 +57,7 @@ The macOS app presents itself as a node. Common commands:
 The node reports a `permissions` map so agents can decide what’s allowed.
 
 Node service + app IPC:
-- When the headless node service is running (remote mode), it connects to the Gateway WS as a node.
+- When the headless node host service is running (remote mode), it connects to the Gateway WS as a node.
 - `system.run` executes in the macOS app (UI/TCC context) over a local Unix socket; prompts + output stay in-app.
 
 Diagram (SCI):

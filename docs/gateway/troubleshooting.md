@@ -354,7 +354,7 @@ clawdbot doctor --fix
 Notes:
 - `clawdbot doctor` reports every invalid entry.
 - `clawdbot doctor --fix` applies migrations/repairs and rewrites the config.
-- Diagnostic commands like `clawdbot logs`, `clawdbot health`, `clawdbot status`, and `clawdbot service` still run even if the config is invalid.
+- Diagnostic commands like `clawdbot logs`, `clawdbot health`, `clawdbot status`, and `clawdbot daemon` still run even if the config is invalid.
 
 ### “All models failed” — what should I check first?
 
