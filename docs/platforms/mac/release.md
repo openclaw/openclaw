@@ -24,6 +24,7 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 Notes:
 - `APP_BUILD` maps to `CFBundleVersion`/`sparkle:version`; keep it numeric + monotonic (no `-beta`), or Sparkle compares it as equal.
 - Defaults to the current architecture (`$(uname -m)`). For release/universal builds, set `BUILD_ARCHS="arm64 x86_64"` (or `BUILD_ARCHS=all`).
+- Use `scripts/package-mac-dist.sh` for release artifacts (zip + DMG + notarization). Use `scripts/package-mac-app.sh` for local/dev packaging.
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
