@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   matchAllowlist,
@@ -111,32 +111,33 @@ describe("exec approvals policy helpers", () => {
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
     const dir = makeTempDir();
-    const oldHome = process.env.HOME;
-    process.env.HOME = dir;
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(dir);
 
-    const approvalsPath = path.join(dir, ".clawdbot", "exec-approvals.json");
-    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
-    fs.writeFileSync(
-      approvalsPath,
-      JSON.stringify(
-        {
-          version: 1,
-          agents: {
-            "*": { allowlist: [{ pattern: "/bin/hostname" }] },
-            main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+    try {
+      const approvalsPath = path.join(dir, ".clawdbot", "exec-approvals.json");
+      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+      fs.writeFileSync(
+        approvalsPath,
+        JSON.stringify(
+          {
+            version: 1,
+            agents: {
+              "*": { allowlist: [{ pattern: "/bin/hostname" }] },
+              main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+            },
           },
-        },
-        null,
-        2,
-      ),
-    );
+          null,
+          2,
+        ),
+      );
 
-    const resolved = resolveExecApprovals("main");
-    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
-      "/bin/hostname",
-      "/usr/bin/uname",
-    ]);
-
-    process.env.HOME = oldHome;
+      const resolved = resolveExecApprovals("main");
+      expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
+        "/bin/hostname",
+        "/usr/bin/uname",
+      ]);
+    } finally {
+      homedirSpy.mockRestore();
+    }
   });
 });
