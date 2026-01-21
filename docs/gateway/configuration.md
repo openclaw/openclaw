@@ -1597,6 +1597,7 @@ Notes / current limitations:
 - The estimated “context ratio” is based on **characters** (approximate), not exact tokens.
 - If the session doesn’t contain at least `keepLastAssistants` assistant messages yet, pruning is skipped.
 - `cache-ttl` only activates for Anthropic API calls (and OpenRouter Anthropic models).
+- After a prune, the TTL window resets so subsequent requests keep cache until `ttl` expires again.
 - For best results, match `contextPruning.ttl` to the model `cacheControlTtl` you set in `agents.defaults.models.*.params`.
 
 Default (off):

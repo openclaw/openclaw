@@ -13,6 +13,7 @@ Session pruning trims **old tool results** from the in-memory context right befo
 - Only affects the messages sent to the model for that request.
  - Only active for Anthropic API calls (and OpenRouter Anthropic models).
  - For best results, match `ttl` to your model `cacheControlTtl`.
+ - After a prune, the TTL window resets so subsequent requests keep cache until `ttl` expires again.
 
 ## What can be pruned
 - Only `toolResult` messages.
