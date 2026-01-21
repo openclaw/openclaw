@@ -1,6 +1,12 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types";
 import { analyzeConfigSchema, renderConfigForm } from "./config-form";
+import {
+  hintForPath,
+  humanize,
+  schemaType,
+  type JsonSchema,
+} from "./config-form.shared";
 
 export type ConfigProps = {
   raw: string;
@@ -19,11 +25,13 @@ export type ConfigProps = {
   originalValue: Record<string, unknown> | null;
   searchQuery: string;
   activeSection: string | null;
+  activeSubsection: string | null;
   onRawChange: (next: string) => void;
   onFormModeChange: (mode: "form" | "raw") => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
   onSearchChange: (query: string) => void;
   onSectionChange: (section: string | null) => void;
+  onSubsectionChange: (section: string | null) => void;
   onReload: () => void;
   onSave: () => void;
   onApply: () => void;
@@ -80,8 +88,47 @@ const SECTIONS: Array<{ key: string; label: string }> = [
   { key: "wizard", label: "Setup Wizard" },
 ];
 
+type SubsectionEntry = {
+  key: string;
+  label: string;
+  description?: string;
+  order: number;
+};
+
+const ALL_SUBSECTION = "__all__";
+
 function getSectionIcon(key: string) {
   return sidebarIcons[key as keyof typeof sidebarIcons] ?? sidebarIcons.default;
+}
+
+function resolveSectionMeta(key: string, schema?: JsonSchema): {
+  label: string;
+  description?: string;
+} {
+  const meta = SECTION_META[key];
+  if (meta) return meta;
+  return {
+    label: schema?.title ?? humanize(key),
+    description: schema?.description ?? "",
+  };
+}
+
+function resolveSubsections(params: {
+  key: string;
+  schema: JsonSchema | undefined;
+  uiHints: ConfigUiHints;
+}): SubsectionEntry[] {
+  const { key, schema, uiHints } = params;
+  if (!schema || schemaType(schema) !== "object" || !schema.properties) return [];
+  const entries = Object.entries(schema.properties).map(([subKey, node]) => {
+    const hint = hintForPath([key, subKey], uiHints);
+    const label = hint?.label ?? node.title ?? humanize(subKey);
+    const description = hint?.help ?? node.description ?? "";
+    const order = hint?.order ?? 50;
+    return { key: subKey, label, description, order };
+  });
+  entries.sort((a, b) => (a.order !== b.order ? a.order - b.order : a.key.localeCompare(b.key)));
+  return entries;
 }
 
 function computeDiff(
@@ -164,6 +211,31 @@ export function renderConfig(props: ConfigProps) {
     .map(k => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
   
   const allSections = [...availableSections, ...extraSections];
+
+  const activeSectionSchema =
+    props.activeSection && analysis.schema && schemaType(analysis.schema) === "object"
+      ? (analysis.schema.properties?.[props.activeSection] as JsonSchema | undefined)
+      : undefined;
+  const activeSectionMeta = props.activeSection
+    ? resolveSectionMeta(props.activeSection, activeSectionSchema)
+    : null;
+  const subsections = props.activeSection
+    ? resolveSubsections({
+        key: props.activeSection,
+        schema: activeSectionSchema,
+        uiHints: props.uiHints,
+      })
+    : [];
+  const allowSubnav =
+    props.formMode === "form" &&
+    Boolean(props.activeSection) &&
+    subsections.length > 0;
+  const isAllSubsection = props.activeSubsection === ALL_SUBSECTION;
+  const effectiveSubsection = props.searchQuery
+    ? null
+    : isAllSubsection
+      ? null
+      : props.activeSubsection ?? (subsections[0]?.key ?? null);
   
   // Compute diff for showing changes
   const diff = props.formMode === "form" 
@@ -304,6 +376,46 @@ export function renderConfig(props: ConfigProps) {
           </details>
         ` : nothing}
 
+        ${activeSectionMeta && props.formMode === "form"
+          ? html`
+              <div class="config-section-hero">
+                <div class="config-section-hero__icon">${getSectionIcon(props.activeSection ?? "")}</div>
+                <div class="config-section-hero__text">
+                  <div class="config-section-hero__title">${activeSectionMeta.label}</div>
+                  ${activeSectionMeta.description
+                    ? html`<div class="config-section-hero__desc">${activeSectionMeta.description}</div>`
+                    : nothing}
+                </div>
+              </div>
+            `
+          : nothing}
+
+        ${allowSubnav
+          ? html`
+              <div class="config-subnav">
+                <button
+                  class="config-subnav__item ${effectiveSubsection === null ? "active" : ""}"
+                  @click=${() => props.onSubsectionChange(ALL_SUBSECTION)}
+                >
+                  All
+                </button>
+                ${subsections.map(
+                  (entry) => html`
+                    <button
+                      class="config-subnav__item ${
+                        effectiveSubsection === entry.key ? "active" : ""
+                      }"
+                      title=${entry.description || entry.label}
+                      @click=${() => props.onSubsectionChange(entry.key)}
+                    >
+                      ${entry.label}
+                    </button>
+                  `,
+                )}
+              </div>
+            `
+          : nothing}
+
         <!-- Form content -->
         <div class="config-content">
           ${props.formMode === "form"
@@ -322,6 +434,7 @@ export function renderConfig(props: ConfigProps) {
                       onPatch: props.onFormPatch,
                       searchQuery: props.searchQuery,
                       activeSection: props.activeSection,
+                      activeSubsection: effectiveSubsection,
                     })}
                 ${formUnsafe
                   ? html`<div class="callout danger" style="margin-top: 12px;">

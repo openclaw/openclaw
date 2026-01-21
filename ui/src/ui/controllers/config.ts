@@ -33,6 +33,7 @@ export type ConfigState = {
   configFormMode: "form" | "raw";
   configSearchQuery: string;
   configActiveSection: string | null;
+  configActiveSubsection: string | null;
   lastError: string | null;
 };
 
