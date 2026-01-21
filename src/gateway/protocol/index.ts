@@ -310,7 +310,7 @@ export const validateWebLoginStartParams =
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
-  if (!errors) return "unknown validation error";
+  if (!errors?.length) return "unknown validation error";
 
   const parts: string[] = [];
 
@@ -328,13 +328,18 @@ export function formatValidationErrors(errors: ErrorObject[] | null | undefined)
       }
     }
 
-    const message = typeof err?.message === "string" ? err.message : "validation error";
+    const message =
+      typeof err?.message === "string" && err.message.trim() ? err.message : "validation error";
     const where = instancePath ? `at ${instancePath}: ` : "";
     parts.push(`${where}${message}`);
   }
 
   // De-dupe while preserving order.
-  const unique = Array.from(new Set(parts));
+  const unique = Array.from(new Set(parts.filter((part) => part.trim())));
+  if (!unique.length) {
+    const fallback = ajv.errorsText(errors, { separator: "; " });
+    return fallback || "unknown validation error";
+  }
   return unique.join("; ");
 }
 
