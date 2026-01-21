@@ -87,7 +87,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
         deliver: true,
         bestEffortDeliver: true,
         messageChannel: channel,
-        replyToId: threadId,
+        threadId,
       },
       defaultRuntime,
       params.deps,
