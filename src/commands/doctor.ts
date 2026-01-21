@@ -250,7 +250,8 @@ export async function doctorCommand(
     healthOk,
   });
 
-  if (prompter.shouldRepair) {
+  const shouldWriteConfig = prompter.shouldRepair || configResult.shouldWriteConfig;
+  if (shouldWriteConfig) {
     cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
     await writeConfigFile(cfg);
     runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);

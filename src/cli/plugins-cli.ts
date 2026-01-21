@@ -454,6 +454,10 @@ export function registerPluginsCli(program: Command) {
       const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
 
       if (targets.length === 0) {
+        if (opts.all) {
+          defaultRuntime.log("No npm-installed plugins to update.");
+          return;
+        }
         defaultRuntime.error("Provide a plugin id or use --all.");
         process.exit(1);
       }

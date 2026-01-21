@@ -623,7 +623,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
         try {
           const { doctorCommand } = await import("../commands/doctor.js");
-          await doctorCommand(defaultRuntime, { nonInteractive: true });
+          const interactiveDoctor = Boolean(process.stdin.isTTY) && !opts.json && opts.yes !== true;
+          await doctorCommand(defaultRuntime, { nonInteractive: !interactiveDoctor });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
         } finally {
