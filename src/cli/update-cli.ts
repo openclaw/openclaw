@@ -18,6 +18,7 @@ import {
   type UpdateRunResult,
   type UpdateStepInfo,
   type UpdateStepProgress,
+  type UpdateStepResult,
 } from "../infra/update-runner.js";
 import {
   detectGlobalInstallManagerByPresence,
