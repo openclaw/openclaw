@@ -53,14 +53,6 @@ const entries: SubCliEntry[] = [
     },
   },
   {
-    name: "service",
-    description: "Service helpers",
-    register: async (program) => {
-      const mod = await import("../service-cli.js");
-      mod.registerServiceCli(program);
-    },
-  },
-  {
     name: "logs",
     description: "Gateway logs",
     register: async (program) => {
