@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
+- Agents: add diagnostics cache trace config and fix cache trace logging edge cases. (#1370) — thanks @parubets.
 
 ## 2026.1.20
 

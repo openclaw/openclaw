@@ -7,8 +7,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { parseBooleanValue } from "../utils/boolean.js";
+import { resolveUserPath } from "../utils.js";
 
 export type CacheTraceStage =
   | "session:loaded"
@@ -61,6 +61,7 @@ type CacheTraceInit = {
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
+  writer?: CacheTraceWriter;
 };
 
 type CacheTraceConfig = {
@@ -80,14 +81,18 @@ const writers = new Map<string, CacheTraceWriter>();
 
 function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const env = params.env ?? process.env;
-  const enabled = isTruthyEnvValue(env.CLAWDBOT_CACHE_TRACE);
-  const filePath =
-    env.CLAWDBOT_CACHE_TRACE_FILE?.trim() ||
-    path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
+  const config = params.cfg?.diagnostics?.cacheTrace;
+  const envEnabled = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE);
+  const enabled = envEnabled ?? config?.enabled ?? false;
+  const fileOverride = config?.filePath?.trim() || env.CLAWDBOT_CACHE_TRACE_FILE?.trim();
+  const filePath = fileOverride
+    ? resolveUserPath(fileOverride)
+    : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
-  const includeMessages = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_MESSAGES);
-  const includePrompt = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_PROMPT);
-  const includeSystem = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_SYSTEM);
+  const includeMessages =
+    parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
+  const includePrompt = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
+  const includeSystem = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
 
   return {
     enabled,
@@ -189,7 +194,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const cfg = resolveCacheTraceConfig(params);
   if (!cfg.enabled) return null;
 
-  const writer = getWriter(cfg.filePath);
+  const writer = params.writer ?? getWriter(cfg.filePath);
   let seq = 0;
 
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = {
@@ -210,10 +215,10 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       stage,
     };
 
-    if (payload.prompt && cfg.includePrompt) {
+    if (payload.prompt !== undefined && cfg.includePrompt) {
       event.prompt = payload.prompt;
     }
-    if (payload.system && cfg.includeSystem) {
+    if (payload.system !== undefined && cfg.includeSystem) {
       event.system = payload.system;
       event.systemDigest = digest(payload.system);
     }
