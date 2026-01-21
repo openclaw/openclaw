@@ -5,6 +5,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 import { renderTable } from "../../terminal/table.js";
+import { parseDurationMs } from "../parse-duration.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -43,30 +44,79 @@ function formatNodeVersions(node: {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+function parseSinceMs(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const value = String(raw).trim();
+  if (!value) return undefined;
+  try {
+    return parseDurationMs(value);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    defaultRuntime.error(`${label}: ${message}`);
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+}
+
 export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes
       .command("status")
       .description("List known nodes with connection status and capabilities")
+      .option("--connected", "Only show connected nodes")
+      .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("status", async () => {
+          const connectedOnly = Boolean(opts.connected);
+          const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
           const result = (await callGatewayCli("node.list", opts, {})) as unknown;
-          if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
-            return;
-          }
+          const obj =
+            typeof result === "object" && result !== null
+              ? (result as Record<string, unknown>)
+              : {};
           const { ok, warn, muted } = getNodesTheme();
           const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
           const now = Date.now();
           const nodes = parseNodeList(result);
-          const pairedCount = nodes.filter((n) => Boolean(n.paired)).length;
-          const connectedCount = nodes.filter((n) => Boolean(n.connected)).length;
-          defaultRuntime.log(
-            `Known: ${nodes.length} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
-          );
-          if (nodes.length === 0) return;
+          const lastConnectedById =
+            sinceMs !== undefined
+              ? new Map(
+                  parsePairingList(await callGatewayCli("node.pair.list", opts, {})).paired.map(
+                    (entry) => [entry.nodeId, entry],
+                  ),
+                )
+              : null;
+          const filtered = nodes.filter((n) => {
+            if (connectedOnly && !n.connected) return false;
+            if (sinceMs !== undefined) {
+              const paired = lastConnectedById?.get(n.nodeId);
+              const lastConnectedAtMs =
+                typeof paired?.lastConnectedAtMs === "number"
+                  ? paired.lastConnectedAtMs
+                  : typeof n.connectedAtMs === "number"
+                    ? n.connectedAtMs
+                    : undefined;
+              if (typeof lastConnectedAtMs !== "number") return false;
+              if (now - lastConnectedAtMs > sinceMs) return false;
+            }
+            return true;
+          });
 
-          const rows = nodes.map((n) => {
+          if (opts.json) {
+            const ts = typeof obj.ts === "number" ? obj.ts : Date.now();
+            defaultRuntime.log(JSON.stringify({ ...obj, ts, nodes: filtered }, null, 2));
+            return;
+          }
+
+          const pairedCount = filtered.filter((n) => Boolean(n.paired)).length;
+          const connectedCount = filtered.filter((n) => Boolean(n.connected)).length;
+          const filteredLabel = filtered.length !== nodes.length ? ` (of ${nodes.length})` : "";
+          defaultRuntime.log(
+            `Known: ${filtered.length}${filteredLabel} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
+          );
+          if (filtered.length === 0) return;
+
+          const rows = filtered.map((n) => {
             const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
@@ -197,21 +247,60 @@ export function registerNodesStatusCommands(nodes: Command) {
     nodes
       .command("list")
       .description("List pending and paired nodes")
+      .option("--connected", "Only show connected nodes")
+      .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("list", async () => {
+          const connectedOnly = Boolean(opts.connected);
+          const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
           const result = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
-          if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
-            return;
-          }
           const { pending, paired } = parsePairingList(result);
-          defaultRuntime.log(`Pending: ${pending.length} · Paired: ${paired.length}`);
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
           const now = Date.now();
+          const hasFilters = connectedOnly || sinceMs !== undefined;
+          const pendingRows = hasFilters ? [] : pending;
+          const connectedById = hasFilters
+            ? new Map(
+                parseNodeList(await callGatewayCli("node.list", opts, {})).map((node) => [
+                  node.nodeId,
+                  node,
+                ]),
+              )
+            : null;
+          const filteredPaired = paired.filter((node) => {
+            if (connectedOnly) {
+              const live = connectedById?.get(node.nodeId);
+              if (!live?.connected) return false;
+            }
+            if (sinceMs !== undefined) {
+              const live = connectedById?.get(node.nodeId);
+              const lastConnectedAtMs =
+                typeof node.lastConnectedAtMs === "number"
+                  ? node.lastConnectedAtMs
+                  : typeof live?.connectedAtMs === "number"
+                    ? live.connectedAtMs
+                    : undefined;
+              if (typeof lastConnectedAtMs !== "number") return false;
+              if (now - lastConnectedAtMs > sinceMs) return false;
+            }
+            return true;
+          });
+          const filteredLabel =
+            hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
+          defaultRuntime.log(
+            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+          );
 
-          if (pending.length > 0) {
-            const pendingRows = pending.map((r) => ({
+          if (opts.json) {
+            defaultRuntime.log(
+              JSON.stringify({ pending: pendingRows, paired: filteredPaired }, null, 2),
+            );
+            return;
+          }
+
+          if (pendingRows.length > 0) {
+            const pendingRowsRendered = pendingRows.map((r) => ({
               Request: r.requestId,
               Node: r.displayName?.trim() ? r.displayName.trim() : r.nodeId,
               IP: r.remoteIp ?? "",
@@ -233,21 +322,30 @@ export function registerNodesStatusCommands(nodes: Command) {
                   { key: "Requested", header: "Requested", minWidth: 12 },
                   { key: "Repair", header: "Repair", minWidth: 6 },
                 ],
-                rows: pendingRows,
+                rows: pendingRowsRendered,
               }).trimEnd(),
             );
           }
 
-          if (paired.length > 0) {
-            const pairedRows = paired.map((n) => ({
-              Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
-              Id: n.nodeId,
-              IP: n.remoteIp ?? "",
-              LastConnect:
+          if (filteredPaired.length > 0) {
+            const pairedRows = filteredPaired.map((n) => {
+              const live = connectedById?.get(n.nodeId);
+              const lastConnectedAtMs =
                 typeof n.lastConnectedAtMs === "number"
-                  ? `${formatAge(Math.max(0, now - n.lastConnectedAtMs))} ago`
-                  : muted("unknown"),
-            }));
+                  ? n.lastConnectedAtMs
+                  : typeof live?.connectedAtMs === "number"
+                    ? live.connectedAtMs
+                    : undefined;
+              return {
+                Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
+                Id: n.nodeId,
+                IP: n.remoteIp ?? "",
+                LastConnect:
+                  typeof lastConnectedAtMs === "number"
+                    ? `${formatAge(Math.max(0, now - lastConnectedAtMs))} ago`
+                    : muted("unknown"),
+              };
+            });
             defaultRuntime.log("");
             defaultRuntime.log(heading("Paired"));
             defaultRuntime.log(

@@ -8,6 +8,8 @@ export type NodesRpcOpts = {
   params?: string;
   invokeTimeout?: string;
   idempotencyKey?: string;
+  connected?: boolean;
+  lastConnected?: string;
   target?: string;
   x?: string;
   y?: string;

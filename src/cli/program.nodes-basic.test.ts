@@ -68,6 +68,83 @@ describe("cli program (nodes basics)", () => {
     expect(runtime.log).toHaveBeenCalledWith("Pending: 0 · Paired: 0");
   });
 
+  it("runs nodes list --connected and filters to connected nodes", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              lastConnectedAtMs: now - 1_000,
+            },
+            {
+              nodeId: "n2",
+              displayName: "Two",
+              remoteIp: "10.0.0.2",
+              lastConnectedAtMs: now - 1_000,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            { nodeId: "n1", connected: true },
+            { nodeId: "n2", connected: false },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(["nodes", "list", "--connected"], { from: "user" });
+
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.list" }));
+    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    expect(output).toContain("One");
+    expect(output).not.toContain("Two");
+  });
+
+  it("runs nodes status --last-connected and filters by age", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: now,
+          nodes: [
+            { nodeId: "n1", displayName: "One", connected: false },
+            { nodeId: "n2", displayName: "Two", connected: false },
+          ],
+        };
+      }
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            { nodeId: "n1", lastConnectedAtMs: now - 1_000 },
+            { nodeId: "n2", lastConnectedAtMs: now - 2 * 24 * 60 * 60 * 1000 },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(["nodes", "status", "--last-connected", "24h"], {
+      from: "user",
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
+    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    expect(output).toContain("One");
+    expect(output).not.toContain("Two");
+  });
+
   it("runs nodes status and calls node.list", async () => {
     callGateway.mockResolvedValue({
       ts: Date.now(),

@@ -18,12 +18,18 @@ Related:
 
 ```bash
 clawdbot nodes list
+clawdbot nodes list --connected
+clawdbot nodes list --last-connected 24h
 clawdbot nodes pending
 clawdbot nodes approve <requestId>
 clawdbot nodes status
+clawdbot nodes status --connected
+clawdbot nodes status --last-connected 24h
 ```
 
 `nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
+Use `--connected` to only show currently-connected nodes. Use `--last-connected <duration>` to
+filter to nodes that connected within a duration (e.g. `24h`, `7d`).
 
 ## Invoke / run
 
