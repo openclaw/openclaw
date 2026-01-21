@@ -2,12 +2,18 @@ import type { Skill } from "@mariozechner/pi-coding-agent";
 
 export type SkillInstallSpec = {
   id?: string;
-  kind: "brew" | "node" | "go" | "uv";
+  kind: "brew" | "node" | "go" | "uv" | "download";
   label?: string;
   bins?: string[];
+  os?: string[];
   formula?: string;
   package?: string;
   module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
 };
 
 export type ClawdbotSkillMetadata = {

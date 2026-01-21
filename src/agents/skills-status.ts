@@ -100,36 +100,49 @@ function normalizeInstallOptions(
 ): SkillInstallOption[] {
   const install = entry.clawdbot?.install ?? [];
   if (install.length === 0) return [];
-  const preferred = selectPreferredInstallSpec(install, prefs);
-  if (!preferred) return [];
-  const { spec, index } = preferred;
-  const id = (spec.id ?? `${spec.kind}-${index}`).trim();
-  const bins = spec.bins ?? [];
-  let label = (spec.label ?? "").trim();
-  if (spec.kind === "node" && spec.package) {
-    label = `Install ${spec.package} (${prefs.nodeManager})`;
-  }
-  if (!label) {
-    if (spec.kind === "brew" && spec.formula) {
-      label = `Install ${spec.formula} (brew)`;
-    } else if (spec.kind === "node" && spec.package) {
+
+  const platform = process.platform;
+  const filtered = install.filter((spec) => {
+    const osList = spec.os ?? [];
+    return osList.length === 0 || osList.includes(platform);
+  });
+  if (filtered.length === 0) return [];
+
+  const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
+    const id = (spec.id ?? `${spec.kind}-${index}`).trim();
+    const bins = spec.bins ?? [];
+    let label = (spec.label ?? "").trim();
+    if (spec.kind === "node" && spec.package) {
       label = `Install ${spec.package} (${prefs.nodeManager})`;
-    } else if (spec.kind === "go" && spec.module) {
-      label = `Install ${spec.module} (go)`;
-    } else if (spec.kind === "uv" && spec.package) {
-      label = `Install ${spec.package} (uv)`;
-    } else {
-      label = "Run installer";
     }
+    if (!label) {
+      if (spec.kind === "brew" && spec.formula) {
+        label = `Install ${spec.formula} (brew)`;
+      } else if (spec.kind === "node" && spec.package) {
+        label = `Install ${spec.package} (${prefs.nodeManager})`;
+      } else if (spec.kind === "go" && spec.module) {
+        label = `Install ${spec.module} (go)`;
+      } else if (spec.kind === "uv" && spec.package) {
+        label = `Install ${spec.package} (uv)`;
+      } else if (spec.kind === "download" && spec.url) {
+        const url = spec.url.trim();
+        const last = url.split("/").pop();
+        label = `Download ${last && last.length > 0 ? last : url}`;
+      } else {
+        label = "Run installer";
+      }
+    }
+    return { id, kind: spec.kind, label, bins };
+  };
+
+  const allDownloads = filtered.every((spec) => spec.kind === "download");
+  if (allDownloads) {
+    return filtered.map((spec, index) => toOption(spec, index));
   }
-  return [
-    {
-      id,
-      kind: spec.kind,
-      label,
-      bins,
-    },
-  ];
+
+  const preferred = selectPreferredInstallSpec(filtered, prefs);
+  if (!preferred) return [];
+  return [toOption(preferred.spec, preferred.index)];
 }
 
 function buildSkillStatus(
