@@ -1,11 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import { resolveAckReaction } from "clawdbot/plugin-sdk";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender, normalizeBlueBubblesHandle } from "./targets.js";
-import { resolveAckReaction } from "../../../src/agents/identity.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import type { BlueBubblesAccountConfig, BlueBubblesAttachment } from "./types.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";

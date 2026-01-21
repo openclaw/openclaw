@@ -1,11 +1,17 @@
-import type { ClawdbotConfig, DmPolicy, WizardPrompter } from "clawdbot/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
-import { addWildcardAllowFrom, promptAccountId } from "../../../src/channels/plugins/onboarding/helpers.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  ClawdbotConfig,
+  DmPolicy,
+  WizardPrompter,
+} from "clawdbot/plugin-sdk";
+import {
+  DEFAULT_ACCOUNT_ID,
+  addWildcardAllowFrom,
+  formatDocsLink,
+  normalizeAccountId,
+  promptAccountId,
+} from "clawdbot/plugin-sdk";
 import {
   listBlueBubblesAccountIds,
   resolveBlueBubblesAccount,
