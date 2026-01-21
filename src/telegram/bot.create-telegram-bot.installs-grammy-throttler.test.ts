@@ -157,13 +157,12 @@ describe("createTelegramBot", () => {
       (globalThis as { Bun?: unknown }).Bun = {};
       createTelegramBot({ token: "tok" });
       const fetchImpl = resolveTelegramFetch();
-      expect(fetchImpl).toBe(fetchSpy);
-      expect(botCtorSpy).toHaveBeenCalledWith(
-        "tok",
-        expect.objectContaining({
-          client: expect.objectContaining({ fetch: fetchSpy }),
-        }),
-      );
+      expect(fetchImpl).toBeTypeOf("function");
+      expect(fetchImpl).not.toBe(fetchSpy);
+      const clientFetch = (botCtorSpy.mock.calls[0]?.[1] as { client?: { fetch?: unknown } })
+        ?.client?.fetch;
+      expect(clientFetch).toBeTypeOf("function");
+      expect(clientFetch).not.toBe(fetchSpy);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalBun === undefined) {
