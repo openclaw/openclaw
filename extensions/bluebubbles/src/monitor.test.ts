@@ -6,6 +6,8 @@ import type { ClawdbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
 import {
   handleBlueBubblesWebhookRequest,
   registerBlueBubblesWebhookTarget,
+  resolveBlueBubblesMessageId,
+  _resetBlueBubblesShortIdState,
 } from "./monitor.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
@@ -223,6 +225,8 @@ describe("BlueBubbles webhook monitor", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset short ID state between tests for predictable behavior
+    _resetBlueBubblesShortIdState();
     mockReadAllowFromStore.mockResolvedValue([]);
     mockUpsertPairingRequest.mockResolvedValue({ code: "TESTCODE", created: true });
     mockResolveRequireMention.mockReturnValue(false);
@@ -466,6 +470,98 @@ describe("BlueBubbles webhook monitor", () => {
       const handled = await handleBlueBubblesWebhookRequest(req, res);
 
       expect(handled).toBe(false);
+    });
+
+    it("parses chatId when provided as a string (webhook variant)", async () => {
+      const { resolveChatGuidForTarget } = await import("./send.js");
+      vi.mocked(resolveChatGuidForTarget).mockClear();
+
+      const account = createMockAccount({ groupPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello from group",
+          handle: { address: "+15551234567" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-1",
+          chatId: "123",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(resolveChatGuidForTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { kind: "chat_id", chatId: 123 },
+        }),
+      );
+    });
+
+    it("extracts chatGuid from nested chat object fields (webhook variant)", async () => {
+      const { sendMessageBlueBubbles, resolveChatGuidForTarget } = await import("./send.js");
+      vi.mocked(sendMessageBlueBubbles).mockClear();
+      vi.mocked(resolveChatGuidForTarget).mockClear();
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+      });
+
+      const account = createMockAccount({ groupPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello from group",
+          handle: { address: "+15551234567" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-1",
+          chat: { chatGuid: "iMessage;+;chat123456" },
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(resolveChatGuidForTarget).not.toHaveBeenCalled();
+      expect(sendMessageBlueBubbles).toHaveBeenCalledWith(
+        "chat_guid:iMessage;+;chat123456",
+        expect.any(String),
+        expect.any(Object),
+      );
     });
   });
 
@@ -1075,11 +1171,84 @@ describe("BlueBubbles webhook monitor", () => {
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      // ReplyToId is the full UUID since it wasn't previously cached
       expect(callArgs.ctx.ReplyToId).toBe("msg-0");
       expect(callArgs.ctx.ReplyToBody).toBe("original message");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
-      expect(callArgs.ctx.Body).toContain("[Replying to +15550000000 id:msg-0]");
+      // Body uses just the ID (no sender) for token savings
+      expect(callArgs.ctx.Body).toContain("[Replying to id:msg-0]");
       expect(callArgs.ctx.Body).toContain("original message");
+    });
+
+    it("hydrates missing reply sender/body from the recent-message cache", async () => {
+      const account = createMockAccount({ dmPolicy: "open", groupPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const chatGuid = "iMessage;+;chat-reply-cache";
+
+      const originalPayload = {
+        type: "new-message",
+        data: {
+          text: "original message (cached)",
+          handle: { address: "+15550000000" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "cache-msg-0",
+          chatGuid,
+          date: Date.now(),
+        },
+      };
+
+      const originalReq = createMockRequest("POST", "/bluebubbles-webhook", originalPayload);
+      const originalRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(originalReq, originalRes);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Only assert the reply message behavior below.
+      mockDispatchReplyWithBufferedBlockDispatcher.mockClear();
+
+      const replyPayload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15551234567" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "cache-msg-1",
+          chatGuid,
+          // Only the GUID is provided; sender/body must be hydrated.
+          replyToMessageGuid: "cache-msg-0",
+          date: Date.now(),
+        },
+      };
+
+      const replyReq = createMockRequest("POST", "/bluebubbles-webhook", replyPayload);
+      const replyRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(replyReq, replyRes);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      // ReplyToId uses short ID "1" (first cached message) for token savings
+      expect(callArgs.ctx.ReplyToId).toBe("1");
+      expect(callArgs.ctx.ReplyToIdFull).toBe("cache-msg-0");
+      expect(callArgs.ctx.ReplyToBody).toBe("original message (cached)");
+      expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
+      // Body uses just the short ID (no sender) for token savings
+      expect(callArgs.ctx.Body).toContain("[Replying to id:1]");
+      expect(callArgs.ctx.Body).toContain("original message (cached)");
     });
 
     it("falls back to threadOriginatorGuid when reply metadata is absent", async () => {
@@ -1436,8 +1605,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
+      // Outbound message ID uses short ID "2" (inbound msg-1 is "1", outbound msg-123 is "2")
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
-        "BlueBubbles sent message id: msg-123",
+        'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({
           sessionKey: "agent:main:bluebubbles:dm:+15551234567",
         }),
@@ -1602,6 +1772,93 @@ describe("BlueBubbles webhook monitor", () => {
         expect.stringContaining("👍"),
         expect.any(Object),
       );
+    });
+  });
+
+  describe("short message ID mapping", () => {
+    it("assigns sequential short IDs to messages", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-uuid-12345",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      // MessageSid should be short ID "1" instead of full UUID
+      expect(callArgs.ctx.MessageSid).toBe("1");
+      expect(callArgs.ctx.MessageSidFull).toBe("msg-uuid-12345");
+    });
+
+    it("resolves short ID back to UUID", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-uuid-12345",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // The short ID "1" should resolve back to the full UUID
+      expect(resolveBlueBubblesMessageId("1")).toBe("msg-uuid-12345");
+    });
+
+    it("returns UUID unchanged when not in cache", () => {
+      expect(resolveBlueBubblesMessageId("msg-not-cached")).toBe("msg-not-cached");
+    });
+
+    it("returns short ID unchanged when numeric but not in cache", () => {
+      expect(resolveBlueBubblesMessageId("999")).toBe("999");
     });
   });
 

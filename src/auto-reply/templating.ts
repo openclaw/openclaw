@@ -38,10 +38,14 @@ export type MsgContext = {
   AccountId?: string;
   ParentSessionKey?: string;
   MessageSid?: string;
+  /** Provider-specific full message id when MessageSid is a shortened alias. */
+  MessageSidFull?: string;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
   ReplyToId?: string;
+  /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
+  ReplyToIdFull?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
   ForwardedFrom?: string;

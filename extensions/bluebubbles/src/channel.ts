@@ -20,6 +20,7 @@ import {
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { probeBlueBubbles, type BlueBubblesProbe } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
 import {
@@ -65,7 +66,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   threading: {
     buildToolContext: ({ context, hasRepliedRef }) => ({
       currentChannelId: context.To?.trim() || undefined,
-      currentThreadTs: context.ReplyToId,
+      currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
       hasRepliedRef,
     }),
   },
@@ -237,7 +238,9 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       return { ok: true, to: trimmed };
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-      const replyToMessageGuid = typeof replyToId === "string" ? replyToId.trim() : "";
+      const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
+      // Resolve short ID (e.g., "5") to full UUID
+      const replyToMessageGuid = rawReplyToId ? resolveBlueBubblesMessageId(rawReplyToId) : "";
       const result = await sendMessageBlueBubbles(to, text, {
         cfg: cfg as ClawdbotConfig,
         accountId: accountId ?? undefined,

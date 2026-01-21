@@ -14,6 +14,7 @@ import {
 } from "clawdbot/plugin-sdk";
 
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { isMacOS26OrHigher } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -77,7 +78,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
     return { to, accountId };
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     const account = resolveBlueBubblesAccount({
       cfg: cfg as ClawdbotConfig,
       accountId: accountId ?? undefined,
@@ -86,7 +87,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     const password = account.config.password?.trim();
     const opts = { cfg: cfg as ClawdbotConfig, accountId: accountId ?? undefined };
 
-    // Helper to resolve chatGuid from various params
+    // Helper to resolve chatGuid from various params or session context
     const resolveChatGuid = async (): Promise<string> => {
       const chatGuid = readStringParam(params, "chatGuid");
       if (chatGuid?.trim()) return chatGuid.trim();
@@ -94,6 +95,8 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const chatIdentifier = readStringParam(params, "chatIdentifier");
       const chatId = readNumberParam(params, "chatId", { integer: true });
       const to = readStringParam(params, "to");
+      // Fall back to session context if no explicit target provided
+      const contextTarget = toolContext?.currentChannelId?.trim();
 
       const target = chatIdentifier?.trim()
         ? ({
@@ -104,7 +107,9 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
           ? ({ kind: "chat_id", chatId } as BlueBubblesSendTarget)
           : to
             ? mapTarget(to)
-            : null;
+            : contextTarget
+              ? mapTarget(contextTarget)
+              : null;
 
       if (!target) {
         throw new Error(`BlueBubbles ${action} requires chatGuid, chatIdentifier, chatId, or to.`);
@@ -127,16 +132,18 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       });
       if (isEmpty && !remove) {
         throw new Error(
-          "BlueBubbles react requires emoji parameter. Use action=react with emoji=<emoji> and messageId=<message_guid>.",
+          "BlueBubbles react requires emoji parameter. Use action=react with emoji=<emoji> and messageId=<message_id>.",
         );
       }
-      const messageId = readStringParam(params, "messageId");
-      if (!messageId) {
+      const rawMessageId = readStringParam(params, "messageId");
+      if (!rawMessageId) {
         throw new Error(
-          "BlueBubbles react requires messageId parameter (the message GUID to react to). " +
-            "Use action=react with messageId=<message_guid>, emoji=<emoji>, and to/chatGuid to identify the chat.",
+          "BlueBubbles react requires messageId parameter (the message ID to react to). " +
+            "Use action=react with messageId=<message_id>, emoji=<emoji>, and to/chatGuid to identify the chat.",
         );
       }
+      // Resolve short ID (e.g., "1", "2") to full UUID
+      const messageId = resolveBlueBubblesMessageId(rawMessageId);
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await resolveChatGuid();
 
@@ -161,20 +168,22 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
             "Apple removed the ability to edit iMessages in this version.",
         );
       }
-      const messageId = readStringParam(params, "messageId");
+      const rawMessageId = readStringParam(params, "messageId");
       const newText =
         readStringParam(params, "text") ??
         readStringParam(params, "newText") ??
         readStringParam(params, "message");
-      if (!messageId || !newText) {
+      if (!rawMessageId || !newText) {
         const missing: string[] = [];
-        if (!messageId) missing.push("messageId (the message GUID to edit)");
+        if (!rawMessageId) missing.push("messageId (the message ID to edit)");
         if (!newText) missing.push("text (the new message content)");
         throw new Error(
           `BlueBubbles edit requires: ${missing.join(", ")}. ` +
-            `Use action=edit with messageId=<message_guid>, text=<new_content>.`,
+            `Use action=edit with messageId=<message_id>, text=<new_content>.`,
         );
       }
+      // Resolve short ID (e.g., "1", "2") to full UUID
+      const messageId = resolveBlueBubblesMessageId(rawMessageId);
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
 
@@ -184,18 +193,20 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         backwardsCompatMessage: backwardsCompatMessage ?? undefined,
       });
 
-      return jsonResult({ ok: true, edited: messageId });
+      return jsonResult({ ok: true, edited: rawMessageId });
     }
 
     // Handle unsend action
     if (action === "unsend") {
-      const messageId = readStringParam(params, "messageId");
-      if (!messageId) {
+      const rawMessageId = readStringParam(params, "messageId");
+      if (!rawMessageId) {
         throw new Error(
-          "BlueBubbles unsend requires messageId parameter (the message GUID to unsend). " +
-            "Use action=unsend with messageId=<message_guid>.",
+          "BlueBubbles unsend requires messageId parameter (the message ID to unsend). " +
+            "Use action=unsend with messageId=<message_id>.",
         );
       }
+      // Resolve short ID (e.g., "1", "2") to full UUID
+      const messageId = resolveBlueBubblesMessageId(rawMessageId);
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 
       await unsendBlueBubblesMessage(messageId, {
@@ -203,24 +214,26 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
       });
 
-      return jsonResult({ ok: true, unsent: messageId });
+      return jsonResult({ ok: true, unsent: rawMessageId });
     }
 
     // Handle reply action
     if (action === "reply") {
-      const messageId = readStringParam(params, "messageId");
+      const rawMessageId = readStringParam(params, "messageId");
       const text = readMessageText(params);
       const to = readStringParam(params, "to") ?? readStringParam(params, "target");
-      if (!messageId || !text || !to) {
+      if (!rawMessageId || !text || !to) {
         const missing: string[] = [];
-        if (!messageId) missing.push("messageId (the message GUID to reply to)");
+        if (!rawMessageId) missing.push("messageId (the message ID to reply to)");
         if (!text) missing.push("text or message (the reply message content)");
         if (!to) missing.push("to or target (the chat target)");
         throw new Error(
           `BlueBubbles reply requires: ${missing.join(", ")}. ` +
-            `Use action=reply with messageId=<message_guid>, message=<your reply>, target=<chat_target>.`,
+            `Use action=reply with messageId=<message_id>, message=<your reply>, target=<chat_target>.`,
         );
       }
+      // Resolve short ID (e.g., "1", "2") to full UUID
+      const messageId = resolveBlueBubblesMessageId(rawMessageId);
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 
       const result = await sendMessageBlueBubbles(to, text, {
@@ -229,7 +242,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         replyToPartIndex: typeof partIndex === "number" ? partIndex : undefined,
       });
 
-      return jsonResult({ ok: true, messageId: result.messageId, repliedTo: messageId });
+      return jsonResult({ ok: true, messageId: result.messageId, repliedTo: rawMessageId });
     }
 
     // Handle sendWithEffect action

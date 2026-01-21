@@ -31,6 +31,165 @@ const DEFAULT_WEBHOOK_PATH = "/bluebubbles-webhook";
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
 
+const REPLY_CACHE_MAX = 2000;
+const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+type BlueBubblesReplyCacheEntry = {
+  accountId: string;
+  messageId: string;
+  shortId: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  senderLabel?: string;
+  body?: string;
+  timestamp: number;
+};
+
+// Best-effort cache for resolving reply context when BlueBubbles webhooks omit sender/body.
+const blueBubblesReplyCacheByMessageId = new Map<string, BlueBubblesReplyCacheEntry>();
+
+// Bidirectional maps for short ID ↔ UUID resolution (token savings optimization)
+const blueBubblesShortIdToUuid = new Map<string, string>();
+const blueBubblesUuidToShortId = new Map<string, string>();
+let blueBubblesShortIdCounter = 0;
+
+function trimOrUndefined(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function generateShortId(): string {
+  blueBubblesShortIdCounter += 1;
+  return String(blueBubblesShortIdCounter);
+}
+
+function rememberBlueBubblesReplyCache(
+  entry: Omit<BlueBubblesReplyCacheEntry, "shortId">,
+): BlueBubblesReplyCacheEntry {
+  const messageId = entry.messageId.trim();
+  if (!messageId) {
+    return { ...entry, shortId: "" };
+  }
+
+  // Check if we already have a short ID for this UUID
+  let shortId = blueBubblesUuidToShortId.get(messageId);
+  if (!shortId) {
+    shortId = generateShortId();
+    blueBubblesShortIdToUuid.set(shortId, messageId);
+    blueBubblesUuidToShortId.set(messageId, shortId);
+  }
+
+  const fullEntry: BlueBubblesReplyCacheEntry = { ...entry, shortId };
+
+  // Refresh insertion order.
+  blueBubblesReplyCacheByMessageId.delete(messageId);
+  blueBubblesReplyCacheByMessageId.set(messageId, fullEntry);
+
+  // Opportunistic prune.
+  const cutoff = Date.now() - REPLY_CACHE_TTL_MS;
+  for (const [key, value] of blueBubblesReplyCacheByMessageId) {
+    if (value.timestamp < cutoff) {
+      blueBubblesReplyCacheByMessageId.delete(key);
+      // Clean up short ID mappings for expired entries
+      if (value.shortId) {
+        blueBubblesShortIdToUuid.delete(value.shortId);
+        blueBubblesUuidToShortId.delete(key);
+      }
+      continue;
+    }
+    break;
+  }
+  while (blueBubblesReplyCacheByMessageId.size > REPLY_CACHE_MAX) {
+    const oldest = blueBubblesReplyCacheByMessageId.keys().next().value as string | undefined;
+    if (!oldest) break;
+    const oldEntry = blueBubblesReplyCacheByMessageId.get(oldest);
+    blueBubblesReplyCacheByMessageId.delete(oldest);
+    // Clean up short ID mappings for evicted entries
+    if (oldEntry?.shortId) {
+      blueBubblesShortIdToUuid.delete(oldEntry.shortId);
+      blueBubblesUuidToShortId.delete(oldest);
+    }
+  }
+
+  return fullEntry;
+}
+
+/**
+ * Resolves a short message ID (e.g., "1", "2") to a full BlueBubbles UUID.
+ * Returns the input unchanged if it's already a UUID or not found in the mapping.
+ */
+export function resolveBlueBubblesMessageId(shortOrUuid: string): string {
+  const trimmed = shortOrUuid.trim();
+  if (!trimmed) return trimmed;
+
+  // If it looks like a short ID (numeric), try to resolve it
+  if (/^\d+$/.test(trimmed)) {
+    const uuid = blueBubblesShortIdToUuid.get(trimmed);
+    if (uuid) return uuid;
+  }
+
+  // Return as-is (either already a UUID or not found)
+  return trimmed;
+}
+
+/**
+ * Resets the short ID state. Only use in tests.
+ * @internal
+ */
+export function _resetBlueBubblesShortIdState(): void {
+  blueBubblesShortIdToUuid.clear();
+  blueBubblesUuidToShortId.clear();
+  blueBubblesReplyCacheByMessageId.clear();
+  blueBubblesShortIdCounter = 0;
+}
+
+/**
+ * Gets the short ID for a UUID, if one exists.
+ */
+function getShortIdForUuid(uuid: string): string | undefined {
+  return blueBubblesUuidToShortId.get(uuid.trim());
+}
+
+function resolveReplyContextFromCache(params: {
+  accountId: string;
+  replyToId: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+}): BlueBubblesReplyCacheEntry | null {
+  const replyToId = params.replyToId.trim();
+  if (!replyToId) return null;
+
+  const cached = blueBubblesReplyCacheByMessageId.get(replyToId);
+  if (!cached) return null;
+  if (cached.accountId !== params.accountId) return null;
+
+  const cutoff = Date.now() - REPLY_CACHE_TTL_MS;
+  if (cached.timestamp < cutoff) {
+    blueBubblesReplyCacheByMessageId.delete(replyToId);
+    return null;
+  }
+
+  const chatGuid = trimOrUndefined(params.chatGuid);
+  const chatIdentifier = trimOrUndefined(params.chatIdentifier);
+  const cachedChatGuid = trimOrUndefined(cached.chatGuid);
+  const cachedChatIdentifier = trimOrUndefined(cached.chatIdentifier);
+  const chatId = typeof params.chatId === "number" ? params.chatId : undefined;
+  const cachedChatId = typeof cached.chatId === "number" ? cached.chatId : undefined;
+
+  // Avoid cross-chat collisions if we have identifiers.
+  if (chatGuid && cachedChatGuid && chatGuid !== cachedChatGuid) return null;
+  if (!chatGuid && chatIdentifier && cachedChatIdentifier && chatIdentifier !== cachedChatIdentifier) {
+    return null;
+  }
+  if (!chatGuid && !chatIdentifier && chatId && cachedChatId && chatId !== cachedChatId) {
+    return null;
+  }
+
+  return cached;
+}
+
 type BlueBubblesCoreRuntime = ReturnType<typeof getBlueBubblesRuntime>;
 
 function logVerbose(core: BlueBubblesCoreRuntime, runtime: BlueBubblesRuntimeEnv, message: string): void {
@@ -217,19 +376,29 @@ function buildMessagePlaceholder(message: NormalizedWebhookMessage): string {
   return "";
 }
 
+const REPLY_BODY_TRUNCATE_LENGTH = 60;
+
 function formatReplyContext(message: {
   replyToId?: string;
+  replyToShortId?: string;
   replyToBody?: string;
   replyToSender?: string;
 }): string | null {
   if (!message.replyToId && !message.replyToBody && !message.replyToSender) return null;
-  const sender = message.replyToSender?.trim() || "unknown sender";
-  const idPart = message.replyToId ? ` id:${message.replyToId}` : "";
-  const body = message.replyToBody?.trim();
-  if (!body) {
-    return `[Replying to ${sender}${idPart}]\n[/Replying]`;
+  // Prefer short ID for token savings
+  const displayId = message.replyToShortId || message.replyToId;
+  // Only include sender if we don't have an ID (fallback)
+  const label = displayId ? `id:${displayId}` : (message.replyToSender?.trim() || "unknown");
+  const rawBody = message.replyToBody?.trim();
+  if (!rawBody) {
+    return `[Replying to ${label}]\n[/Replying]`;
   }
-  return `[Replying to ${sender}${idPart}]\n${body}\n[/Replying]`;
+  // Truncate long reply bodies for token savings
+  const body =
+    rawBody.length > REPLY_BODY_TRUNCATE_LENGTH
+      ? `${rawBody.slice(0, REPLY_BODY_TRUNCATE_LENGTH)}…`
+      : rawBody;
+  return `[Replying to ${label}]\n${body}\n[/Replying]`;
 }
 
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
@@ -404,6 +573,15 @@ function resolveGroupFlagFromChatGuid(chatGuid?: string | null): boolean | undef
   return undefined;
 }
 
+function extractChatIdentifierFromChatGuid(chatGuid?: string | null): string | undefined {
+  const guid = chatGuid?.trim();
+  if (!guid) return undefined;
+  const parts = guid.split(";");
+  if (parts.length < 3) return undefined;
+  const identifier = parts[2]?.trim();
+  return identifier || undefined;
+}
+
 function formatGroupAllowlistEntry(params: {
   chatGuid?: string;
   chatId?: number;
@@ -550,20 +728,31 @@ function normalizeWebhookMessage(payload: Record<string, unknown>): NormalizedWe
   const chatGuid =
     readString(message, "chatGuid") ??
     readString(message, "chat_guid") ??
+    readString(chat, "chatGuid") ??
+    readString(chat, "chat_guid") ??
     readString(chat, "guid") ??
+    readString(chatFromList, "chatGuid") ??
+    readString(chatFromList, "chat_guid") ??
     readString(chatFromList, "guid");
   const chatIdentifier =
     readString(message, "chatIdentifier") ??
     readString(message, "chat_identifier") ??
+    readString(chat, "chatIdentifier") ??
+    readString(chat, "chat_identifier") ??
     readString(chat, "identifier") ??
     readString(chatFromList, "chatIdentifier") ??
     readString(chatFromList, "chat_identifier") ??
-    readString(chatFromList, "identifier");
+    readString(chatFromList, "identifier") ??
+    extractChatIdentifierFromChatGuid(chatGuid);
   const chatId =
-    readNumber(message, "chatId") ??
-    readNumber(message, "chat_id") ??
-    readNumber(chat, "id") ??
-    readNumber(chatFromList, "id");
+    readNumberLike(message, "chatId") ??
+    readNumberLike(message, "chat_id") ??
+    readNumberLike(chat, "chatId") ??
+    readNumberLike(chat, "chat_id") ??
+    readNumberLike(chat, "id") ??
+    readNumberLike(chatFromList, "chatId") ??
+    readNumberLike(chatFromList, "chat_id") ??
+    readNumberLike(chatFromList, "id");
   const chatName =
     readString(message, "chatName") ??
     readString(chat, "displayName") ??
@@ -679,19 +868,30 @@ function normalizeWebhookReaction(payload: Record<string, unknown>): NormalizedW
   const chatGuid =
     readString(message, "chatGuid") ??
     readString(message, "chat_guid") ??
+    readString(chat, "chatGuid") ??
+    readString(chat, "chat_guid") ??
     readString(chat, "guid") ??
+    readString(chatFromList, "chatGuid") ??
+    readString(chatFromList, "chat_guid") ??
     readString(chatFromList, "guid");
   const chatIdentifier =
     readString(message, "chatIdentifier") ??
     readString(message, "chat_identifier") ??
+    readString(chat, "chatIdentifier") ??
+    readString(chat, "chat_identifier") ??
     readString(chat, "identifier") ??
     readString(chatFromList, "chatIdentifier") ??
     readString(chatFromList, "chat_identifier") ??
-    readString(chatFromList, "identifier");
+    readString(chatFromList, "identifier") ??
+    extractChatIdentifierFromChatGuid(chatGuid);
   const chatId =
     readNumberLike(message, "chatId") ??
     readNumberLike(message, "chat_id") ??
+    readNumberLike(chat, "chatId") ??
+    readNumberLike(chat, "chat_id") ??
     readNumberLike(chat, "id") ??
+    readNumberLike(chatFromList, "chatId") ??
+    readNumberLike(chatFromList, "chat_id") ??
     readNumberLike(chatFromList, "id");
   const chatName =
     readString(message, "chatName") ??
@@ -901,14 +1101,39 @@ async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  if (message.fromMe) return;
+
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
 
   const text = message.text.trim();
   const attachments = message.attachments ?? [];
   const placeholder = buildMessagePlaceholder(message);
-  if (!text && !placeholder) {
+  const rawBody = text || placeholder;
+
+  const cacheMessageId = message.messageId?.trim();
+  let messageShortId: string | undefined;
+  const cacheInboundMessage = () => {
+    if (!cacheMessageId) return;
+    const cacheEntry = rememberBlueBubblesReplyCache({
+      accountId: account.accountId,
+      messageId: cacheMessageId,
+      chatGuid: message.chatGuid,
+      chatIdentifier: message.chatIdentifier,
+      chatId: message.chatId,
+      senderLabel: message.fromMe ? "me" : message.senderId,
+      body: rawBody,
+      timestamp: message.timestamp ?? Date.now(),
+    });
+    messageShortId = cacheEntry.shortId;
+  };
+
+  if (message.fromMe) {
+    // Cache from-me messages so reply context can resolve sender/body.
+    cacheInboundMessage();
+    return;
+  }
+
+  if (!rawBody) {
     logVerbose(core, runtime, `drop: empty text sender=${message.senderId}`);
     return;
   }
@@ -1148,6 +1373,10 @@ async function processMessage(
     return;
   }
 
+  // Cache allowed inbound messages so later replies can resolve sender/body without
+  // surfacing dropped content (allowlist/mention/command gating).
+  cacheInboundMessage();
+
   const baseUrl = account.config.serverUrl?.trim();
   const password = account.config.password?.trim();
   const maxBytes =
@@ -1199,12 +1428,42 @@ async function processMessage(
       }
     }
   }
-  const rawBody = text.trim() || placeholder;
-  const replyContext = formatReplyContext(message);
+  let replyToId = message.replyToId;
+  let replyToBody = message.replyToBody;
+  let replyToSender = message.replyToSender;
+  let replyToShortId: string | undefined;
+
+  if (replyToId && (!replyToBody || !replyToSender)) {
+    const cached = resolveReplyContextFromCache({
+      accountId: account.accountId,
+      replyToId,
+      chatGuid: message.chatGuid,
+      chatIdentifier: message.chatIdentifier,
+      chatId: message.chatId,
+    });
+    if (cached) {
+      if (!replyToBody && cached.body) replyToBody = cached.body;
+      if (!replyToSender && cached.senderLabel) replyToSender = cached.senderLabel;
+      replyToShortId = cached.shortId;
+      if (core.logging.shouldLogVerbose()) {
+        const preview = (cached.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+        logVerbose(
+          core,
+          runtime,
+          `reply-context cache hit replyToId=${replyToId} sender=${replyToSender ?? ""} body="${preview}"`,
+        );
+      }
+    }
+  }
+
+  // If no cached short ID, try to get one from the UUID directly
+  if (replyToId && !replyToShortId) {
+    replyToShortId = getShortIdForUuid(replyToId);
+  }
+
+  const replyContext = formatReplyContext({ replyToId, replyToShortId, replyToBody, replyToSender });
   const baseBody = replyContext ? `${rawBody}\n\n${replyContext}` : rawBody;
-  const fromLabel = isGroup
-    ? `group:${peerId}`
-    : message.senderName || `user:${message.senderId}`;
+  const fromLabel = isGroup ? undefined : message.senderName || `user:${message.senderId}`;
   const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
@@ -1230,12 +1489,12 @@ async function processMessage(
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
-  const target =
+    const target =
       isGroup && (chatId || chatIdentifier)
         ? chatId
-          ? { kind: "chat_id", chatId }
-          : { kind: "chat_identifier", chatIdentifier: chatIdentifier ?? "" }
-        : { kind: "handle", address: message.senderId };
+          ? ({ kind: "chat_id", chatId } as const)
+          : ({ kind: "chat_identifier", chatIdentifier: chatIdentifier ?? "" } as const)
+        : ({ kind: "handle", address: message.senderId } as const);
     if (target.kind !== "chat_identifier" || target.chatIdentifier) {
       chatGuidForActions =
         (await resolveChatGuidForTarget({
@@ -1316,10 +1575,23 @@ async function processMessage(
       ? formatBlueBubblesChatTarget({ chatGuid: chatGuidForActions })
       : message.senderId;
 
-  const maybeEnqueueOutboundMessageId = (messageId?: string) => {
+  const maybeEnqueueOutboundMessageId = (messageId?: string, snippet?: string) => {
     const trimmed = messageId?.trim();
     if (!trimmed || trimmed === "ok" || trimmed === "unknown") return;
-    core.system.enqueueSystemEvent(`BlueBubbles sent message id: ${trimmed}`, {
+    // Cache outbound message to get short ID
+    const cacheEntry = rememberBlueBubblesReplyCache({
+      accountId: account.accountId,
+      messageId: trimmed,
+      chatGuid: chatGuidForActions ?? chatGuid,
+      chatIdentifier,
+      chatId,
+      senderLabel: "me",
+      body: snippet ?? "",
+      timestamp: Date.now(),
+    });
+    const displayId = cacheEntry.shortId || trimmed;
+    const preview = snippet ? ` "${snippet.slice(0, 12)}${snippet.length > 12 ? "…" : ""}"` : "";
+    core.system.enqueueSystemEvent(`Assistant sent${preview} [message_id:${displayId}]`, {
       sessionKey: route.sessionKey,
       contextKey: `bluebubbles:outbound:${outboundTarget}:${trimmed}`,
     });
@@ -1343,16 +1615,20 @@ async function processMessage(
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
-    ReplyToId: message.replyToId,
-    ReplyToBody: message.replyToBody,
-    ReplyToSender: message.replyToSender,
+    // Use short ID for token savings (agent can use this to reference the message)
+    ReplyToId: replyToShortId || replyToId,
+    ReplyToIdFull: replyToId,
+    ReplyToBody: replyToBody,
+    ReplyToSender: replyToSender,
     GroupSubject: groupSubject,
     GroupMembers: groupMembers,
     SenderName: message.senderName || undefined,
     SenderId: message.senderId,
     Provider: "bluebubbles",
     Surface: "bluebubbles",
-    MessageSid: message.messageId,
+    // Use short ID for token savings (agent can use this to reference the message)
+    MessageSid: messageShortId || message.messageId,
+    MessageSidFull: message.messageId,
     Timestamp: message.timestamp,
     OriginatingChannel: "bluebubbles",
     OriginatingTo: `bluebubbles:${outboundTarget}`,
@@ -1367,6 +1643,11 @@ async function processMessage(
       cfg: config,
       dispatcherOptions: {
         deliver: async (payload) => {
+          const rawReplyToId = typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+          // Resolve short ID (e.g., "5") to full UUID
+          const replyToMessageGuid = rawReplyToId
+            ? resolveBlueBubblesMessageId(rawReplyToId)
+            : "";
           const mediaList = payload.mediaUrls?.length
             ? payload.mediaUrls
             : payload.mediaUrl
@@ -1382,10 +1663,11 @@ async function processMessage(
                 to: outboundTarget,
                 mediaUrl,
                 caption: caption ?? undefined,
-                replyToId: payload.replyToId ?? null,
+                replyToId: replyToMessageGuid || null,
                 accountId: account.accountId,
               });
-              maybeEnqueueOutboundMessageId(result.messageId);
+              const cachedBody = (caption ?? "").trim() || "<media:attachment>";
+              maybeEnqueueOutboundMessageId(result.messageId, cachedBody);
               sentMessage = true;
               statusSink?.({ lastOutboundAt: Date.now() });
             }
@@ -1400,14 +1682,12 @@ async function processMessage(
           if (!chunks.length && payload.text) chunks.push(payload.text);
           if (!chunks.length) return;
           for (const chunk of chunks) {
-            const replyToMessageGuid =
-              typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
             const result = await sendMessageBlueBubbles(outboundTarget, chunk, {
               cfg: config,
               accountId: account.accountId,
               replyToMessageGuid: replyToMessageGuid || undefined,
             });
-            maybeEnqueueOutboundMessageId(result.messageId);
+            maybeEnqueueOutboundMessageId(result.messageId, chunk);
             sentMessage = true;
             statusSink?.({ lastOutboundAt: Date.now() });
           }
@@ -1541,7 +1821,9 @@ async function processReaction(
 
   const senderLabel = reaction.senderName || reaction.senderId;
   const chatLabel = reaction.isGroup ? ` in group:${peerId}` : "";
-  const text = `BlueBubbles reaction ${reaction.action}: ${reaction.emoji} by ${senderLabel}${chatLabel} on msg ${reaction.messageId}`;
+  // Use short ID for token savings
+  const messageDisplayId = getShortIdForUuid(reaction.messageId) || reaction.messageId;
+  const text = `BlueBubbles reaction ${reaction.action}: ${reaction.emoji} by ${senderLabel}${chatLabel} on msg ${messageDisplayId}`;
   core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,
     contextKey: `bluebubbles:reaction:${reaction.action}:${peerId}:${reaction.messageId}:${reaction.senderId}:${reaction.emoji}`,
