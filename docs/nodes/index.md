@@ -289,6 +289,9 @@ Notes:
 - The node host stores its node id + pairing token in `~/.clawdbot/node.json`.
 - Exec approvals are enforced locally via `~/.clawdbot/exec-approvals.json`
   (see [Exec approvals](/tools/exec-approvals)).
+- On macOS, the headless node host prefers the companion app exec host when reachable and falls
+  back to local execution if the app is unavailable. Set `CLAWDBOT_NODE_EXEC_HOST=app` to require
+  the app, or `CLAWDBOT_NODE_EXEC_FALLBACK=0` to disable fallback.
 - Add `--tls` / `--tls-fingerprint` when the bridge requires TLS.
 
 ## Mac node mode
