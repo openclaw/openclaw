@@ -56,32 +56,57 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
+          const rich = isRich();
+          const ok = (text: string) => (rich ? theme.success(text) : text);
+          const warn = (text: string) => (rich ? theme.warn(text) : text);
+          const muted = (text: string) => (rich ? theme.muted(text) : text);
+          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
           const nodes = parseNodeList(result);
           const pairedCount = nodes.filter((n) => Boolean(n.paired)).length;
           const connectedCount = nodes.filter((n) => Boolean(n.connected)).length;
           defaultRuntime.log(
             `Known: ${nodes.length} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
           );
-          for (const n of nodes) {
-            const name = n.displayName || n.nodeId;
-            const ip = n.remoteIp ? ` · ${n.remoteIp}` : "";
-            const device = n.deviceFamily ? ` · device: ${n.deviceFamily}` : "";
-            const hw = n.modelIdentifier ? ` · hw: ${n.modelIdentifier}` : "";
-            const perms = formatPermissions(n.permissions);
-            const permsText = perms ? ` · perms: ${perms}` : "";
-            const versions = formatNodeVersions(n);
-            const versionText = versions ? ` · ${versions}` : "";
-            const caps =
-              Array.isArray(n.caps) && n.caps.length > 0
-                ? `[${n.caps.map(String).filter(Boolean).sort().join(",")}]`
-                : Array.isArray(n.caps)
-                  ? "[]"
-                  : "?";
-            const pairing = n.paired ? "paired" : "unpaired";
-            defaultRuntime.log(
-              `- ${name} · ${n.nodeId}${ip}${device}${hw}${permsText}${versionText} · ${pairing} · ${n.connected ? "connected" : "disconnected"} · caps: ${caps}`,
-            );
-          }
+          if (nodes.length === 0) return;
+
+          const rows = nodes.map((n) => {
+            const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
+            const device = (() => {
+              if (n.deviceFamily && n.modelIdentifier) {
+                return `${n.deviceFamily} (${n.modelIdentifier})`;
+              }
+              return n.deviceFamily ?? n.modelIdentifier ?? "";
+            })();
+            const caps = Array.isArray(n.caps)
+              ? n.caps.map(String).filter(Boolean).sort().join(", ")
+              : "?";
+            const paired = n.paired ? ok("paired") : warn("unpaired");
+            const connected = n.connected ? ok("connected") : muted("disconnected");
+
+            return {
+              Node: name,
+              ID: n.nodeId,
+              IP: n.remoteIp ?? "",
+              Device: device,
+              Status: `${paired} · ${connected}`,
+              Caps: caps,
+            };
+          });
+
+          defaultRuntime.log(
+            renderTable({
+              width: tableWidth,
+              columns: [
+                { key: "Node", header: "Node", minWidth: 14, flex: true },
+                { key: "ID", header: "ID", minWidth: 10 },
+                { key: "IP", header: "IP", minWidth: 10 },
+                { key: "Device", header: "Device", minWidth: 14, flex: true },
+                { key: "Status", header: "Status", minWidth: 16 },
+                { key: "Caps", header: "Caps", minWidth: 10, flex: true },
+              ],
+              rows,
+            }).trimEnd(),
+          );
         });
       }),
   );

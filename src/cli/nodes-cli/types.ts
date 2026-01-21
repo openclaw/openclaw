@@ -56,6 +56,7 @@ export type NodeListNode = {
   permissions?: Record<string, boolean>;
   paired?: boolean;
   connected?: boolean;
+  connectedAtMs?: number;
 };
 
 export type PendingRequest = {

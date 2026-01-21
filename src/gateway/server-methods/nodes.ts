@@ -258,6 +258,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           caps,
           commands,
           permissions: live?.permissions ?? paired?.permissions,
+          connectedAtMs: live?.connectedAtMs,
           paired: Boolean(paired),
           connected: Boolean(live),
         };
@@ -320,6 +321,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           caps,
           commands,
           permissions: live?.permissions,
+          connectedAtMs: live?.connectedAtMs,
           paired: Boolean(paired),
           connected: Boolean(live),
         },
