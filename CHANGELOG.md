@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 - Exec approvals: support wildcard agent allowlists (`*`) across all agents.
 
 ### Fixes
+- Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 
 ## 2026.1.20
