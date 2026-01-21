@@ -28,12 +28,7 @@ afterEach(() => {
 });
 
 describe("chat markdown rendering", () => {
-  it("renders markdown inside tool result cards", async () => {
-    localStorage.setItem(
-      "clawdbot.control.settings.v1",
-      JSON.stringify({ useNewChatLayout: false }),
-    );
-
+  it("renders markdown inside tool output sidebar", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
@@ -48,12 +43,16 @@ describe("chat markdown rendering", () => {
         timestamp,
       },
     ];
-    // Expand the tool output card so its markdown is rendered into the DOM.
-    app.toolOutputExpanded = new Set([`${timestamp}:1`]);
 
     await app.updateComplete;
 
-    const strong = app.querySelector(".chat-tool-card__output strong");
+    const toolCard = app.querySelector(".chat-tool-card") as HTMLElement | null;
+    expect(toolCard).not.toBeNull();
+    toolCard?.click();
+
+    await app.updateComplete;
+
+    const strong = app.querySelector(".sidebar-markdown strong");
     expect(strong?.textContent).toBe("world");
   });
 });

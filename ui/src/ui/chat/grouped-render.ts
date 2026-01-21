@@ -3,6 +3,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 
 import { toSanitizedMarkdownHtml } from "../markdown";
 import type { MessageGroup } from "../types/chat-types";
+import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
 import {
   extractText,
@@ -150,9 +151,11 @@ function renderGroupedMessage(
     ? formatReasoningMarkdown(extractedThinking)
     : null;
   const markdown = markdownBase;
+  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
 
   const bubbleClasses = [
     "chat-bubble",
+    canCopyMarkdown ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]
@@ -169,6 +172,7 @@ function renderGroupedMessage(
 
   return html`
     <div class="${bubbleClasses}">
+      ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
       ${reasoningMarkdown
         ? html`<div class="chat-thinking">${unsafeHTML(
             toSanitizedMarkdownHtml(reasoningMarkdown),
@@ -181,4 +185,3 @@ function renderGroupedMessage(
     </div>
   `;
 }
-

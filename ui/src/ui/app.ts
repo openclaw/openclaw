@@ -33,7 +33,6 @@ import type { DevicePairingList } from "./controllers/devices";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import {
   resetToolStream as resetToolStreamInternal,
-  toggleToolOutput as toggleToolOutputInternal,
   type ToolStreamEntry,
 } from "./app-tool-stream";
 import {
@@ -109,7 +108,6 @@ export class ClawdbotApp extends LitElement {
   @state() chatRunId: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
-  @state() toolOutputExpanded = new Set<string>();
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -301,13 +299,6 @@ export class ClawdbotApp extends LitElement {
     );
   }
 
-  toggleToolOutput(id: string, expanded: boolean) {
-    toggleToolOutputInternal(
-      this as unknown as Parameters<typeof toggleToolOutputInternal>[0],
-      id,
-      expanded,
-    );
-  }
   applySettings(next: UiSettings) {
     applySettingsInternal(
       this as unknown as Parameters<typeof applySettingsInternal>[0],

@@ -31,7 +31,6 @@ type ToolStreamHost = {
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
-  toolOutputExpanded: Set<string>;
   toolStreamSyncTimer: number | null;
 };
 
@@ -136,18 +135,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
-  host.toolOutputExpanded = new Set();
   flushToolStreamSync(host);
-}
-
-export function toggleToolOutput(host: ToolStreamHost, id: string, expanded: boolean) {
-  const next = new Set(host.toolOutputExpanded);
-  if (expanded) {
-    next.add(id);
-  } else {
-    next.delete(id);
-  }
-  host.toolOutputExpanded = next;
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {

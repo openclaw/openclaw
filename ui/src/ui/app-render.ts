@@ -429,11 +429,7 @@ export function renderApp(state: AppViewState) {
               disabledReason: chatDisabledReason,
               error: state.lastError,
               sessions: state.sessionsResult,
-              isToolOutputExpanded: (id) => state.toolOutputExpanded.has(id),
-              onToolOutputToggle: (id, expanded) =>
-                state.toggleToolOutput(id, expanded),
               focusMode: state.settings.chatFocusMode,
-              useNewChatLayout: state.settings.useNewChatLayout,
               onRefresh: () => {
                 state.resetToolStream();
                 return loadChatHistory(state);
@@ -442,11 +438,6 @@ export function renderApp(state: AppViewState) {
                 state.applySettings({
                   ...state.settings,
                   chatFocusMode: !state.settings.chatFocusMode,
-                }),
-              onToggleLayout: () =>
-                state.applySettings({
-                  ...state.settings,
-                  useNewChatLayout: !state.settings.useNewChatLayout,
                 }),
               onChatScroll: (event) => state.handleChatScroll(event),
               onDraftChange: (next) => (state.chatMessage = next),

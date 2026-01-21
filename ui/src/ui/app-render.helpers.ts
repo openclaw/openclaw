@@ -39,10 +39,6 @@ export function renderTab(state: AppViewState, tab: Tab) {
 
 export function renderChatControls(state: AppViewState) {
   const sessionOptions = resolveSessionOptions(state.sessionKey, state.sessionsResult);
-  // Icon for list view (legacy)
-  const listIcon = html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>`;
-  // Icon for grouped view
-  const groupIcon = html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`;
   // Refresh icon
   const refreshIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>`;
   const focusIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h3"></path><path d="M20 7V4h-3"></path><path d="M4 17v3h3"></path><path d="M20 17v3h-3"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
@@ -115,18 +111,6 @@ export function renderChatControls(state: AppViewState) {
         title="Toggle focus mode (hide sidebar + page header)"
       >
         ${focusIcon}
-      </button>
-      <button
-        class="btn btn--sm btn--icon ${state.settings.useNewChatLayout ? "active" : ""}"
-        @click=${() =>
-          state.applySettings({
-            ...state.settings,
-            useNewChatLayout: !state.settings.useNewChatLayout,
-          })}
-        aria-pressed=${state.settings.useNewChatLayout}
-        title="${state.settings.useNewChatLayout ? "Switch to list view" : "Switch to grouped view"}"
-      >
-        ${state.settings.useNewChatLayout ? groupIcon : listIcon}
       </button>
     </div>
   `;

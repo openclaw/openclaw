@@ -20,6 +20,7 @@ Docs: https://docs.clawd.bot
 - Security: warn when <=300B models run without sandboxing and with web tools enabled.
 - Skills: add download installs with OS-filtered install options; add local sherpa-onnx-tts skill.
 - Docs: clarify WhatsApp voice notes and Windows WSL portproxy LAN access notes.
+- UI: add copy-as-markdown with error feedback and drop legacy list view. (#1345) — thanks @bradleypriest.
 ### Fixes
 - Discovery: shorten Bonjour DNS-SD service type to `_clawdbot-gw._tcp` and update discovery clients/docs.
 - Agents: preserve subagent announce thread/topic routing + queued replies across channels. (#1241) — thanks @gnarco.
