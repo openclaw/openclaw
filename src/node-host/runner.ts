@@ -833,17 +833,50 @@ async function sendInvokeResult(
   },
 ) {
   try {
-    await client.request("node.invoke.result", {
-      id: frame.id,
-      nodeId: frame.nodeId,
-      ok: result.ok,
-      payload: result.payload,
-      payloadJSON: result.payloadJSON ?? null,
-      error: result.error ?? null,
-    });
+    await client.request("node.invoke.result", buildNodeInvokeResultParams(frame, result));
   } catch {
     // ignore: node invoke responses are best-effort
   }
+}
+
+export function buildNodeInvokeResultParams(
+  frame: NodeInvokeRequestPayload,
+  result: {
+    ok: boolean;
+    payload?: unknown;
+    payloadJSON?: string | null;
+    error?: { code?: string; message?: string } | null;
+  },
+): {
+  id: string;
+  nodeId: string;
+  ok: boolean;
+  payload?: unknown;
+  payloadJSON?: string;
+  error?: { code?: string; message?: string };
+} {
+  const params: {
+    id: string;
+    nodeId: string;
+    ok: boolean;
+    payload?: unknown;
+    payloadJSON?: string;
+    error?: { code?: string; message?: string };
+  } = {
+    id: frame.id,
+    nodeId: frame.nodeId,
+    ok: result.ok,
+  };
+  if (result.payload !== undefined) {
+    params.payload = result.payload;
+  }
+  if (typeof result.payloadJSON === "string") {
+    params.payloadJSON = result.payloadJSON;
+  }
+  if (result.error) {
+    params.error = result.error;
+  }
+  return params;
 }
 
 async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
