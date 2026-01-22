@@ -58,6 +58,24 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).not.toHaveBeenCalled();
   });
 
+  it("does not add whitespace-only submissions to history", () => {
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+
+    const handler = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage: vi.fn(),
+      handleBangLine: vi.fn(),
+    });
+
+    handler("   ");
+
+    expect(editor.addToHistory).not.toHaveBeenCalled();
+  });
+
   it("routes slash commands to handleCommand", () => {
     const editor = {
       setText: vi.fn(),

@@ -50,6 +50,29 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).toHaveBeenCalledWith("!");
   });
 
+  it("does not treat leading whitespace before ! as a bang command", () => {
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+    const handleCommand = vi.fn();
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+
+    const onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand,
+      sendMessage,
+      handleBangLine,
+    });
+
+    onSubmit("  !ls");
+
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith("!ls");
+    expect(editor.addToHistory).toHaveBeenCalledWith("!ls");
+  });
+
   it("trims normal messages before sending and adding to history", () => {
     const editor = {
       setText: vi.fn(),

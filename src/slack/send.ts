@@ -88,7 +88,7 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, params.maxBytes);
+  const { buffer, fileName } = await loadWebMedia(params.mediaUrl, params.maxBytes);
   const basePayload = {
     channel_id: params.channelId,
     file: buffer,
