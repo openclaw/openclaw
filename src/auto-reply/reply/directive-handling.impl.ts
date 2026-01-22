@@ -461,7 +461,9 @@ export async function handleDirectiveOnly(params: {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }
   } else if (modelSelection && !didPersistModel) {
-    parts.push(`Model switch to ${modelSelection.provider}/${modelSelection.model} failed (session state unavailable).`);
+    parts.push(
+      `Model switch to ${modelSelection.provider}/${modelSelection.model} failed (session state unavailable).`,
+    );
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
