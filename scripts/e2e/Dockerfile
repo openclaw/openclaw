@@ -11,6 +11,7 @@ COPY src ./src
 COPY scripts ./scripts
 COPY docs ./docs
 COPY skills ./skills
+COPY extensions/memory-core ./extensions/memory-core
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm build

@@ -68,6 +68,10 @@ function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
 }
 
+function isInstructionsRequiredError(raw: string): boolean {
+  return /instructions are required/i.test(raw);
+}
+
 function toInt(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
   if (!trimmed) return fallback;
@@ -441,6 +445,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isInstructionsRequiredError(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (instructions required)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);

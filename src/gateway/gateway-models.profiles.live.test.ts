@@ -113,6 +113,30 @@ function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
 }
 
+function isInstructionsRequiredError(error: string): boolean {
+  return /instructions are required/i.test(error);
+}
+
+function isOpenAIReasoningSequenceError(error: string): boolean {
+  const msg = error.toLowerCase();
+  return msg.includes("required following item") && msg.includes("reasoning");
+}
+
+function isToolNonceRefusal(error: string): boolean {
+  const msg = error.toLowerCase();
+  if (!msg.includes("nonce")) return false;
+  return (
+    msg.includes("token") ||
+    msg.includes("secret") ||
+    msg.includes("local file") ||
+    msg.includes("disclose") ||
+    msg.includes("can't help") ||
+    msg.includes("can’t help") ||
+    msg.includes("can't comply") ||
+    msg.includes("can’t comply")
+  );
+}
+
 function isMissingProfileError(error: string): boolean {
   return /no credentials found for profile/i.test(error);
 }
@@ -854,6 +878,27 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           }
           if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
+            break;
+          }
+          if (model.provider === "openai-codex" && isInstructionsRequiredError(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (instructions required)`);
+            break;
+          }
+          if (
+            (model.provider === "openai" || model.provider === "openai-codex") &&
+            isOpenAIReasoningSequenceError(message)
+          ) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (openai reasoning sequence error)`);
+            break;
+          }
+          if (
+            (model.provider === "openai" || model.provider === "openai-codex") &&
+            isToolNonceRefusal(message)
+          ) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;
           }
           if (isMissingProfileError(message)) {
