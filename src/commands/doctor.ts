@@ -87,6 +87,19 @@ export async function doctorCommand(
   });
   let cfg: ClawdbotConfig = configResult.cfg;
 
+  const configPath = configResult.path ?? CONFIG_PATH_CLAWDBOT;
+  if (!cfg.gateway?.mode) {
+    const lines = [
+      "gateway.mode is unset; gateway start will be blocked.",
+      `Fix: run ${formatCliCommand("clawdbot configure")} and set Gateway mode (local/remote).`,
+      `Or set directly: ${formatCliCommand("clawdbot config set gateway.mode local")}`,
+    ];
+    if (!fs.existsSync(configPath)) {
+      lines.push(`Missing config: run ${formatCliCommand("clawdbot setup")} first.`);
+    }
+    note(lines.join("\n"), "Gateway");
+  }
+
   cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
   await noteAuthProfileHealth({
     cfg,
