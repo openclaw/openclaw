@@ -39,6 +39,7 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../protocol/index.js";
+import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { handleGatewayRequest } from "../../server-methods.js";
@@ -293,24 +294,53 @@ export function attachGatewayWsMessageHandler(params: {
 
         const device = connectParams.device;
         let devicePublicKey: string | null = null;
-        // Allow token-authenticated connections (e.g., control-ui) to skip device identity
-        const hasTokenAuth = !!connectParams.auth?.token;
-        if (!device && !hasTokenAuth) {
-          setHandshakeState("failed");
-          setCloseCause("device-required", {
-            client: connectParams.client.id,
-            clientDisplayName: connectParams.client.displayName,
-            mode: connectParams.client.mode,
-            version: connectParams.client.version,
-          });
-          send({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: errorShape(ErrorCodes.NOT_PAIRED, "device identity required"),
-          });
-          close(1008, "device identity required");
-          return;
+        const hasTokenAuth = Boolean(connectParams.auth?.token);
+        const hasPasswordAuth = Boolean(connectParams.auth?.password);
+        const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+
+        if (!device) {
+          const allowInsecureControlUi =
+            isControlUi && loadConfig().gateway?.controlUi?.allowInsecureAuth === true;
+          const canSkipDevice =
+            isControlUi && allowInsecureControlUi ? hasTokenAuth || hasPasswordAuth : hasTokenAuth;
+
+          if (isControlUi && !allowInsecureControlUi) {
+            const errorMessage = "control ui requires HTTPS or localhost (secure context)";
+            setHandshakeState("failed");
+            setCloseCause("control-ui-insecure-auth", {
+              client: connectParams.client.id,
+              clientDisplayName: connectParams.client.displayName,
+              mode: connectParams.client.mode,
+              version: connectParams.client.version,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, errorMessage),
+            });
+            close(1008, errorMessage);
+            return;
+          }
+
+          // Allow token-authenticated connections (e.g., control-ui) to skip device identity
+          if (!canSkipDevice) {
+            setHandshakeState("failed");
+            setCloseCause("device-required", {
+              client: connectParams.client.id,
+              clientDisplayName: connectParams.client.displayName,
+              mode: connectParams.client.mode,
+              version: connectParams.client.version,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.NOT_PAIRED, "device identity required"),
+            });
+            close(1008, "device identity required");
+            return;
+          }
         }
         if (device) {
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);

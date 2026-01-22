@@ -86,6 +86,33 @@ Then open:
 
 Paste the token into the UI settings (sent as `connect.params.auth.token`).
 
+## Insecure HTTP
+
+If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`),
+the browser runs in a **non-secure context** and blocks WebCrypto. By default,
+Clawdbot **blocks** Control UI connections without device identity.
+
+**Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
+- `https://<magicdns>/` (Serve)
+- `http://127.0.0.1:18789/` (on the gateway host)
+
+**Downgrade example (token-only over HTTP):**
+
+```json5
+{
+  gateway: {
+    controlUi: { allowInsecureAuth: true },
+    bind: "tailnet",
+    auth: { mode: "token", token: "replace-me" }
+  }
+}
+```
+
+This disables device identity + pairing for the Control UI. Use only if you
+trust the network.
+
+See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
+
 ## Building the UI
 
 The Gateway serves static files from `dist/control-ui`. Build them with:

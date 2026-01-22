@@ -282,6 +282,7 @@ export const ClawdbotSchema = z
           .object({
             enabled: z.boolean().optional(),
             basePath: z.string().optional(),
+            allowInsecureAuth: z.boolean().optional(),
           })
           .strict()
           .optional(),

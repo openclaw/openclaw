@@ -227,6 +227,29 @@ describe("security audit", () => {
     }
   });
 
+  it("warns when control UI allows insecure auth", async () => {
+    const cfg: ClawdbotConfig = {
+      gateway: {
+        controlUi: { allowInsecureAuth: true },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.control_ui.insecure_auth",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
   it("warns when multiple DM senders share the main session", async () => {
     const cfg: ClawdbotConfig = { session: { dmScope: "main" } };
     const plugins: ChannelPlugin[] = [

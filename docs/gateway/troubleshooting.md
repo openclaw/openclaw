@@ -31,6 +31,19 @@ See also: [Health checks](/gateway/health) and [Logging](/logging).
 
 ## Common Issues
 
+### Control UI fails on HTTP ("device identity required" / "connect failed")
+
+If you open the dashboard over plain HTTP (e.g. `http://<lan-ip>:18789/` or
+`http://<tailscale-ip>:18789/`), the browser runs in a **non-secure context** and
+blocks WebCrypto, so device identity can’t be generated.
+
+**Fix:**
+- Prefer HTTPS via [Tailscale Serve](/gateway/tailscale).
+- Or open locally on the gateway host: `http://127.0.0.1:18789/`.
+- If you must stay on HTTP, enable `gateway.controlUi.allowInsecureAuth: true` and
+  use a gateway token (token-only; no device identity/pairing). See
+  [Control UI](/web/control-ui#insecure-http).
+
 ### CI Secrets Scan Failed
 
 This means `detect-secrets` found new candidates not yet in the baseline.
@@ -68,6 +81,34 @@ Doctor/service will show runtime state (PID/last exit) and log hints.
 - Quick tip: `--verbose` affects **console** output only. File logs remain controlled by `logging.level`.
 
 See [/logging](/logging) for a full overview of formats, config, and access.
+
+### "Gateway start blocked: set gateway.mode=local"
+
+This means the config exists but `gateway.mode` is unset (or not `local`), so the
+Gateway refuses to start.
+
+**Fix (recommended):**
+- Run the wizard and set the Gateway run mode to **Local**:
+  ```bash
+  clawdbot configure
+  ```
+- Or set it directly:
+  ```bash
+  clawdbot config set gateway.mode local
+  ```
+
+**If you meant to run a remote Gateway instead:**
+- Set a remote URL and keep `gateway.mode=remote`:
+  ```bash
+  clawdbot config set gateway.mode remote
+  clawdbot config set gateway.remote.url "wss://gateway.example.com"
+  ```
+
+**Ad-hoc/dev only:** pass `--allow-unconfigured` to start the gateway without
+`gateway.mode=local`.
+
+**No config file yet?** Run `clawdbot setup` to create a starter config, then rerun
+the gateway.
 
 ### Service Environment (PATH + runtime)
 
