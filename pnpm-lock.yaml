@@ -301,6 +301,8 @@ importers:
 
   extensions/imessage: {}
 
+  extensions/lobster: {}
+
   extensions/matrix:
     dependencies:
       '@matrix-org/matrix-sdk-crypto-nodejs':
