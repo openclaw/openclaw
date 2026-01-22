@@ -4,6 +4,23 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.22 (unreleased)
 
+### Changes
+- Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
+- Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
+- Memory: prevent CLI hangs by deferring vector probes, adding sqlite-vec/embedding timeouts, and showing sync progress early.
+- Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
+- Docs: add /model allowlist troubleshooting note. (#1405)
+- Docs: add per-message Gmail search example for gog. (#1220) Thanks @mbelinky.
+- UI: show per-session assistant identity in the Control UI. (#1420) Thanks @robbyczgw-cla.
+- Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
+- Signal: add typing indicators and DM read receipts via signal-cli.
+- MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.
+- CLI: add `clawdbot update wizard` for interactive channel selection and restart prompts. https://docs.clawd.bot/cli/update
+- macOS: add attach-only debug toggle + `--attach-only`/`--no-launchd` flag to skip launchd installs.
+
+### Breaking
+- **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
+
 ### Fixes
 - BlueBubbles: stop typing indicator on idle/no-reply. (#1439) Thanks @Nicell.
 - Auto-reply: only report a model switch when session state is available. (#1465) Thanks @robbyczgw-cla.

@@ -79,6 +79,11 @@ final class GatewayProcessManager {
 
     func ensureLaunchAgentEnabledIfNeeded() async {
         guard !CommandResolver.connectionModeIsRemote() else { return }
+        if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
+            self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
+            self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
+            return
+        }
         let enabled = await GatewayLaunchAgentManager.isLoaded()
         guard !enabled else { return }
         let bundlePath = Bundle.main.bundleURL.path
@@ -305,6 +310,15 @@ final class GatewayProcessManager {
                 self.status = .failed(resolution.status.message)
             }
             self.logger.error("gateway command resolve failed: \(resolution.status.message)")
+            return
+        }
+
+        if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
+            let message = "Launchd disabled; start the Gateway manually or disable attach-only."
+            self.status = .failed(message)
+            self.lastFailureReason = "launchd disabled"
+            self.appendLog("[gateway] launchd disabled; skipping auto-start\n")
+            self.logger.info("gateway launchd enable skipped (disable marker set)")
             return
         }
 
