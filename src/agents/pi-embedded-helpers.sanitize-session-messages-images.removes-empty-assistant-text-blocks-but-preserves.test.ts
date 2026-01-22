@@ -1,15 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { sanitizeSessionMessagesImages } from "./pi-embedded-helpers.js";
-import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
-  name: DEFAULT_AGENTS_FILENAME,
-  path: "/tmp/AGENTS.md",
-  content: "",
-  missing: false,
-  ...overrides,
-});
 describe("sanitizeSessionMessagesImages", () => {
   it("removes empty assistant text blocks but preserves tool calls", async () => {
     const input = [
@@ -30,7 +22,8 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(content).toHaveLength(1);
     expect((content as Array<{ type?: string }>)[0]?.type).toBe("toolCall");
   });
-  it("sanitizes tool ids for assistant blocks and tool results when enabled", async () => {
+
+  it("sanitizes tool ids in standard mode (preserves underscores)", async () => {
     const input = [
       {
         role: "assistant",
@@ -55,12 +48,48 @@ describe("sanitizeSessionMessagesImages", () => {
       sanitizeToolCallIds: true,
     });
 
+    // Standard mode preserves underscores for readability
     const assistant = out[0] as { content?: Array<{ id?: string }> };
     expect(assistant.content?.[0]?.id).toBe("call_abc_item_123");
     expect(assistant.content?.[1]?.id).toBe("call_abc_item_456");
 
     const toolResult = out[1] as { toolUseId?: string };
     expect(toolResult.toolUseId).toBe("call_abc_item_123");
+  });
+
+  it("sanitizes tool ids in strict mode (alphanumeric only)", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "call_abc|item:123", name: "test", input: {} },
+          {
+            type: "toolCall",
+            id: "call_abc|item:456",
+            name: "exec",
+            arguments: {},
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolUseId: "call_abc|item:123",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+    });
+
+    // Strict mode strips all non-alphanumeric characters
+    const assistant = out[0] as { content?: Array<{ id?: string }> };
+    expect(assistant.content?.[0]?.id).toBe("callabcitem123");
+    expect(assistant.content?.[1]?.id).toBe("callabcitem456");
+
+    const toolResult = out[1] as { toolUseId?: string };
+    expect(toolResult.toolUseId).toBe("callabcitem123");
   });
   it("filters whitespace-only assistant text blocks", async () => {
     const input = [
