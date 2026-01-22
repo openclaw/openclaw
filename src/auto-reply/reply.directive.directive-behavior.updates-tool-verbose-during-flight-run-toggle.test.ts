@@ -211,10 +211,9 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("Pick: /model <#> or /model <provider/model>");
-      expect(text).toContain("openai/gpt-4.1-mini");
-      expect(text).not.toContain("claude-sonnet-4-1");
+      expect(text).toContain("Current: anthropic/claude-opus-4-5");
+      expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
+      expect(text).toContain("More: /model status");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
