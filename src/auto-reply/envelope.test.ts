@@ -18,6 +18,7 @@ describe("formatAgentEnvelope", () => {
       host: "mac-mini",
       ip: "10.0.0.5",
       timestamp: ts,
+      envelope: { timezone: "utc" },
       body: "hello",
     });
 
@@ -26,7 +27,7 @@ describe("formatAgentEnvelope", () => {
     expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 2025-01-02T03:04Z] hello");
   });
 
-  it("formats timestamps in UTC regardless of local timezone", () => {
+  it("formats timestamps in local timezone by default", () => {
     const originalTz = process.env.TZ;
     process.env.TZ = "America/Los_Angeles";
 
@@ -39,10 +40,10 @@ describe("formatAgentEnvelope", () => {
 
     process.env.TZ = originalTz;
 
-    expect(body).toBe("[WebChat 2025-01-02T03:04Z] hello");
+    expect(body).toMatch(/\[WebChat 2025-01-01 19:04 [^\]]+\] hello/);
   });
 
-  it("formats timestamps in local timezone when configured", () => {
+  it("formats timestamps in UTC when configured", () => {
     const originalTz = process.env.TZ;
     process.env.TZ = "America/Los_Angeles";
 
@@ -50,13 +51,13 @@ describe("formatAgentEnvelope", () => {
     const body = formatAgentEnvelope({
       channel: "WebChat",
       timestamp: ts,
-      envelope: { timezone: "local" },
+      envelope: { timezone: "utc" },
       body: "hello",
     });
 
     process.env.TZ = originalTz;
 
-    expect(body).toMatch(/\[WebChat 2025-01-01 19:04 [^\]]+\] hello/);
+    expect(body).toBe("[WebChat 2025-01-02T03:04Z] hello");
   });
 
   it("formats timestamps in user timezone when configured", () => {
