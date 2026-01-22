@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/signal",
-  "version": "2026.1.20-2",
+  "version": "2026.1.21",
   "type": "module",
   "description": "Clawdbot Signal channel plugin",
   "clawdbot": {
