@@ -36,7 +36,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
-  it("suggests closest match for typos without switching", () => {
+  it("auto-applies closest match for typos", () => {
     const directives = parseInlineDirectives("/model anthropic/claud-opus-4-5");
     const cfg = { commands: { text: true } } as unknown as ClawdbotConfig;
 
@@ -52,9 +52,11 @@ describe("/model chat UX", () => {
       provider: "anthropic",
     });
 
-    expect(resolved.modelSelection).toBeUndefined();
-    expect(resolved.errorText).toContain("Did you mean:");
-    expect(resolved.errorText).toContain("anthropic/claude-opus-4-5");
-    expect(resolved.errorText).toContain("Try: /model anthropic/claude-opus-4-5");
+    expect(resolved.modelSelection).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      isDefault: true,
+    });
+    expect(resolved.errorText).toBeUndefined();
   });
 });

@@ -478,7 +478,9 @@ describe("runHeartbeatOnce", () => {
         peerKind: "group",
         peerId: groupId,
       });
-      cfg.agents?.defaults?.heartbeat && (cfg.agents.defaults.heartbeat.session = groupSessionKey);
+      if (cfg.agents?.defaults?.heartbeat) {
+        cfg.agents.defaults.heartbeat.session = groupSessionKey;
+      }
 
       await fs.writeFile(
         storePath,
