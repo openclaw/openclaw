@@ -89,6 +89,12 @@
   color: rgba(134, 142, 150, 1);
 }
 
+/* Image avatar support */
+img.chat-avatar {
+  object-fit: cover;
+  object-position: center;
+}
+
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
