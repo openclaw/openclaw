@@ -28,6 +28,6 @@
   },
   "dependencies": {
     "clawdbot": "workspace:*",
-    "undici": "7.18.2"
+    "undici": "7.19.0"
   }
 }
