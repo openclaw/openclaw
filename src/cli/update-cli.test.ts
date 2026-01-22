@@ -236,7 +236,7 @@ describe("update-cli", () => {
         durationMs: 100,
       });
 
-      await updateCommand({});
+      await updateCommand({ yes: true });
 
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("stable");
