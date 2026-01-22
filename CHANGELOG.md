@@ -21,6 +21,7 @@ Docs: https://docs.clawd.bot
 - **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
 
 ### Fixes
+- Media: accept MEDIA paths with spaces/tilde and prefer the message tool hint for image replies.
 - Config: avoid stack traces for invalid configs and log the config path.
 - CLI: read Codex CLI account_id for workspace billing. (#1422) Thanks @aj47.
 - Doctor: avoid recreating WhatsApp config when only legacy routing keys remain. (#900)
