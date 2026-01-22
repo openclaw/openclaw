@@ -525,6 +525,9 @@ export async function runTui(opts: TuiOptions) {
 
     return await new Promise<boolean>((resolve) => {
       chatLog.addSystem("Allow local shell commands for this session?");
+      chatLog.addSystem(
+        "This runs commands on YOUR machine (not the gateway) and may delete files or reveal secrets.",
+      );
       chatLog.addSystem("Select Yes/No (arrows + Enter), Esc to cancel.");
       const selector = createSearchableSelectList(
         [
