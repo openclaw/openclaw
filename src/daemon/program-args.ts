@@ -237,7 +237,7 @@ export async function resolveNodeProgramArguments(params: {
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
 }): Promise<GatewayProgramArgs> {
-  const args = ["node", "start", "--host", params.host, "--port", String(params.port)];
+  const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
   if (params.tls || params.tlsFingerprint) args.push("--tls");
   if (params.tlsFingerprint) args.push("--tls-fingerprint", params.tlsFingerprint);
   if (params.nodeId) args.push("--node-id", params.nodeId);
