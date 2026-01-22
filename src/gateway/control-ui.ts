@@ -206,11 +206,22 @@ interface ServeIndexHtmlOpts {
   agentId?: string;
 }
 
+function looksLikeLocalAvatarPath(value: string | undefined): boolean {
+  if (!value) return false;
+  if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value)) return false;
+  return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(value);
+}
+
 function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndexHtmlOpts) {
   const { basePath, config, agentId } = opts;
   const identity = config
     ? resolveAssistantIdentity({ cfg: config, agentId })
     : DEFAULT_ASSISTANT_IDENTITY;
+  // Resolve local file avatars to /avatar/{agentId} URL
+  let avatarValue = identity.avatar;
+  if (looksLikeLocalAvatarPath(avatarValue) && identity.agentId) {
+    avatarValue = buildAvatarUrl(basePath, identity.agentId);
+  }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   const raw = fs.readFileSync(indexPath, "utf8");
@@ -218,7 +229,7 @@ function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndex
     injectControlUiConfig(raw, {
       basePath,
       assistantName: identity.name,
-      assistantAvatar: identity.avatar,
+      assistantAvatar: avatarValue,
     }),
   );
 }
