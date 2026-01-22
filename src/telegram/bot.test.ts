@@ -2213,6 +2213,47 @@ describe("createTelegramBot", () => {
     ).toBe(false);
   });
 
+  it("blocks native DM commands for unpaired users", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    commandSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
+    readTelegramAllowFromStore.mockResolvedValueOnce([]);
+
+    createTelegramBot({ token: "tok" });
+    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handler) throw new Error("status command handler missing");
+
+    await handler({
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/status",
+        date: 1736380800,
+        message_id: 42,
+      },
+      match: "",
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      12345,
+      "You are not authorized to use this command.",
+    );
+  });
+
   it("streams tool summaries for native slash commands", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
