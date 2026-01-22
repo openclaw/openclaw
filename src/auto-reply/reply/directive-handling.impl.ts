@@ -288,6 +288,7 @@ export async function handleDirectiveOnly(params: {
     nextThinkLevel === "xhigh" &&
     !supportsXHighThinking(resolvedProvider, resolvedModel);
 
+  let didPersistModel = false;
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =
       currentElevatedLevel ??
@@ -346,6 +347,7 @@ export async function handleDirectiveOnly(params: {
         selection: modelSelection,
         profileOverride,
       });
+      didPersistModel = true;
     }
     if (directives.hasQueueDirective && directives.queueReset) {
       delete sessionEntry.queueMode;
@@ -447,7 +449,7 @@ export async function handleDirectiveOnly(params: {
       `Thinking level set to high (xhigh not supported for ${resolvedProvider}/${resolvedModel}).`,
     );
   }
-  if (modelSelection) {
+  if (modelSelection && didPersistModel) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
     parts.push(
@@ -458,6 +460,8 @@ export async function handleDirectiveOnly(params: {
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }
+  } else if (modelSelection && !didPersistModel) {
+    parts.push(`Model switch to ${modelSelection.provider}/${modelSelection.model} failed (session state unavailable).`);
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
