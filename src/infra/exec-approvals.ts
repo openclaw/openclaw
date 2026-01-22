@@ -91,7 +91,10 @@ function normalizeAllowlistPattern(value: string | undefined): string | null {
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
-function mergeLegacyAgent(current: ExecApprovalsAgent, legacy: ExecApprovalsAgent): ExecApprovalsAgent {
+function mergeLegacyAgent(
+  current: ExecApprovalsAgent,
+  legacy: ExecApprovalsAgent,
+): ExecApprovalsAgent {
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
@@ -120,13 +123,11 @@ function ensureDir(filePath: string) {
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
-  const agents = { ...(file.agents ?? {}) };
+  const agents = { ...file.agents };
   const legacyDefault = agents.default;
   if (legacyDefault) {
     const main = agents[DEFAULT_AGENT_ID];
-    agents[DEFAULT_AGENT_ID] = main
-      ? mergeLegacyAgent(main, legacyDefault)
-      : legacyDefault;
+    agents[DEFAULT_AGENT_ID] = main ? mergeLegacyAgent(main, legacyDefault) : legacyDefault;
     delete agents.default;
   }
   const normalized: ExecApprovalsFile = {
