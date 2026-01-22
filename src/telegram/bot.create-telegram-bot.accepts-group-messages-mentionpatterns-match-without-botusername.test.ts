@@ -120,7 +120,6 @@ const getOnHandler = (event: string) => {
 };
 
 const ORIGINAL_TZ = process.env.TZ;
-
 describe("createTelegramBot", () => {
   beforeEach(() => {
     process.env.TZ = "UTC";
@@ -153,6 +152,11 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       identity: { name: "Bert" },
       messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
       channels: {
@@ -195,6 +199,11 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: {
           groupPolicy: "open",

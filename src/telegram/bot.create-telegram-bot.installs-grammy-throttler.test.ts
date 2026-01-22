@@ -129,6 +129,11 @@ describe("createTelegramBot", () => {
     process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },

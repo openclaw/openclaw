@@ -298,6 +298,11 @@ describe("web auto-reply", () => {
       };
 
       setLoadConfigMock(() => ({
+        agents: {
+          defaults: {
+            envelopeTimezone: "utc",
+          },
+        },
         session: { store: store.storePath },
       }));
 
