@@ -15,7 +15,9 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
+  canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveStorePath,
   saveSessionStore,
@@ -27,7 +29,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -286,17 +288,53 @@ function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig, heartbeat?: HeartbeatC
   );
 }
 
-function resolveHeartbeatSession(cfg: ClawdbotConfig, agentId?: string) {
+function resolveHeartbeatSession(
+  cfg: ClawdbotConfig,
+  agentId?: string,
+  heartbeat?: HeartbeatConfig,
+) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
-  const sessionKey =
+  const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  return { sessionKey, storePath, store, entry };
+  const mainEntry = store[mainSessionKey];
+
+  if (scope === "global") {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const trimmed = heartbeat?.session?.trim() ?? "";
+  if (!trimmed) {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "main" || normalized === "global") {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const candidate = toAgentStoreSessionKey({
+    agentId: resolvedAgentId,
+    requestKey: trimmed,
+    mainKey: cfg.session?.mainKey,
+  });
+  const canonical = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolvedAgentId,
+    sessionKey: candidate,
+  });
+  if (canonical !== "global") {
+    const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
+    if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+      return { sessionKey: canonical, storePath, store, entry: store[canonical] };
+    }
+  }
+
+  return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
 }
 
 function resolveHeartbeatReplyPayload(
@@ -427,7 +465,7 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId);
+  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const lastChannel = delivery.lastChannel;
