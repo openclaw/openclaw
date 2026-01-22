@@ -8,7 +8,7 @@ read_when:
 This repo supports “remote over SSH” by keeping a single Gateway (the master) running on a dedicated host (desktop/server) and connecting clients to it.
 
 - For **operators (you / the macOS app)**: SSH tunneling is the universal fallback.
-- For **nodes (iOS/Android and future devices)**: prefer the Gateway **Bridge** when on the same LAN/tailnet (see [Discovery](/gateway/discovery)).
+- For **nodes (iOS/Android and future devices)**: connect to the Gateway **WebSocket** (LAN/tailnet or SSH tunnel as needed).
 
 ## The core idea
 
@@ -55,12 +55,12 @@ One gateway service owns state + channels. Nodes are peripherals.
 Flow example (Telegram → node):
 - Telegram message arrives at the **Gateway**.
 - Gateway runs the **agent** and decides whether to call a node tool.
-- Gateway calls the **node** over the Bridge (`node.*` RPC).
+- Gateway calls the **node** over the Gateway WebSocket (`node.*` RPC).
 - Node returns the result; Gateway replies back out to Telegram.
 
 Notes:
 - **Nodes do not run the gateway service.** Only one gateway should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)).
-- macOS app “node mode” is just a node client over the Bridge.
+- macOS app “node mode” is just a node client over the Gateway WebSocket.
 
 ## SSH tunnel (CLI + tools)
 

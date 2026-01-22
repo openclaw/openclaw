@@ -297,23 +297,9 @@ Notes:
 - On macOS, the headless node host prefers the companion app exec host when reachable and falls
   back to local execution if the app is unavailable. Set `CLAWDBOT_NODE_EXEC_HOST=app` to require
   the app, or `CLAWDBOT_NODE_EXEC_FALLBACK=0` to disable fallback.
-<<<<<<< HEAD
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
-||||||| parent of 2ab821adc (docs: align node transport with gateway ws)
-- Add `--tls` / `--tls-fingerprint` when the bridge requires TLS.
-=======
-- Add `--tls` / `--tls-fingerprint` when the gateway requires TLS.
->>>>>>> 2ab821adc (docs: align node transport with gateway ws)
 
 ## Mac node mode
 
-<<<<<<< HEAD
 - The macOS menubar app connects to the Gateway WS server as a node (so `clawdbot nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.
-||||||| parent of 2ab821adc (docs: align node transport with gateway ws)
-- The macOS menubar app connects to the Gateway bridge as a node (so `clawdbot nodes …` works against this Mac).
-- In remote mode, the app opens an SSH tunnel for the bridge port and connects to `localhost`.
-=======
-- The macOS menubar app connects to the Gateway WebSocket as a node (so `clawdbot nodes …` works against this Mac).
-- In remote mode, the app opens an SSH tunnel for the gateway port and connects to `localhost`.
->>>>>>> 2ab821adc (docs: align node transport with gateway ws)

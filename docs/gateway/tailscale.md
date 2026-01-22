@@ -95,8 +95,7 @@ clawdbot gateway --tailscale funnel --auth password
 - `gateway.bind: "tailnet"` is a direct Tailnet bind (no HTTPS, no Serve/Funnel).
 - `gateway.bind: "auto"` prefers loopback; use `tailnet` if you want Tailnet-only.
 - Serve/Funnel only expose the **Gateway control UI + WS**. Nodes connect over
-  the same Gateway WS endpoint, so Serve can work for node access. (Legacy TCP
-  bridge traffic is not proxied by Serve.)
+  the same Gateway WS endpoint, so Serve can work for node access.
 
 ## Browser control server (remote Gateway + local browser)
 
