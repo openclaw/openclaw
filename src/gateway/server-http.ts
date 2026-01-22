@@ -11,7 +11,9 @@ import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
+import { resolveAgentAvatar } from "../agents/identity-avatar.js";
+import { loadConfig } from "../config/config.js";
+import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import {
   extractHookToken,
   getHookChannelError,
@@ -244,6 +246,13 @@ export function createGatewayHttpServer(opts: {
         if (await canvasHost.handleHttpRequest(req, res)) return;
       }
       if (controlUiEnabled) {
+        if (
+          handleControlUiAvatarRequest(req, res, {
+            basePath: controlUiBasePath,
+            resolveAvatar: (agentId) => resolveAgentAvatar(loadConfig(), agentId),
+          })
+        )
+          return;
         if (
           handleControlUiHttpRequest(req, res, {
             basePath: controlUiBasePath,

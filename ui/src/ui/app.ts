@@ -7,6 +7,7 @@ import { renderApp } from "./app-render";
 import type { Tab } from "./navigation";
 import type { ResolvedTheme, ThemeMode } from "./theme";
 import type {
+  AgentsListResult,
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
@@ -106,6 +107,7 @@ export class ClawdbotApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+  @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   // Sidebar state for tool output viewing
@@ -167,6 +169,10 @@ export class ClawdbotApp extends LitElement {
   @state() presenceEntries: PresenceEntry[] = [];
   @state() presenceError: string | null = null;
   @state() presenceStatus: string | null = null;
+
+  @state() agentsLoading = false;
+  @state() agentsList: AgentsListResult | null = null;
+  @state() agentsError: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
