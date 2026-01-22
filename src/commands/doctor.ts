@@ -112,8 +112,10 @@ export async function doctorCommand(
   }
   if (resolveMode(cfg) === "local") {
     const authMode = cfg.gateway?.auth?.mode;
-    const token =
+    const configToken =
       typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway?.auth?.token.trim() : "";
+    const envToken = process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ?? "";
+    const token = configToken || envToken;
     const needsToken = authMode !== "password" && (authMode !== "token" || !token);
     if (needsToken) {
       note(
