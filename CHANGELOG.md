@@ -33,6 +33,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Control UI: ignore bootstrap identity placeholder text for avatar values and fall back to the default avatar. https://docs.clawd.bot/cli/agents https://docs.clawd.bot/web/control-ui
+- Slack: remove deprecated `filetype` field from `files.uploadV2` to eliminate API warnings. (#1447)
 
 ## 2026.1.21
 
