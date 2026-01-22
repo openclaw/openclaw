@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
+- Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
 
 ### Fixes
 - Doctor: warn when gateway.mode is unset with configure/config guidance.

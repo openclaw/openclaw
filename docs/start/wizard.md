@@ -45,7 +45,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 ## What the wizard does
 
 **Local mode (default)** walks you through:
-  - Model/auth (OpenAI Code (Codex) subscription OAuth, Anthropic API key (recommended) or `claude setup-token`, plus MiniMax/GLM/Moonshot/AI Gateway options)
+  - Model/auth (OpenAI Code (Codex) subscription OAuth, Anthropic API key (recommended) or setup-token (paste), plus MiniMax/GLM/Moonshot/AI Gateway options)
 - Workspace location + bootstrap files
 - Gateway settings (port/bind/auth/tailscale)
 - Providers (Telegram, WhatsApp, Discord, Signal)
@@ -79,9 +79,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 2) **Model/Auth**
    - **Anthropic API key (recommended)**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
-   - **Anthropic token (setup-token)**: run `claude setup-token` locally (the wizard can run it for you and reuse the token) or run it elsewhere and paste the token.
    - **Anthropic OAuth (Claude Code CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
-   - **Anthropic token (paste setup-token)**: run `claude setup-token` in your terminal, then paste the token (you can name it; blank = default).
+   - **Anthropic token (paste setup-token)**: run `claude setup-token` on any machine, then paste the token (you can name it; blank = default).
    - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
    - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
      - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
