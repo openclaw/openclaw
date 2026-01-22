@@ -249,6 +249,11 @@ public struct ClawdbotSessionPreviewEntry: Codable, Sendable {
 public struct ClawdbotSessionsPreviewPayload: Codable, Sendable {
     public let ts: Int
     public let previews: [ClawdbotSessionPreviewEntry]
+
+    public init(ts: Int, previews: [ClawdbotSessionPreviewEntry]) {
+        self.ts = ts
+        self.previews = previews
+    }
 }
 
 public struct ClawdbotChatSendResponse: Codable, Sendable {
