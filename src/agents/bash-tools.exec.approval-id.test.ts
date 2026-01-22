@@ -80,10 +80,6 @@ describe("exec approvals", () => {
     if (process.platform !== "win32") {
       await fs.chmod(exePath, 0o755);
     }
-    const execEnv: Record<string, string> = { PATH: binDir };
-    if (process.platform === "win32") {
-      execEnv.PATHEXT = ".CMD";
-    }
     const approvalsFile = {
       version: 1,
       defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
@@ -117,8 +113,7 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call2", {
-      command: `${exeName} --help`,
-      env: execEnv,
+      command: `"${exePath}" --help`,
     });
     expect(result.details.status).toBe("completed");
     expect(calls).toContain("exec.approvals.node.get");
