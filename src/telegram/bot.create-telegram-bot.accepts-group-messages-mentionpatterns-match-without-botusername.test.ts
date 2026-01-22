@@ -89,7 +89,6 @@ vi.mock("grammy", () => ({
 const sequentializeMiddleware = vi.fn();
 const sequentializeSpy = vi.fn(() => sequentializeMiddleware);
 let _sequentializeKey: ((ctx: unknown) => string) | undefined;
-let originalTz: string | undefined;
 vi.mock("@grammyjs/runner", () => ({
   sequentialize: (keyFn: (ctx: unknown) => string) => {
     _sequentializeKey = keyFn;
@@ -119,9 +118,10 @@ const getOnHandler = (event: string) => {
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
+const ORIGINAL_TZ = process.env.TZ;
+
 describe("createTelegramBot", () => {
   beforeEach(() => {
-    originalTz = process.env.TZ;
     process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
@@ -140,9 +140,8 @@ describe("createTelegramBot", () => {
     botCtorSpy.mockReset();
     _sequentializeKey = undefined;
   });
-
   afterEach(() => {
-    process.env.TZ = originalTz;
+    process.env.TZ = ORIGINAL_TZ;
   });
 
   // groupPolicy tests
