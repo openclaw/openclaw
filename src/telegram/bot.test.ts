@@ -10,6 +10,7 @@ import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
@@ -153,6 +154,11 @@ describe("createTelegramBot", () => {
     process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
@@ -455,8 +461,12 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0];
+      const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+      const timestampPattern = escapeRegExp(expectedTimestamp);
       expect(payload.Body).toMatch(
-        /^\[Telegram Ada Lovelace \(@ada_bot\) id:1234 (\+\d+[smhd] )?2025-01-09 01:00 [^\]]+\]/,
+        new RegExp(
+          `^\\[Telegram Ada Lovelace \\(@ada_bot\\) id:1234 (\\+\\d+[smhd] )?${timestampPattern}\\]`,
+        ),
       );
       expect(payload.Body).toContain("hello world");
     } finally {
@@ -561,6 +571,11 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       identity: { name: "Bert" },
       messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
       channels: {
@@ -590,8 +605,10 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expectInboundContextContract(payload);
     expect(payload.WasMentioned).toBe(true);
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const timestampPattern = escapeRegExp(expectedTimestamp);
     expect(payload.Body).toMatch(
-      /^\[Telegram Test Group id:7 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
+      new RegExp(`^\\[Telegram Test Group id:7 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
     );
     expect(payload.SenderName).toBe("Ada");
     expect(payload.SenderId).toBe("9");
@@ -603,6 +620,11 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: {
           groupPolicy: "open",
@@ -634,8 +656,10 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expectInboundContextContract(payload);
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const timestampPattern = escapeRegExp(expectedTimestamp);
     expect(payload.Body).toMatch(
-      /^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
+      new RegExp(`^\\[Telegram Ops id:42 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
     );
     expect(payload.SenderName).toBe("Ada Lovelace");
     expect(payload.SenderId).toBe("99");

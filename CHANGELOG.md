@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
+- Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
 - Memory: prevent CLI hangs by deferring vector probes, adding sqlite-vec/embedding timeouts, and showing sync progress early.
 - Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
 - Docs: add /model allowlist troubleshooting note. (#1405)
@@ -97,6 +98,7 @@ Docs: https://docs.clawd.bot
 - Plugins: move channel catalog metadata into plugin manifests. (#1290) https://docs.clawd.bot/plugins/manifest
 - Plugins: align Nextcloud Talk policy helpers with core patterns. (#1290) https://docs.clawd.bot/plugins/manifest
 - Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) https://docs.clawd.bot/web/control-ui
+- Agents/UI: add agent avatar support in identity config, IDENTITY.md, and the Control UI. (#1329) https://docs.clawd.bot/gateway/configuration
 - Plugins: add plugin slots with a dedicated memory slot selector. https://docs.clawd.bot/plugins/agent-tools
 - Plugins: ship the bundled BlueBubbles channel plugin (disabled by default). https://docs.clawd.bot/channels/bluebubbles
 - Plugins: migrate bundled messaging extensions to the plugin SDK and resolve plugin-sdk imports in the loader.
@@ -106,6 +108,7 @@ Docs: https://docs.clawd.bot
 - Plugins: auto-enable bundled channel/provider plugins when configuration is present.
 - Plugins: sync plugin sources on channel switches and update npm-installed plugins during `clawdbot update`.
 - Plugins: share npm plugin update logic between `clawdbot update` and `clawdbot plugins update`.
+
 - Gateway/API: add `/v1/responses` (OpenResponses) with item-based input + semantic streaming events. (#1229)
 - Gateway/API: expand `/v1/responses` to support file/image inputs, tool_choice, usage, and output limits. (#1229)
 - Usage: add `/usage cost` summaries and macOS menu cost charts. https://docs.clawd.bot/reference/api-usage-costs

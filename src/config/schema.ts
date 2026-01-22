@@ -119,6 +119,7 @@ const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includeMessages": "Cache Trace Include Messages",
   "diagnostics.cacheTrace.includePrompt": "Cache Trace Include Prompt",
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
+  "agents.list.*.identity.avatar": "Identity Avatar",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -315,6 +316,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
   "channels.signal.account": "Signal Account",
   "channels.imessage.cliPath": "iMessage CLI Path",
+  "agents.list[].identity.avatar": "Agent Avatar",
   "plugins.enabled": "Enable Plugins",
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
@@ -344,6 +346,8 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "agents.list[].identity.avatar":
+    "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "gateway.auth.token": "Recommended for all gateways; required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
@@ -511,6 +515,8 @@ const FIELD_HELP: Record<string, string> = {
     "Resolved install directory (usually ~/.clawdbot/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
   "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
+  "agents.list.*.identity.avatar":
+    "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
@@ -616,6 +622,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/clawdbot",
+  "agents.list[].identity.avatar": "avatars/clawd.png",
 };
 
 const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];

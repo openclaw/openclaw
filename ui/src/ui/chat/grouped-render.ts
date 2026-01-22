@@ -12,10 +12,10 @@ import {
 } from "./message-extract";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
 
-export function renderReadingIndicatorGroup() {
+export function renderReadingIndicatorGroup(assistantAvatarUrl?: string | null) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant")}
+      ${renderAvatar("assistant", assistantAvatarUrl ?? undefined)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -30,6 +30,7 @@ export function renderReadingIndicatorGroup() {
 export function renderStreamingGroup(
   text: string,
   startedAt: number,
+  assistantAvatarUrl?: string | null,
   onOpenSidebar?: (content: string) => void,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
@@ -39,7 +40,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant")}
+      ${renderAvatar("assistant", assistantAvatarUrl ?? undefined)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -61,7 +62,11 @@ export function renderStreamingGroup(
 
 export function renderMessageGroup(
   group: MessageGroup,
-  opts: { onOpenSidebar?: (content: string) => void; showReasoning: boolean },
+  opts: {
+    onOpenSidebar?: (content: string) => void;
+    showReasoning: boolean;
+    assistantAvatarUrl?: string | null;
+  },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const who =
@@ -83,7 +88,7 @@ export function renderMessageGroup(
 
   return html`
     <div class="chat-group ${roleClass}">
-      ${renderAvatar(group.role)}
+      ${renderAvatar(group.role, opts.assistantAvatarUrl ?? undefined)}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
           renderGroupedMessage(
