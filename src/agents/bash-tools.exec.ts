@@ -896,8 +896,8 @@ export function createExecTool(
                   security: hostSecurity,
                   ask: hostAsk,
                   agentId: defaults?.agentId,
-                  resolvedPath: null,
-                  sessionKey: defaults?.sessionKey ?? null,
+                  resolvedPath: undefined,
+                  sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               )) as { decision?: string } | null;
@@ -1060,7 +1060,7 @@ export function createExecTool(
           const approvalSlug = createApprovalSlug(approvalId);
           const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
           const contextKey = `exec:${approvalId}`;
-          const resolvedPath = analysis.segments[0]?.resolution?.resolvedPath ?? null;
+          const resolvedPath = analysis.segments[0]?.resolution?.resolvedPath;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
           const commandText = params.command;
           const effectiveTimeout =
@@ -1082,7 +1082,7 @@ export function createExecTool(
                   ask: hostAsk,
                   agentId: defaults?.agentId,
                   resolvedPath,
-                  sessionKey: defaults?.sessionKey ?? null,
+                  sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               )) as { decision?: string } | null;
