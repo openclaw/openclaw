@@ -6,7 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
-- Agents: add identity avatar config support and Control UI avatar rendering. (#1329) Thanks @dlauer.
+- Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
 - Memory: prevent CLI hangs by deferring vector probes, adding sqlite-vec/embedding timeouts, and showing sync progress early.
 - Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
 - Docs: add per-message Gmail search example for gog. (#1220) Thanks @mbelinky.
