@@ -5,8 +5,10 @@ import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system
 import { prependSystemEvents } from "./session-updates.js";
 
 describe("prependSystemEvents", () => {
-  it("adds a UTC timestamp to queued system events", async () => {
+  it("adds a local timestamp to queued system events by default", async () => {
     vi.useFakeTimers();
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
     const timestamp = new Date("2026-01-12T20:19:17Z");
     vi.setSystemTime(timestamp);
 
@@ -20,11 +22,10 @@ describe("prependSystemEvents", () => {
       prefixedBodyBase: "User: hi",
     });
 
-    const expectedTimestamp = "2026-01-12T20:19:17Z";
-
-    expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+    expect(result).toMatch(/System: \[2026-01-12 12:19:17 [^\]]+\] Model switched\./);
 
     resetSystemEventsForTest();
+    process.env.TZ = originalTz;
     vi.useRealTimers();
   });
 });

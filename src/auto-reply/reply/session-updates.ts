@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -27,9 +28,32 @@ export async function prependSystemEvents(params: {
     return trimmed;
   };
 
-  const formatSystemEventTimestamp = (ts: number) => {
-    const date = new Date(ts);
-    if (Number.isNaN(date.getTime())) return "unknown-time";
+  const resolveExplicitTimezone = (value: string): string | undefined => {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+      return value;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const resolveSystemEventTimezone = (cfg: ClawdbotConfig) => {
+    const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
+    if (!raw) return { mode: "local" as const };
+    const lowered = raw.toLowerCase();
+    if (lowered === "utc" || lowered === "gmt") return { mode: "utc" as const };
+    if (lowered === "local" || lowered === "host") return { mode: "local" as const };
+    if (lowered === "user") {
+      return {
+        mode: "iana" as const,
+        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+      };
+    }
+    const explicit = resolveExplicitTimezone(raw);
+    return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
+  };
+
+  const formatUtcTimestamp = (date: Date): string => {
     const yyyy = String(date.getUTCFullYear()).padStart(4, "0");
     const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
     const dd = String(date.getUTCDate()).padStart(2, "0");
@@ -39,6 +63,42 @@ export async function prependSystemEvents(params: {
     return `${yyyy}-${mm}-${dd}T${hh}:${min}:${sec}Z`;
   };
 
+  const formatZonedTimestamp = (date: Date, timeZone?: string): string | undefined => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+      timeZoneName: "short",
+    }).formatToParts(date);
+    const pick = (type: string) => parts.find((part) => part.type === type)?.value;
+    const yyyy = pick("year");
+    const mm = pick("month");
+    const dd = pick("day");
+    const hh = pick("hour");
+    const min = pick("minute");
+    const sec = pick("second");
+    const tz = [...parts]
+      .reverse()
+      .find((part) => part.type === "timeZoneName")
+      ?.value?.trim();
+    if (!yyyy || !mm || !dd || !hh || !min || !sec) return undefined;
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ""}`;
+  };
+
+  const formatSystemEventTimestamp = (ts: number, cfg: ClawdbotConfig) => {
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return "unknown-time";
+    const zone = resolveSystemEventTimezone(cfg);
+    if (zone.mode === "utc") return formatUtcTimestamp(date);
+    if (zone.mode === "local") return formatZonedTimestamp(date) ?? "unknown-time";
+    return formatZonedTimestamp(date, zone.timeZone) ?? "unknown-time";
+  };
+
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
@@ -46,7 +106,7 @@ export async function prependSystemEvents(params: {
       .map((event) => {
         const compacted = compactSystemEvent(event.text);
         if (!compacted) return null;
-        return `[${formatSystemEventTimestamp(event.ts)}] ${compacted}`;
+        return `[${formatSystemEventTimestamp(event.ts, params.cfg)}] ${compacted}`;
       })
       .filter((v): v is string => Boolean(v)),
   );
