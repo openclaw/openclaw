@@ -69,11 +69,13 @@ High-level:
 
 1. Requires a clean worktree (no uncommitted changes).
 2. Switches to the selected channel (tag or branch).
-3. Fetches and rebases against `@{upstream}` (dev only).
-4. Installs deps (pnpm preferred; npm fallback).
-5. Builds + builds the Control UI.
-6. Runs `clawdbot doctor` as the final “safe update” check.
-7. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
+3. Fetches upstream (dev only).
+4. Dev only: preflight lint + TypeScript build in a temp worktree; if the tip fails, walks back up to 10 commits to find the newest clean build.
+5. Rebases onto the selected commit (dev only).
+6. Installs deps (pnpm preferred; npm fallback).
+7. Builds + builds the Control UI.
+8. Runs `clawdbot doctor` as the final “safe update” check.
+9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
 
 ## `--update` shorthand
 

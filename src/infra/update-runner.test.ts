@@ -74,7 +74,9 @@ describe("runGatewayUpdate", () => {
         stdout: "origin/main",
       },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} rebase @{upstream}`]: { code: 1, stderr: "conflict" },
+      [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: "upstream123" },
+      [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: { stdout: "upstream123\n" },
+      [`git -C ${tempDir} rebase upstream123`]: { code: 1, stderr: "conflict" },
       [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
     });
 
