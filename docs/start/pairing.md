@@ -45,27 +45,29 @@ Stored under `~/.clawdbot/credentials/`:
 Treat these as sensitive (they gate access to your assistant).
 
 
-## 2) Node pairing (iOS/Android nodes joining the gateway)
+## 2) Node device pairing (iOS/Android/macOS/headless nodes)
 
-Nodes (iOS/Android, future hardware, etc.) connect to the Gateway and request to join.
-The Gateway keeps an authoritative allowlist; new nodes require explicit approve/reject.
+Nodes connect to the Gateway as **devices** with `role: node`. The Gateway
+creates a device pairing request that must be approved.
 
-### Approve a node
+### Approve a node device
 
 ```bash
-clawdbot nodes pending
-clawdbot nodes approve <requestId>
+clawdbot devices list
+clawdbot devices approve <requestId>
+clawdbot devices reject <requestId>
 ```
 
 ### Where the state lives
 
-Stored under `~/.clawdbot/nodes/`:
+Stored under `~/.clawdbot/devices/`:
 - `pending.json` (short-lived; pending requests expire)
-- `paired.json` (paired nodes + tokens)
+- `paired.json` (paired devices + tokens)
 
-### Details
+### Notes
 
-Full protocol + design notes: [Gateway pairing](/gateway/pairing)
+- The legacy `node.pair.*` API (CLI: `clawdbot nodes pending/approve`) is a
+  separate gateway-owned pairing store. WS nodes still require device pairing.
 
 
 ## Related docs
