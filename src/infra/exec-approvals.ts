@@ -360,11 +360,14 @@ function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS
   }
   const envPath = env?.PATH ?? process.env.PATH ?? "";
   const entries = envPath.split(path.delimiter).filter(Boolean);
+  const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
   const extensions =
     process.platform === "win32"
-      ? (env?.PATHEXT ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-          .split(";")
-          .map((ext) => ext.toLowerCase())
+      ? hasExtension
+        ? [""]
+        : (env?.PATHEXT ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+            .split(";")
+            .map((ext) => ext.toLowerCase())
       : [""];
   for (const entry of entries) {
     for (const ext of extensions) {
@@ -403,6 +406,14 @@ function normalizeMatchTarget(value: string): string {
   return value.replace(/\\\\/g, "/").toLowerCase();
 }
 
+function tryRealpath(value: string): string | null {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return null;
+  }
+}
+
 function globToRegExp(pattern: string): RegExp {
   let regex = "^";
   let i = 0;
@@ -435,8 +446,15 @@ function matchesPattern(pattern: string, target: string): boolean {
   const trimmed = pattern.trim();
   if (!trimmed) return false;
   const expanded = trimmed.startsWith("~") ? expandHome(trimmed) : trimmed;
-  const normalizedPattern = normalizeMatchTarget(expanded);
-  const normalizedTarget = normalizeMatchTarget(target);
+  const hasWildcard = /[*?]/.test(expanded);
+  let normalizedPattern = expanded;
+  let normalizedTarget = target;
+  if (process.platform === "win32" && !hasWildcard) {
+    normalizedPattern = tryRealpath(expanded) ?? expanded;
+    normalizedTarget = tryRealpath(target) ?? target;
+  }
+  normalizedPattern = normalizeMatchTarget(normalizedPattern);
+  normalizedTarget = normalizeMatchTarget(normalizedTarget);
   const regex = globToRegExp(normalizedPattern);
   return regex.test(normalizedTarget);
 }
