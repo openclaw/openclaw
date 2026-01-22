@@ -6,6 +6,7 @@ import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import {
   formatAssistantErrorText,
+  formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   normalizeTextForComparison,
@@ -64,6 +65,12 @@ export function buildEmbeddedRunPayloads(params: {
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
     : null;
+  const formattedRawErrorMessage = rawErrorMessage
+    ? formatRawAssistantErrorForUi(rawErrorMessage)
+    : null;
+  const normalizedFormattedRawErrorMessage = formattedRawErrorMessage
+    ? normalizeTextForComparison(formattedRawErrorMessage)
+    : null;
   const normalizedRawErrorText = rawErrorMessage
     ? normalizeTextForComparison(rawErrorMessage)
     : null;
@@ -116,9 +123,14 @@ export function buildEmbeddedRunPayloads(params: {
       if (trimmed === genericErrorText) return true;
     }
     if (rawErrorMessage && trimmed === rawErrorMessage) return true;
+    if (formattedRawErrorMessage && trimmed === formattedRawErrorMessage) return true;
     if (normalizedRawErrorText) {
       const normalized = normalizeTextForComparison(trimmed);
       if (normalized && normalized === normalizedRawErrorText) return true;
+    }
+    if (normalizedFormattedRawErrorMessage) {
+      const normalized = normalizeTextForComparison(trimmed);
+      if (normalized && normalized === normalizedFormattedRawErrorMessage) return true;
     }
     if (rawErrorFingerprint) {
       const fingerprint = getApiErrorPayloadFingerprint(trimmed);

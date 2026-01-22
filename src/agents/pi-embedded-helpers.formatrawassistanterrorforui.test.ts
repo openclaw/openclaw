@@ -17,4 +17,10 @@ describe("formatRawAssistantErrorForUi", () => {
   it("renders a generic unknown error message when raw is empty", () => {
     expect(formatRawAssistantErrorForUi("")).toContain("unknown error");
   });
+
+  it("formats plain HTTP status lines", () => {
+    expect(formatRawAssistantErrorForUi("500 Internal Server Error")).toBe(
+      "HTTP 500: Internal Server Error",
+    );
+  });
 });

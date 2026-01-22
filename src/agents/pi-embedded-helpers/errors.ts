@@ -201,6 +201,14 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) return "LLM request failed with an unknown error.";
 
+  const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
+  if (httpMatch) {
+    const rest = httpMatch[2].trim();
+    if (!rest.startsWith("{")) {
+      return `HTTP ${httpMatch[1]}: ${rest}`;
+    }
+  }
+
   const info = parseApiErrorInfo(trimmed);
   if (info?.message) {
     const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
@@ -261,8 +269,8 @@ export function formatAssistantErrorText(
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
 
-  if (isRawApiErrorPayload(raw)) {
-    return "The AI service returned an error. Please try again.";
+  if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message
@@ -293,7 +301,7 @@ export function sanitizeUserFacingText(text: string): string {
   }
 
   if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-    return "The AI service returned an error. Please try again.";
+    return formatRawAssistantErrorForUi(trimmed);
   }
 
   if (ERROR_PREFIX_RE.test(trimmed)) {
@@ -303,7 +311,7 @@ export function sanitizeUserFacingText(text: string): string {
     if (isTimeoutErrorMessage(trimmed)) {
       return "LLM request timed out.";
     }
-    return "The AI service returned an error. Please try again.";
+    return formatRawAssistantErrorForUi(trimmed);
   }
 
   return stripped;
