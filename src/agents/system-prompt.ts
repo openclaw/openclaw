@@ -517,10 +517,14 @@ export function buildAgentSystemPrompt(params: {
 
   const contextFiles = params.contextFiles ?? [];
   if (contextFiles.length > 0) {
+    const hasSoulFile = contextFiles.some((file) => file.path.trim().toLowerCase() === "soul.md");
     lines.push(
       "# Project Context",
       "",
       "The following project context files have been loaded:",
+      hasSoulFile
+        ? "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it."
+        : "",
       "",
     );
     for (const file of contextFiles) {
