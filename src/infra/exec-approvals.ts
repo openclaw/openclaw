@@ -465,6 +465,21 @@ function matchesPattern(pattern: string, target: string): boolean {
   return regex.test(normalizedTarget);
 }
 
+function resolveAllowlistCandidatePath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  if (!resolution) return undefined;
+  if (resolution.resolvedPath) return resolution.resolvedPath;
+  const raw = resolution.rawExecutable?.trim();
+  if (!raw) return undefined;
+  const expanded = raw.startsWith("~") ? expandHome(raw) : raw;
+  if (!expanded.includes("/") && !expanded.includes("\\")) return undefined;
+  if (path.isAbsolute(expanded)) return expanded;
+  const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
+  return path.resolve(base, expanded);
+}
+
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: CommandResolution | null,
@@ -770,7 +785,12 @@ export function evaluateExecAllowlist(params: {
   }
   const allowSkills = params.autoAllowSkills === true && (params.skillBins?.size ?? 0) > 0;
   const allowlistSatisfied = params.analysis.segments.every((segment) => {
-    const match = matchAllowlist(params.allowlist, segment.resolution);
+    const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
+    const candidateResolution =
+      candidatePath && segment.resolution
+        ? { ...segment.resolution, resolvedPath: candidatePath }
+        : segment.resolution;
+    const match = matchAllowlist(params.allowlist, candidateResolution);
     if (match) allowlistMatches.push(match);
     const safe = isSafeBinUsage({
       argv: segment.argv,
