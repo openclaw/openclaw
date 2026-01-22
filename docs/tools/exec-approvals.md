@@ -134,6 +134,10 @@ When a prompt is required, the gateway broadcasts `exec.approval.requested` to o
 The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
 
+When approvals are required, the exec tool returns immediately with an approval id. Use that id to
+correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
+timeout, the request is treated as an approval timeout and surfaced as a denial reason.
+
 The confirmation dialog includes:
 - command + args
 - cwd
@@ -162,11 +166,13 @@ Security notes:
 ## System events
 
 Exec lifecycle is surfaced as system messages:
-- `exec.started`
-- `exec.finished`
-- `exec.denied`
+- `Exec running` (only if the command exceeds the running notice threshold)
+- `Exec finished`
+- `Exec denied`
 
 These are posted to the agent’s session after the node reports the event.
+Gateway-host exec approvals emit the same lifecycle events when the command finishes (and optionally when running longer than the threshold).
+Approval-gated execs reuse the approval id as the `runId` in these messages for easy correlation.
 
 ## Implications
 

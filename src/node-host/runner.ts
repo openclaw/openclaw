@@ -57,6 +57,7 @@ type SystemRunParams = {
   sessionKey?: string | null;
   approved?: boolean | null;
   approvalDecision?: string | null;
+  runId?: string | null;
 };
 
 type SystemWhichParams = {
@@ -583,7 +584,7 @@ async function handleInvoke(
   const ask = approvals.agent.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const sessionKey = params.sessionKey?.trim() || "node";
-  const runId = crypto.randomUUID();
+  const runId = params.runId?.trim() || crypto.randomUUID();
   const env = sanitizeEnv(params.env ?? undefined);
   const analysis = rawCommand
     ? analyzeShellCommand({ command: rawCommand, cwd: params.cwd ?? undefined, env })
@@ -802,17 +803,6 @@ async function handleInvoke(
     });
     return;
   }
-
-  await sendNodeEvent(
-    client,
-    "exec.started",
-    buildExecEventPayload({
-      sessionKey,
-      runId,
-      host: "node",
-      command: cmdText,
-    }),
-  );
 
   const result = await runCommand(
     argv,

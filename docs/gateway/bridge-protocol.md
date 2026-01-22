@@ -58,8 +58,8 @@ Exact allowlist is enforced in `src/gateway/server-bridge.ts`.
 
 ## Exec lifecycle events
 
-Nodes can emit `exec.started`, `exec.finished`, or `exec.denied` events to surface
-system.run activity. These are mapped to system events in the gateway.
+Nodes can emit `exec.finished` or `exec.denied` events to surface system.run activity.
+These are mapped to system events in the gateway. (Legacy nodes may still emit `exec.started`.)
 
 Payload fields (all optional unless noted):
 - `sessionKey` (required): agent session to receive the system event.
