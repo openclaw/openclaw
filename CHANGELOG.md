@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 - Auto-reply: only report a model switch when session state is available. (#1465) Thanks @robbyczgw-cla.
 - Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.
 - Agents: surface concrete API error details instead of generic AI service errors.
+- Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
 
 ## 2026.1.21-2
 
