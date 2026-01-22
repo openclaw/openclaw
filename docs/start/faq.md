@@ -728,7 +728,7 @@ Nodes don’t see inbound provider traffic; they only receive node RPC calls.
 ### How can my agent access my computer if the Gateway is hosted remotely?
 
 Short answer: **pair your computer as a node**. The Gateway runs elsewhere, but it can
-call `node.*` tools (screen, camera, system) on your local machine over the Bridge.
+call `node.*` tools (screen, camera, system) on your local machine over the Gateway WebSocket.
 
 Typical setup:
 1) Run the Gateway on the always‑on host (VPS/home server).
