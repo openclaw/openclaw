@@ -4,6 +4,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
@@ -84,6 +86,35 @@ export function resolveExecApprovalsSocketPath(): string {
   return expandHome(DEFAULT_SOCKET);
 }
 
+function normalizeAllowlistPattern(value: string | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed.toLowerCase() : null;
+}
+
+function mergeLegacyAgent(
+  current: ExecApprovalsAgent,
+  legacy: ExecApprovalsAgent,
+): ExecApprovalsAgent {
+  const allowlist: ExecAllowlistEntry[] = [];
+  const seen = new Set<string>();
+  const pushEntry = (entry: ExecAllowlistEntry) => {
+    const key = normalizeAllowlistPattern(entry.pattern);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    allowlist.push(entry);
+  };
+  for (const entry of current.allowlist ?? []) pushEntry(entry);
+  for (const entry of legacy.allowlist ?? []) pushEntry(entry);
+
+  return {
+    security: current.security ?? legacy.security,
+    ask: current.ask ?? legacy.ask,
+    askFallback: current.askFallback ?? legacy.askFallback,
+    autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
+    allowlist: allowlist.length > 0 ? allowlist : undefined,
+  };
+}
+
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
@@ -92,6 +123,13 @@ function ensureDir(filePath: string) {
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
+  const agents = { ...file.agents };
+  const legacyDefault = agents.default;
+  if (legacyDefault) {
+    const main = agents[DEFAULT_AGENT_ID];
+    agents[DEFAULT_AGENT_ID] = main ? mergeLegacyAgent(main, legacyDefault) : legacyDefault;
+    delete agents.default;
+  }
   const normalized: ExecApprovalsFile = {
     version: 1,
     socket: {
@@ -104,7 +142,7 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       askFallback: file.defaults?.askFallback,
       autoAllowSkills: file.defaults?.autoAllowSkills,
     },
-    agents: file.agents ?? {},
+    agents,
   };
   return normalized;
 }
@@ -231,7 +269,7 @@ export function resolveExecApprovalsFromFile(params: {
 }): ExecApprovalsResolved {
   const file = normalizeExecApprovals(params.file);
   const defaults = file.defaults ?? {};
-  const agentKey = params.agentId ?? "default";
+  const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
   const fallbackSecurity = params.overrides?.security ?? DEFAULT_SECURITY;

@@ -18,6 +18,7 @@ Docs: https://docs.clawd.bot
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
 - Cron: cap reminder context history to 10 messages and honor `contextMessages`. (#1103) Thanks @mkbehr.
+- Exec approvals: treat main as the default agent + migrate legacy default allowlists. (#1417) Thanks @czekaj.
 - UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
 
 ## 2026.1.21
