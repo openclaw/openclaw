@@ -117,6 +117,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [My skill generated an image/PDF, but nothing was sent](#my-skill-generated-an-imagepdf-but-nothing-was-sent)
 - [Security and access control](#security-and-access-control)
   - [Is it safe to expose Clawdbot to inbound DMs?](#is-it-safe-to-expose-clawdbot-to-inbound-dms)
+  - [Is prompt injection only a concern for public bots?](#is-prompt-injection-only-a-concern-for-public-bots)
+  - [Can I use cheaper models for personal assistant tasks?](#can-i-use-cheaper-models-for-personal-assistant-tasks)
   - [I ran `/start` in Telegram but didn’t get a pairing code](#i-ran-start-in-telegram-but-didnt-get-a-pairing-code)
   - [WhatsApp: will it message my contacts? How does pairing work?](#whatsapp-will-it-message-my-contacts-how-does-pairing-work)
 - [Chat commands, aborting tasks, and “it won’t stop”](#chat-commands-aborting-tasks-and-it-wont-stop)
@@ -1538,6 +1540,28 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 - Opening DMs publicly requires explicit opt‑in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `clawdbot doctor` to surface risky DM policies.
+
+### Is prompt injection only a concern for public bots?
+
+No. Prompt injection is about **untrusted content**, not just who can DM the bot.
+If your assistant reads external content (web search/fetch, browser pages, emails,
+docs, attachments, pasted logs), that content can include instructions that try
+to hijack the model. This can happen even if **you are the only sender**.
+
+The biggest risk is when tools are enabled: the model can be tricked into
+exfiltrating context or calling tools on your behalf. Reduce the blast radius by:
+- using a read-only or tool-disabled "reader" agent to summarize untrusted content
+- keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents
+- sandboxing and strict tool allowlists
+
+Details: [Security](/gateway/security).
+
+### Can I use cheaper models for personal assistant tasks?
+
+Yes, **if** the agent is chat-only and the input is trusted. Smaller tiers are
+more susceptible to instruction hijacking, so avoid them for tool-enabled agents
+or when reading untrusted content. If you must use a smaller model, lock down
+tools and run inside a sandbox. See [Security](/gateway/security).
 
 ### I ran `/start` in Telegram but didn’t get a pairing code
 

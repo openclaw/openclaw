@@ -178,6 +178,20 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
 - **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 
+### Prompt injection does not require public DMs
+
+Even if **only you** can message the bot, prompt injection can still happen via
+any **untrusted content** the bot reads (web search/fetch results, browser pages,
+emails, docs, attachments, pasted logs/code). In other words: the sender is not
+the only threat surface; the **content itself** can carry adversarial instructions.
+
+When tools are enabled, the typical risk is exfiltrating context or triggering
+tool calls. Reduce the blast radius by:
+- Using a read-only or tool-disabled **reader agent** to summarize untrusted content,
+  then pass the summary to your main agent.
+- Keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
+- Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
+
 ### Model strength (security note)
 
 Prompt injection resistance is **not** uniform across model tiers. Smaller/cheaper models are generally more susceptible to tool misuse and instruction hijacking, especially under adversarial prompts.
@@ -187,6 +201,7 @@ Recommendations:
 - **Avoid weaker tiers** (for example, Sonnet or Haiku) for tool-enabled agents or untrusted inboxes.
 - If you must use a smaller model, **reduce blast radius** (read-only tools, strong sandboxing, minimal filesystem access, strict allowlists).
 - When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
+ - For chat-only personal assistants with trusted input and no tools, smaller models are usually fine.
 
 ## Reasoning & verbose output in groups
 
