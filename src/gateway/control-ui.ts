@@ -98,7 +98,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function buildAvatarUrl(basePath: string, agentId: string): string {
+export function buildAvatarUrl(basePath: string, agentId: string): string {
   return basePath ? `${basePath}${AVATAR_PREFIX}/${agentId}` : `${AVATAR_PREFIX}/${agentId}`;
 }
 
@@ -206,10 +206,32 @@ interface ServeIndexHtmlOpts {
   agentId?: string;
 }
 
-function looksLikeLocalAvatarPath(value: string | undefined): boolean {
-  if (!value) return false;
-  if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value)) return false;
+function looksLikeLocalAvatarPath(value: string): boolean {
+  if (/[\\/]/.test(value)) return true;
   return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(value);
+}
+
+export function resolveAssistantAvatarUrl(params: {
+  avatar?: string | null;
+  agentId?: string | null;
+  basePath?: string;
+}): string | undefined {
+  const avatar = params.avatar?.trim();
+  if (!avatar) return undefined;
+  if (/^https?:\/\//i.test(avatar) || /^data:image\//i.test(avatar)) return avatar;
+
+  const basePath = normalizeControlUiBasePath(params.basePath);
+  const baseAvatarPrefix = basePath ? `${basePath}${AVATAR_PREFIX}/` : `${AVATAR_PREFIX}/`;
+  if (basePath && avatar.startsWith(`${AVATAR_PREFIX}/`)) {
+    return `${basePath}${avatar}`;
+  }
+  if (avatar.startsWith(baseAvatarPrefix)) return avatar;
+
+  if (!params.agentId) return avatar;
+  if (looksLikeLocalAvatarPath(avatar)) {
+    return buildAvatarUrl(basePath, params.agentId);
+  }
+  return avatar;
 }
 
 function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndexHtmlOpts) {
@@ -217,11 +239,16 @@ function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndex
   const identity = config
     ? resolveAssistantIdentity({ cfg: config, agentId })
     : DEFAULT_ASSISTANT_IDENTITY;
-  // Resolve local file avatars to /avatar/{agentId} URL
-  let avatarValue = identity.avatar;
-  if (looksLikeLocalAvatarPath(avatarValue) && identity.agentId) {
-    avatarValue = buildAvatarUrl(basePath, identity.agentId);
-  }
+  const resolvedAgentId =
+    typeof (identity as { agentId?: string }).agentId === "string"
+      ? (identity as { agentId?: string }).agentId
+      : agentId;
+  const avatarValue =
+    resolveAssistantAvatarUrl({
+      avatar: identity.avatar,
+      agentId: resolvedAgentId,
+      basePath,
+    }) ?? identity.avatar;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   const raw = fs.readFileSync(indexPath, "utf8");
