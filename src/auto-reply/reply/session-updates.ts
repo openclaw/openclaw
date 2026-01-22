@@ -240,7 +240,14 @@ export async function incrementCompactionCount(params: {
   /** Token count after compaction - if provided, updates session token counts */
   tokensAfter?: number;
 }): Promise<number | undefined> {
-  const { sessionEntry, sessionStore, sessionKey, storePath, now = Date.now(), tokensAfter } = params;
+  const {
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    now = Date.now(),
+    tokensAfter,
+  } = params;
   if (!sessionStore || !sessionKey) return undefined;
   const entry = sessionStore[sessionKey] ?? sessionEntry;
   if (!entry) return undefined;

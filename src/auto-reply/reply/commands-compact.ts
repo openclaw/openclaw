@@ -104,7 +104,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens = tokensAfterCompaction ??
+  const totalTokens =
+    tokensAfterCompaction ??
     params.sessionEntry.totalTokens ??
     (params.sessionEntry.inputTokens ?? 0) + (params.sessionEntry.outputTokens ?? 0);
   const contextSummary = formatContextUsageShort(
