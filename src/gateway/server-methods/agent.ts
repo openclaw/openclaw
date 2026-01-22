@@ -407,7 +407,18 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const cfg = loadConfig();
     const identity = resolveAssistantIdentity({ cfg, agentId });
-    respond(true, identity, undefined);
+    // Resolve local file avatars to /avatar/{agentId} URL
+    let avatarValue = identity.avatar;
+    if (
+      avatarValue &&
+      !/^https?:\/\//i.test(avatarValue) &&
+      !/^data:image\//i.test(avatarValue) &&
+      /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(avatarValue) &&
+      identity.agentId
+    ) {
+      avatarValue = `/avatar/${identity.agentId}`;
+    }
+    respond(true, { ...identity, avatar: avatarValue }, undefined);
   },
   "agent.wait": async ({ params, respond }) => {
     if (!validateAgentWaitParams(params)) {
