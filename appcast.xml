@@ -3,13 +3,13 @@
     <channel>
         <title>Clawdbot</title>
         <item>
-            <title>2026.1.20</title>
+            <title>2026.1.21</title>
             <pubDate>Wed, 21 Jan 2026 08:18:22 +0000</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
             <sparkle:version>7116</sparkle:version>
-            <sparkle:shortVersionString>2026.1.20</sparkle:shortVersionString>
+            <sparkle:shortVersionString>2026.1.21</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.20</h2>
+            <description><![CDATA[<h2>Clawdbot 2026.1.21</h2>
 <h3>Changes</h3>
 <ul>
 <li>Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.clawd.bot/web/control-ui</li>
@@ -190,7 +190,7 @@
 Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @NicholaiVogel, @RyanLisse, @ThePickle31, @VACInc, @Whoaa512, @YuriNachos, @aaronveklabs, @abdaraxus, @alauppe, @ameno-, @artuskg, @austinm911, @bradleypriest, @cheeeee, @dougvk, @fogboots, @gnarco, @gumadeiras, @jdrhyne, @joelklabo, @longmaba, @mukhtharcm, @odysseus0, @oscargavin, @rhjoh, @sebslight, @sibbl, @sleontenko, @steipete, @suminhthanh, @thewilloftheshadow, @tyler6204, @vignesh07, @visionik, @ysqander, @zerone0x.
 <p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.20/Clawdbot-2026.1.20.zip" length="12208102" type="application/octet-stream" sparkle:edSignature="hU495Eii8O3qmmUnxYFhXyEGv+qan6KL+GpeuBhPIXf+7B5F/gBh5Oz9cHaqaAPoZ4/3Bo6xgvic0HTkbz6gDw=="/>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.21/Clawdbot-2026.1.21.zip" length="12208102" type="application/octet-stream" sparkle:edSignature="hU495Eii8O3qmmUnxYFhXyEGv+qan6KL+GpeuBhPIXf+7B5F/gBh5Oz9cHaqaAPoZ4/3Bo6xgvic0HTkbz6gDw=="/>
         </item>
         <item>
             <title>2026.1.16-2</title>

@@ -96,7 +96,7 @@ describe("runGatewayUpdate", () => {
       JSON.stringify({ name: "clawdbot", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
       "utf-8",
     );
-    const stableTag = "v2026.1.20-1";
+    const stableTag = "v2026.1.21-1";
     const betaTag = "v2026.1.19-beta.2";
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
