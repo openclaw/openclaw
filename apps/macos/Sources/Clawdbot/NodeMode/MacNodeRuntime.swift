@@ -480,13 +480,13 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DISABLED: security=deny")
         }
 
-        let requiresAsk: Bool = {
-            if ask == .always { return true }
-            if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow { return true }
-            return false
-        }()
+        let requiresAsk = ExecApprovalHelpers.requiresAsk(
+            ask: ask,
+            security: security,
+            allowlistMatch: allowlistMatch,
+            skillAllow: skillAllow)
 
-        let decisionFromParams = Self.parseApprovalDecision(params.approvalDecision)
+        let decisionFromParams = ExecApprovalHelpers.parseDecision(params.approvalDecision)
         var approvedByAsk = params.approved == true || decisionFromParams != nil
         var persistAllowlist = decisionFromParams == .allowAlways
         if decisionFromParams == .deny {
@@ -536,14 +536,10 @@ actor MacNodeRuntime {
                 approvedByAsk = true
             }
         }
-        if persistAllowlist, security == .allowlist {
-            let pattern = resolution?.resolvedPath
-                ?? resolution?.rawExecutable
-                ?? command.first
-                ?? ""
-            if !pattern.isEmpty {
-                ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
-            }
+        if persistAllowlist, security == .allowlist,
+           let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
+        {
+            ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
         }
 
         if security == .allowlist, allowlistMatch == nil, !skillAllow, !approvedByAsk {
@@ -805,12 +801,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    private static func parseApprovalDecision(_ raw: String?) -> ExecApprovalDecision? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return ExecApprovalDecision(rawValue: trimmed)
     }
 
     private static let blockedEnvKeys: Set<String> = [
