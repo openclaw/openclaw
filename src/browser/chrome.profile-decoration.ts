@@ -180,3 +180,11 @@ export function decorateClawdProfile(
     // ignore
   }
 }
+
+export function ensureProfileCleanExit(userDataDir: string) {
+  const preferencesPath = path.join(userDataDir, "Default", "Preferences");
+  const prefs = safeReadJson(preferencesPath) ?? {};
+  setDeep(prefs, ["exit_type"], "Normal");
+  setDeep(prefs, ["exited_cleanly"], true);
+  safeWriteJson(preferencesPath, prefs);
+}

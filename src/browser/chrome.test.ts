@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   decorateClawdProfile,
+  ensureProfileCleanExit,
   findChromeExecutableMac,
   findChromeExecutableWindows,
   isChromeReachable,
@@ -98,6 +99,18 @@ describe("browser chrome profile decoration", () => {
 
       const prefs = await readJson(path.join(userDataDir, "Default", "Preferences"));
       expect(typeof prefs.profile).toBe("object");
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes clean exit prefs to avoid restore prompts", async () => {
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "clawdbot-chrome-test-"));
+    try {
+      ensureProfileCleanExit(userDataDir);
+      const prefs = await readJson(path.join(userDataDir, "Default", "Preferences"));
+      expect(prefs.exit_type).toBe("Normal");
+      expect(prefs.exited_cleanly).toBe(true);
     } finally {
       await fsp.rm(userDataDir, { recursive: true, force: true });
     }

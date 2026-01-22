@@ -13,7 +13,11 @@ import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
-import { decorateClawdProfile, isProfileDecorated } from "./chrome.profile-decoration.js";
+import {
+  decorateClawdProfile,
+  ensureProfileCleanExit,
+  isProfileDecorated,
+} from "./chrome.profile-decoration.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { DEFAULT_CLAWD_BROWSER_COLOR, DEFAULT_CLAWD_BROWSER_PROFILE_NAME } from "./constants.js";
 
@@ -26,7 +30,11 @@ export {
   findChromeExecutableWindows,
   resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
-export { decorateClawdProfile, isProfileDecorated } from "./chrome.profile-decoration.js";
+export {
+  decorateClawdProfile,
+  ensureProfileCleanExit,
+  isProfileDecorated,
+} from "./chrome.profile-decoration.js";
 
 function exists(filePath: string) {
   try {
@@ -178,6 +186,8 @@ export async function launchClawdChrome(
       "--disable-background-networking",
       "--disable-component-update",
       "--disable-features=Translate,MediaRouter",
+      "--disable-session-crashed-bubble",
+      "--hide-crash-restore-bubble",
       "--password-store=basic",
     ];
 
@@ -244,6 +254,12 @@ export async function launchClawdChrome(
     } catch (err) {
       log.warn(`clawd browser profile decoration failed: ${String(err)}`);
     }
+  }
+
+  try {
+    ensureProfileCleanExit(userDataDir);
+  } catch (err) {
+    log.warn(`clawd browser clean-exit prefs failed: ${String(err)}`);
   }
 
   const proc = spawnOnce();
