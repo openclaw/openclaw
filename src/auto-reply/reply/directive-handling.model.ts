@@ -341,16 +341,41 @@ export function resolveModelSelectionFromDirective(params: {
 
     if (resolved.selection) {
       const suggestion = `${resolved.selection.provider}/${resolved.selection.model}`;
-      return {
-        errorText: [
-          `Unrecognized model: ${raw}`,
-          "",
-          `Did you mean: ${suggestion}`,
-          `Try: /model ${suggestion}`,
-          "",
-          "Browse: /models or /models <provider>",
-        ].join("\n"),
-      };
+      const rawHasSlash = raw.includes("/");
+      const shouldAutoSelect = (() => {
+        if (!rawHasSlash) return true;
+        const slash = raw.indexOf("/");
+        if (slash <= 0) return true;
+        const rawProvider = normalizeProviderId(raw.slice(0, slash));
+        const rawFragment = raw
+          .slice(slash + 1)
+          .trim()
+          .toLowerCase();
+        if (!rawFragment) return false;
+        const resolvedProvider = normalizeProviderId(resolved.selection.provider);
+        if (rawProvider !== resolvedProvider) return false;
+        const resolvedModel = resolved.selection.model.toLowerCase();
+        return (
+          resolvedModel.startsWith(rawFragment) ||
+          resolvedModel.includes(rawFragment) ||
+          rawFragment.startsWith(resolvedModel)
+        );
+      })();
+
+      if (shouldAutoSelect) {
+        modelSelection = resolved.selection;
+      } else {
+        return {
+          errorText: [
+            `Unrecognized model: ${raw}`,
+            "",
+            `Did you mean: ${suggestion}`,
+            `Try: /model ${suggestion}`,
+            "",
+            "Browse: /models or /models <provider>",
+          ].join("\n"),
+        };
+      }
     }
   }
 
