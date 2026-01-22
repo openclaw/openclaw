@@ -29,6 +29,8 @@ vi.mock("../auto-reply/reply.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendMessageSignal: (...args: unknown[]) => sendMock(...args),
+  sendTypingSignal: vi.fn().mockResolvedValue(true),
+  sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
