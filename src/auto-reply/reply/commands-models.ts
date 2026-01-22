@@ -7,6 +7,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -68,10 +69,11 @@ function parseModelsArgs(raw: string): {
   };
 }
 
-export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
-
-  const body = params.command.commandBodyNormalized.trim();
+export async function resolveModelsCommandReply(params: {
+  cfg: ClawdbotConfig;
+  commandBodyNormalized: string;
+}): Promise<ReplyPayload | null> {
+  const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) return null;
 
   const argText = body.replace(/^\/models\b/i, "").trim();
@@ -164,7 +166,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
       "Use: /models <provider>",
       "Switch: /model <provider/model>",
     ];
-    return { reply: { text: lines.join("\n") }, shouldContinue: false };
+    return { text: lines.join("\n") };
   }
 
   if (!byProvider.has(provider)) {
@@ -176,7 +178,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
       "",
       "Use: /models <provider>",
     ];
-    return { reply: { text: lines.join("\n") }, shouldContinue: false };
+    return { text: lines.join("\n") };
   }
 
   const models = [...(byProvider.get(provider) ?? new Set<string>())].sort();
@@ -189,7 +191,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
       "Browse: /models",
       "Switch: /model <provider/model>",
     ];
-    return { reply: { text: lines.join("\n") }, shouldContinue: false };
+    return { text: lines.join("\n") };
   }
 
   const effectivePageSize = all ? total : pageSize;
@@ -203,7 +205,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
       `Try: /models ${provider} ${safePage}`,
       `All: /models ${provider} all`,
     ];
-    return { reply: { text: lines.join("\n") }, shouldContinue: false };
+    return { text: lines.join("\n") };
   }
 
   const startIndex = (safePage - 1) * effectivePageSize;
@@ -226,5 +228,16 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   }
 
   const payload: ReplyPayload = { text: lines.join("\n") };
-  return { reply: payload, shouldContinue: false };
+  return payload;
+}
+
+export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) return null;
+
+  const reply = await resolveModelsCommandReply({
+    cfg: params.cfg,
+    commandBodyNormalized: params.command.commandBodyNormalized,
+  });
+  if (!reply) return null;
+  return { reply, shouldContinue: false };
 };

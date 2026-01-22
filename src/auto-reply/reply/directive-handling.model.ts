@@ -20,6 +20,7 @@ import {
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import { resolveModelsCommandReply } from "./commands-models.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
 function buildModelPickerCatalog(params: {
@@ -185,14 +186,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
   });
 
   if (wantsLegacyList) {
-    return {
-      text: [
-        "Model listing moved.",
-        "",
-        "Use: /models (providers) or /models <provider> (models)",
-        "Switch: /model <provider/model>",
-      ].join("\n"),
-    };
+    const reply = await resolveModelsCommandReply({
+      cfg: params.cfg,
+      commandBodyNormalized: "/models",
+    });
+    return reply ?? { text: "No models available." };
   }
 
   if (wantsSummary) {
@@ -340,42 +338,7 @@ export function resolveModelSelectionFromDirective(params: {
     }
 
     if (resolved.selection) {
-      const suggestion = `${resolved.selection.provider}/${resolved.selection.model}`;
-      const rawHasSlash = raw.includes("/");
-      const shouldAutoSelect = (() => {
-        if (!rawHasSlash) return true;
-        const slash = raw.indexOf("/");
-        if (slash <= 0) return true;
-        const rawProvider = normalizeProviderId(raw.slice(0, slash));
-        const rawFragment = raw
-          .slice(slash + 1)
-          .trim()
-          .toLowerCase();
-        if (!rawFragment) return false;
-        const resolvedProvider = normalizeProviderId(resolved.selection.provider);
-        if (rawProvider !== resolvedProvider) return false;
-        const resolvedModel = resolved.selection.model.toLowerCase();
-        return (
-          resolvedModel.startsWith(rawFragment) ||
-          resolvedModel.includes(rawFragment) ||
-          rawFragment.startsWith(resolvedModel)
-        );
-      })();
-
-      if (shouldAutoSelect) {
-        modelSelection = resolved.selection;
-      } else {
-        return {
-          errorText: [
-            `Unrecognized model: ${raw}`,
-            "",
-            `Did you mean: ${suggestion}`,
-            `Try: /model ${suggestion}`,
-            "",
-            "Browse: /models or /models <provider>",
-          ].join("\n"),
-        };
-      }
+      modelSelection = resolved.selection;
     }
   }
 

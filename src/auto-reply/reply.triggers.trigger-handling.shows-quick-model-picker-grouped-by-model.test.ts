@@ -123,7 +123,7 @@ describe("trigger handling", () => {
       expect(normalized).not.toContain("image");
     });
   });
-  it("moves /model list to /models", async () => {
+  it("aliases /model list to /models", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
       const res = await getReplyFromConfig(
@@ -143,8 +143,8 @@ describe("trigger handling", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       const normalized = normalizeTestText(text ?? "");
-      expect(normalized).toContain("Model listing moved.");
-      expect(normalized).toContain("Use: /models (providers) or /models <provider> (models)");
+      expect(normalized).toContain("Providers:");
+      expect(normalized).toContain("Use: /models <provider>");
       expect(normalized).toContain("Switch: /model <provider/model>");
     });
   });
