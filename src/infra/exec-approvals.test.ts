@@ -253,10 +253,7 @@ describe("exec approvals default agent migration", () => {
     };
     const resolved = resolveExecApprovalsFromFile({ file });
     expect(resolved.agent.ask).toBe("always");
-    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
-      "/bin/main",
-      "/bin/legacy",
-    ]);
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
   });
 });
