@@ -74,12 +74,13 @@ Time format: 12-hour
 If only the timezone is known, we still include the section and instruct the model
 to assume UTC for unknown time references.
 
-## System event lines (UTC)
+## System event lines (local by default)
 
-Queued system events inserted into agent context are prefixed with a UTC timestamp:
+Queued system events inserted into agent context are prefixed with a timestamp using the
+same timezone selection as message envelopes (default: host-local).
 
 ```
-System: [2026-01-12T20:19:17Z] Model switched.
+System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 ### Configure user timezone + format

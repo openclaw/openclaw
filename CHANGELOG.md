@@ -14,7 +14,7 @@ Docs: https://docs.clawd.bot
 - MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.
 
 ### Breaking
-- **BREAKING:** Envelope timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
+- **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
 
 ### Fixes
 - Config: avoid stack traces for invalid configs and log the config path.
