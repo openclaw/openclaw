@@ -155,17 +155,20 @@ Quick diagnosis:
 ```bash
 node -v
 npm -v
-npm bin -g
+npm prefix -g
 echo "$PATH"
 ```
 
-If the output of `npm bin -g` is **not** present inside `echo "$PATH"`, your shell can’t find global npm binaries (including `clawdbot`).
+If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not** present inside `echo "$PATH"`, your shell can’t find global npm binaries (including `clawdbot`).
 
 Fix: add it to your shell startup file (zsh: `~/.zshrc`, bash: `~/.bashrc`):
 
 ```bash
-export PATH="/path/from/npm/bin/-g:$PATH"
+# macOS / Linux
+export PATH="$(npm prefix -g)/bin:$PATH"
 ```
+
+On Windows, add the output of `npm prefix -g` to your PATH.
 
 Then open a new terminal (or `rehash` in zsh / `hash -r` in bash).
 
