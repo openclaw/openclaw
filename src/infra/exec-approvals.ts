@@ -660,7 +660,11 @@ export function isSafeBinUsage(params: {
   if (params.safeBins.size === 0) return false;
   const resolution = params.resolution;
   const execName = resolution?.executableName?.toLowerCase();
-  if (!execName || !params.safeBins.has(execName)) return false;
+  if (!execName) return false;
+  const matchesSafeBin =
+    params.safeBins.has(execName) ||
+    (process.platform === "win32" && params.safeBins.has(path.parse(execName).name));
+  if (!matchesSafeBin) return false;
   if (!resolution?.resolvedPath) return false;
   const cwd = params.cwd ?? process.cwd();
   const exists = params.fileExists ?? defaultFileExists;

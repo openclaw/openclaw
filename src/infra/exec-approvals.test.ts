@@ -72,12 +72,13 @@ describe("exec approvals command resolution", () => {
     const dir = makeTempDir();
     const binDir = path.join(dir, "bin");
     fs.mkdirSync(binDir, { recursive: true });
-    const exe = path.join(binDir, "rg");
+    const exeName = process.platform === "win32" ? "rg.exe" : "rg";
+    const exe = path.join(binDir, exeName);
     fs.writeFileSync(exe, "");
     fs.chmodSync(exe, 0o755);
     const res = resolveCommandResolution("rg -n foo", undefined, { PATH: binDir });
     expect(res?.resolvedPath).toBe(exe);
-    expect(res?.executableName).toBe("rg");
+    expect(res?.executableName).toBe(exeName);
   });
 
   it("resolves relative paths against cwd", () => {
@@ -127,7 +128,8 @@ describe("exec approvals safe bins", () => {
     const dir = makeTempDir();
     const binDir = path.join(dir, "bin");
     fs.mkdirSync(binDir, { recursive: true });
-    const exe = path.join(binDir, "jq");
+    const exeName = process.platform === "win32" ? "jq.exe" : "jq";
+    const exe = path.join(binDir, exeName);
     fs.writeFileSync(exe, "");
     fs.chmodSync(exe, 0o755);
     const res = analyzeShellCommand({
@@ -150,7 +152,8 @@ describe("exec approvals safe bins", () => {
     const dir = makeTempDir();
     const binDir = path.join(dir, "bin");
     fs.mkdirSync(binDir, { recursive: true });
-    const exe = path.join(binDir, "jq");
+    const exeName = process.platform === "win32" ? "jq.exe" : "jq";
+    const exe = path.join(binDir, exeName);
     fs.writeFileSync(exe, "");
     fs.chmodSync(exe, 0o755);
     const file = path.join(dir, "secret.json");
