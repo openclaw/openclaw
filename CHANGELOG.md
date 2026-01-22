@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Highlights
 - Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
 - Custom assistant identity + avatars in the Control UI. https://docs.clawd.bot/cli/agents https://docs.clawd.bot/web/control-ui
+- Cache optimizations: cache-ttl pruning + defaults reduce token spend on cold requests. https://docs.clawd.bot/concepts/session-pruning
 - Exec approvals + elevated ask/full modes. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/elevated
 - Signal typing/read receipts + MSTeams attachments. https://docs.clawd.bot/channels/signal https://docs.clawd.bot/channels/msteams
 - `/models` UX refresh + `clawdbot update wizard`. https://docs.clawd.bot/cli/models https://docs.clawd.bot/cli/update
