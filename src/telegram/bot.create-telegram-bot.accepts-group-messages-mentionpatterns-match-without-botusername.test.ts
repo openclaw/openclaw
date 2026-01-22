@@ -119,7 +119,6 @@ const getOnHandler = (event: string) => {
 };
 
 const ORIGINAL_TZ = process.env.TZ;
-
 describe("createTelegramBot", () => {
   beforeEach(() => {
     process.env.TZ = "UTC";
