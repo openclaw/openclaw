@@ -6,15 +6,20 @@ final class ConnectionModeCoordinator {
     static let shared = ConnectionModeCoordinator()
 
     private let logger = Logger(subsystem: "com.clawdbot", category: "connection")
+    private var lastMode: AppState.ConnectionMode?
 
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
+        if let lastMode = self.lastMode, lastMode != mode {
+            GatewayProcessManager.shared.clearLastFailure()
+            NodesStore.shared.lastError = nil
+        }
+        self.lastMode = mode
         switch mode {
         case .unconfigured:
-            if let error = await NodeServiceManager.stop() {
-                NodesStore.shared.lastError = "Node service stop failed: \(error)"
-            }
+            _ = await NodeServiceManager.stop()
+            NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
             WebChatManager.shared.resetTunnels()
             GatewayProcessManager.shared.stop()
@@ -23,9 +28,8 @@ final class ConnectionModeCoordinator {
             Task.detached { await PortGuardian.shared.sweep(mode: .unconfigured) }
 
         case .local:
-            if let error = await NodeServiceManager.stop() {
-                NodesStore.shared.lastError = "Node service stop failed: \(error)"
-            }
+            _ = await NodeServiceManager.stop()
+            NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
             WebChatManager.shared.resetTunnels()
             let shouldStart = GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused)
@@ -56,6 +60,7 @@ final class ConnectionModeCoordinator {
             WebChatManager.shared.resetTunnels()
 
             do {
+                NodesStore.shared.lastError = nil
                 if let error = await NodeServiceManager.start() {
                     NodesStore.shared.lastError = "Node service start failed: \(error)"
                 }
