@@ -925,6 +925,27 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionsPreviewParams: Codable, Sendable {
+    public let keys: [String]
+    public let limit: Int?
+    public let maxchars: Int?
+
+    public init(
+        keys: [String],
+        limit: Int?,
+        maxchars: Int?
+    ) {
+        self.keys = keys
+        self.limit = limit
+        self.maxchars = maxchars
+    }
+    private enum CodingKeys: String, CodingKey {
+        case keys
+        case limit
+        case maxchars = "maxChars"
+    }
+}
+
 public struct SessionsResolveParams: Codable, Sendable {
     public let key: String?
     public let label: String?
