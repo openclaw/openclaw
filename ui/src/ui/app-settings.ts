@@ -264,6 +264,9 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   if (next === "logs")
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  if (next === "debug")
+    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
+  else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   if (host.connected) void refreshActiveTab(host);
 }
 

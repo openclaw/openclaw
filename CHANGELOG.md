@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
+- UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
 
 ## 2026.1.21
 
