@@ -302,7 +302,7 @@ describe("update-cli", () => {
       });
       vi.mocked(resolveNpmChannelTag).mockResolvedValue({
         tag: "latest",
-        version: "2026.1.21-1",
+        version: "1.2.3-1",
       });
       vi.mocked(runGatewayUpdate).mockResolvedValue({
         status: "ok",
