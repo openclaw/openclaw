@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT_PREFIX = "/";
+const AVATAR_PREFIX = "/avatar";
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -62,6 +63,10 @@ function contentTypeForExt(ext: string): string {
     case ".jpg":
     case ".jpeg":
       return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
     case ".ico":
       return "image/x-icon";
     case ".txt":
@@ -69,6 +74,83 @@ function contentTypeForExt(ext: string): string {
     default:
       return "application/octet-stream";
   }
+}
+
+export type ControlUiAvatarResolution =
+  | { kind: "none"; reason: string }
+  | { kind: "local"; filePath: string }
+  | { kind: "remote"; url: string }
+  | { kind: "data"; url: string };
+
+type ControlUiAvatarMeta = {
+  avatarUrl: string | null;
+};
+
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.end(JSON.stringify(body));
+}
+
+function buildAvatarUrl(basePath: string, agentId: string): string {
+  return basePath ? `${basePath}${AVATAR_PREFIX}/${agentId}` : `${AVATAR_PREFIX}/${agentId}`;
+}
+
+function isValidAgentId(agentId: string): boolean {
+  return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
+}
+
+export function handleControlUiAvatarRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
+): boolean {
+  const urlRaw = req.url;
+  if (!urlRaw) return false;
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+
+  const url = new URL(urlRaw, "http://localhost");
+  const basePath = normalizeControlUiBasePath(opts.basePath);
+  const pathname = url.pathname;
+  const pathWithBase = basePath ? `${basePath}${AVATAR_PREFIX}/` : `${AVATAR_PREFIX}/`;
+  if (!pathname.startsWith(pathWithBase)) return false;
+
+  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
+  const agentId = agentIdParts[0] ?? "";
+  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
+    respondNotFound(res);
+    return true;
+  }
+
+  if (url.searchParams.get("meta") === "1") {
+    const resolved = opts.resolveAvatar(agentId);
+    const avatarUrl =
+      resolved.kind === "local"
+        ? buildAvatarUrl(basePath, agentId)
+        : resolved.kind === "remote" || resolved.kind === "data"
+          ? resolved.url
+          : null;
+    sendJson(res, 200, { avatarUrl } satisfies ControlUiAvatarMeta);
+    return true;
+  }
+
+  const resolved = opts.resolveAvatar(agentId);
+  if (resolved.kind !== "local") {
+    respondNotFound(res);
+    return true;
+  }
+
+  if (req.method === "HEAD") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", contentTypeForExt(path.extname(resolved.filePath).toLowerCase()));
+    res.setHeader("Cache-Control", "no-cache");
+    res.end();
+    return true;
+  }
+
+  serveFile(res, resolved.filePath);
+  return true;
 }
 
 function respondNotFound(res: ServerResponse) {

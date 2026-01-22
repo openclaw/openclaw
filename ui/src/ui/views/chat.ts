@@ -28,6 +28,7 @@ export type ChatProps = {
   toolMessages: unknown[];
   stream: string | null;
   streamStartedAt: number | null;
+  assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
   connected: boolean;
@@ -114,7 +115,7 @@ export function renderChat(props: ChatProps) {
               : nothing}
             ${repeat(buildChatItems(props), (item) => item.key, (item) => {
               if (item.kind === "reading-indicator") {
-                return renderReadingIndicatorGroup();
+                return renderReadingIndicatorGroup(props.assistantAvatarUrl ?? null);
               }
 
               if (item.kind === "stream") {
@@ -122,6 +123,7 @@ export function renderChat(props: ChatProps) {
                   item.text,
                   item.startedAt,
                   props.onOpenSidebar,
+                  props.assistantAvatarUrl ?? null,
                 );
               }
 
@@ -129,6 +131,7 @@ export function renderChat(props: ChatProps) {
                 return renderMessageGroup(item, {
                   onOpenSidebar: props.onOpenSidebar,
                   showReasoning,
+                  assistantAvatarUrl: props.assistantAvatarUrl ?? null,
                 });
               }
 

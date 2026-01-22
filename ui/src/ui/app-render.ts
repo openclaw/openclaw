@@ -28,6 +28,7 @@ import type {
   StatusSummary,
 } from "./types";
 import type { ChatQueueItem, CronFormState } from "./ui-types";
+import { refreshChatAvatar } from "./app-chat";
 import { renderChat } from "./views/chat";
 import { renderConfig } from "./views/config";
 import { renderChannels } from "./views/channels";
@@ -413,6 +414,7 @@ export function renderApp(state: AppViewState) {
                   lastActiveSessionKey: next,
                 });
                 void loadChatHistory(state);
+                void refreshChatAvatar(state);
               },
               thinkingLevel: state.chatThinkingLevel,
               showThinking: state.settings.chatShowThinking,
@@ -422,6 +424,7 @@ export function renderApp(state: AppViewState) {
               toolMessages: state.chatToolMessages,
               stream: state.chatStream,
               streamStartedAt: state.chatStreamStartedAt,
+              assistantAvatarUrl: state.chatAvatarUrl,
               draft: state.chatMessage,
               queue: state.chatQueue,
               connected: state.connected,
@@ -432,7 +435,7 @@ export function renderApp(state: AppViewState) {
               focusMode: state.settings.chatFocusMode,
               onRefresh: () => {
                 state.resetToolStream();
-                return loadChatHistory(state);
+                return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
               },
               onToggleFocusMode: () =>
                 state.applySettings({

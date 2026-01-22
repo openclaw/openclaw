@@ -18,5 +18,6 @@ Related:
 clawdbot agents list
 clawdbot agents add work --workspace ~/clawd-work
 clawdbot agents set-identity --workspace ~/clawd --from-identity
+clawdbot agents set-identity --agent main --avatar avatars/clawd.png
 clawdbot agents delete work
 ```

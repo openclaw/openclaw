@@ -154,6 +154,6 @@ export type IdentityConfig = {
   name?: string;
   theme?: string;
   emoji?: string;
-  /** Path to a custom avatar image (relative to workspace or absolute). */
+  /** Avatar image path (workspace-relative) or a URL/data URL. Local files must live in the workspace. */
   avatar?: string;
 };

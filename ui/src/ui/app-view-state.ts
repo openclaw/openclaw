@@ -48,6 +48,7 @@ export type AppViewState = {
   chatToolMessages: unknown[];
   chatStream: string | null;
   chatRunId: string | null;
+  chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
   nodesLoading: boolean;

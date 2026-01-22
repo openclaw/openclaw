@@ -139,7 +139,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
 
   agents
     .command("set-identity")
-    .description("Update an agent identity (name/theme/emoji)")
+    .description("Update an agent identity (name/theme/emoji/avatar)")
     .option("--agent <id>", "Agent id to update")
     .option("--workspace <dir>", "Workspace directory used to locate the agent + IDENTITY.md")
     .option("--identity-file <path>", "Explicit IDENTITY.md path to read")
@@ -147,6 +147,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--name <name>", "Identity name")
     .option("--theme <theme>", "Identity theme")
     .option("--emoji <emoji>", "Identity emoji")
+    .option("--avatar <path>", "Identity avatar (workspace-relative, URL, or data: URL)")
     .option("--json", "Output JSON summary", false)
     .addHelpText(
       "after",
@@ -174,6 +175,7 @@ ${formatHelpExamples([
             name: opts.name as string | undefined,
             theme: opts.theme as string | undefined,
             emoji: opts.emoji as string | undefined,
+            avatar: opts.avatar as string | undefined,
             json: Boolean(opts.json),
           },
           defaultRuntime,
