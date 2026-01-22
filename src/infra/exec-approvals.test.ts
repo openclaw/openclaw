@@ -17,6 +17,13 @@ import {
   type ExecAllowlistEntry,
 } from "./exec-approvals.js";
 
+function makePathEnv(binDir: string): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") {
+    return { PATH: binDir };
+  }
+  return { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" };
+}
+
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-exec-approvals-"));
 }
@@ -76,7 +83,7 @@ describe("exec approvals command resolution", () => {
     const exe = path.join(binDir, exeName);
     fs.writeFileSync(exe, "");
     fs.chmodSync(exe, 0o755);
-    const res = resolveCommandResolution("rg -n foo", undefined, { PATH: binDir });
+    const res = resolveCommandResolution("rg -n foo", undefined, makePathEnv(binDir));
     expect(res?.resolvedPath).toBe(exe);
     expect(res?.executableName).toBe(exeName);
   });
@@ -135,7 +142,7 @@ describe("exec approvals safe bins", () => {
     const res = analyzeShellCommand({
       command: "jq .foo",
       cwd: dir,
-      env: { PATH: binDir },
+      env: makePathEnv(binDir),
     });
     expect(res.ok).toBe(true);
     const segment = res.segments[0];
@@ -161,7 +168,7 @@ describe("exec approvals safe bins", () => {
     const res = analyzeShellCommand({
       command: "jq .foo secret.json",
       cwd: dir,
-      env: { PATH: binDir },
+      env: makePathEnv(binDir),
     });
     expect(res.ok).toBe(true);
     const segment = res.segments[0];
