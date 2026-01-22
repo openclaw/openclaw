@@ -11,6 +11,7 @@ import {
   evaluateSessionFreshness,
   type GroupKeyResolution,
   loadSessionStore,
+  resolveChannelResetConfig,
   resolveThreadFlag,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -106,6 +107,7 @@ export async function initSessionState(params: {
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
   });
+  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
@@ -129,7 +131,6 @@ export async function initSessionState(params: {
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
-  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
     normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
@@ -195,7 +196,19 @@ export async function initSessionState(params: {
     parentSessionKey: ctx.ParentSessionKey,
   });
   const resetType = resolveSessionResetType({ sessionKey, isGroup, isThread });
-  const resetPolicy = resolveSessionResetPolicy({ sessionCfg, resetType });
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg,
+    channel:
+      groupResolution?.channel ??
+      (ctx.OriginatingChannel as string | undefined) ??
+      ctx.Surface ??
+      ctx.Provider,
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    resetOverride: channelReset,
+  });
   const freshEntry = entry
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;

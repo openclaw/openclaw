@@ -13,6 +13,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
@@ -45,6 +46,84 @@ const FUZZY_VARIANT_TOKENS = [
   "small",
   "nano",
 ];
+
+function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
+  if (a === b) return 0;
+  if (!a || !b) return null;
+  const aLen = a.length;
+  const bLen = b.length;
+  if (Math.abs(aLen - bLen) > maxDistance) return null;
+
+  // Standard DP with early exit. O(maxDistance * minLen) in common cases.
+  const prev = Array.from({ length: bLen + 1 }, (_, idx) => idx);
+  const curr = Array.from({ length: bLen + 1 }, () => 0);
+
+  for (let i = 1; i <= aLen; i++) {
+    curr[0] = i;
+    let rowMin = curr[0];
+
+    const aChar = a.charCodeAt(i - 1);
+    for (let j = 1; j <= bLen; j++) {
+      const cost = aChar === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      if (curr[j] < rowMin) rowMin = curr[j];
+    }
+
+    if (rowMin > maxDistance) return null;
+
+    for (let j = 0; j <= bLen; j++) prev[j] = curr[j] ?? 0;
+  }
+
+  const dist = prev[bLen] ?? null;
+  if (dist == null || dist > maxDistance) return null;
+  return dist;
+}
+
+type StoredModelOverride = {
+  provider?: string;
+  model: string;
+  source: "session" | "parent";
+};
+
+function resolveModelOverrideFromEntry(entry?: SessionEntry): {
+  provider?: string;
+  model: string;
+} | null {
+  const model = entry?.modelOverride?.trim();
+  if (!model) return null;
+  const provider = entry?.providerOverride?.trim() || undefined;
+  return { provider, model };
+}
+
+function resolveParentSessionKeyCandidate(params: {
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): string | null {
+  const explicit = params.parentSessionKey?.trim();
+  if (explicit && explicit !== params.sessionKey) return explicit;
+  const derived = resolveThreadParentSessionKey(params.sessionKey);
+  if (derived && derived !== params.sessionKey) return derived;
+  return null;
+}
+
+function resolveStoredModelOverride(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): StoredModelOverride | null {
+  const direct = resolveModelOverrideFromEntry(params.sessionEntry);
+  if (direct) return { ...direct, source: "session" };
+  const parentKey = resolveParentSessionKeyCandidate({
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.parentSessionKey,
+  });
+  if (!parentKey || !params.sessionStore) return null;
+  const parentEntry = params.sessionStore[parentKey];
+  const parentOverride = resolveModelOverrideFromEntry(parentEntry);
+  if (!parentOverride) return null;
+  return { ...parentOverride, source: "parent" };
+}
 
 function scoreFuzzyMatch(params: {
   provider: string;
@@ -94,6 +173,13 @@ function scoreFuzzyMatch(params: {
     includes: 80,
   });
 
+  // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
+  // Bounded to keep this cheap across large model sets.
+  const distModel = boundedLevenshteinDistance(fragment, modelLower, 3);
+  if (distModel != null) {
+    score += (3 - distModel) * 70;
+  }
+
   const aliases = params.aliasIndex.byKey.get(key) ?? [];
   for (const alias of aliases) {
     score += scoreFragment(alias.toLowerCase(), {
@@ -138,6 +224,7 @@ export async function createModelSelectionState(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  parentSessionKey?: string;
   storePath?: string;
   defaultProvider: string;
   defaultModel: string;
@@ -151,6 +238,7 @@ export async function createModelSelectionState(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    parentSessionKey,
     storePath,
     defaultProvider,
     defaultModel,
@@ -160,7 +248,13 @@ export async function createModelSelectionState(params: {
   let model = params.model;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-  const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
+  const initialStoredOverride = resolveStoredModelOverride({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey,
+  });
+  const hasStoredOverride = Boolean(initialStoredOverride);
   const needsModelCatalog = params.hasModelDirective || hasAllowlist || hasStoredOverride;
 
   let allowedModelKeys = new Set<string>();
@@ -203,14 +297,18 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-  const storedModelOverride = sessionEntry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const candidateProvider = storedProviderOverride || defaultProvider;
-    const key = modelKey(candidateProvider, storedModelOverride);
+  const storedOverride = resolveStoredModelOverride({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey,
+  });
+  if (storedOverride?.model) {
+    const candidateProvider = storedOverride.provider || defaultProvider;
+    const key = modelKey(candidateProvider, storedOverride.model);
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = candidateProvider;
-      model = storedModelOverride;
+      model = storedOverride.model;
     }
   }
 
@@ -293,17 +391,16 @@ export function resolveModelDirectiveSelection(params: {
     const fragment = params.fragment.trim().toLowerCase();
     if (!fragment) return {};
 
+    const providerFilter = params.provider ? normalizeProviderId(params.provider) : undefined;
+
     const candidates: Array<{ provider: string; model: string }> = [];
     for (const key of allowedModelKeys) {
       const slash = key.indexOf("/");
       if (slash <= 0) continue;
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
-      if (params.provider && provider !== normalizeProviderId(params.provider)) continue;
-      const haystack = `${provider}/${model}`.toLowerCase();
-      if (haystack.includes(fragment) || model.toLowerCase().includes(fragment)) {
-        candidates.push({ provider, model });
-      }
+      if (providerFilter && provider !== providerFilter) continue;
+      candidates.push({ provider, model });
     }
 
     // Also allow partial alias matches when the user didn't specify a provider.
@@ -325,11 +422,6 @@ export function resolveModelDirectiveSelection(params: {
       }
     }
 
-    if (candidates.length === 1) {
-      const match = candidates[0];
-      if (!match) return {};
-      return { selection: buildSelection(match.provider, match.model) };
-    }
     if (candidates.length === 0) return {};
 
     const scored = candidates
@@ -354,8 +446,13 @@ export function resolveModelDirectiveSelection(params: {
         return a.key.localeCompare(b.key);
       });
 
-    const best = scored[0]?.candidate;
-    if (!best) return {};
+    const bestScored = scored[0];
+    const best = bestScored?.candidate;
+    if (!best || !bestScored) return {};
+
+    const minScore = providerFilter ? 90 : 120;
+    if (bestScored.score < minScore) return {};
+
     return { selection: buildSelection(best.provider, best.model) };
   };
 
@@ -369,7 +466,7 @@ export function resolveModelDirectiveSelection(params: {
     const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
     if (fuzzy.selection || fuzzy.error) return fuzzy;
     return {
-      error: `Unrecognized model "${rawTrimmed}". Use /model to list available models.`,
+      error: `Unrecognized model "${rawTrimmed}". Use /models to list providers, or /models <provider> to list models.`,
     };
   }
 
@@ -400,7 +497,7 @@ export function resolveModelDirectiveSelection(params: {
   if (fuzzy.selection || fuzzy.error) return fuzzy;
 
   return {
-    error: `Model "${resolved.ref.provider}/${resolved.ref.model}" is not allowed. Use /model to list available models.`,
+    error: `Model "${resolved.ref.provider}/${resolved.ref.model}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
   };
 }
 

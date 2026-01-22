@@ -4,8 +4,6 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
-  downgradeGeminiThinkingBlocks,
-  downgradeGeminiHistory,
   isCompactionFailureError,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
@@ -16,6 +14,8 @@ import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
 import { isAntigravityClaude } from "../pi-embedded-helpers/google.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
+import { normalizeProviderId } from "../model-selection.js";
+import type { ToolCallIdMode } from "../tool-call-id.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
 const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
@@ -46,46 +46,27 @@ const OPENAI_TOOL_CALL_ID_APIS = new Set([
   "openai-responses",
   "openai-codex-responses",
 ]);
+const MISTRAL_MODEL_HINTS = [
+  "mistral",
+  "mixtral",
+  "codestral",
+  "pixtral",
+  "devstral",
+  "ministral",
+  "mistralai",
+];
 
 function shouldSanitizeToolCallIds(modelApi?: string | null): boolean {
   if (!modelApi) return false;
   return isGoogleModelApi(modelApi) || OPENAI_TOOL_CALL_ID_APIS.has(modelApi);
 }
 
-function filterOpenAIReasoningOnlyMessages(
-  messages: AgentMessage[],
-  modelApi?: string | null,
-): AgentMessage[] {
-  if (modelApi !== "openai-responses") return messages;
-  return messages.filter((msg) => {
-    if (!msg || typeof msg !== "object") return true;
-    if ((msg as { role?: unknown }).role !== "assistant") return true;
-    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
-    const content = assistant.content;
-    if (!Array.isArray(content) || content.length === 0) return true;
-    let hasThinking = false;
-    let hasPairedContent = false;
-    for (const block of content) {
-      if (!block || typeof block !== "object") continue;
-      const type = (block as { type?: unknown }).type;
-      if (type === "thinking") {
-        hasThinking = true;
-        continue;
-      }
-      if (type === "toolCall" || type === "toolUse" || type === "functionCall") {
-        hasPairedContent = true;
-        break;
-      }
-      if (type === "text") {
-        const text = (block as { text?: unknown }).text;
-        if (typeof text === "string" && text.trim().length > 0) {
-          hasPairedContent = true;
-          break;
-        }
-      }
-    }
-    return !(hasThinking && !hasPairedContent);
-  });
+function isMistralModel(params: { provider?: string | null; modelId?: string | null }): boolean {
+  const provider = normalizeProviderId(params.provider ?? "");
+  if (provider === "mistral") return true;
+  const modelId = (params.modelId ?? "").toLowerCase();
+  if (!modelId) return false;
+  return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
 }
 
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
@@ -229,39 +210,26 @@ export async function sanitizeSessionHistory(params: {
   sessionId: string;
 }): Promise<AgentMessage[]> {
   const isAntigravityClaudeModel = isAntigravityClaude(params.modelApi, params.modelId);
-  const provider = (params.provider ?? "").toLowerCase();
+  const provider = normalizeProviderId(params.provider ?? "");
   const modelId = (params.modelId ?? "").toLowerCase();
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") && modelId.includes("gemini");
-  const isGeminiLike = isGoogleModelApi(params.modelApi) || isOpenRouterGemini;
+  const isMistral = isMistralModel({ provider, modelId });
+  const toolCallIdMode: ToolCallIdMode | undefined = isMistral ? "strict9" : undefined;
+  const sanitizeToolCallIds = shouldSanitizeToolCallIds(params.modelApi) || isMistral;
   const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
-    sanitizeToolCallIds: shouldSanitizeToolCallIds(params.modelApi),
+    sanitizeToolCallIds,
+    toolCallIdMode,
     enforceToolCallLast: params.modelApi === "anthropic-messages",
     preserveSignatures: params.modelApi === "google-antigravity" && isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenRouterGemini
       ? { allowBase64Only: true, includeCamelCase: true }
       : undefined,
   });
-  // TODO REMOVE when https://github.com/badlogic/pi-mono/pull/838 is merged.
-  const openaiReasoningFiltered = filterOpenAIReasoningOnlyMessages(
-    sanitizedImages,
-    params.modelApi,
-  );
-  const repairedTools = sanitizeToolUseResultPairing(openaiReasoningFiltered);
-  const isAntigravityProvider =
-    provider === "google-antigravity" || params.modelApi === "google-antigravity";
-  const shouldDowngradeThinking = isGeminiLike && !isAntigravityClaudeModel;
-  // Gemini rejects unsigned thinking blocks; downgrade them before send to avoid INVALID_ARGUMENT.
-  const downgradedThinking = shouldDowngradeThinking
-    ? downgradeGeminiThinkingBlocks(repairedTools)
-    : repairedTools;
-  const shouldDowngradeHistory = shouldDowngradeThinking && !isAntigravityProvider;
-  const downgraded = shouldDowngradeHistory
-    ? downgradeGeminiHistory(downgradedThinking)
-    : downgradedThinking;
+  const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
 
   return applyGoogleTurnOrderingFix({
-    messages: downgraded,
+    messages: repairedTools,
     modelApi: params.modelApi,
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,

@@ -157,11 +157,16 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
       const allowFrom = (routing as Record<string, unknown>).allowFrom;
       if (allowFrom === undefined) return;
 
-      const channels = ensureRecord(raw, "channels");
-      const whatsapp =
-        channels.whatsapp && typeof channels.whatsapp === "object"
-          ? (channels.whatsapp as Record<string, unknown>)
-          : {};
+      const channels = getRecord(raw.channels);
+      const whatsapp = channels ? getRecord(channels.whatsapp) : null;
+      if (!whatsapp) {
+        delete (routing as Record<string, unknown>).allowFrom;
+        if (Object.keys(routing as Record<string, unknown>).length === 0) {
+          delete raw.routing;
+        }
+        changes.push("Removed routing.allowFrom (channels.whatsapp not configured).");
+        return;
+      }
 
       if (whatsapp.allowFrom === undefined) {
         whatsapp.allowFrom = allowFrom;
@@ -174,8 +179,8 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
       if (Object.keys(routing as Record<string, unknown>).length === 0) {
         delete raw.routing;
       }
-      channels.whatsapp = whatsapp;
-      raw.channels = channels;
+      channels!.whatsapp = whatsapp;
+      raw.channels = channels!;
     },
   },
   {
@@ -194,7 +199,11 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
       if (requireMention === undefined) return;
 
       const channels = ensureRecord(raw, "channels");
-      const applyTo = (key: "whatsapp" | "telegram" | "imessage") => {
+      const applyTo = (
+        key: "whatsapp" | "telegram" | "imessage",
+        options?: { requireExisting?: boolean },
+      ) => {
+        if (options?.requireExisting && !isRecord(channels[key])) return;
         const section =
           channels[key] && typeof channels[key] === "object"
             ? (channels[key] as Record<string, unknown>)
@@ -223,7 +232,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         }
       };
 
-      applyTo("whatsapp");
+      applyTo("whatsapp", { requireExisting: true });
       applyTo("telegram");
       applyTo("imessage");
 

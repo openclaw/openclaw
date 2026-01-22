@@ -2,6 +2,10 @@ import AjvPkg, { type ErrorObject } from "ajv";
 import {
   type AgentEvent,
   AgentEventSchema,
+  type AgentIdentityParams,
+  AgentIdentityParamsSchema,
+  type AgentIdentityResult,
+  AgentIdentityResultSchema,
   AgentParamsSchema,
   type AgentSummary,
   AgentSummarySchema,
@@ -198,6 +202,8 @@ export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
 export const validatePollParams = ajv.compile<PollParams>(PollParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
+export const validateAgentIdentityParams =
+  ajv.compile<AgentIdentityParams>(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
@@ -359,6 +365,8 @@ export {
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,
+  AgentIdentityParamsSchema,
+  AgentIdentityResultSchema,
   WakeParamsSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
@@ -432,6 +440,8 @@ export type {
   ErrorShape,
   StateVersion,
   AgentEvent,
+  AgentIdentityParams,
+  AgentIdentityResult,
   AgentWaitParams,
   ChatEvent,
   TickEvent,

@@ -34,7 +34,7 @@ Plist location (per‑user):
 
 Manager:
 - The macOS app owns LaunchAgent install/update in Local mode.
-- The CLI can also install it: `clawdbot daemon install`.
+- The CLI can also install it: `clawdbot gateway install`.
 
 Behavior:
 - “Clawdbot Active” enables/disables the LaunchAgent.

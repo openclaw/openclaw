@@ -46,26 +46,32 @@ export function pickProbeHostForBind(
   if (bindMode === "custom" && customBindHost?.trim()) {
     return customBindHost.trim();
   }
-  if (bindMode === "auto") return tailnetIPv4 ?? "127.0.0.1";
+  if (bindMode === "tailnet") return tailnetIPv4 ?? "127.0.0.1";
   return "127.0.0.1";
 }
 
-export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
-  if (!env) return [];
-  const allow = [
-    "CLAWDBOT_PROFILE",
-    "CLAWDBOT_STATE_DIR",
-    "CLAWDBOT_CONFIG_PATH",
-    "CLAWDBOT_GATEWAY_PORT",
-    "CLAWDBOT_NIX_MODE",
-  ];
-  const lines: string[] = [];
-  for (const key of allow) {
+const SAFE_DAEMON_ENV_KEYS = [
+  "CLAWDBOT_PROFILE",
+  "CLAWDBOT_STATE_DIR",
+  "CLAWDBOT_CONFIG_PATH",
+  "CLAWDBOT_GATEWAY_PORT",
+  "CLAWDBOT_NIX_MODE",
+];
+
+export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
+  if (!env) return {};
+  const filtered: Record<string, string> = {};
+  for (const key of SAFE_DAEMON_ENV_KEYS) {
     const value = env[key];
     if (!value?.trim()) continue;
-    lines.push(`${key}=${value.trim()}`);
+    filtered[key] = value.trim();
   }
-  return lines;
+  return filtered;
+}
+
+export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
+  const filtered = filterDaemonEnv(env);
+  return Object.entries(filtered).map(([key, value]) => `${key}=${value}`);
 }
 
 export function normalizeListenerAddress(raw: string): string {
@@ -123,7 +129,7 @@ export function renderRuntimeHints(
     }
   })();
   if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("clawdbot daemon install", env)}`);
+    hints.push(`Service not installed. Run: ${formatCliCommand("clawdbot gateway install", env)}`);
     if (fileLog) hints.push(`File logs: ${fileLog}`);
     return hints;
   }
@@ -146,7 +152,7 @@ export function renderRuntimeHints(
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const base = [
-    formatCliCommand("clawdbot daemon install", env),
+    formatCliCommand("clawdbot gateway install", env),
     formatCliCommand("clawdbot gateway", env),
   ];
   const profile = env.CLAWDBOT_PROFILE;

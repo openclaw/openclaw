@@ -60,10 +60,12 @@ export {
   listWhatsAppDirectoryPeersFromConfig,
 } from "./directory-config.js";
 export {
+  applyChannelMatchMeta,
   buildChannelKeyCandidates,
   normalizeChannelSlug,
   resolveChannelEntryMatch,
   resolveChannelEntryMatchWithFallback,
+  resolveChannelMatchConfig,
   resolveNestedAllowlistDecision,
   type ChannelEntryMatch,
   type ChannelMatchSource,

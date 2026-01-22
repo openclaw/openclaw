@@ -574,6 +574,6 @@ export async function statusCommand(
   if (gatewayReachable) {
     runtime.log(`  Need to test channels? ${formatCliCommand("clawdbot status --deep")}`);
   } else {
-    runtime.log(`  Fix reachability first: ${formatCliCommand("clawdbot gateway status")}`);
+    runtime.log(`  Fix reachability first: ${formatCliCommand("clawdbot gateway probe")}`);
   }
 }

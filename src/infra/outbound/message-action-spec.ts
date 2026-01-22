@@ -57,6 +57,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
   unsend: ["messageId"],
   edit: ["messageId"],
+  react: ["chatGuid", "chatIdentifier", "chatId"],
   renameGroup: ["chatGuid", "chatIdentifier", "chatId"],
   setGroupIcon: ["chatGuid", "chatIdentifier", "chatId"],
   addParticipant: ["chatGuid", "chatIdentifier", "chatId"],

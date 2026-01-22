@@ -18,6 +18,7 @@ public struct ConnectParams: Codable, Sendable {
     public let caps: [String]?
     public let commands: [String]?
     public let permissions: [String: AnyCodable]?
+    public let pathenv: String?
     public let role: String?
     public let scopes: [String]?
     public let device: [String: AnyCodable]?
@@ -32,6 +33,7 @@ public struct ConnectParams: Codable, Sendable {
         caps: [String]?,
         commands: [String]?,
         permissions: [String: AnyCodable]?,
+        pathenv: String?,
         role: String?,
         scopes: [String]?,
         device: [String: AnyCodable]?,
@@ -45,6 +47,7 @@ public struct ConnectParams: Codable, Sendable {
         self.caps = caps
         self.commands = commands
         self.permissions = permissions
+        self.pathenv = pathenv
         self.role = role
         self.scopes = scopes
         self.device = device
@@ -59,6 +62,7 @@ public struct ConnectParams: Codable, Sendable {
         case caps
         case commands
         case permissions
+        case pathenv = "pathEnv"
         case role
         case scopes
         case device
@@ -545,6 +549,44 @@ public struct AgentParams: Codable, Sendable {
         case idempotencykey = "idempotencyKey"
         case label
         case spawnedby = "spawnedBy"
+    }
+}
+
+public struct AgentIdentityParams: Codable, Sendable {
+    public let agentid: String?
+    public let sessionkey: String?
+
+    public init(
+        agentid: String?,
+        sessionkey: String?
+    ) {
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct AgentIdentityResult: Codable, Sendable {
+    public let agentid: String
+    public let name: String?
+    public let avatar: String?
+
+    public init(
+        agentid: String,
+        name: String?,
+        avatar: String?
+    ) {
+        self.agentid = agentid
+        self.name = name
+        self.avatar = avatar
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case avatar
     }
 }
 
@@ -1443,17 +1485,21 @@ public struct WebLoginWaitParams: Codable, Sendable {
 public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let name: String?
+    public let identity: [String: AnyCodable]?
 
     public init(
         id: String,
-        name: String?
+        name: String?,
+        identity: [String: AnyCodable]?
     ) {
         self.id = id
         self.name = name
+        self.identity = identity
     }
     private enum CodingKeys: String, CodingKey {
         case id
         case name
+        case identity
     }
 }
 
@@ -1904,6 +1950,7 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
 }
 
 public struct ExecApprovalRequestParams: Codable, Sendable {
+    public let id: String?
     public let command: String
     public let cwd: String?
     public let host: String?
@@ -1915,6 +1962,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let timeoutms: Int?
 
     public init(
+        id: String?,
         command: String,
         cwd: String?,
         host: String?,
@@ -1925,6 +1973,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         sessionkey: String?,
         timeoutms: Int?
     ) {
+        self.id = id
         self.command = command
         self.cwd = cwd
         self.host = host
@@ -1936,6 +1985,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.timeoutms = timeoutms
     }
     private enum CodingKeys: String, CodingKey {
+        case id
         case command
         case cwd
         case host

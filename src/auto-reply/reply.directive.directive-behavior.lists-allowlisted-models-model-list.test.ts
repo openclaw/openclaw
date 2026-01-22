@@ -60,7 +60,7 @@ describe("directive behavior", () => {
     vi.restoreAllMocks();
   });
 
-  it("lists allowlisted models on /model list", async () => {
+  it("aliases /model list to /models", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
@@ -84,13 +84,15 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Pick: /model <#> or /model <provider/model>");
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(text).toContain("Providers:");
+      expect(text).toContain("- anthropic");
+      expect(text).toContain("- openai");
+      expect(text).toContain("Use: /models <provider>");
+      expect(text).toContain("Switch: /model <provider/model>");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("falls back to configured models when catalog is unavailable", async () => {
+  it("shows current model when catalog is unavailable", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
@@ -115,16 +117,17 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Pick: /model <#> or /model <provider/model>");
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(text).toContain("Current: anthropic/claude-opus-4-5");
+      expect(text).toContain("Switch: /model <provider/model>");
+      expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
+      expect(text).toContain("More: /model status");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("includes catalog models when no allowlist is set", async () => {
+  it("includes catalog providers when no allowlist is set", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      vi.mocked(loadModelCatalog).mockResolvedValue([
         { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "grok-4", name: "Grok 4", provider: "xai" },
@@ -150,14 +153,15 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
-      expect(text).toContain("minimax/MiniMax-M2.1");
-      expect(text).toContain("xai/grok-4");
+      expect(text).toContain("Providers:");
+      expect(text).toContain("- anthropic");
+      expect(text).toContain("- openai");
+      expect(text).toContain("- xai");
+      expect(text).toContain("Use: /models <provider>");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("merges config allowlist models even when catalog is present", async () => {
+  it("lists config-only providers when catalog is present", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       // Catalog present but missing custom providers: /model should still include
@@ -173,7 +177,7 @@ describe("directive behavior", () => {
       const storePath = path.join(home, "sessions.json");
 
       const res = await getReplyFromConfig(
-        { Body: "/model list", From: "+1222", To: "+1222", CommandAuthorized: true },
+        { Body: "/models minimax", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {
@@ -202,8 +206,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(text).toContain("Model set to minimax");
       expect(text).toContain("minimax/MiniMax-M2.1");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -231,6 +234,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Providers:");
       expect(text).not.toContain("missing (missing)");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });

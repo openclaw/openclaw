@@ -27,6 +27,25 @@ const callGateway = vi.fn(async (opts: { method?: string }) => {
       },
     };
   }
+  if (opts.method === "exec.approvals.node.get") {
+    return {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "hash",
+      file: {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+        },
+        agents: {},
+      },
+    };
+  }
+  if (opts.method === "exec.approval.request") {
+    return { decision: "allow-once" };
+  }
   return { ok: true };
 });
 
@@ -49,6 +68,10 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+}));
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({}),
 }));
 
 describe("nodes-cli coverage", () => {
@@ -112,8 +135,41 @@ describe("nodes-cli coverage", () => {
       env: { FOO: "bar" },
       timeoutMs: 1200,
       needsScreenRecording: true,
+      agentId: "main",
+      approved: true,
+      approvalDecision: "allow-once",
     });
     expect(invoke?.params?.timeoutMs).toBe(5000);
+  });
+
+  it("invokes system.run with raw command", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGateway.mockClear();
+    randomIdempotencyKey.mockClear();
+
+    const { registerNodesCli } = await import("./nodes-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+
+    await program.parseAsync(
+      ["nodes", "run", "--agent", "main", "--node", "mac-1", "--raw", "echo hi"],
+      { from: "user" },
+    );
+
+    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+
+    expect(invoke).toBeTruthy();
+    expect(invoke?.params?.idempotencyKey).toBe("rk_test");
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(invoke?.params?.params).toMatchObject({
+      command: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: "echo hi",
+      agentId: "main",
+      approved: true,
+      approvalDecision: "allow-once",
+    });
   });
 
   it("invokes system.notify with provided fields", async () => {

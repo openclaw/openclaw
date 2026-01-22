@@ -28,20 +28,20 @@ describe("resolveNpmChannelTag", () => {
   });
 
   it("falls back to latest when beta is older", async () => {
-    versionByTag.beta = "2026.1.19-beta.1";
-    versionByTag.latest = "2026.1.20-1";
+    versionByTag.beta = "1.0.0-beta.1";
+    versionByTag.latest = "1.0.1-1";
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
 
-    expect(resolved).toEqual({ tag: "latest", version: "2026.1.20-1" });
+    expect(resolved).toEqual({ tag: "latest", version: "1.0.1-1" });
   });
 
   it("keeps beta when beta is not older", async () => {
-    versionByTag.beta = "2026.1.20-beta.1";
-    versionByTag.latest = "2026.1.20-1";
+    versionByTag.beta = "1.0.2-beta.1";
+    versionByTag.latest = "1.0.1-1";
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
 
-    expect(resolved).toEqual({ tag: "beta", version: "2026.1.20-beta.1" });
+    expect(resolved).toEqual({ tag: "beta", version: "1.0.2-beta.1" });
   });
 });

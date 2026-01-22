@@ -44,6 +44,8 @@ describe("resolveOpencodeZenModelApi", () => {
     expect(resolveOpencodeZenModelApi("minimax-m2.1-free")).toBe("anthropic-messages");
     expect(resolveOpencodeZenModelApi("gemini-3-pro")).toBe("google-generative-ai");
     expect(resolveOpencodeZenModelApi("gpt-5.2")).toBe("openai-responses");
+    expect(resolveOpencodeZenModelApi("alpha-gd4")).toBe("openai-completions");
+    expect(resolveOpencodeZenModelApi("big-pickle")).toBe("openai-completions");
     expect(resolveOpencodeZenModelApi("glm-4.7-free")).toBe("openai-completions");
     expect(resolveOpencodeZenModelApi("some-unknown-model")).toBe("openai-completions");
   });

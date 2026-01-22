@@ -172,6 +172,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false, onPartialReply },
+      typingMode: "message",
     });
     await run();
 

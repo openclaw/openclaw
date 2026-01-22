@@ -1,4 +1,6 @@
 import ClawdbotIPC
+import ClawdbotKit
+import CoreLocation
 import SwiftUI
 
 struct PermissionsSettings: View {
@@ -8,6 +10,8 @@ struct PermissionsSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            SystemRunSettingsView()
+
             Text("Allow these so Clawdbot can notify and capture when needed.")
                 .padding(.top, 4)
 
@@ -15,12 +19,80 @@ struct PermissionsSettings: View {
                 .padding(.horizontal, 2)
                 .padding(.vertical, 6)
 
+            LocationAccessSettings()
+
             Button("Restart onboarding") { self.showOnboarding() }
                 .buttonStyle(.bordered)
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
+    }
+}
+
+private struct LocationAccessSettings: View {
+    @AppStorage(locationModeKey) private var locationModeRaw: String = ClawdbotLocationMode.off.rawValue
+    @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
+    @State private var lastLocationModeRaw: String = ClawdbotLocationMode.off.rawValue
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Location Access")
+                .font(.body)
+
+            Picker("", selection: self.$locationModeRaw) {
+                Text("Off").tag(ClawdbotLocationMode.off.rawValue)
+                Text("While Using").tag(ClawdbotLocationMode.whileUsing.rawValue)
+                Text("Always").tag(ClawdbotLocationMode.always.rawValue)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+
+            Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
+                .disabled(self.locationMode == .off)
+
+            Text("Always may require System Settings to approve background location.")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear {
+            self.lastLocationModeRaw = self.locationModeRaw
+        }
+        .onChange(of: self.locationModeRaw) { _, newValue in
+            let previous = self.lastLocationModeRaw
+            self.lastLocationModeRaw = newValue
+            guard let mode = ClawdbotLocationMode(rawValue: newValue) else { return }
+            Task {
+                let granted = await self.requestLocationAuthorization(mode: mode)
+                if !granted {
+                    await MainActor.run {
+                        self.locationModeRaw = previous
+                        self.lastLocationModeRaw = previous
+                    }
+                }
+            }
+        }
+    }
+
+    private var locationMode: ClawdbotLocationMode {
+        ClawdbotLocationMode(rawValue: self.locationModeRaw) ?? .off
+    }
+
+    private func requestLocationAuthorization(mode: ClawdbotLocationMode) async -> Bool {
+        guard mode != .off else { return true }
+        guard CLLocationManager.locationServicesEnabled() else {
+            await MainActor.run { LocationPermissionHelper.openSettings() }
+            return false
+        }
+
+        let status = CLLocationManager().authorizationStatus
+        let requireAlways = mode == .always
+        if PermissionManager.isLocationAuthorized(status: status, requireAlways: requireAlways) {
+            return true
+        }
+        let updated = await LocationPermissionRequester.shared.request(always: requireAlways)
+        return PermissionManager.isLocationAuthorized(status: updated, requireAlways: requireAlways)
     }
 }
 
@@ -45,25 +117,6 @@ struct PermissionStatusList: View {
             .font(.footnote)
             .padding(.top, 2)
             .help("Refresh status")
-
-            if (self.status[.accessibility] ?? false) == false || (self.status[.screenRecording] ?? false) == false {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(
-                        "Note: macOS may require restarting Clawdbot after enabling Accessibility or Screen Recording.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Button {
-                        LaunchdManager.startClawdbot()
-                    } label: {
-                        Label("Restart Clawdbot", systemImage: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                .padding(.top, 4)
-            }
         }
     }
 

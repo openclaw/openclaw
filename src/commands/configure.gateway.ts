@@ -32,19 +32,24 @@ export async function promptGatewayConfig(
       message: "Gateway bind mode",
       options: [
         {
+          value: "loopback",
+          label: "Loopback (Local only)",
+          hint: "Bind to 127.0.0.1 - secure, local-only access",
+        },
+        {
+          value: "tailnet",
+          label: "Tailnet (Tailscale IP)",
+          hint: "Bind to your Tailscale IP only (100.x.x.x)",
+        },
+        {
           value: "auto",
-          label: "Auto (Tailnet → LAN)",
-          hint: "Prefer Tailnet IP, fall back to all interfaces if unavailable",
+          label: "Auto (Loopback → LAN)",
+          hint: "Prefer loopback; fall back to all interfaces if unavailable",
         },
         {
           value: "lan",
           label: "LAN (All interfaces)",
           hint: "Bind to 0.0.0.0 - accessible from anywhere on your network",
-        },
-        {
-          value: "loopback",
-          label: "Loopback (Local only)",
-          hint: "Bind to 127.0.0.1 - secure, local-only access",
         },
         {
           value: "custom",
@@ -54,7 +59,7 @@ export async function promptGatewayConfig(
       ],
     }),
     runtime,
-  ) as "auto" | "lan" | "loopback" | "custom";
+  ) as "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
   let customBindHost: string | undefined;
   if (bind === "custom") {

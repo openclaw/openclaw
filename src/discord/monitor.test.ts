@@ -281,6 +281,59 @@ describe("discord guild/channel resolution", () => {
     });
     expect(thread?.allowed).toBe(false);
   });
+
+  it("applies wildcard channel config when no specific match", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {
+        general: { allow: true, requireMention: false },
+        "*": { allow: true, autoThread: true, requireMention: true },
+      },
+    };
+    // Specific channel should NOT use wildcard
+    const general = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "123",
+      channelName: "general",
+      channelSlug: "general",
+    });
+    expect(general?.allowed).toBe(true);
+    expect(general?.requireMention).toBe(false);
+    expect(general?.autoThread).toBeUndefined();
+    expect(general?.matchSource).toBe("direct");
+
+    // Unknown channel should use wildcard
+    const random = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "999",
+      channelName: "random",
+      channelSlug: "random",
+    });
+    expect(random?.allowed).toBe(true);
+    expect(random?.autoThread).toBe(true);
+    expect(random?.requireMention).toBe(true);
+    expect(random?.matchSource).toBe("wildcard");
+  });
+
+  it("falls back to wildcard when thread channel and parent are missing", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {
+        "*": { allow: true, requireMention: false },
+      },
+    };
+    const thread = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-123",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-999",
+      parentName: "general",
+      parentSlug: "general",
+      scope: "thread",
+    });
+    expect(thread?.allowed).toBe(true);
+    expect(thread?.matchKey).toBe("*");
+    expect(thread?.matchSource).toBe("wildcard");
+  });
 });
 
 describe("discord mention gating", () => {

@@ -51,7 +51,7 @@ function buildScopeSelection(opts: UninstallOptions): {
 
 async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
-    runtime.error("Nix mode detected; daemon uninstall is disabled.");
+    runtime.error("Nix mode detected; service uninstall is disabled.");
     return false;
   }
   const service = resolveGatewayService();

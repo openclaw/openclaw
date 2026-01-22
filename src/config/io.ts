@@ -249,7 +249,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           .join("\n");
         if (!loggedInvalidConfigs.has(configPath)) {
           loggedInvalidConfigs.add(configPath);
-          deps.logger.error(`Invalid config:\\n${details}`);
+          deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
         }
         const error = new Error("Invalid config");
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
@@ -300,6 +300,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);
         throw err;
+      }
+      const error = err as { code?: string };
+      if (error?.code === "INVALID_CONFIG") {
+        return {};
       }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
       return {};

@@ -36,10 +36,10 @@ clawdbot onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Prompt caching (Anthropic API)
 
-Clawdbot enables **1-hour prompt caching by default** for Anthropic API keys.
+Clawdbot does **not** override Anthropic’s default cache TTL unless you set it.
 This is **API-only**; Claude Code CLI OAuth ignores TTL settings.
 
-To override the TTL per model, set `cacheControlTtl` in the model `params`:
+To set the TTL per model, use `cacheControlTtl` in the model `params`:
 
 ```json5
 {
@@ -70,11 +70,9 @@ Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. 
 claude setup-token
 ```
 
-Paste the token into Clawdbot (wizard: **Anthropic token (paste setup-token)**), or let Clawdbot run the command locally:
+Paste the token into Clawdbot (wizard: **Anthropic token (paste setup-token)**), or run it on the gateway host:
 
 ```bash
-clawdbot onboard --auth-choice setup-token
-# or
 clawdbot models auth setup-token --provider anthropic
 ```
 
@@ -87,9 +85,6 @@ clawdbot models auth paste-token --provider anthropic
 ### CLI setup
 
 ```bash
-# Run setup-token locally (wizard can run it for you)
-clawdbot onboard --auth-choice setup-token
-
 # Reuse Claude Code CLI OAuth credentials if already logged in
 clawdbot onboard --auth-choice claude-cli
 ```
@@ -104,7 +99,7 @@ clawdbot onboard --auth-choice claude-cli
 
 ## Notes
 
-- The wizard can run `claude setup-token` locally and store the token, or you can paste a token generated elsewhere.
+- Generate the setup-token with `claude setup-token` and paste it, or run `clawdbot models auth setup-token` on the gateway host.
 - Clawdbot writes `auth.profiles["anthropic:claude-cli"].mode` as `"oauth"` so the profile
   accepts both OAuth and setup-token credentials. Older configs using `"token"` are
   auto-migrated on load.

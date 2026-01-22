@@ -23,21 +23,33 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.path).toBe("routing.groupChat.requireMention");
     }
   });
-  it("migrates routing.allowFrom to channels.whatsapp.allowFrom", async () => {
+  it("migrates routing.allowFrom to channels.whatsapp.allowFrom when whatsapp configured", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { allowFrom: ["+15555550123"] },
+      channels: { whatsapp: {} },
     });
     expect(res.changes).toContain("Moved routing.allowFrom → channels.whatsapp.allowFrom.");
     expect(res.config?.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     expect(res.config?.routing?.allowFrom).toBeUndefined();
   });
-  it("migrates routing.groupChat.requireMention to channels whatsapp/telegram/imessage groups", async () => {
+  it("drops routing.allowFrom when whatsapp missing", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      routing: { allowFrom: ["+15555550123"] },
+    });
+    expect(res.changes).toContain("Removed routing.allowFrom (channels.whatsapp not configured).");
+    expect(res.config?.channels?.whatsapp).toBeUndefined();
+    expect(res.config?.routing?.allowFrom).toBeUndefined();
+  });
+  it("migrates routing.groupChat.requireMention to channels whatsapp/telegram/imessage groups when whatsapp configured", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { groupChat: { requireMention: false } },
+      channels: { whatsapp: {} },
     });
     expect(res.changes).toContain(
       'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
@@ -49,6 +61,26 @@ describe("legacy config detection", () => {
       'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
     );
     expect(res.config?.channels?.whatsapp?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
+  });
+  it("migrates routing.groupChat.requireMention to telegram/imessage when whatsapp missing", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      routing: { groupChat: { requireMention: false } },
+    });
+    expect(res.changes).toContain(
+      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
+    );
+    expect(res.changes).toContain(
+      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
+    );
+    expect(res.changes).not.toContain(
+      'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
+    );
+    expect(res.config?.channels?.whatsapp).toBeUndefined();
     expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
     expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(false);
     expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
@@ -218,14 +250,20 @@ describe("legacy config detection", () => {
     expect(res.config?.gateway?.auth?.mode).toBe("token");
     expect((res.config?.gateway as { token?: string })?.token).toBeUndefined();
   });
-  it("migrates gateway.bind from 'tailnet' to 'auto'", async () => {
+  it("keeps gateway.bind tailnet", async () => {
     vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
+    const { migrateLegacyConfig, validateConfigObject } = await import("./config.js");
     const res = migrateLegacyConfig({
       gateway: { bind: "tailnet" as const },
     });
-    expect(res.changes).toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
-    expect(res.config?.gateway?.bind).toBe("auto");
+    expect(res.changes).not.toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
+    expect(res.config).toBeNull();
+
+    const validated = validateConfigObject({ gateway: { bind: "tailnet" as const } });
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.config.gateway?.bind).toBe("tailnet");
+    }
   });
   it('rejects telegram.dmPolicy="open" without allowFrom "*"', async () => {
     vi.resetModules();

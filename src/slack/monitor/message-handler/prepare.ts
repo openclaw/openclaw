@@ -22,6 +22,7 @@ import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
+import { formatAllowlistMatchMeta } from "../../../channels/allowlist-match.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
@@ -32,6 +33,7 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import type { SlackMessageEvent } from "../../types.js";
+import { resolveSlackThreadContext } from "../../threading.js";
 
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
@@ -131,9 +133,7 @@ export async function prepareSlackMessage(params: {
         allowList: allowFromLower,
         id: directUserId,
       });
-      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
-        allowMatch.matchSource ?? "none"
-      }`;
+      const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
       if (!allowMatch.allowed) {
         if (ctx.dmPolicy === "pairing") {
           const sender = await ctx.resolveUserName(directUserId);
@@ -189,9 +189,9 @@ export async function prepareSlackMessage(params: {
   });
 
   const baseSessionKey = route.sessionKey;
-  const threadTs = message.thread_ts;
-  const hasThreadTs = typeof threadTs === "string" && threadTs.length > 0;
-  const isThreadReply = hasThreadTs && (threadTs !== message.ts || Boolean(message.parent_user_id));
+  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const threadTs = threadContext.incomingThreadTs;
+  const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: isThreadReply ? threadTs : undefined,
@@ -475,9 +475,9 @@ export async function prepareSlackMessage(params: {
     Provider: "slack" as const,
     Surface: "slack" as const,
     MessageSid: message.ts,
-    ReplyToId: message.thread_ts ?? message.ts,
-    // Preserve thread context for routed tool notifications (thread replies only).
-    MessageThreadId: isThreadReply ? threadTs : undefined,
+    ReplyToId: threadContext.replyToId,
+    // Preserve thread context for routed tool notifications.
+    MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,

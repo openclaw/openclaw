@@ -196,6 +196,8 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
+  await typingSignals.signalRunStart();
+
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
@@ -377,7 +379,7 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
       replyToMode,
       replyToChannel,
-      currentMessageId: sessionCtx.MessageSid,
+      currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentTargets: runResult.messagingToolSentTargets,

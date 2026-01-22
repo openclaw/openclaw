@@ -11,7 +11,16 @@ import {
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
+    activeHours: z
+      .object({
+        start: z.string().optional(),
+        end: z.string().optional(),
+        timezone: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     model: z.string().optional(),
+    session: z.string().optional(),
     includeReasoning: z.boolean().optional(),
     target: z
       .union([
@@ -43,6 +52,42 @@ export const HeartbeatSchema = z
         message: "invalid duration (use ms, s, m, h)",
       });
     }
+
+    const active = val.activeHours;
+    if (!active) return;
+    const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
+    const validateTime = (raw: string | undefined, opts: { allow24: boolean }, path: string) => {
+      if (!raw) return;
+      if (!timePattern.test(raw)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["activeHours", path],
+          message: 'invalid time (use "HH:MM" 24h format)',
+        });
+        return;
+      }
+      const [hourStr, minuteStr] = raw.split(":");
+      const hour = Number(hourStr);
+      const minute = Number(minuteStr);
+      if (hour === 24 && minute !== 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["activeHours", path],
+          message: "invalid time (24:00 is the only allowed 24:xx value)",
+        });
+        return;
+      }
+      if (hour === 24 && !opts.allow24) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["activeHours", path],
+          message: "invalid time (start cannot be 24:00)",
+        });
+      }
+    };
+
+    validateTime(active.start, { allow24: false }, "start");
+    validateTime(active.end, { allow24: true }, "end");
   })
   .optional();
 
@@ -214,8 +259,10 @@ export const AgentToolsSchema = z
         ask: z.enum(["off", "on-miss", "always"]).optional(),
         node: z.string().optional(),
         pathPrepend: z.array(z.string()).optional(),
+        safeBins: z.array(z.string()).optional(),
         backgroundMs: z.number().int().positive().optional(),
         timeoutSec: z.number().int().positive().optional(),
+        approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
         cleanupMs: z.number().int().positive().optional(),
         notifyOnExit: z.boolean().optional(),
         applyPatch: z
@@ -442,6 +489,7 @@ export const ToolsSchema = z
         ask: z.enum(["off", "on-miss", "always"]).optional(),
         node: z.string().optional(),
         pathPrepend: z.array(z.string()).optional(),
+        safeBins: z.array(z.string()).optional(),
         backgroundMs: z.number().int().positive().optional(),
         timeoutSec: z.number().int().positive().optional(),
         cleanupMs: z.number().int().positive().optional(),

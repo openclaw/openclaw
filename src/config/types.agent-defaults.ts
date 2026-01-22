@@ -23,7 +23,9 @@ export type AgentModelListConfig = {
 };
 
 export type AgentContextPruningConfig = {
-  mode?: "off" | "adaptive" | "aggressive";
+  mode?: "off" | "cache-ttl";
+  /** TTL to consider cache expired (duration string, default unit: minutes). */
+  ttl?: string;
   keepLastAssistants?: number;
   softTrimRatio?: number;
   hardClearRatio?: number;
@@ -97,6 +99,8 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
+  /** Optional repository root for system prompt runtime line (overrides auto-detect). */
+  repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
@@ -132,7 +136,7 @@ export type AgentDefaultsConfig = {
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
-  elevatedDefault?: "off" | "on";
+  elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
   /**
@@ -160,8 +164,19 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /** Optional active-hours window (local time); heartbeats run only inside this window. */
+    activeHours?: {
+      /** Start time (24h, HH:MM). Inclusive. */
+      start?: string;
+      /** End time (24h, HH:MM). Exclusive. Use "24:00" for end-of-day. */
+      end?: string;
+      /** Timezone for the window ("user", "local", or IANA TZ id). Default: "user". */
+      timezone?: string;
+    };
     /** Heartbeat model override (provider/model). */
     model?: string;
+    /** Session key for heartbeat runs ("main" or explicit session key). */
+    session?: string;
     /** Delivery target (last|whatsapp|telegram|discord|slack|mattermost|msteams|signal|imessage|none). */
     target?:
       | "last"

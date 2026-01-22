@@ -359,7 +359,7 @@ export async function runConfigureWizard(
         if (!selected.includes("gateway")) {
           const portInput = guardCancel(
             await text({
-              message: "Gateway port for daemon install",
+              message: "Gateway port for service install",
               initialValue: String(gatewayPort),
               validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
             }),
@@ -481,7 +481,7 @@ export async function runConfigureWizard(
           if (!didConfigureGateway) {
             const portInput = guardCancel(
               await text({
-                message: "Gateway port for daemon install",
+                message: "Gateway port for service install",
                 initialValue: String(gatewayPort),
                 validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
               }),

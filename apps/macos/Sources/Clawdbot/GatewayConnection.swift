@@ -250,6 +250,11 @@ actor GatewayConnection {
         await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
     }
 
+    func authSource() async -> GatewayAuthSource? {
+        guard let client else { return nil }
+        return await client.authSource()
+    }
+
     func shutdown() async {
         if let client {
             await client.shutdown()

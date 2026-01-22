@@ -210,8 +210,11 @@ export type ChannelThreadingAdapter = {
 
 export type ChannelThreadingContext = {
   Channel?: string;
+  From?: string;
   To?: string;
+  ChatType?: string;
   ReplyToId?: string;
+  ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
 };
@@ -235,6 +238,10 @@ export type ChannelMessagingAdapter = {
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+};
+
+export type ChannelAgentPromptAdapter = {
+  messageToolHints?: (params: { cfg: ClawdbotConfig; accountId?: string | null }) => string[];
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
@@ -278,6 +285,7 @@ export type ChannelMessageActionAdapter = {
   listActions?: (params: { cfg: ClawdbotConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: ClawdbotConfig }) => boolean;
+  supportsCards?: (params: { cfg: ClawdbotConfig }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };

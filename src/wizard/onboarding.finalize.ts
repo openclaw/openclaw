@@ -64,7 +64,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
     await prompter.note(
-      "Systemd user services are unavailable. Skipping lingering checks and daemon install.",
+      "Systemd user services are unavailable. Skipping lingering checks and service install.",
       "Systemd",
     );
   }
@@ -94,15 +94,15 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     installDaemon = true;
   } else {
     installDaemon = await prompter.confirm({
-      message: "Install Gateway daemon (recommended)",
+      message: "Install Gateway service (recommended)",
       initialValue: true,
     });
   }
 
   if (process.platform === "linux" && !systemdAvailable && installDaemon) {
     await prompter.note(
-      "Systemd user services are unavailable; skipping daemon install. Use your container supervisor or `docker compose up -d`.",
-      "Gateway daemon",
+      "Systemd user services are unavailable; skipping service install. Use your container supervisor or `docker compose up -d`.",
+      "Gateway service",
     );
     installDaemon = false;
   }
@@ -112,14 +112,14 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       flow === "quickstart"
         ? (DEFAULT_GATEWAY_DAEMON_RUNTIME as GatewayDaemonRuntime)
         : ((await prompter.select({
-            message: "Gateway daemon runtime",
+            message: "Gateway service runtime",
             options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
             initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
           })) as GatewayDaemonRuntime);
     if (flow === "quickstart") {
       await prompter.note(
-        "QuickStart uses Node for the Gateway daemon (stable + supported).",
-        "Gateway daemon runtime",
+        "QuickStart uses Node for the Gateway service (stable + supported).",
+        "Gateway service runtime",
       );
     }
     const service = resolveGatewayService();
@@ -135,10 +135,10 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       })) as "restart" | "reinstall" | "skip";
       if (action === "restart") {
         await withWizardProgress(
-          "Gateway daemon",
-          { doneMessage: "Gateway daemon restarted." },
+          "Gateway service",
+          { doneMessage: "Gateway service restarted." },
           async (progress) => {
-            progress.update("Restarting Gateway daemon…");
+            progress.update("Restarting Gateway service…");
             await service.restart({
               env: process.env,
               stdout: process.stdout,
@@ -147,10 +147,10 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         );
       } else if (action === "reinstall") {
         await withWizardProgress(
-          "Gateway daemon",
-          { doneMessage: "Gateway daemon uninstalled." },
+          "Gateway service",
+          { doneMessage: "Gateway service uninstalled." },
           async (progress) => {
-            progress.update("Uninstalling Gateway daemon…");
+            progress.update("Uninstalling Gateway service…");
             await service.uninstall({ env: process.env, stdout: process.stdout });
           },
         );
@@ -158,10 +158,10 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     }
 
     if (!loaded || (loaded && (await service.isLoaded({ env: process.env })) === false)) {
-      const progress = prompter.progress("Gateway daemon");
+      const progress = prompter.progress("Gateway service");
       let installError: string | null = null;
       try {
-        progress.update("Preparing Gateway daemon…");
+        progress.update("Preparing Gateway service…");
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port: settings.port,
@@ -170,7 +170,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           warn: (message, title) => prompter.note(message, title),
         });
 
-        progress.update("Installing Gateway daemon…");
+        progress.update("Installing Gateway service…");
         await service.install({
           env: process.env,
           stdout: process.stdout,
@@ -182,11 +182,11 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         installError = err instanceof Error ? err.message : String(err);
       } finally {
         progress.stop(
-          installError ? "Gateway daemon install failed." : "Gateway daemon installed.",
+          installError ? "Gateway service install failed." : "Gateway service installed.",
         );
       }
       if (installError) {
-        await prompter.note(`Gateway daemon install failed: ${installError}`, "Gateway");
+        await prompter.note(`Gateway service install failed: ${installError}`, "Gateway");
         await prompter.note(gatewayInstallErrorHint(), "Gateway");
       }
     }

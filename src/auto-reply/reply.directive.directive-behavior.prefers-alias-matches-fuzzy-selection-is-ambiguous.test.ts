@@ -67,7 +67,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      await getReplyFromConfig(
+      const res = await getReplyFromConfig(
         { Body: "/model ki", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
@@ -103,9 +103,11 @@ describe("directive behavior", () => {
         },
       );
 
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model set to Kimi (moonshot/kimi-k2-0905-preview).");
       assertModelSelection(storePath, {
-        model: "kimi-k2-0905-preview",
         provider: "moonshot",
+        model: "kimi-k2-0905-preview",
       });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -217,7 +219,7 @@ describe("directive behavior", () => {
       );
 
       const events = drainSystemEvents(MAIN_SESSION_KEY);
-      expect(events.some((e) => e.includes("Elevated ON"))).toBe(true);
+      expect(events.some((e) => e.includes("Elevated ASK"))).toBe(true);
     });
   });
   it("queues a system event when toggling reasoning", async () => {

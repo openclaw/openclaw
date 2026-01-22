@@ -102,6 +102,8 @@ async function resolveContextReport(
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.cfg,
     agentId: sessionAgentId,
+    workspaceDir,
+    cwd: process.cwd(),
     runtime: {
       host: "unknown",
       os: "unknown",
@@ -118,7 +120,7 @@ async function resolveContextReport(
         workspaceAccess: "rw" as const,
         elevated: {
           allowed: params.elevated.allowed,
-          defaultLevel: params.resolvedElevatedLevel === "off" ? ("off" as const) : ("on" as const),
+          defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
         },
       }
     : { enabled: false };

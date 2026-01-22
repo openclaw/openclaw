@@ -436,3 +436,42 @@ describe("initSessionState reset policy", () => {
     }
   });
 });
+
+describe("initSessionState channel reset overrides", () => {
+  it("uses channel-specific reset policy when configured", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-channel-idle-"));
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:dm:123";
+    const sessionId = "session-override";
+    const updatedAt = Date.now() - (10080 - 1) * 60_000;
+
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        idleMinutes: 60,
+        resetByType: { dm: { mode: "idle", idleMinutes: 10 } },
+        resetByChannel: { discord: { mode: "idle", idleMinutes: 10080 } },
+      },
+    } as ClawdbotConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Hello",
+        SessionKey: sessionKey,
+        Provider: "discord",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionEntry.sessionId).toBe(sessionId);
+  });
+});

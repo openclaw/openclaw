@@ -174,11 +174,15 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
   const bind =
-    bindRaw === "loopback" || bindRaw === "lan" || bindRaw === "auto" || bindRaw === "custom"
+    bindRaw === "loopback" ||
+    bindRaw === "lan" ||
+    bindRaw === "auto" ||
+    bindRaw === "custom" ||
+    bindRaw === "tailnet"
       ? bindRaw
       : null;
   if (!bind) {
-    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "auto", or "custom")');
+    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
     defaultRuntime.exit(1);
     return;
   }
@@ -278,7 +282,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     ) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("clawdbot daemon stop")}`,
+        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("clawdbot gateway stop")}`,
       );
       try {
         const diagnostics = await inspectPortUsage(port);
@@ -304,7 +308,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--port <port>", "Port for the gateway WebSocket")
     .option(
       "--bind <mode>",
-      'Bind mode ("loopback"|"tailnet"|"lan"|"auto"). Defaults to config gateway.bind (or loopback).',
+      'Bind mode ("loopback"|"lan"|"tailnet"|"auto"|"custom"). Defaults to config gateway.bind (or loopback).',
     )
     .option(
       "--token <token>",

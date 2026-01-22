@@ -63,7 +63,7 @@ export function buildGatewayConnectionDetails(
   const localPort = resolveGatewayPort(config);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const bindMode = config.gateway?.bind ?? "loopback";
-  const preferTailnet = bindMode === "auto" && !!tailnetIPv4;
+  const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl =
     preferTailnet && tailnetIPv4

@@ -31,13 +31,13 @@ Manual steps (same result):
 1) Stop the gateway service:
 
 ```bash
-clawdbot daemon stop
+clawdbot gateway stop
 ```
 
 2) Uninstall the gateway service (launchd/systemd/schtasks):
 
 ```bash
-clawdbot daemon uninstall
+clawdbot gateway uninstall
 ```
 
 3) Delete state + config:

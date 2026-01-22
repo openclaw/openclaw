@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
-import { setContextPruningRuntime } from "./context-pruning/runtime.js";
+import { getContextPruningRuntime, setContextPruningRuntime } from "./context-pruning/runtime.js";
 
 import {
   computeEffectiveSettings,
@@ -135,12 +135,15 @@ describe("context-pruning", () => {
   });
 
   it("never prunes tool results before the first user message", () => {
-    const settings = computeEffectiveSettings({
-      mode: "aggressive",
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
       keepLastAssistants: 0,
-      hardClear: { placeholder: "[cleared]" },
-    });
-    if (!settings) throw new Error("expected settings");
+      softTrimRatio: 0.0,
+      hardClearRatio: 0.0,
+      minPrunableToolChars: 0,
+      hardClear: { enabled: true, placeholder: "[cleared]" },
+      softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+    };
 
     const messages: AgentMessage[] = [
       makeAssistant("bootstrap tool calls"),
@@ -170,7 +173,7 @@ describe("context-pruning", () => {
     expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
   });
 
-  it("mode aggressive clears eligible tool results before cutoff", () => {
+  it("hard-clear removes eligible tool results before cutoff", () => {
     const messages: AgentMessage[] = [
       makeUser("u1"),
       makeAssistant("a1"),
@@ -195,9 +198,11 @@ describe("context-pruning", () => {
 
     const settings = {
       ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      mode: "aggressive",
       keepLastAssistants: 1,
-      hardClear: { enabled: false, placeholder: "[cleared]" },
+      softTrimRatio: 10.0,
+      hardClearRatio: 0.0,
+      minPrunableToolChars: 0,
+      hardClear: { enabled: true, placeholder: "[cleared]" },
     };
 
     const ctx = {
@@ -258,6 +263,7 @@ describe("context-pruning", () => {
       },
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
+      lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
     });
 
     const messages: AgentMessage[] = [
@@ -298,6 +304,72 @@ describe("context-pruning", () => {
 
     if (!result) throw new Error("expected handler to return messages");
     expect(toolText(findToolResult(result.messages, "t1"))).toBe("[cleared]");
+  });
+
+  it("cache-ttl prunes once and resets the ttl window", () => {
+    const sessionManager = {};
+    const lastTouch = Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000;
+
+    setContextPruningRuntime(sessionManager, {
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 0,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 0,
+        hardClear: { enabled: true, placeholder: "[cleared]" },
+        softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+      },
+      contextWindowTokens: 1000,
+      isToolPrunable: () => true,
+      lastCacheTouchAt: lastTouch,
+    });
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistant("a1"),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "x".repeat(20_000),
+      }),
+    ];
+
+    let handler:
+      | ((
+          event: { messages: AgentMessage[] },
+          ctx: ExtensionContext,
+        ) => { messages: AgentMessage[] } | undefined)
+      | undefined;
+
+    const api = {
+      on: (name: string, fn: unknown) => {
+        if (name === "context") {
+          handler = fn as typeof handler;
+        }
+      },
+      appendEntry: (_type: string, _data?: unknown) => {},
+    } as unknown as ExtensionAPI;
+
+    contextPruningExtension(api);
+    if (!handler) throw new Error("missing context handler");
+
+    const first = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+    if (!first) throw new Error("expected first prune");
+    expect(toolText(findToolResult(first.messages, "t1"))).toBe("[cleared]");
+
+    const runtime = getContextPruningRuntime(sessionManager);
+    if (!runtime?.lastCacheTouchAt) throw new Error("expected lastCacheTouchAt");
+    expect(runtime.lastCacheTouchAt).toBeGreaterThan(lastTouch);
+
+    const second = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+    expect(second).toBeUndefined();
   });
 
   it("respects tools allow/deny (deny wins; wildcards supported)", () => {

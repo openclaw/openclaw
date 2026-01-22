@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
-import { HANDSHAKE_TIMEOUT_MS } from "./server-constants.js";
+import { getHandshakeTimeoutMs } from "./server-constants.js";
 import {
   connectReq,
   getFreePort,
@@ -11,6 +11,7 @@ import {
   startServerWithClient,
   testState,
 } from "./test-helpers.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 installGatewayTestHooks();
 
@@ -28,10 +29,21 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
 describe("gateway server auth/connect", () => {
   test("closes silent handshakes after timeout", { timeout: 60_000 }, async () => {
     vi.useRealTimers();
-    const { server, ws } = await startServerWithClient();
-    const closed = await waitForWsClose(ws, HANDSHAKE_TIMEOUT_MS + 2_000);
-    expect(closed).toBe(true);
-    await server.close();
+    const prevHandshakeTimeout = process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS;
+    process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS = "250";
+    try {
+      const { server, ws } = await startServerWithClient();
+      const handshakeTimeoutMs = getHandshakeTimeoutMs();
+      const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2_000);
+      expect(closed).toBe(true);
+      await server.close();
+    } finally {
+      if (prevHandshakeTimeout === undefined) {
+        delete process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS;
+      } else {
+        process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+      }
+    }
   });
 
   test("connect (req) handshake returns hello-ok payload", async () => {
@@ -114,6 +126,52 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
     await server.close();
+  });
+
+  test("rejects control ui without device identity by default", async () => {
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    const res = await connectReq(ws, {
+      token: "secret",
+      device: null,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "1.0.0",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("secure context");
+    ws.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
+  test("allows control ui without device identity when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    const res = await connectReq(ws, {
+      token: "secret",
+      device: null,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "1.0.0",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+    expect(res.ok).toBe(true);
+    ws.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
   });
 
   test("accepts device token auth for paired device", async () => {

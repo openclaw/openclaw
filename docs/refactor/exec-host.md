@@ -30,7 +30,7 @@ read_when:
 - **Node identity:** use existing `nodeId`.
 - **Socket auth:** Unix socket + token (cross-platform); split later if needed.
 - **Node host state:** `~/.clawdbot/node.json` (node id + pairing token).
-- **macOS exec host:** run `system.run` inside the macOS app; node service forwards requests over local IPC.
+- **macOS exec host:** run `system.run` inside the macOS app; node host service forwards requests over local IPC.
 - **No XPC helper:** stick to Unix socket + token + peer checks.
 
 ## Key concepts
@@ -216,7 +216,7 @@ Option B:
 ## Slash commands
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>`
 - Per-agent, per-session overrides; non-persistent unless saved via config.
-- `/elevated on|off` remains a shortcut for `host=gateway security=full`.
+- `/elevated on|off|ask|full` remains a shortcut for `host=gateway security=full` (with `full` skipping approvals).
 
 ## Cross-platform story
 - The runner service is the portable execution target.

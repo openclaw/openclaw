@@ -21,7 +21,7 @@ export async function installGatewayDaemonNonInteractive(params: {
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
-    runtime.log("Systemd user services are unavailable; skipping daemon install.");
+    runtime.log("Systemd user services are unavailable; skipping service install.");
     return;
   }
 
@@ -48,7 +48,7 @@ export async function installGatewayDaemonNonInteractive(params: {
       environment,
     });
   } catch (err) {
-    runtime.error(`Gateway daemon install failed: ${String(err)}`);
+    runtime.error(`Gateway service install failed: ${String(err)}`);
     runtime.log(gatewayInstallErrorHint());
     return;
   }

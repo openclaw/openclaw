@@ -13,21 +13,13 @@ export type QueueConfig = {
   mode?: QueueMode;
   byChannel?: QueueModeByProvider;
   debounceMs?: number;
+  /** Per-channel debounce overrides (ms). */
+  debounceMsByChannel?: InboundDebounceByProvider;
   cap?: number;
   drop?: QueueDropPolicy;
 };
 
-export type InboundDebounceByProvider = {
-  whatsapp?: number;
-  telegram?: number;
-  discord?: number;
-  slack?: number;
-  mattermost?: number;
-  signal?: number;
-  imessage?: number;
-  msteams?: number;
-  webchat?: number;
-};
+export type InboundDebounceByProvider = Record<string, number>;
 
 export type InboundDebounceConfig = {
   debounceMs?: number;

@@ -1,5 +1,6 @@
 import net from "node:net";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveLsofCommand } from "./ports-lsof.js";
 import { buildPortHints } from "./ports-format.js";
 import type { PortListener, PortUsage, PortUsageStatus } from "./ports-types.js";
 
@@ -71,7 +72,8 @@ async function readUnixListeners(
   port: number,
 ): Promise<{ listeners: PortListener[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
-  const res = await runCommandSafe(["lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
+  const lsof = await resolveLsofCommand();
+  const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
   if (res.code === 0) {
     const listeners = parseLsofFieldOutput(res.stdout);
     await Promise.all(
@@ -87,11 +89,12 @@ async function readUnixListeners(
     );
     return { listeners, detail: res.stdout.trim() || undefined, errors };
   }
-  if (res.code === 1) {
+  const stderr = res.stderr.trim();
+  if (res.code === 1 && !res.error && !stderr) {
     return { listeners: [], detail: undefined, errors };
   }
   if (res.error) errors.push(res.error);
-  const detail = [res.stderr.trim(), res.stdout.trim()].filter(Boolean).join("\n");
+  const detail = [stderr, res.stdout.trim()].filter(Boolean).join("\n");
   if (detail) errors.push(detail);
   return { listeners: [], detail: undefined, errors };
 }
@@ -175,7 +178,7 @@ async function readWindowsListeners(
   return { listeners, detail: res.stdout.trim() || undefined, errors };
 }
 
-async function checkPortInUse(port: number): Promise<PortUsageStatus> {
+async function tryListenOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
   try {
     await new Promise<void>((resolve, reject) => {
       const tester = net
@@ -184,13 +187,27 @@ async function checkPortInUse(port: number): Promise<PortUsageStatus> {
         .once("listening", () => {
           tester.close(() => resolve());
         })
-        .listen(port);
+        .listen({ port, host, exclusive: true });
     });
     return "free";
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") return "busy";
+    if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
+      return "skip";
+    }
     return "unknown";
   }
+}
+
+async function checkPortInUse(port: number): Promise<PortUsageStatus> {
+  const hosts = ["127.0.0.1", "0.0.0.0", "::1", "::"];
+  let sawUnknown = false;
+  for (const host of hosts) {
+    const result = await tryListenOnHost(port, host);
+    if (result === "busy") return "busy";
+    if (result === "unknown") sawUnknown = true;
+  }
+  return sawUnknown ? "unknown" : "free";
 }
 
 export async function inspectPortUsage(port: number): Promise<PortUsage> {

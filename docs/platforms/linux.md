@@ -41,7 +41,7 @@ clawdbot onboard --install-daemon
 Or:
 
 ```
-clawdbot daemon install
+clawdbot gateway install
 ```
 
 Or:
@@ -50,7 +50,7 @@ Or:
 clawdbot configure
 ```
 
-Select **Gateway daemon** when prompted.
+Select **Gateway service** when prompted.
 
 Repair/migrate:
 

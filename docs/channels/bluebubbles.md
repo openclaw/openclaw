@@ -149,6 +149,19 @@ Available actions:
 - **leaveGroup**: Leave a group chat (`chatGuid`)
 - **sendAttachment**: Send media/files (`to`, `buffer`, `filename`)
 
+### Message IDs (short vs full)
+Clawdbot may surface *short* message IDs (e.g., `1`, `2`) to save tokens.
+- `MessageSid` / `ReplyToId` can be short IDs.
+- `MessageSidFull` / `ReplyToIdFull` contain the provider full IDs.
+- Short IDs are in-memory; they can expire on restart or cache eviction.
+- Actions accept short or full `messageId`, but short IDs will error if no longer available.
+
+Use full IDs for durable automations and storage:
+- Templates: `{{MessageSidFull}}`, `{{ReplyToIdFull}}`
+- Context: `MessageSidFull` / `ReplyToIdFull` in inbound payloads
+
+See [Configuration](/gateway/configuration) for template variables.
+
 ## Block streaming
 Control whether responses are sent as a single message or streamed in blocks:
 ```json5

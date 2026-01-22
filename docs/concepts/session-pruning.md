@@ -9,8 +9,22 @@ read_when:
 Session pruning trims **old tool results** from the in-memory context right before each LLM call. It does **not** rewrite the on-disk session history (`*.jsonl`).
 
 ## When it runs
-- Before each LLM request (context hook).
+- When `mode: "cache-ttl"` is enabled and the last Anthropic call for the session is older than `ttl`.
 - Only affects the messages sent to the model for that request.
+ - Only active for Anthropic API calls (and OpenRouter Anthropic models).
+ - For best results, match `ttl` to your model `cacheControlTtl`.
+ - After a prune, the TTL window resets so subsequent requests keep cache until `ttl` expires again.
+
+## Smart defaults (Anthropic)
+- **OAuth or setup-token** profiles: enable `cache-ttl` pruning and set heartbeat to `1h`.
+- **API key** profiles: enable `cache-ttl` pruning, set heartbeat to `30m`, and default `cacheControlTtl` to `1h` on Anthropic models.
+- If you set any of these values explicitly, Clawdbot does **not** override them.
+
+## What this improves (cost + cache behavior)
+- **Why prune:** Anthropic prompt caching only applies within the TTL. If a session goes idle past the TTL, the next request re-caches the full prompt unless you trim it first.
+- **What gets cheaper:** pruning reduces the **cacheWrite** size for that first request after the TTL expires.
+- **Why the TTL reset matters:** once pruning runs, the cache window resets, so follow‑up requests can reuse the freshly cached prompt instead of re-caching the full history again.
+- **What it does not do:** pruning doesn’t add tokens or “double” costs; it only changes what gets cached on that first post‑TTL request.
 
 ## What can be pruned
 - Only `toolResult` messages.
@@ -26,14 +40,10 @@ Pruning uses an estimated context window (chars ≈ tokens × 4). The window siz
 3) `agents.defaults.contextTokens`.
 4) Default `200000` tokens.
 
-## Modes
-### adaptive
-- If estimated context ratio ≥ `softTrimRatio`: soft-trim oversized tool results.
-- If still ≥ `hardClearRatio` **and** prunable tool text ≥ `minPrunableToolChars`: hard-clear oldest eligible tool results.
-
-### aggressive
-- Always hard-clears eligible tool results before the cutoff.
-- Ignores `hardClear.enabled` (always clears when eligible).
+## Mode
+### cache-ttl
+- Pruning only runs if the last Anthropic call is older than `ttl` (default `5m`).
+- When it runs: same soft-trim + hard-clear behavior as before.
 
 ## Soft vs hard pruning
 - **Soft-trim**: only for oversized tool results.
@@ -52,6 +62,7 @@ Pruning uses an estimated context window (chars ≈ tokens × 4). The window siz
 - Compaction is separate: compaction summarizes and persists, pruning is transient per request. See [/concepts/compaction](/concepts/compaction).
 
 ## Defaults (when enabled)
+- `ttl`: `"5m"`
 - `keepLastAssistants`: `3`
 - `softTrimRatio`: `0.3`
 - `hardClearRatio`: `0.5`
@@ -60,16 +71,7 @@ Pruning uses an estimated context window (chars ≈ tokens × 4). The window siz
 - `hardClear`: `{ enabled: true, placeholder: "[Old tool result content cleared]" }`
 
 ## Examples
-Default (adaptive):
-```json5
-{
-  agent: {
-    contextPruning: { mode: "adaptive" }
-  }
-}
-```
-
-To disable:
+Default (off):
 ```json5
 {
   agent: {
@@ -78,11 +80,11 @@ To disable:
 }
 ```
 
-Aggressive:
+Enable TTL-aware pruning:
 ```json5
 {
   agent: {
-    contextPruning: { mode: "aggressive" }
+    contextPruning: { mode: "cache-ttl", ttl: "5m" }
   }
 }
 ```
@@ -92,7 +94,7 @@ Restrict pruning to specific tools:
 {
   agent: {
     contextPruning: {
-      mode: "adaptive",
+      mode: "cache-ttl",
       tools: { allow: ["exec", "read"], deny: ["*image*"] }
     }
   }

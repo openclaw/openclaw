@@ -23,10 +23,10 @@ Common use cases:
 Execution is still guarded by **exec approvals** and per‑agent allowlists on the
 node host, so you can keep command access scoped and explicit.
 
-## Start (foreground)
+## Run (foreground)
 
 ```bash
-clawdbot node start --host <gateway-host> --port 18790
+clawdbot node run --host <gateway-host> --port 18790
 ```
 
 Options:
@@ -42,9 +42,7 @@ Options:
 Install a headless node host as a user service.
 
 ```bash
-clawdbot node service install --host <gateway-host> --port 18790
-# or
-clawdbot service node install --host <gateway-host> --port 18790
+clawdbot node install --host <gateway-host> --port 18790
 ```
 
 Options:
@@ -61,18 +59,10 @@ Manage the service:
 
 ```bash
 clawdbot node status
-clawdbot service node status
-clawdbot node service status
-clawdbot node service start
-clawdbot node service stop
-clawdbot node service restart
-clawdbot node service uninstall
-```
-
-Legacy alias:
-
-```bash
-clawdbot node daemon status
+clawdbot node run
+clawdbot node stop
+clawdbot node restart
+clawdbot node uninstall
 ```
 
 ## Pairing

@@ -21,6 +21,7 @@ import {
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 
 import type { ResolvedSlackAccount } from "../accounts.js";
 
@@ -206,9 +207,7 @@ export function registerSlackMonitorSlashCommands(params: {
             id: command.user_id,
             name: senderName,
           });
-          const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
-            allowMatch.matchSource ?? "none"
-          }`;
+          const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
           if (!allowMatch.allowed) {
             if (ctx.dmPolicy === "pairing") {
               const { code, created } = await upsertChannelPairingRequest({

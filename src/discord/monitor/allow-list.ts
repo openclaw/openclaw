@@ -3,6 +3,8 @@ import type { Guild, User } from "@buape/carbon";
 import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
+  resolveChannelMatchConfig,
+  type ChannelMatchSource,
 } from "../../channels/channel-config.js";
 import type { AllowlistMatch } from "../../channels/allowlist-match.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -44,7 +46,7 @@ export type DiscordChannelConfigResolved = {
   systemPrompt?: string;
   autoThread?: boolean;
   matchKey?: string;
-  matchSource?: "direct" | "parent";
+  matchSource?: ChannelMatchSource;
 };
 
 export function normalizeDiscordAllowList(
@@ -198,13 +200,12 @@ function resolveDiscordChannelEntryMatch(
     entries: channels,
     keys,
     parentKeys,
+    wildcardKey: "*",
   });
 }
 
 function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
-  matchKey: string | undefined,
-  matchSource: "direct" | "parent",
 ): DiscordChannelConfigResolved {
   const resolved: DiscordChannelConfigResolved = {
     allowed: entry.allow !== false,
@@ -215,8 +216,6 @@ function resolveDiscordChannelConfigEntry(
     systemPrompt: entry.systemPrompt,
     autoThread: entry.autoThread,
   };
-  if (matchKey) resolved.matchKey = matchKey;
-  resolved.matchSource = matchSource;
   return resolved;
 }
 
@@ -234,8 +233,8 @@ export function resolveDiscordChannelConfig(params: {
     name: channelName,
     slug: channelSlug,
   });
-  if (!match.entry || !match.matchKey) return { allowed: false };
-  return resolveDiscordChannelConfigEntry(match.entry, match.matchKey, "direct");
+  const resolved = resolveChannelMatchConfig(match, resolveDiscordChannelConfigEntry);
+  return resolved ?? { allowed: false };
 }
 
 export function resolveDiscordChannelConfigWithFallback(params: {
@@ -277,14 +276,7 @@ export function resolveDiscordChannelConfigWithFallback(params: {
         }
       : undefined,
   );
-  if (match.entry && match.matchKey && match.matchSource) {
-    return resolveDiscordChannelConfigEntry(
-      match.entry,
-      match.matchKey,
-      match.matchSource === "parent" ? "parent" : "direct",
-    );
-  }
-  return { allowed: false };
+  return resolveChannelMatchConfig(match, resolveDiscordChannelConfigEntry) ?? { allowed: false };
 }
 
 export function resolveDiscordShouldRequireMention(params: {

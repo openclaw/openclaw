@@ -52,6 +52,51 @@ actor SessionPreviewCache {
     }
 }
 
+actor SessionPreviewLimiter {
+    static let shared = SessionPreviewLimiter(maxConcurrent: 2)
+
+    private let maxConcurrent: Int
+    private var available: Int
+    private var waitQueue: [UUID] = []
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    init(maxConcurrent: Int) {
+        let normalized = max(1, maxConcurrent)
+        self.maxConcurrent = normalized
+        self.available = normalized
+    }
+
+    func withPermit<T>(_ operation: () async throws -> T) async throws -> T {
+        await self.acquire()
+        defer { self.release() }
+        if Task.isCancelled { throw CancellationError() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        if self.available > 0 {
+            self.available -= 1
+            return
+        }
+        let id = UUID()
+        await withCheckedContinuation { cont in
+            self.waitQueue.append(id)
+            self.waiters[id] = cont
+        }
+    }
+
+    private func release() {
+        if let id = self.waitQueue.first {
+            self.waitQueue.removeFirst()
+            if let cont = self.waiters.removeValue(forKey: id) {
+                cont.resume()
+            }
+            return
+        }
+        self.available = min(self.available + 1, self.maxConcurrent)
+    }
+}
+
 #if DEBUG
 extension SessionPreviewCache {
     func _testSet(items: [SessionPreviewItem], for sessionKey: String, updatedAt: Date = Date()) {
@@ -184,17 +229,31 @@ enum SessionMenuPreviewLoader {
             return self.snapshot(from: cached)
         }
 
+        let isConnected = await MainActor.run {
+            if case .connected = ControlChannel.shared.state { return true }
+            return false
+        }
+
+        guard isConnected else {
+            if let fallback = await SessionPreviewCache.shared.lastItems(for: sessionKey) {
+                return Self.snapshot(from: fallback)
+            }
+            return SessionMenuPreviewSnapshot(items: [], status: .error("Gateway disconnected"))
+        }
+
         do {
             let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
-            let payload = try await AsyncTimeout.withTimeout(
-                seconds: self.previewTimeoutSeconds,
-                onTimeout: { PreviewTimeoutError() },
-                operation: {
-                    try await GatewayConnection.shared.chatHistory(
-                        sessionKey: sessionKey,
-                        limit: self.previewLimit(for: maxItems),
-                        timeoutMs: timeoutMs)
-                })
+            let payload = try await SessionPreviewLimiter.shared.withPermit {
+                try await AsyncTimeout.withTimeout(
+                    seconds: self.previewTimeoutSeconds,
+                    onTimeout: { PreviewTimeoutError() },
+                    operation: {
+                        try await GatewayConnection.shared.chatHistory(
+                            sessionKey: sessionKey,
+                            limit: self.previewLimit(for: maxItems),
+                            timeoutMs: timeoutMs)
+                    })
+            }
             let built = Self.previewItems(from: payload, maxItems: maxItems)
             await SessionPreviewCache.shared.store(items: built, for: sessionKey)
             return Self.snapshot(from: built)

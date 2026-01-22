@@ -95,13 +95,13 @@ export function createTypingSignaler(params: {
 
   const signalToolStart = async () => {
     if (disabled) return;
-    if (!hasRenderableText) return;
+    // Start typing as soon as tools begin executing, even before the first text delta.
     if (!typing.isActive()) {
       await typing.startTypingLoop();
       typing.refreshTypingTtl();
       return;
     }
-    // Keep typing indicator alive during tool execution without changing mode semantics.
+    // Keep typing indicator alive during tool execution.
     typing.refreshTypingTtl();
   };
 

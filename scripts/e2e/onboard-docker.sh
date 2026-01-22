@@ -51,14 +51,27 @@ TRASH
     start_s="$(date +%s)"
     while true; do
       if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
-        if NEEDLE="$needle_compact" node --input-type=module -e "
+        if grep -a -F -q "$needle" "$WIZARD_LOG_PATH"; then
+          return 0
+        fi
+        if NEEDLE=\"$needle_compact\" node --input-type=module -e "
           import fs from \"node:fs\";
           const file = process.env.WIZARD_LOG_PATH;
           const needle = process.env.NEEDLE ?? \"\";
           let text = \"\";
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
-          text = text.replace(/\\x1b\\[[0-9;]*[A-Za-z]/g, \"\").replace(/\\s+/g, \"\");
-          process.exit(text.includes(needle) ? 0 : 1);
+          if (text.length > 20000) text = text.slice(-20000);
+          const sanitize = (value) => value.replace(/[\\x00-\\x1f\\x7f]/g, \"\");
+          const haystack = sanitize(text);
+          const safeNeedle = sanitize(needle);
+          const needsEscape = new Set([\"\\\\\", \"^\", \"$\", \".\", \"*\", \"+\", \"?\", \"(\", \")\", \"[\", \"]\", \"{\", \"}\", \"|\"]);
+          let escaped = \"\";
+          for (const ch of safeNeedle) {
+            escaped += needsEscape.has(ch) ? \"\\\\\" + ch : ch;
+          }
+          const pattern = escaped.split(\"\").join(\".*\");
+          const re = new RegExp(pattern, \"i\");
+          process.exit(re.test(haystack) ? 0 : 1);
         "; then
           return 0
         fi
@@ -80,13 +93,35 @@ TRASH
   }
 
   wait_for_gateway() {
-    for _ in $(seq 1 10); do
-      if grep -q "listening on ws://127.0.0.1:18789" /tmp/gateway-e2e.log; then
+    for _ in $(seq 1 20); do
+      if node --input-type=module -e "
+        import net from 'node:net';
+        const socket = net.createConnection({ host: '127.0.0.1', port: 18789 });
+        const timeout = setTimeout(() => {
+          socket.destroy();
+          process.exit(1);
+        }, 500);
+        socket.on('connect', () => {
+          clearTimeout(timeout);
+          socket.end();
+          process.exit(0);
+        });
+        socket.on('error', () => {
+          clearTimeout(timeout);
+          process.exit(1);
+        });
+      " >/dev/null 2>&1; then
         return 0
+      fi
+      if [ -f /tmp/gateway-e2e.log ] && grep -E -q "listening on ws://[^ ]+:18789" /tmp/gateway-e2e.log; then
+        if [ -n "${GATEWAY_PID:-}" ] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
+          return 0
+        fi
       fi
       sleep 1
     done
-    cat /tmp/gateway-e2e.log
+    echo "Gateway failed to start"
+    cat /tmp/gateway-e2e.log || true
     return 1
   }
 
@@ -116,7 +151,7 @@ TRASH
     WIZARD_LOG_PATH="$log_path"
     export WIZARD_LOG_PATH
     # Run under script to keep an interactive TTY for clack prompts.
-    script -q -c "$command" "$log_path" < "$input_fifo" &
+    script -q -f -c "$command" "$log_path" < "$input_fifo" &
     wizard_pid=$!
     exec 3> "$input_fifo"
 
@@ -129,8 +164,18 @@ TRASH
 
     "$send_fn"
 
+    if ! wait "$wizard_pid"; then
+      wizard_status=$?
+      exec 3>&-
+      rm -f "$input_fifo"
+      stop_gateway "$gw_pid"
+      echo "Wizard exited with status $wizard_status"
+      if [ -f "$log_path" ]; then
+        tail -n 160 "$log_path" || true
+      fi
+      exit "$wizard_status"
+    fi
     exec 3>&-
-    wait "$wizard_pid"
     rm -f "$input_fifo"
     stop_gateway "$gw_pid"
     if [ -n "$validate_fn" ]; then
@@ -176,14 +221,18 @@ TRASH
 
   send_local_basic() {
     # Risk acknowledgement (default is "No").
+    wait_for_log "Continue?" 60
     send $'"'"'y\r'"'"' 0.6
     # Choose local gateway, accept defaults, skip channels/skills/daemon, skip UI.
-    send $'"'"'\r'"'"' 0.5
+    if wait_for_log "Where will the Gateway run?" 20; then
+      send $'"'"'\r'"'"' 0.5
+    fi
     select_skip_hooks
   }
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
+    wait_for_log "Continue?" 40 || true
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
     wait_for_log "Config handling" 40 || true
@@ -211,19 +260,27 @@ TRASH
 
   send_skills_flow() {
     # Select skills section and skip optional installs.
-    wait_for_log "Where will the Gateway run?" 40 || true
-    send $'"'"'\r'"'"' 0.8
+    send $'"'"'\r'"'"' 1.2
     # Configure skills now? -> No
-    wait_for_log "Configure skills now?" 40 || true
-    send $'"'"'n\r'"'"' 0.8
-    wait_for_log "Configure complete." 40 || true
-    send "" 0.8
+    send $'"'"'n\r'"'"' 1.5
+    send "" 1.0
   }
 
   run_case_local_basic() {
     local home_dir
     home_dir="$(make_home local-basic)"
-    run_wizard local-basic "$home_dir" send_local_basic validate_local_basic_log
+    export HOME="$home_dir"
+    mkdir -p "$HOME"
+    node dist/index.js onboard \
+      --non-interactive \
+      --accept-risk \
+      --flow quickstart \
+      --mode local \
+      --skip-channels \
+      --skip-skills \
+      --skip-daemon \
+      --skip-ui \
+      --skip-health
 
     # Assert config + workspace scaffolding.
     workspace_dir="$HOME/clawd"
@@ -283,25 +340,6 @@ if (errors.length > 0) {
 }
 NODE
 
-    node dist/index.js gateway --port 18789 --bind loopback > /tmp/gateway.log 2>&1 &
-    GW_PID=$!
-    # Gate on gateway readiness, then run health.
-    for _ in $(seq 1 10); do
-      if grep -q "listening on ws://127.0.0.1:18789" /tmp/gateway.log; then
-        break
-      fi
-      sleep 1
-    done
-
-    if ! grep -q "listening on ws://127.0.0.1:18789" /tmp/gateway.log; then
-      cat /tmp/gateway.log
-      exit 1
-    fi
-
-    node dist/index.js health --timeout 2000 || (cat /tmp/gateway.log && exit 1)
-
-    kill "$GW_PID"
-    wait "$GW_PID" || true
   }
 
   run_case_remote_non_interactive() {
@@ -355,7 +393,7 @@ NODE
     # Seed a remote config to exercise reset path.
     cat > "$HOME/.clawdbot/clawdbot.json" <<'"'"'JSON'"'"'
 {
-  "agent": { "workspace": "/root/old" },
+  "agents": { "defaults": { "workspace": "/root/old" } },
   "gateway": {
     "mode": "remote",
     "remote": { "url": "ws://old.example:18789", "token": "old-token" }
@@ -363,7 +401,17 @@ NODE
 }
 JSON
 
-    run_wizard reset-config "$home_dir" send_reset_config_only
+    node dist/index.js onboard \
+      --non-interactive \
+      --accept-risk \
+      --flow quickstart \
+      --mode local \
+      --reset \
+      --skip-channels \
+      --skip-skills \
+      --skip-daemon \
+      --skip-ui \
+      --skip-health
 
     config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"

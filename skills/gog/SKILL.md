@@ -16,6 +16,7 @@ Setup (once)
 
 Common commands
 - Gmail search: `gog gmail search 'newer_than:7d' --max 10`
+- Gmail messages search (per email, ignores threading): `gog gmail messages search "in:inbox from:ryanair.com" --max 20 --account you@example.com`
 - Gmail send (plain): `gog gmail send --to a@b.com --subject "Hi" --body "Hello"`
 - Gmail send (multi-line): `gog gmail send --to a@b.com --subject "Hi" --body-file ./message.txt`
 - Gmail send (stdin): `gog gmail send --to a@b.com --subject "Hi" --body-file -`
@@ -88,3 +89,4 @@ Notes
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
 - Confirm before sending mail or creating events.
+- `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.

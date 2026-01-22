@@ -219,8 +219,8 @@ public actor GatewayNodeSession {
         }
         if let error = response.error {
             params["error"] = AnyCodable([
-                "code": AnyCodable(error.code.rawValue),
-                "message": AnyCodable(error.message),
+                "code": error.code.rawValue,
+                "message": error.message,
             ])
         }
         do {

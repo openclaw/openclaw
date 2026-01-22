@@ -314,7 +314,7 @@ private enum ExecHostExecutor {
         }
 
         var approvedByAsk = approvalDecision != nil
-        if self.requiresAsk(
+        if ExecApprovalHelpers.requiresAsk(
             ask: context.ask,
             security: context.security,
             allowlistMatch: context.allowlistMatch,
@@ -417,34 +417,18 @@ private enum ExecHostExecutor {
             skillAllow: skillAllow)
     }
 
-    private static func requiresAsk(
-        ask: ExecAsk,
-        security: ExecSecurity,
-        allowlistMatch: ExecAllowlistEntry?,
-        skillAllow: Bool) -> Bool
-    {
-        if ask == .always { return true }
-        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow { return true }
-        return false
-    }
-
     private static func persistAllowlistEntry(
         decision: ExecApprovalDecision?,
         context: ExecApprovalContext)
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
-        guard let pattern = self.allowlistPattern(command: context.command, resolution: context.resolution) else {
+        guard let pattern = ExecApprovalHelpers.allowlistPattern(
+            command: context.command,
+            resolution: context.resolution)
+        else {
             return
         }
         ExecApprovalsStore.addAllowlistEntry(agentId: context.trimmedAgent, pattern: pattern)
-    }
-
-    private static func allowlistPattern(
-        command: [String],
-        resolution: ExecCommandResolution?) -> String?
-    {
-        let pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? command.first ?? ""
-        return pattern.isEmpty ? nil : pattern
     }
 
     private static func ensureScreenRecordingAccess(_ needsScreenRecording: Bool?) async -> ExecHostResponse? {

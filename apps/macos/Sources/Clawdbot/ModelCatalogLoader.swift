@@ -2,14 +2,28 @@ import Foundation
 import JavaScriptCore
 
 enum ModelCatalogLoader {
-    static let defaultPath: String = FileManager().homeDirectoryForCurrentUser
-        .appendingPathComponent("Projects/pi-mono/packages/ai/src/models.generated.ts").path
+    static var defaultPath: String { self.resolveDefaultPath() }
     private static let logger = Logger(subsystem: "com.clawdbot", category: "models")
+    private nonisolated static let appSupportDir: URL = {
+        let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("Clawdbot", isDirectory: true)
+    }()
+
+    private static var cachePath: URL {
+        self.appSupportDir.appendingPathComponent("model-catalog/models.generated.js", isDirectory: false)
+    }
 
     static func load(from path: String) async throws -> [ModelChoice] {
         let expanded = (path as NSString).expandingTildeInPath
-        self.logger.debug("model catalog load start file=\(URL(fileURLWithPath: expanded).lastPathComponent)")
-        let source = try String(contentsOfFile: expanded, encoding: .utf8)
+        guard let resolved = self.resolvePath(preferred: expanded) else {
+            self.logger.error("model catalog load failed: file not found")
+            throw NSError(
+                domain: "ModelCatalogLoader",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Model catalog file not found"])
+        }
+        self.logger.debug("model catalog load start file=\(URL(fileURLWithPath: resolved.path).lastPathComponent)")
+        let source = try String(contentsOfFile: resolved.path, encoding: .utf8)
         let sanitized = self.sanitize(source: source)
 
         let ctx = JSContext()
@@ -45,7 +59,80 @@ enum ModelCatalogLoader {
             return lhs.provider.localizedCaseInsensitiveCompare(rhs.provider) == .orderedAscending
         }
         self.logger.debug("model catalog loaded providers=\(rawModels.count) models=\(sorted.count)")
+        if resolved.shouldCache {
+            self.cacheCatalog(sourcePath: resolved.path)
+        }
         return sorted
+    }
+
+    private static func resolveDefaultPath() -> String {
+        let cache = self.cachePath.path
+        if FileManager().isReadableFile(atPath: cache) { return cache }
+        if let bundlePath = self.bundleCatalogPath() { return bundlePath }
+        if let nodePath = self.nodeModulesCatalogPath() { return nodePath }
+        return cache
+    }
+
+    private static func resolvePath(preferred: String) -> (path: String, shouldCache: Bool)? {
+        if FileManager().isReadableFile(atPath: preferred) {
+            return (preferred, preferred != self.cachePath.path)
+        }
+
+        if let bundlePath = self.bundleCatalogPath(), bundlePath != preferred {
+            self.logger.warning("model catalog path missing; falling back to bundled catalog")
+            return (bundlePath, true)
+        }
+
+        let cache = self.cachePath.path
+        if cache != preferred, FileManager().isReadableFile(atPath: cache) {
+            self.logger.warning("model catalog path missing; falling back to cached catalog")
+            return (cache, false)
+        }
+
+        if let nodePath = self.nodeModulesCatalogPath(), nodePath != preferred {
+            self.logger.warning("model catalog path missing; falling back to node_modules catalog")
+            return (nodePath, true)
+        }
+
+        return nil
+    }
+
+    private static func bundleCatalogPath() -> String? {
+        guard let url = Bundle.main.url(forResource: "models.generated", withExtension: "js") else {
+            return nil
+        }
+        return url.path
+    }
+
+    private static func nodeModulesCatalogPath() -> String? {
+        let roots = [
+            URL(fileURLWithPath: CommandResolver.projectRootPath()),
+            URL(fileURLWithPath: FileManager().currentDirectoryPath),
+        ]
+        for root in roots {
+            let candidate = root
+                .appendingPathComponent("node_modules/@mariozechner/pi-ai/dist/models.generated.js")
+            if FileManager().isReadableFile(atPath: candidate.path) {
+                return candidate.path
+            }
+        }
+        return nil
+    }
+
+    private static func cacheCatalog(sourcePath: String) {
+        let destination = self.cachePath
+        do {
+            try FileManager().createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            if FileManager().fileExists(atPath: destination.path) {
+                try FileManager().removeItem(at: destination)
+            }
+            try FileManager().copyItem(atPath: sourcePath, toPath: destination.path)
+            self.logger.debug("model catalog cached file=\(destination.lastPathComponent)")
+        } catch {
+            self.logger.warning("model catalog cache failed: \(error.localizedDescription)")
+        }
     }
 
     private static func sanitize(source: String) -> String {

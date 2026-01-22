@@ -2,52 +2,25 @@ import AppKit
 import ClawdbotDiscovery
 import ClawdbotIPC
 import ClawdbotKit
-import CoreLocation
 import Observation
 import SwiftUI
 
 struct GeneralSettings: View {
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(locationModeKey) private var locationModeRaw: String = ClawdbotLocationMode.off.rawValue
-    @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
         localDisplayName: InstanceIdentity.displayName)
-    @State private var isInstallingCLI = false
-    @State private var cliStatus: String?
-    @State private var cliInstalled = false
-    @State private var cliInstallLocation: String?
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool { ProcessInfo.processInfo.isNixMode }
-    @State private var lastLocationModeRaw: String = ClawdbotLocationMode.off.rawValue
 
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
-                if !self.state.onboardingSeen {
-                    Button {
-                        DebugActions.restartOnboarding()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Label("Complete onboarding to finish setup", systemImage: "arrow.counterclockwise")
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(Color.accentColor)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 2)
-                }
-
                 VStack(alignment: .leading, spacing: 12) {
                     SettingsToggleRow(
                         title: "Clawdbot active",
@@ -83,29 +56,6 @@ struct GeneralSettings: View {
                         subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
                         binding: self.$cameraEnabled)
 
-                    SystemRunSettingsView()
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Location Access")
-                            .font(.body)
-
-                        Picker("", selection: self.$locationModeRaw) {
-                            Text("Off").tag(ClawdbotLocationMode.off.rawValue)
-                            Text("While Using").tag(ClawdbotLocationMode.whileUsing.rawValue)
-                            Text("Always").tag(ClawdbotLocationMode.always.rawValue)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-
-                        Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
-                            .disabled(self.locationMode == .off)
-
-                        Text("Always may require System Settings to approve background location.")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
                     SettingsToggleRow(
                         title: "Enable Peekaboo Bridge",
                         subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
@@ -130,27 +80,11 @@ struct GeneralSettings: View {
         }
         .onAppear {
             guard !self.isPreview else { return }
-            self.refreshCLIStatus()
             self.refreshGatewayStatus()
-            self.lastLocationModeRaw = self.locationModeRaw
         }
         .onChange(of: self.state.canvasEnabled) { _, enabled in
             if !enabled {
                 CanvasManager.shared.hideAll()
-            }
-        }
-        .onChange(of: self.locationModeRaw) { _, newValue in
-            let previous = self.lastLocationModeRaw
-            self.lastLocationModeRaw = newValue
-            guard let mode = ClawdbotLocationMode(rawValue: newValue) else { return }
-            Task {
-                let granted = await self.requestLocationAuthorization(mode: mode)
-                if !granted {
-                    await MainActor.run {
-                        self.locationModeRaw = previous
-                        self.lastLocationModeRaw = previous
-                    }
-                }
             }
         }
     }
@@ -161,39 +95,20 @@ struct GeneralSettings: View {
             set: { self.state.isPaused = !$0 })
     }
 
-    private var locationMode: ClawdbotLocationMode {
-        ClawdbotLocationMode(rawValue: self.locationModeRaw) ?? .off
-    }
-
-    private func requestLocationAuthorization(mode: ClawdbotLocationMode) async -> Bool {
-        guard mode != .off else { return true }
-        guard CLLocationManager.locationServicesEnabled() else {
-            await MainActor.run { LocationPermissionHelper.openSettings() }
-            return false
-        }
-
-        let status = CLLocationManager().authorizationStatus
-        let requireAlways = mode == .always
-        if PermissionManager.isLocationAuthorized(status: status, requireAlways: requireAlways) {
-            return true
-        }
-        let updated = await LocationPermissionRequester.shared.request(always: requireAlways)
-        return PermissionManager.isLocationAuthorized(status: updated, requireAlways: requireAlways)
-    }
-
     private var connectionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Clawdbot runs")
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Picker("", selection: self.$state.connectionMode) {
+            Picker("Mode", selection: self.$state.connectionMode) {
                 Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
                 Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                 Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 380, alignment: .leading)
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 260, alignment: .leading)
 
             if self.state.connectionMode == .unconfigured {
                 Text("Pick Local or Remote to start the Gateway.")
@@ -216,8 +131,6 @@ struct GeneralSettings: View {
             if self.state.connectionMode == .remote {
                 self.remoteCard
             }
-
-            self.cliInstaller
         }
     }
 
@@ -299,6 +212,11 @@ struct GeneralSettings: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let authLabel = ControlChannel.shared.authSourceLabel {
+                    Text(authLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Text("Tip: enable Tailscale for stable remote access.")
@@ -344,59 +262,6 @@ struct GeneralSettings: View {
     private var isControlStatusDuplicate: Bool {
         guard case let .failed(message) = self.remoteStatus else { return false }
         return message == self.controlStatusLine
-    }
-
-    private var cliInstaller: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button {
-                    Task { await self.installCLI() }
-                } label: {
-                    let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
-                    ZStack {
-                        Text(title)
-                            .opacity(self.isInstallingCLI ? 0 : 1)
-                        if self.isInstallingCLI {
-                            ProgressView()
-                                .controlSize(.mini)
-                        }
-                    }
-                    .frame(minWidth: 150)
-                }
-                .disabled(self.isInstallingCLI)
-
-                if self.isInstallingCLI {
-                    Text("Working...")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else if self.cliInstalled {
-                    Label("Installed", systemImage: "checkmark.circle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Not installed")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if let status = cliStatus {
-                Text(status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else if let installLocation = self.cliInstallLocation {
-                Text("Found at \(installLocation)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else {
-                Text("Installs a user-space Node 22+ runtime and the CLI (no Homebrew).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        }
     }
 
     private var gatewayInstallerCard: some View {
@@ -452,22 +317,6 @@ struct GeneralSettings: View {
         .padding(12)
         .background(Color.gray.opacity(0.08))
         .cornerRadius(10)
-    }
-
-    private func installCLI() async {
-        guard !self.isInstallingCLI else { return }
-        self.isInstallingCLI = true
-        defer { isInstallingCLI = false }
-        await CLIInstaller.install { status in
-            self.cliStatus = status
-            self.refreshCLIStatus()
-        }
-    }
-
-    private func refreshCLIStatus() {
-        let installLocation = CLIInstaller.installedLocation()
-        self.cliInstallLocation = installLocation
-        self.cliInstalled = installLocation != nil
     }
 
     private func refreshGatewayStatus() {
@@ -763,9 +612,6 @@ extension GeneralSettings {
             message: "Gateway ready")
         view.remoteStatus = .failed("SSH failed")
         view.showRemoteAdvanced = true
-        view.cliInstalled = true
-        view.cliInstallLocation = "/usr/local/bin/clawdbot"
-        view.cliStatus = "Installed"
         _ = view.body
 
         state.connectionMode = .unconfigured

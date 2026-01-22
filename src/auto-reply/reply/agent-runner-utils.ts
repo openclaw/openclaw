@@ -1,7 +1,7 @@
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
@@ -21,24 +21,27 @@ export function buildThreadingToolContext(params: {
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
   if (!config) return {};
-  const provider = normalizeChannelId(sessionCtx.Provider);
-  if (!provider) return {};
-  const dock = getChannelDock(provider);
-  if (!dock?.threading?.buildToolContext) return {};
-  // WhatsApp context isolation keys off conversation id, not the bot's own number.
-  const threadingTo =
-    provider === "whatsapp"
-      ? (sessionCtx.From ?? sessionCtx.To)
-      : provider === "imessage" && sessionCtx.ChatType === "direct"
-        ? (sessionCtx.From ?? sessionCtx.To)
-        : sessionCtx.To;
+  const rawProvider = sessionCtx.Provider?.trim().toLowerCase();
+  if (!rawProvider) return {};
+  const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
+  // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
+  const dock = provider ? getChannelDock(provider) : undefined;
+  if (!dock?.threading?.buildToolContext) {
+    return {
+      currentChannelId: sessionCtx.To?.trim() || undefined,
+      currentChannelProvider: provider ?? (rawProvider as ChannelId),
+      hasRepliedRef,
+    };
+  }
   const context =
     dock.threading.buildToolContext({
       cfg: config,
       accountId: sessionCtx.AccountId,
       context: {
         Channel: sessionCtx.Provider,
-        To: threadingTo,
+        From: sessionCtx.From,
+        To: sessionCtx.To,
+        ChatType: sessionCtx.ChatType,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
@@ -47,7 +50,7 @@ export function buildThreadingToolContext(params: {
     }) ?? {};
   return {
     ...context,
-    currentChannelProvider: provider,
+    currentChannelProvider: provider!, // guaranteed non-null since dock exists
   };
 }
 

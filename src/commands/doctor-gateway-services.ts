@@ -97,7 +97,7 @@ export async function maybeMigrateLegacyGatewayService(
 
   const daemonRuntime = await prompter.select<GatewayDaemonRuntime>(
     {
-      message: "Gateway daemon runtime",
+      message: "Gateway service runtime",
       options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
       initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
     },
@@ -120,7 +120,7 @@ export async function maybeMigrateLegacyGatewayService(
       environment,
     });
   } catch (err) {
-    runtime.error(`Gateway daemon install failed: ${String(err)}`);
+    runtime.error(`Gateway service install failed: ${String(err)}`);
     note(gatewayInstallErrorHint(), "Gateway");
   }
 }

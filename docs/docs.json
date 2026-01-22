@@ -845,8 +845,6 @@
           "cli/nodes",
           "cli/approvals",
           "cli/gateway",
-          "cli/daemon",
-          "cli/service",
           "cli/tui",
           "cli/voicecall",
           "cli/wake",

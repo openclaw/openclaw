@@ -50,7 +50,7 @@ Guide: [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 ## Command flow (what runs where)
 
-One gateway daemon owns state + channels. Nodes are peripherals.
+One gateway service owns state + channels. Nodes are peripherals.
 
 Flow example (Telegram → node):
 - Telegram message arrives at the **Gateway**.
@@ -59,7 +59,7 @@ Flow example (Telegram → node):
 - Node returns the result; Gateway replies back out to Telegram.
 
 Notes:
-- **Nodes do not run the gateway daemon.** Only one gateway should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)).
+- **Nodes do not run the gateway service.** Only one gateway should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)).
 - macOS app “node mode” is just a node client over the Bridge.
 
 ## SSH tunnel (CLI + tools)
@@ -112,7 +112,7 @@ Runbook: [macOS remote access](/platforms/mac/remote).
 Short version: **keep the Gateway loopback-only** unless you’re sure you need a bind.
 
 - **Loopback + SSH/Tailscale Serve** is the safest default (no public exposure).
-- **Non-loopback binds** (`lan`/`tailnet`/`auto`) must use auth tokens/passwords.
+- **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
 - `gateway.remote.token` is **only** for remote CLI calls — it does **not** enable local auth.
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate via identity headers when `gateway.auth.allowTailscale: true`.

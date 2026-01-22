@@ -11,6 +11,7 @@ import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runti
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
+import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 function resolvePiExtensionPath(id: string): string {
   const self = fileURLToPath(import.meta.url);
@@ -43,7 +44,8 @@ function buildContextPruningExtension(params: {
   model: Model<Api> | undefined;
 }): { additionalExtensionPaths?: string[] } {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
-  if (raw?.mode !== "adaptive" && raw?.mode !== "aggressive") return {};
+  if (raw?.mode !== "cache-ttl") return {};
+  if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) return {};
 
   const settings = computeEffectiveSettings(raw);
   if (!settings) return {};
@@ -52,6 +54,7 @@ function buildContextPruningExtension(params: {
     settings,
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
+    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager),
   });
 
   return {

@@ -11,6 +11,24 @@ export type ChannelEntryMatch<T> = {
   matchSource?: ChannelMatchSource;
 };
 
+export function applyChannelMatchMeta<
+  TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
+>(result: TResult, match: ChannelEntryMatch<unknown>): TResult {
+  if (match.matchKey && match.matchSource) {
+    result.matchKey = match.matchKey;
+    result.matchSource = match.matchSource;
+  }
+  return result;
+}
+
+export function resolveChannelMatchConfig<
+  TEntry,
+  TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
+>(match: ChannelEntryMatch<TEntry>, resolveEntry: (entry: TEntry) => TResult): TResult | null {
+  if (!match.entry) return null;
+  return applyChannelMatchMeta(resolveEntry(match.entry), match);
+}
+
 export function normalizeChannelSlug(value: string): string {
   return value
     .trim()

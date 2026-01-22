@@ -151,7 +151,9 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
       atHour: 4,
       idleMinutes: 60
     },
-    heartbeatIdleMinutes: 120,
+    resetByChannel: {
+      discord: { mode: "idle", idleMinutes: 10080 }
+    },
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdbot/agents/default/sessions/sessions.json",
     typingIntervalSeconds: 5,

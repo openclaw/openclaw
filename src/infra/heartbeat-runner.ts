@@ -1,4 +1,5 @@
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveUserTimezone } from "../agents/date-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -14,7 +15,9 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
+  canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveStorePath,
   saveSessionStore,
@@ -26,7 +29,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -69,6 +72,81 @@ export type HeartbeatSummary = {
 };
 
 const DEFAULT_HEARTBEAT_TARGET = "last";
+const ACTIVE_HOURS_TIME_PATTERN = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
+
+function resolveActiveHoursTimezone(cfg: ClawdbotConfig, raw?: string): string {
+  const trimmed = raw?.trim();
+  if (!trimmed || trimmed === "user") {
+    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+  }
+  if (trimmed === "local") {
+    const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return host?.trim() || "UTC";
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+    return trimmed;
+  } catch {
+    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+  }
+}
+
+function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
+  if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) return null;
+  const [hourStr, minuteStr] = raw.split(":");
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (hour === 24) {
+    if (!opts.allow24 || minute !== 0) return null;
+    return 24 * 60;
+  }
+  return hour * 60 + minute;
+}
+
+function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(nowMs));
+    const map: Record<string, string> = {};
+    for (const part of parts) {
+      if (part.type !== "literal") map[part.type] = part.value;
+    }
+    const hour = Number(map.hour);
+    const minute = Number(map.minute);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return hour * 60 + minute;
+  } catch {
+    return null;
+  }
+}
+
+function isWithinActiveHours(
+  cfg: ClawdbotConfig,
+  heartbeat?: HeartbeatConfig,
+  nowMs?: number,
+): boolean {
+  const active = heartbeat?.activeHours;
+  if (!active) return true;
+
+  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
+  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
+  if (startMin === null || endMin === null) return true;
+  if (startMin === endMin) return true;
+
+  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
+  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
+  if (currentMin === null) return true;
+
+  if (endMin > startMin) {
+    return currentMin >= startMin && currentMin < endMin;
+  }
+  return currentMin >= startMin || currentMin < endMin;
+}
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -210,17 +288,53 @@ function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig, heartbeat?: HeartbeatC
   );
 }
 
-function resolveHeartbeatSession(cfg: ClawdbotConfig, agentId?: string) {
+function resolveHeartbeatSession(
+  cfg: ClawdbotConfig,
+  agentId?: string,
+  heartbeat?: HeartbeatConfig,
+) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
-  const sessionKey =
+  const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  return { sessionKey, storePath, store, entry };
+  const mainEntry = store[mainSessionKey];
+
+  if (scope === "global") {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const trimmed = heartbeat?.session?.trim() ?? "";
+  if (!trimmed) {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "main" || normalized === "global") {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const candidate = toAgentStoreSessionKey({
+    agentId: resolvedAgentId,
+    requestKey: trimmed,
+    mainKey: cfg.session?.mainKey,
+  });
+  const canonical = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolvedAgentId,
+    sessionKey: candidate,
+  });
+  if (canonical !== "global") {
+    const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
+    if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+      return { sessionKey: canonical, storePath, store, entry: store[canonical] };
+    }
+  }
+
+  return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
 }
 
 function resolveHeartbeatReplyPayload(
@@ -341,13 +455,17 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "disabled" };
   }
 
+  const startedAt = opts.deps?.nowMs?.() ?? Date.now();
+  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+    return { status: "skipped", reason: "quiet-hours" };
+  }
+
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
-  const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId);
+  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const lastChannel = delivery.lastChannel;

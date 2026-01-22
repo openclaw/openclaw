@@ -17,12 +17,12 @@ Quick triage commands (in order):
 
 | Command | What it tells you | When to use it |
 |---|---|---|
-| `clawdbot status` | Local summary: OS + update, gateway reachability/mode, daemon, agents/sessions, provider config state | First check, quick overview |
+| `clawdbot status` | Local summary: OS + update, gateway reachability/mode, service, agents/sessions, provider config state | First check, quick overview |
 | `clawdbot status --all` | Full local diagnosis (read-only, pasteable, safe-ish) incl. log tail | When you need to share a debug report |
 | `clawdbot status --deep` | Runs gateway health checks (incl. provider probes; requires reachable gateway) | When “configured” doesn’t mean “working” |
-| `clawdbot gateway status` | Gateway discovery + reachability (local + remote targets) | When you suspect you’re probing the wrong gateway |
+| `clawdbot gateway probe` | Gateway discovery + reachability (local + remote targets) | When you suspect you’re probing the wrong gateway |
 | `clawdbot channels status --probe` | Asks the running gateway for channel status (and optionally probes) | When gateway is reachable but channels misbehave |
-| `clawdbot daemon status` | Supervisor state (launchd/systemd/schtasks), runtime PID/exit, last gateway error | When the daemon “looks loaded” but nothing runs |
+| `clawdbot gateway status` | Supervisor state (launchd/systemd/schtasks), runtime PID/exit, last gateway error | When the service “looks loaded” but nothing runs |
 | `clawdbot logs --follow` | Live logs (best signal for runtime issues) | When you need the actual failure reason |
 
 **Sharing output:** prefer `clawdbot status --all` (it redacts tokens). If you paste `clawdbot status`, consider setting `CLAWDBOT_SHOW_SECRETS=0` first (token previews).
@@ -31,6 +31,19 @@ See also: [Health checks](/gateway/health) and [Logging](/logging).
 
 ## Common Issues
 
+### Control UI fails on HTTP ("device identity required" / "connect failed")
+
+If you open the dashboard over plain HTTP (e.g. `http://<lan-ip>:18789/` or
+`http://<tailscale-ip>:18789/`), the browser runs in a **non-secure context** and
+blocks WebCrypto, so device identity can’t be generated.
+
+**Fix:**
+- Prefer HTTPS via [Tailscale Serve](/gateway/tailscale).
+- Or open locally on the gateway host: `http://127.0.0.1:18789/`.
+- If you must stay on HTTP, enable `gateway.controlUi.allowInsecureAuth: true` and
+  use a gateway token (token-only; no device identity/pairing). See
+  [Control UI](/web/control-ui#insecure-http).
+
 ### CI Secrets Scan Failed
 
 This means `detect-secrets` found new candidates not yet in the baseline.
@@ -38,16 +51,16 @@ Follow [Secret scanning](/gateway/security#secret-scanning-detect-secrets).
 
 ### Service Installed but Nothing is Running
 
-If the gateway service is installed but the process exits immediately, the daemon
+If the gateway service is installed but the process exits immediately, the service
 can appear “loaded” while nothing is running.
 
 **Check:**
 ```bash
-clawdbot daemon status
+clawdbot gateway status
 clawdbot doctor
 ```
 
-Doctor/daemon will show runtime state (PID/last exit) and log hints.
+Doctor/service will show runtime state (PID/last exit) and log hints.
 
 **Logs:**
 - Preferred: `clawdbot logs --follow`
@@ -69,14 +82,42 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 
 See [/logging](/logging) for a full overview of formats, config, and access.
 
+### "Gateway start blocked: set gateway.mode=local"
+
+This means the config exists but `gateway.mode` is unset (or not `local`), so the
+Gateway refuses to start.
+
+**Fix (recommended):**
+- Run the wizard and set the Gateway run mode to **Local**:
+  ```bash
+  clawdbot configure
+  ```
+- Or set it directly:
+  ```bash
+  clawdbot config set gateway.mode local
+  ```
+
+**If you meant to run a remote Gateway instead:**
+- Set a remote URL and keep `gateway.mode=remote`:
+  ```bash
+  clawdbot config set gateway.mode remote
+  clawdbot config set gateway.remote.url "wss://gateway.example.com"
+  ```
+
+**Ad-hoc/dev only:** pass `--allow-unconfigured` to start the gateway without
+`gateway.mode=local`.
+
+**No config file yet?** Run `clawdbot setup` to create a starter config, then rerun
+the gateway.
+
 ### Service Environment (PATH + runtime)
 
-The gateway daemon runs with a **minimal PATH** to avoid shell/manager cruft:
+The gateway service runs with a **minimal PATH** to avoid shell/manager cruft:
 - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
 - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
 
 This intentionally excludes version managers (nvm/fnm/volta/asdf) and package
-managers (pnpm/npm) because the daemon does not load your shell init. Runtime
+managers (pnpm/npm) because the service does not load your shell init. Runtime
 variables like `DISPLAY` should live in `~/.clawdbot/.env` (loaded early by the
 gateway).
 Exec runs on `host=gateway` merge your login-shell `PATH` into the exec environment,
@@ -106,31 +147,31 @@ the Gateway likely refused to bind.
 **What "running" means here**
 - `Runtime: running` means your supervisor (launchd/systemd/schtasks) thinks the process is alive.
 - `RPC probe` means the CLI could actually connect to the gateway WebSocket and call `status`.
-- Always trust `Probe target:` + `Config (daemon):` as the “what did we actually try?” lines.
+- Always trust `Probe target:` + `Config (service):` as the “what did we actually try?” lines.
 
 **Check:**
-- `gateway.mode` must be `local` for `clawdbot gateway` and the daemon.
-- If you set `gateway.mode=remote`, the **CLI defaults** to a remote URL. The daemon can still be running locally, but your CLI may be probing the wrong place. Use `clawdbot daemon status` to see the daemon’s resolved port + probe target (or pass `--url`).
-- `clawdbot daemon status` and `clawdbot doctor` surface the **last gateway error** from logs when the service looks running but the port is closed.
-- Non-loopback binds (`lan`/`tailnet`/`auto`) require auth:
+- `gateway.mode` must be `local` for `clawdbot gateway` and the service.
+- If you set `gateway.mode=remote`, the **CLI defaults** to a remote URL. The service can still be running locally, but your CLI may be probing the wrong place. Use `clawdbot gateway status` to see the service’s resolved port + probe target (or pass `--url`).
+- `clawdbot gateway status` and `clawdbot doctor` surface the **last gateway error** from logs when the service looks running but the port is closed.
+- Non-loopback binds (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) require auth:
   `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
 - `gateway.remote.token` is for remote CLI calls only; it does **not** enable local auth.
 - `gateway.token` is ignored; use `gateway.auth.token`.
 
-**If `clawdbot daemon status` shows a config mismatch**
-- `Config (cli): ...` and `Config (daemon): ...` should normally match.
-- If they don’t, you’re almost certainly editing one config while the daemon is running another.
-- Fix: rerun `clawdbot daemon install --force` from the same `--profile` / `CLAWDBOT_STATE_DIR` you want the daemon to use.
+**If `clawdbot gateway status` shows a config mismatch**
+- `Config (cli): ...` and `Config (service): ...` should normally match.
+- If they don’t, you’re almost certainly editing one config while the service is running another.
+- Fix: rerun `clawdbot gateway install --force` from the same `--profile` / `CLAWDBOT_STATE_DIR` you want the service to use.
 
-**If `clawdbot daemon status` reports service config issues**
+**If `clawdbot gateway status` reports service config issues**
 - The supervisor config (launchd/systemd/schtasks) is missing current defaults.
-- Fix: run `clawdbot doctor` to update it (or `clawdbot daemon install --force` for a full rewrite).
+- Fix: run `clawdbot doctor` to update it (or `clawdbot gateway install --force` for a full rewrite).
 
 **If `Last gateway error:` mentions “refusing to bind … without auth”**
-- You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`auto`) but left auth off.
-- Fix: set `gateway.auth.mode` + `gateway.auth.token` (or export `CLAWDBOT_GATEWAY_TOKEN`) and restart the daemon.
+- You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) but left auth off.
+- Fix: set `gateway.auth.mode` + `gateway.auth.token` (or export `CLAWDBOT_GATEWAY_TOKEN`) and restart the service.
 
-**If `clawdbot daemon status` says `bind=tailnet` but no tailnet interface was found**
+**If `clawdbot gateway status` says `bind=tailnet` but no tailnet interface was found**
 - The gateway tried to bind to a Tailscale IP (100.64.0.0/10) but none were detected on the host.
 - Fix: bring up Tailscale on that machine (or change `gateway.bind` to `loopback`/`lan`).
 
@@ -144,7 +185,7 @@ This means something is already listening on the gateway port.
 
 **Check:**
 ```bash
-clawdbot daemon status
+clawdbot gateway status
 ```
 
 It will show the listener(s) and likely causes (gateway already running, SSH tunnel).
@@ -354,7 +395,7 @@ clawdbot doctor --fix
 Notes:
 - `clawdbot doctor` reports every invalid entry.
 - `clawdbot doctor --fix` applies migrations/repairs and rewrites the config.
-- Diagnostic commands like `clawdbot logs`, `clawdbot health`, `clawdbot status`, and `clawdbot service` still run even if the config is invalid.
+- Diagnostic commands like `clawdbot logs`, `clawdbot health`, `clawdbot status`, `clawdbot gateway status`, and `clawdbot gateway probe` still run even if the config is invalid.
 
 ### “All models failed” — what should I check first?
 
@@ -407,7 +448,7 @@ git status   # ensure you’re in the repo root
 pnpm install
 pnpm build
 clawdbot doctor
-clawdbot daemon restart
+clawdbot gateway restart
 ```
 
 Why: pnpm is the configured package manager for this repo.
@@ -432,7 +473,7 @@ Notes:
 - After switching, run:
   ```bash
   clawdbot doctor
-  clawdbot daemon restart
+  clawdbot gateway restart
   ```
 
 ### Telegram block streaming isn’t splitting text between tool calls. Why?
@@ -507,8 +548,8 @@ The app connects to a local gateway on port `18789`. If it stays stuck:
 **Fix 1: Stop the supervisor (preferred)**
 If the gateway is supervised by launchd, killing the PID will just respawn it. Stop the supervisor first:
 ```bash
-clawdbot daemon status
-clawdbot daemon stop
+clawdbot gateway status
+clawdbot gateway stop
 # Or: launchctl bootout gui/$UID/com.clawdbot.gateway (replace with com.clawdbot.<profile> if needed)
 ```
 
@@ -558,9 +599,9 @@ clawdbot channels login --verbose
 
 ```bash
 # Supervisor + probe target + config paths
-clawdbot daemon status
+clawdbot gateway status
 # Include system-level scans (legacy/extra services, port listeners)
-clawdbot daemon status --deep
+clawdbot gateway status --deep
 
 # Is the gateway reachable?
 clawdbot health --json
@@ -581,13 +622,13 @@ tail -20 /tmp/clawdbot/clawdbot-*.log
 Nuclear option:
 
 ```bash
-clawdbot daemon stop
+clawdbot gateway stop
 # If you installed a service and want a clean install:
-# clawdbot daemon uninstall
+# clawdbot gateway uninstall
 
 trash "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}"
 clawdbot channels login         # re-pair WhatsApp
-clawdbot daemon restart           # or: clawdbot gateway
+clawdbot gateway restart           # or: clawdbot gateway
 ```
 
 ⚠️ This loses all sessions and requires re-pairing WhatsApp.

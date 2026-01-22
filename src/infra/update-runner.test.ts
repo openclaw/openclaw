@@ -74,7 +74,9 @@ describe("runGatewayUpdate", () => {
         stdout: "origin/main",
       },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} rebase @{upstream}`]: { code: 1, stderr: "conflict" },
+      [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: "upstream123" },
+      [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: { stdout: "upstream123\n" },
+      [`git -C ${tempDir} rebase upstream123`]: { code: 1, stderr: "conflict" },
       [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
     });
 
@@ -96,8 +98,8 @@ describe("runGatewayUpdate", () => {
       JSON.stringify({ name: "clawdbot", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
       "utf-8",
     );
-    const stableTag = "v2026.1.20-1";
-    const betaTag = "v2026.1.19-beta.2";
+    const stableTag = "v1.0.1-1";
+    const betaTag = "v1.0.0-beta.2";
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },

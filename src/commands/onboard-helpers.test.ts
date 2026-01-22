@@ -71,4 +71,24 @@ describe("resolveControlUiLinks", () => {
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
   });
+
+  it("uses tailnet IP for tailnet bind", () => {
+    mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "tailnet",
+    });
+    expect(links.httpUrl).toBe("http://100.64.0.9:18789/");
+    expect(links.wsUrl).toBe("ws://100.64.0.9:18789");
+  });
+
+  it("keeps loopback for auto even when tailnet is present", () => {
+    mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "auto",
+    });
+    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+  });
 });

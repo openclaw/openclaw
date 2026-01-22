@@ -7,7 +7,10 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
-import { listChannelSupportedActions } from "../../channel-tools.js";
+import {
+  listChannelSupportedActions,
+  resolveChannelMessageToolHints,
+} from "../../channel-tools.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -49,6 +52,7 @@ import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
+import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
@@ -76,6 +80,50 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { detectAndLoadPromptImages } from "./images.js";
+
+export function injectHistoryImagesIntoMessages(
+  messages: AgentMessage[],
+  historyImagesByIndex: Map<number, ImageContent[]>,
+): boolean {
+  if (historyImagesByIndex.size === 0) return false;
+  let didMutate = false;
+
+  for (const [msgIndex, images] of historyImagesByIndex) {
+    // Bounds check: ensure index is valid before accessing
+    if (msgIndex < 0 || msgIndex >= messages.length) continue;
+    const msg = messages[msgIndex];
+    if (msg && msg.role === "user") {
+      // Convert string content to array format if needed
+      if (typeof msg.content === "string") {
+        msg.content = [{ type: "text", text: msg.content }];
+        didMutate = true;
+      }
+      if (Array.isArray(msg.content)) {
+        // Check for existing image content to avoid duplicates across turns
+        const existingImageData = new Set(
+          msg.content
+            .filter(
+              (c): c is ImageContent =>
+                c != null &&
+                typeof c === "object" &&
+                c.type === "image" &&
+                typeof c.data === "string",
+            )
+            .map((c) => c.data),
+        );
+        for (const img of images) {
+          // Only add if this image isn't already in the message
+          if (!existingImageData.has(img.data)) {
+            msg.content.push(img);
+            didMutate = true;
+          }
+        }
+      }
+    }
+  }
+
+  return didMutate;
+}
 
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
@@ -215,6 +263,13 @@ export async function runEmbeddedAttempt(
           channel: runtimeChannel,
         })
       : undefined;
+    const messageToolHints = runtimeChannel
+      ? resolveChannelMessageToolHints({
+          cfg: params.config,
+          channel: runtimeChannel,
+          accountId: params.agentAccountId,
+        })
+      : undefined;
 
     const defaultModelRef = resolveDefaultModelForAgent({
       cfg: params.config ?? {},
@@ -224,6 +279,8 @@ export async function runEmbeddedAttempt(
     const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
       config: params.config,
       agentId: sessionAgentId,
+      workspaceDir: effectiveWorkspace,
+      cwd: process.cwd(),
       runtime: {
         host: machineName,
         os: `${os.type()} ${os.release()}`,
@@ -260,6 +317,7 @@ export async function runEmbeddedAttempt(
       reactionGuidance,
       promptMode,
       runtimeInfo,
+      messageToolHints,
       sandboxInfo,
       tools,
       modelAliasLines: buildModelAliasLines(params.config),
@@ -626,38 +684,13 @@ export async function runEmbeddedAttempt(
 
           // Inject history images into their original message positions.
           // This ensures the model sees images in context (e.g., "compare to the first image").
-          if (imageResult.historyImagesByIndex.size > 0) {
-            for (const [msgIndex, images] of imageResult.historyImagesByIndex) {
-              // Bounds check: ensure index is valid before accessing
-              if (msgIndex < 0 || msgIndex >= activeSession.messages.length) continue;
-              const msg = activeSession.messages[msgIndex];
-              if (msg && msg.role === "user") {
-                // Convert string content to array format if needed
-                if (typeof msg.content === "string") {
-                  msg.content = [{ type: "text", text: msg.content }];
-                }
-                if (Array.isArray(msg.content)) {
-                  // Check for existing image content to avoid duplicates across turns
-                  const existingImageData = new Set(
-                    msg.content
-                      .filter(
-                        (c): c is ImageContent =>
-                          c != null &&
-                          typeof c === "object" &&
-                          c.type === "image" &&
-                          typeof c.data === "string",
-                      )
-                      .map((c) => c.data),
-                  );
-                  for (const img of images) {
-                    // Only add if this image isn't already in the message
-                    if (!existingImageData.has(img.data)) {
-                      msg.content.push(img);
-                    }
-                  }
-                }
-              }
-            }
+          const didMutate = injectHistoryImagesIntoMessages(
+            activeSession.messages,
+            imageResult.historyImagesByIndex,
+          );
+          if (didMutate) {
+            // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
+            activeSession.agent.replaceMessages(activeSession.messages);
           }
 
           cacheTrace?.recordStage("prompt:images", {
@@ -665,6 +698,17 @@ export async function runEmbeddedAttempt(
             messages: activeSession.messages,
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
+
+          const shouldTrackCacheTtl =
+            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+            isCacheTtlEligibleProvider(params.provider, params.modelId);
+          if (shouldTrackCacheTtl) {
+            appendCacheTtlTimestamp(sessionManager, {
+              timestamp: Date.now(),
+              provider: params.provider,
+              modelId: params.modelId,
+            });
+          }
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter

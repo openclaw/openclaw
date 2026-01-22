@@ -6,6 +6,8 @@ import {
   resolveChannelEntryMatch,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
+  applyChannelMatchMeta,
+  resolveChannelMatchConfig,
 } from "./channel-config.js";
 
 describe("buildChannelKeyCandidates", () => {
@@ -87,6 +89,33 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     expect(match.entry).toBe(entries["My Team"]);
     expect(match.matchSource).toBe("direct");
     expect(match.matchKey).toBe("My Team");
+  });
+});
+
+describe("applyChannelMatchMeta", () => {
+  it("copies match metadata onto resolved configs", () => {
+    const resolved = applyChannelMatchMeta(
+      { allowed: true },
+      { matchKey: "general", matchSource: "direct" },
+    );
+    expect(resolved.matchKey).toBe("general");
+    expect(resolved.matchSource).toBe("direct");
+  });
+});
+
+describe("resolveChannelMatchConfig", () => {
+  it("returns null when no entry is matched", () => {
+    const resolved = resolveChannelMatchConfig({ matchKey: "x" }, () => ({ allowed: true }));
+    expect(resolved).toBeNull();
+  });
+
+  it("resolves entry and applies match metadata", () => {
+    const resolved = resolveChannelMatchConfig(
+      { entry: { allow: true }, matchKey: "*", matchSource: "wildcard" },
+      () => ({ allowed: true }),
+    );
+    expect(resolved?.matchKey).toBe("*");
+    expect(resolved?.matchSource).toBe("wildcard");
   });
 });
 

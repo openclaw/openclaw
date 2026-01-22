@@ -15,7 +15,7 @@ Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It set
 - channels (WhatsApp/Telegram/Discord/Mattermost/...)
 - pairing defaults (secure DMs)
 - workspace bootstrap + skills
-- optional background daemon
+- optional background service
 
 If you want the deeper reference pages, jump to: [Wizard](/start/wizard), [Setup](/start/setup), [Pairing](/start/pairing), [Security](/gateway/security).
 
@@ -71,7 +71,7 @@ npm install -g clawdbot@latest
 pnpm add -g clawdbot@latest
 ```
 
-## 2) Run the onboarding wizard (and install the daemon)
+## 2) Run the onboarding wizard (and install the service)
 
 ```bash
 clawdbot onboard --install-daemon
@@ -89,7 +89,7 @@ Wizard doc: [Wizard](/start/wizard)
 
 ### Auth: where it lives (important)
 
-- **Recommended Anthropic path:** set an API key (wizard can store it for daemon use). `claude setup-token` is also supported if you want to reuse Claude Code credentials.
+- **Recommended Anthropic path:** set an API key (wizard can store it for service use). `claude setup-token` is also supported if you want to reuse Claude Code credentials.
 
 - OAuth credentials (legacy import): `~/.clawdbot/credentials/oauth.json`
 - Auth profiles (OAuth + API keys): `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
@@ -98,10 +98,10 @@ Headless/server tip: do OAuth on a normal machine first, then copy `oauth.json` 
 
 ## 3) Start the Gateway
 
-If you installed the daemon during onboarding, the Gateway should already be running:
+If you installed the service during onboarding, the Gateway should already be running:
 
 ```bash
-clawdbot daemon status
+clawdbot gateway status
 ```
 
 Manual run (foreground):

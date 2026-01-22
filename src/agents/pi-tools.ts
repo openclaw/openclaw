@@ -84,6 +84,7 @@ function resolveExecConfig(cfg: ClawdbotConfig | undefined) {
     pathPrepend: globalExec?.pathPrepend,
     backgroundMs: globalExec?.backgroundMs,
     timeoutSec: globalExec?.timeoutSec,
+    approvalRunningNoticeMs: globalExec?.approvalRunningNoticeMs,
     cleanupMs: globalExec?.cleanupMs,
     notifyOnExit: globalExec?.notifyOnExit,
     applyPatch: globalExec?.applyPatch,
@@ -219,6 +220,8 @@ export function createClawdbotCodingTools(options?: {
     messageProvider: options?.messageProvider,
     backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
     timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
+    approvalRunningNoticeMs:
+      options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     sandbox: sandbox
       ? {

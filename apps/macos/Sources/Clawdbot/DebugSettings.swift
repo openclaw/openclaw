@@ -484,6 +484,22 @@ struct DebugSettings: View {
                     }
                 }
 
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(
+                        "Note: macOS may require restarting Clawdbot after enabling Accessibility or Screen Recording.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button {
+                        LaunchdManager.startClawdbot()
+                    } label: {
+                        Label("Restart Clawdbot", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
                 HStack(spacing: 8) {
                     Button("Restart app") { DebugActions.restartApp() }
                     Button("Restart onboarding") { DebugActions.restartOnboarding() }

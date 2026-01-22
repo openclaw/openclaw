@@ -86,6 +86,33 @@ Then open:
 
 Paste the token into the UI settings (sent as `connect.params.auth.token`).
 
+## Insecure HTTP
+
+If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`),
+the browser runs in a **non-secure context** and blocks WebCrypto. By default,
+Clawdbot **blocks** Control UI connections without device identity.
+
+**Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
+- `https://<magicdns>/` (Serve)
+- `http://127.0.0.1:18789/` (on the gateway host)
+
+**Downgrade example (token-only over HTTP):**
+
+```json5
+{
+  gateway: {
+    controlUi: { allowInsecureAuth: true },
+    bind: "tailnet",
+    auth: { mode: "token", token: "replace-me" }
+  }
+}
+```
+
+This disables device identity + pairing for the Control UI. Use only if you
+trust the network.
+
+See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
+
 ## Building the UI
 
 The Gateway serves static files from `dist/control-ui`. Build them with:
@@ -107,3 +134,29 @@ pnpm ui:dev # auto-installs UI deps on first run
 ```
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
+
+## Debugging/testing: dev server + remote Gateway
+
+The Control UI is static files; the WebSocket target is configurable and can be
+different from the HTTP origin. This is handy when you want the Vite dev server
+locally but the Gateway runs elsewhere.
+
+1) Start the UI dev server: `pnpm ui:dev`
+2) Open a URL like:
+
+```text
+http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
+```
+
+Optional one-time auth (if needed):
+
+```text
+http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-token>
+```
+
+Notes:
+- `gatewayUrl` is stored in localStorage after load and removed from the URL.
+- `token` is stored in localStorage; `password` is kept in memory only.
+- Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
+
+Remote access setup details: [Remote access](/gateway/remote).

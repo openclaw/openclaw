@@ -65,6 +65,6 @@ export async function buildGatewayInstallPlan(params: {
 
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
-    ? "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip daemon install."
-    : `Tip: rerun \`${formatCliCommand("clawdbot daemon install")}\` after fixing the error.`;
+    ? "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip service install."
+    : `Tip: rerun \`${formatCliCommand("clawdbot gateway install")}\` after fixing the error.`;
 }

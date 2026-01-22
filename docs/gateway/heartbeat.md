@@ -10,10 +10,11 @@ surface anything that needs attention without spamming you.
 
 ## Quick start (beginner)
 
-1. Leave heartbeats enabled (default is `30m`) or set your own cadence.
+1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/setup-token) or set your own cadence.
 2. Create a tiny `HEARTBEAT.md` checklist in the agent workspace (optional but recommended).
 3. Decide where heartbeat messages should go (`target: "last"` is the default).
 4. Optional: enable heartbeat reasoning delivery for transparency.
+5. Optional: restrict heartbeats to active hours (local time).
 
 Example config:
 
@@ -24,6 +25,7 @@ Example config:
       heartbeat: {
         every: "30m",
         target: "last",
+        // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       }
     }
@@ -33,11 +35,13 @@ Example config:
 
 ## Defaults
 
-- Interval: `30m` (set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable).
+- Interval: `30m` (or `1h` when Anthropic OAuth/setup-token is the detected auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
   `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system
   prompt includes a “Heartbeat” section and the run is flagged internally.
+- Active hours (`heartbeat.activeHours`) are checked in the configured timezone.
+  Outside the window, heartbeats are skipped until the next tick inside the window.
 
 ## What the heartbeat prompt is for
 
@@ -123,18 +127,26 @@ Example: two agents, only the second agent runs heartbeats.
 - `every`: heartbeat interval (duration string; default unit = minutes).
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
+- `session`: optional session key for heartbeat runs.
+  - `main` (default): agent main session.
+  - Explicit session key (copy from `clawdbot sessions --json` or the [sessions CLI](/cli/sessions)).
+  - Session key formats: see [Sessions](/concepts/session) and [Groups](/concepts/groups).
 - `target`:
   - `last` (default): deliver to the last used external channel.
-  - explicit channel: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage`.
+  - explicit channel: `whatsapp` / `telegram` / `discord` / `slack` / `msteams` / `signal` / `imessage`.
   - `none`: run the heartbeat but **do not deliver** externally.
-- `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram, etc.).
+- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id).
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
 
 ## Delivery behavior
 
-- Heartbeats run in each agent’s **main session** (`agent:<id>:<mainKey>`), or `global`
-  when `session.scope = "global"`.
+- Heartbeats run in the agent’s main session by default (`agent:<id>:<mainKey>`),
+  or `global` when `session.scope = "global"`. Set `session` to override to a
+  specific channel session (Discord/WhatsApp/etc.).
+- `session` only affects the run context; delivery is controlled by `target` and `to`.
+- To deliver to a specific channel/recipient, set `target` + `to`. With
+  `target: "last"`, delivery uses the last external channel for that session.
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no
   outbound message is sent.

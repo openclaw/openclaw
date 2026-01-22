@@ -14,7 +14,7 @@ Run these in order:
 ```bash
 clawdbot status
 clawdbot status --all
-clawdbot daemon status
+clawdbot gateway probe
 clawdbot logs --follow
 clawdbot doctor
 ```
@@ -38,15 +38,29 @@ Almost always a Node/npm PATH issue. Start here:
 - [Gateway troubleshooting](/gateway/troubleshooting)
 - [Gateway authentication](/gateway/authentication)
 
-### Daemon says running, but RPC probe fails
+### Control UI fails on HTTP (device identity required)
 
 - [Gateway troubleshooting](/gateway/troubleshooting)
-- [Background process / daemon](/gateway/background-process)
+- [Control UI](/web/control-ui#insecure-http)
+
+### Service says running, but RPC probe fails
+
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Background process / service](/gateway/background-process)
 
 ### Model/auth failures (rate limit, billing, “all models failed”)
 
 - [Models](/cli/models)
 - [OAuth / auth concepts](/concepts/oauth)
+
+### `/model` says `model not allowed`
+
+This usually means `agents.defaults.models` is configured as an allowlist. When it’s non-empty,
+only those provider/model keys can be selected.
+
+- Check the allowlist: `clawdbot config get agents.defaults.models`
+- Add the model you want (or clear the allowlist) and retry `/model`
+- Use `/models` to browse the allowed providers/models
 
 ### When filing an issue
 

@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import type { AppViewState } from "./app-view-state";
+import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import {
   TAB_GROUPS,
   iconForTab,
@@ -28,6 +29,7 @@ import type {
   StatusSummary,
 } from "./types";
 import type { ChatQueueItem, CronFormState } from "./ui-types";
+import { refreshChatAvatar } from "./app-chat";
 import { renderChat } from "./views/chat";
 import { renderConfig } from "./views/config";
 import { renderChannels } from "./views/channels";
@@ -79,6 +81,24 @@ import { loadCronRuns, toggleCronJob, runCronJob, removeCronJob, addCronJob } fr
 import { loadDebug, callDebugMethod } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
 
+const AVATAR_DATA_RE = /^data:/i;
+const AVATAR_HTTP_RE = /^https?:\/\//i;
+
+function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
+  const list = state.agentsList?.agents ?? [];
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  const agentId =
+    parsed?.agentId ??
+    state.agentsList?.defaultId ??
+    "main";
+  const agent = list.find((entry) => entry.id === agentId);
+  const identity = agent?.identity;
+  const candidate = identity?.avatarUrl ?? identity?.avatar;
+  if (!candidate) return undefined;
+  if (AVATAR_DATA_RE.test(candidate) || AVATAR_HTTP_RE.test(candidate)) return candidate;
+  return identity?.avatarUrl;
+}
+
 export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
@@ -86,6 +106,8 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
   const isChat = state.tab === "chat";
   const chatFocus = isChat && state.settings.chatFocusMode;
+  const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
+  const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""}">
@@ -199,6 +221,7 @@ export function renderApp(state: AppViewState) {
                   sessionKey: next,
                   lastActiveSessionKey: next,
                 });
+                void state.loadAssistantIdentity();
               },
               onConnect: () => state.connect(),
               onRefresh: () => state.loadOverview(),
@@ -412,12 +435,15 @@ export function renderApp(state: AppViewState) {
                   sessionKey: next,
                   lastActiveSessionKey: next,
                 });
+                void state.loadAssistantIdentity();
                 void loadChatHistory(state);
+                void refreshChatAvatar(state);
               },
               thinkingLevel: state.chatThinkingLevel,
               showThinking: state.settings.chatShowThinking,
               loading: state.chatLoading,
               sending: state.chatSending,
+              assistantAvatarUrl: chatAvatarUrl,
               messages: state.chatMessages,
               toolMessages: state.chatToolMessages,
               stream: state.chatStream,
@@ -432,7 +458,7 @@ export function renderApp(state: AppViewState) {
               focusMode: state.settings.chatFocusMode,
               onRefresh: () => {
                 state.resetToolStream();
-                return loadChatHistory(state);
+                return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
               },
               onToggleFocusMode: () =>
                 state.applySettings({
@@ -455,6 +481,8 @@ export function renderApp(state: AppViewState) {
               onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
               onCloseSidebar: () => state.handleCloseSidebar(),
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+              assistantName: state.assistantName,
+              assistantAvatar: state.assistantAvatar,
             })
           : nothing}
 
