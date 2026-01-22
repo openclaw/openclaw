@@ -1563,6 +1563,100 @@ describe("BlueBubbles webhook monitor", () => {
         expect.any(Object),
       );
     });
+
+    it("stops typing on idle", async () => {
+      const { sendBlueBubblesTyping } = await import("./chat.js");
+      vi.mocked(sendBlueBubblesTyping).mockClear();
+
+      const account = createMockAccount();
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.onReplyStart?.();
+        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        await params.dispatcherOptions.onIdle?.();
+      });
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
+        expect.any(String),
+        false,
+        expect.any(Object),
+      );
+    });
+
+    it("stops typing when no reply is sent", async () => {
+      const { sendBlueBubblesTyping } = await import("./chat.js");
+      vi.mocked(sendBlueBubblesTyping).mockClear();
+
+      const account = createMockAccount();
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async () => undefined);
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
+        expect.any(String),
+        false,
+        expect.any(Object),
+      );
+    });
   });
 
   describe("outbound message ids", () => {
