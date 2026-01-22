@@ -46,7 +46,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "anthropic",
     label: "Anthropic",
     hint: "Claude Code CLI + API key",
-    choices: ["claude-cli", "setup-token", "token", "apiKey"],
+    choices: ["claude-cli", "token", "apiKey"],
   },
   {
     value: "minimax",
@@ -169,12 +169,6 @@ export function buildAuthChoiceOptions(params: {
       hint: "reuses existing Claude Code auth · requires Keychain access",
     });
   }
-
-  options.push({
-    value: "setup-token",
-    label: "Anthropic token (run setup-token)",
-    hint: "runs `claude setup-token` · opens browser for fresh OAuth login",
-  });
 
   options.push({
     value: "token",
