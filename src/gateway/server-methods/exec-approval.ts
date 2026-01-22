@@ -26,6 +26,7 @@ export function createExecApprovalHandlers(manager: ExecApprovalManager): Gatewa
         return;
       }
       const p = params as {
+        id?: string;
         command: string;
         cwd?: string;
         host?: string;
@@ -37,6 +38,15 @@ export function createExecApprovalHandlers(manager: ExecApprovalManager): Gatewa
         timeoutMs?: number;
       };
       const timeoutMs = typeof p.timeoutMs === "number" ? p.timeoutMs : 120_000;
+      const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
+      if (explicitId && manager.getSnapshot(explicitId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval id already pending"),
+        );
+        return;
+      }
       const request = {
         command: p.command,
         cwd: p.cwd ?? null,
@@ -47,7 +57,7 @@ export function createExecApprovalHandlers(manager: ExecApprovalManager): Gatewa
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: p.sessionKey ?? null,
       };
-      const record = manager.create(request, timeoutMs);
+      const record = manager.create(request, timeoutMs, explicitId);
       context.broadcast(
         "exec.approval.requested",
         {

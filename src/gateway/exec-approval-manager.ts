@@ -33,11 +33,15 @@ type PendingEntry = {
 export class ExecApprovalManager {
   private pending = new Map<string, PendingEntry>();
 
-  create(request: ExecApprovalRequestPayload, timeoutMs: number): ExecApprovalRecord {
+  create(
+    request: ExecApprovalRequestPayload,
+    timeoutMs: number,
+    id?: string | null,
+  ): ExecApprovalRecord {
     const now = Date.now();
-    const id = randomUUID();
+    const resolvedId = id && id.trim().length > 0 ? id.trim() : randomUUID();
     const record: ExecApprovalRecord = {
-      id,
+      id: resolvedId,
       request,
       createdAtMs: now,
       expiresAtMs: now + timeoutMs,

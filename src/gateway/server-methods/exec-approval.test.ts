@@ -60,4 +60,120 @@ describe("exec approval handlers", () => {
     );
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
+
+  it("accepts explicit approval ids", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+
+    const respond = vi.fn();
+    const context = {
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+    };
+
+    const requestPromise = handlers["exec.approval.request"]({
+      params: {
+        id: "approval-123",
+        command: "echo ok",
+        cwd: "/tmp",
+        host: "gateway",
+        timeoutMs: 2000,
+      },
+      respond,
+      context: context as unknown as Parameters<
+        (typeof handlers)["exec.approval.request"]
+      >[0]["context"],
+      client: null,
+      req: { id: "req-1", type: "req", method: "exec.approval.request" },
+      isWebchatConnect: noop,
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    expect(id).toBe("approval-123");
+
+    const resolveRespond = vi.fn();
+    await handlers["exec.approval.resolve"]({
+      params: { id, decision: "allow-once" },
+      respond: resolveRespond,
+      context: context as unknown as Parameters<
+        (typeof handlers)["exec.approval.resolve"]
+      >[0]["context"],
+      client: { connect: { client: { id: "cli", displayName: "CLI" } } },
+      req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
+      isWebchatConnect: noop,
+    });
+
+    await requestPromise;
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-123", decision: "allow-once" }),
+      undefined,
+    );
+  });
+
+  it("rejects duplicate approval ids", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respondA = vi.fn();
+    const respondB = vi.fn();
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+    const context = {
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+    };
+
+    const requestPromise = handlers["exec.approval.request"]({
+      params: {
+        id: "dup-1",
+        command: "echo ok",
+      },
+      respond: respondA,
+      context: context as unknown as Parameters<
+        (typeof handlers)["exec.approval.request"]
+      >[0]["context"],
+      client: null,
+      req: { id: "req-1", type: "req", method: "exec.approval.request" },
+      isWebchatConnect: noop,
+    });
+
+    await handlers["exec.approval.request"]({
+      params: {
+        id: "dup-1",
+        command: "echo again",
+      },
+      respond: respondB,
+      context: context as unknown as Parameters<
+        (typeof handlers)["exec.approval.request"]
+      >[0]["context"],
+      client: null,
+      req: { id: "req-2", type: "req", method: "exec.approval.request" },
+      isWebchatConnect: noop,
+    });
+
+    expect(respondB).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "approval id already pending" }),
+    );
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    const resolveRespond = vi.fn();
+    await handlers["exec.approval.resolve"]({
+      params: { id, decision: "deny" },
+      respond: resolveRespond,
+      context: context as unknown as Parameters<
+        (typeof handlers)["exec.approval.resolve"]
+      >[0]["context"],
+      client: { connect: { client: { id: "cli", displayName: "CLI" } } },
+      req: { id: "req-3", type: "req", method: "exec.approval.resolve" },
+      isWebchatConnect: noop,
+    });
+
+    await requestPromise;
+  });
 });

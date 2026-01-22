@@ -161,6 +161,7 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",
+  "tools.exec.approvalRunningNoticeMs": "Exec Approval Running Notice (ms)",
   "tools.exec.host": "Exec Host",
   "tools.exec.security": "Exec Security",
   "tools.exec.ask": "Exec Ask",

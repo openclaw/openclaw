@@ -89,6 +89,7 @@ export const ExecApprovalsNodeSetParamsSchema = Type.Object(
 
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
+    id: Type.Optional(NonEmptyString),
     command: NonEmptyString,
     cwd: Type.Optional(Type.String()),
     host: Type.Optional(Type.String()),
