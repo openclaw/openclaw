@@ -84,9 +84,9 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Pick: /model <#> or /model <provider/model>");
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(text).toContain("Model listing moved.");
+      expect(text).toContain("Use: /models (providers) or /models <provider> (models)");
+      expect(text).toContain("Switch: /model <provider/model>");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -115,9 +115,9 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Pick: /model <#> or /model <provider/model>");
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(text).toContain("Current: anthropic/claude-opus-4-5");
+      expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
+      expect(text).toContain("More: /model status");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -150,10 +150,9 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
-      expect(text).toContain("minimax/MiniMax-M2.1");
-      expect(text).toContain("xai/grok-4");
+      expect(text).toContain("Model listing moved.");
+      expect(text).toContain("Use: /models (providers) or /models <provider> (models)");
+      expect(text).toContain("Switch: /model <provider/model>");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -202,9 +201,9 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
-      expect(text).toContain("minimax/MiniMax-M2.1");
+      expect(text).toContain("Model listing moved.");
+      expect(text).toContain("Use: /models (providers) or /models <provider> (models)");
+      expect(text).toContain("Switch: /model <provider/model>");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -231,6 +230,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model listing moved.");
       expect(text).not.toContain("missing (missing)");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
