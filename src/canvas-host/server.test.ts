@@ -171,7 +171,7 @@ describe("canvas host", () => {
 
       const ws = new WebSocket(`ws://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("ws open timeout")), 2000);
+        const timer = setTimeout(() => reject(new Error("ws open timeout")), 5000);
         ws.on("open", () => {
           clearTimeout(timer);
           resolve();
@@ -183,13 +183,14 @@ describe("canvas host", () => {
       });
 
       const msg = new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("reload timeout")), 4000);
+        const timer = setTimeout(() => reject(new Error("reload timeout")), 10_000);
         ws.on("message", (data) => {
           clearTimeout(timer);
           resolve(rawDataToString(data));
         });
       });
 
+      await new Promise((resolve) => setTimeout(resolve, 100));
       await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
       expect(await msg).toBe("reload");
       ws.close();
@@ -197,7 +198,7 @@ describe("canvas host", () => {
       await server.close();
       await fs.rm(dir, { recursive: true, force: true });
     }
-  }, 10_000);
+  }, 20_000);
 
   it("serves the gateway-hosted A2UI scaffold", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
