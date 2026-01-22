@@ -160,6 +160,7 @@ export function buildAgentSystemPrompt(params: {
     defaultModel?: string;
     channel?: string;
     capabilities?: string[];
+    repoRoot?: string;
   };
   messageToolHints?: string[];
   sandboxInfo?: {
@@ -570,6 +571,7 @@ export function buildRuntimeLine(
     node?: string;
     model?: string;
     defaultModel?: string;
+    repoRoot?: string;
   },
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
@@ -578,6 +580,7 @@ export function buildRuntimeLine(
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
+    runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os
       ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
       : runtimeInfo?.arch

@@ -226,7 +226,9 @@ describe("createTelegramBot", () => {
     expect(payload.SenderName).toBe("Ada Lovelace");
     expect(payload.SenderId).toBe("99");
     expect(payload.SenderUsername).toBe("ada");
-    expect(payload.Body).toMatch(/^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/);
+    expect(payload.Body).toMatch(
+      /^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
+    );
   });
   it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
     onSpy.mockReset();

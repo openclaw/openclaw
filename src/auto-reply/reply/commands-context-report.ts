@@ -102,6 +102,8 @@ async function resolveContextReport(
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.cfg,
     agentId: sessionAgentId,
+    workspaceDir,
+    cwd: process.cwd(),
     runtime: {
       host: "unknown",
       os: "unknown",
