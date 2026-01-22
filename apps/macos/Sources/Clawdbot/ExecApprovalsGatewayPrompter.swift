@@ -63,24 +63,36 @@ final class ExecApprovalsGatewayPrompter {
         let mode = AppStateStore.shared.connectionMode
         let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let recentlyActive = self.isRecentlyActive(mode: mode, thresholdSeconds: 120)
+        return Self.shouldPresent(
+            mode: mode,
+            activeSession: activeSession,
+            requestSession: requestSession,
+            lastInputSeconds: Self.lastInputSeconds(),
+            thresholdSeconds: 120)
+    }
 
-        if let session = requestSession, !session.isEmpty {
-            if let active = activeSession, !active.isEmpty {
+    private static func shouldPresent(
+        mode: AppState.ConnectionMode,
+        activeSession: String?,
+        requestSession: String?,
+        lastInputSeconds: Int?,
+        thresholdSeconds: Int) -> Bool
+    {
+        let active = activeSession?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requested = requestSession?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let recentlyActive = lastInputSeconds.map { $0 <= thresholdSeconds } ?? (mode == .local)
+
+        if let session = requested, !session.isEmpty {
+            if let active, !active.isEmpty {
                 return active == session
             }
             return recentlyActive
         }
 
-        if let active = activeSession, !active.isEmpty {
+        if let active, !active.isEmpty {
             return true
         }
         return mode == .local
-    }
-
-    private func isRecentlyActive(mode: AppState.ConnectionMode, thresholdSeconds: Int) -> Bool {
-        guard let seconds = Self.lastInputSeconds() else { return mode == .local }
-        return seconds <= thresholdSeconds
     }
 
     private static func lastInputSeconds() -> Int? {
@@ -90,3 +102,22 @@ final class ExecApprovalsGatewayPrompter {
         return Int(seconds.rounded())
     }
 }
+
+#if DEBUG
+extension ExecApprovalsGatewayPrompter {
+    static func _testShouldPresent(
+        mode: AppState.ConnectionMode,
+        activeSession: String?,
+        requestSession: String?,
+        lastInputSeconds: Int?,
+        thresholdSeconds: Int = 120) -> Bool
+    {
+        self.shouldPresent(
+            mode: mode,
+            activeSession: activeSession,
+            requestSession: requestSession,
+            lastInputSeconds: lastInputSeconds,
+            thresholdSeconds: thresholdSeconds)
+    }
+}
+#endif

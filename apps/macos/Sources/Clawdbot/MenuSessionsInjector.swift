@@ -192,7 +192,8 @@ extension MenuSessionsInjector {
             let headerItem = NSMenuItem()
             headerItem.tag = self.tag
             headerItem.isEnabled = false
-            let statusText = self.cachedErrorText ?? (isConnected ? nil : self.controlChannelStatusText(for: channelState))
+            let statusText = self
+                .cachedErrorText ?? (isConnected ? nil : self.controlChannelStatusText(for: channelState))
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
                     count: rows.count,
