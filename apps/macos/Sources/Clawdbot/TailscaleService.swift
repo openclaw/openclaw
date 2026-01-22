@@ -221,6 +221,6 @@ final class TailscaleService {
     }
 
     nonisolated static func fallbackTailnetIPv4() -> String? {
-        Self.detectTailnetIPv4()
+        self.detectTailnetIPv4()
     }
 }

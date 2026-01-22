@@ -47,7 +47,6 @@ struct PermissionStatusList: View {
             .font(.footnote)
             .padding(.top, 2)
             .help("Refresh status")
-
         }
     }
 

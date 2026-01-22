@@ -191,7 +191,6 @@ struct GeneralSettings: View {
             if self.state.connectionMode == .remote {
                 self.remoteCard
             }
-
         }
     }
 

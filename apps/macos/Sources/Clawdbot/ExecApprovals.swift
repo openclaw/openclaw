@@ -280,8 +280,10 @@ enum ExecApprovalsStore {
         let resolvedAgent = ExecApprovalsResolvedDefaults(
             security: agentEntry.security ?? wildcardEntry.security ?? resolvedDefaults.security,
             ask: agentEntry.ask ?? wildcardEntry.ask ?? resolvedDefaults.ask,
-            askFallback: agentEntry.askFallback ?? wildcardEntry.askFallback ?? resolvedDefaults.askFallback,
-            autoAllowSkills: agentEntry.autoAllowSkills ?? wildcardEntry.autoAllowSkills ?? resolvedDefaults.autoAllowSkills)
+            askFallback: agentEntry.askFallback ?? wildcardEntry.askFallback
+                ?? resolvedDefaults.askFallback,
+            autoAllowSkills: agentEntry.autoAllowSkills ?? wildcardEntry.autoAllowSkills
+                ?? resolvedDefaults.autoAllowSkills)
         let allowlist = ((wildcardEntry.allowlist ?? []) + (agentEntry.allowlist ?? []))
             .map { entry in
                 ExecAllowlistEntry(
