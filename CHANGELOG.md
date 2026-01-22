@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 - Signal: add typing indicators and DM read receipts via signal-cli.
 
 ### Fixes
+- Config: avoid stack traces for invalid configs and log the config path.
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
 - UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
