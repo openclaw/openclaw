@@ -273,7 +273,11 @@ export async function sanitizeSessionHistory(params: {
   sessionManager: SessionManager;
   sessionId: string;
 }): Promise<AgentMessage[]> {
-  const isAntigravityClaudeModel = isAntigravityClaude(params.modelApi, params.modelId);
+  const isAntigravityClaudeModel = isAntigravityClaude({
+    api: params.modelApi,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
   const provider = normalizeProviderId(params.provider ?? "");
   const modelId = (params.modelId ?? "").toLowerCase();
   const isOpenRouterGemini =
@@ -285,15 +289,14 @@ export async function sanitizeSessionHistory(params: {
     sanitizeToolCallIds,
     toolCallIdMode,
     enforceToolCallLast: params.modelApi === "anthropic-messages",
-    preserveSignatures: params.modelApi === "google-antigravity" && isAntigravityClaudeModel,
+    preserveSignatures: isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenRouterGemini
       ? { allowBase64Only: true, includeCamelCase: true }
       : undefined,
   });
-  const sanitizedThinking =
-    params.modelApi === "google-antigravity" && isAntigravityClaudeModel
-      ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
-      : sanitizedImages;
+  const sanitizedThinking = isAntigravityClaudeModel
+    ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
+    : sanitizedImages;
   const repairedTools = sanitizeToolUseResultPairing(sanitizedThinking);
 
   return applyGoogleTurnOrderingFix({
