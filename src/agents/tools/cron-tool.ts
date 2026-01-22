@@ -16,6 +16,7 @@ const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs"
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 
+const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
@@ -33,7 +34,9 @@ const CronToolSchema = Type.Object({
   patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
   text: Type.Optional(Type.String()),
   mode: optionalStringEnum(CRON_WAKE_MODES),
-  contextMessages: Type.Optional(Type.Number()),
+  contextMessages: Type.Optional(
+    Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+  ),
 });
 
 type CronToolOptions = {
@@ -88,7 +91,11 @@ async function buildReminderContextLines(params: {
   gatewayOpts: GatewayCallOptions;
   contextMessages: number;
 }) {
-  if (params.contextMessages <= 0) return [];
+  const maxMessages = Math.min(
+    REMINDER_CONTEXT_MESSAGES_MAX,
+    Math.max(0, Math.floor(params.contextMessages)),
+  );
+  if (maxMessages <= 0) return [];
   const sessionKey = params.agentSessionKey?.trim();
   if (!sessionKey) return [];
   const cfg = loadConfig();
@@ -97,13 +104,13 @@ async function buildReminderContextLines(params: {
   try {
     const res = (await callGatewayTool("chat.history", params.gatewayOpts, {
       sessionKey: resolvedKey,
-      limit: 12,
+      limit: maxMessages,
     })) as { messages?: unknown[] };
     const messages = Array.isArray(res?.messages) ? res.messages : [];
     const parsed = messages
       .map((msg) => extractMessageText(msg as ChatMessage))
       .filter((msg): msg is { role: string; text: string } => Boolean(msg));
-    const recent = parsed.slice(-params.contextMessages);
+    const recent = parsed.slice(-maxMessages);
     if (recent.length === 0) return [];
     const lines: string[] = [];
     let total = 0;
@@ -126,7 +133,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     label: "Cron",
     name: "cron",
     description:
-      "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use `jobId` as the canonical identifier; `id` is accepted for compatibility. Use `contextMessages` to add previous messages as context to the job text.",
+      "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use `jobId` as the canonical identifier; `id` is accepted for compatibility. Use `contextMessages` (0-10) to add previous messages as context to the job text.",
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -152,7 +159,9 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
           }
           const job = normalizeCronJobCreate(params.job) ?? params.job;
           const contextMessages =
-            typeof params.contextMessages === "number" ? params.contextMessages : 0;
+            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
+              ? params.contextMessages
+              : 0;
           if (
             job &&
             typeof job === "object" &&

@@ -129,6 +129,42 @@ describe("cron tool", () => {
     expect(text).toContain("User: Remind me about the thing at 2pm");
   });
 
+  it("caps contextMessages at 10", async () => {
+    const messages = Array.from({ length: 12 }, (_, idx) => ({
+      role: "user",
+      content: [{ type: "text", text: `Message ${idx + 1}` }],
+    }));
+    callGatewayMock.mockResolvedValueOnce({ messages }).mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "main" });
+    await tool.execute("call5", {
+      action: "add",
+      contextMessages: 20,
+      job: {
+        name: "reminder",
+        schedule: { atMs: 123 },
+        payload: { kind: "systemEvent", text: "Reminder: the thing." },
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    const historyCall = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { limit?: number };
+    };
+    expect(historyCall.method).toBe("chat.history");
+    expect(historyCall.params?.limit).toBe(10);
+
+    const cronCall = callGatewayMock.mock.calls[1]?.[0] as {
+      params?: { payload?: { text?: string } };
+    };
+    const text = cronCall.params?.payload?.text ?? "";
+    expect(text).not.toMatch(/Message 1\\b/);
+    expect(text).not.toMatch(/Message 2\\b/);
+    expect(text).toContain("Message 3");
+    expect(text).toContain("Message 12");
+  });
+
   it("does not add context when contextMessages is 0 (default)", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
