@@ -9,6 +9,7 @@ import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
+import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
@@ -256,6 +257,7 @@ export function createGatewayHttpServer(opts: {
         if (
           handleControlUiHttpRequest(req, res, {
             basePath: controlUiBasePath,
+            config: loadConfig(),
           })
         )
           return;

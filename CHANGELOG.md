@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 - Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
 - Docs: add /model allowlist troubleshooting note. (#1405)
 - Docs: add per-message Gmail search example for gog. (#1220) Thanks @mbelinky.
+- UI: show per-session assistant identity in the Control UI. (#1420) Thanks @robbyczgw-cla.
 - Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
 - Signal: add typing indicators and DM read receipts via signal-cli.
 - MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.

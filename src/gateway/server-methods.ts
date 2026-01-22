@@ -55,6 +55,7 @@ const READ_METHODS = new Set([
   "usage.cost",
   "models.list",
   "agents.list",
+  "agent.identity.get",
   "skills.status",
   "voicewake.get",
   "sessions.list",

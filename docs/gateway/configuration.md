@@ -2654,7 +2654,13 @@ If unset, clients fall back to a muted light-blue.
 ```json5
 {
   ui: {
-    seamColor: "#FF4500" // hex (RRGGBB or #RRGGBB)
+    seamColor: "#FF4500", // hex (RRGGBB or #RRGGBB)
+    // Optional: Control UI assistant identity override.
+    // If unset, the Control UI uses the active agent identity (config or IDENTITY.md).
+    assistant: {
+      name: "Clawdbot",
+      avatar: "CB" // emoji, short text, or image URL/data URI
+    }
   }
 }
 ```

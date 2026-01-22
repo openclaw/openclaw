@@ -25,6 +25,7 @@ import {
 } from "./controllers/exec-approval";
 import type { ClawdbotApp } from "./app";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
+import { loadAssistantIdentity } from "./controllers/assistant-identity";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -43,6 +44,9 @@ type GatewayHost = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   debugHealth: HealthSnapshot | null;
+  assistantName: string;
+  assistantAvatar: string | null;
+  assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
   execApprovalQueue: ExecApprovalRequest[];
@@ -121,6 +125,7 @@ export function connectGateway(host: GatewayHost) {
       host.connected = true;
       host.hello = hello;
       applySnapshot(host, hello);
+      void loadAssistantIdentity(host as unknown as ClawdbotApp);
       void loadAgents(host as unknown as ClawdbotApp);
       void loadNodes(host as unknown as ClawdbotApp, { quiet: true });
       void loadDevices(host as unknown as ClawdbotApp, { quiet: true });

@@ -41,6 +41,9 @@ export type AppViewState = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   eventLog: EventLogEntry[];
+  assistantName: string;
+  assistantAvatar: string | null;
+  assistantAgentId: string | null;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
@@ -144,6 +147,7 @@ export type AppViewState = {
   setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
   applySettings: (next: UiSettings) => void;
   loadOverview: () => Promise<void>;
+  loadAssistantIdentity: () => Promise<void>;
   loadCron: () => Promise<void>;
   handleWhatsAppStart: (force: boolean) => Promise<void>;
   handleWhatsAppWait: () => Promise<void>;

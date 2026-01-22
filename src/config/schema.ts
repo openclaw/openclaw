@@ -261,6 +261,8 @@ const FIELD_LABELS: Record<string, string> = {
   "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
   "ui.seamColor": "Accent Color",
+  "ui.assistant.name": "Assistant Name",
+  "ui.assistant.avatar": "Assistant Avatar",
   "browser.controlUrl": "Browser Control URL",
   "browser.snapshotDefaults": "Browser Snapshot Defaults",
   "browser.snapshotDefaults.mode": "Browser Snapshot Mode",

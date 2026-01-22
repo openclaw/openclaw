@@ -62,6 +62,7 @@ export function renderChatControls(state: AppViewState) {
               sessionKey: next,
               lastActiveSessionKey: next,
             });
+            void state.loadAssistantIdentity();
             syncUrlWithSessionKey(state, next, true);
             void loadChatHistory(state);
           }}

@@ -756,6 +756,8 @@ export function createExecTool(
               .join("\n"),
           );
         }
+      }
+      if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
       const configuredHost = defaults?.host ?? "sandbox";

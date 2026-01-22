@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
+import { resolveInjectedAssistantIdentity } from "./assistant-identity";
 import { loadSettings, type UiSettings } from "./storage";
 import { renderApp } from "./app-render";
 import type { Tab } from "./navigation";
@@ -76,12 +77,15 @@ import {
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
+import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity";
 
 declare global {
   interface Window {
     __CLAWDBOT_CONTROL_UI_BASE_PATH__?: string;
   }
 }
+
+const injectedAssistantIdentity = resolveInjectedAssistantIdentity();
 
 @customElement("clawdbot-app")
 export class ClawdbotApp extends LitElement {
@@ -97,6 +101,10 @@ export class ClawdbotApp extends LitElement {
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
+
+  @state() assistantName = injectedAssistantIdentity.name;
+  @state() assistantAvatar = injectedAssistantIdentity.avatar;
+  @state() assistantAgentId = injectedAssistantIdentity.agentId ?? null;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -304,6 +312,10 @@ export class ClawdbotApp extends LitElement {
     resetChatScrollInternal(
       this as unknown as Parameters<typeof resetChatScrollInternal>[0],
     );
+  }
+
+  async loadAssistantIdentity() {
+    await loadAssistantIdentityInternal(this);
   }
 
   applySettings(next: UiSettings) {

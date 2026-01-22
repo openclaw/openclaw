@@ -221,6 +221,7 @@ export function renderApp(state: AppViewState) {
                   sessionKey: next,
                   lastActiveSessionKey: next,
                 });
+                void state.loadAssistantIdentity();
               },
               onConnect: () => state.connect(),
               onRefresh: () => state.loadOverview(),
@@ -434,6 +435,7 @@ export function renderApp(state: AppViewState) {
                   sessionKey: next,
                   lastActiveSessionKey: next,
                 });
+                void state.loadAssistantIdentity();
                 void loadChatHistory(state);
                 void refreshChatAvatar(state);
               },
@@ -479,6 +481,8 @@ export function renderApp(state: AppViewState) {
               onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
               onCloseSidebar: () => state.handleCloseSidebar(),
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+              assistantName: state.assistantName,
+              assistantAvatar: state.assistantAvatar,
             })
           : nothing}
 
