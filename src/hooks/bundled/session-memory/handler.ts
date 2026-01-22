@@ -160,11 +160,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
     await fs.writeFile(memoryFilePath, entry, "utf-8");
     console.log("[session-memory] Memory file written successfully");
 
-    // Send confirmation message to user with filename
+    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");
-    const confirmMsg = `💾 Session context saved to memory before reset.\n📄 ${relPath}`;
-    event.messages.push(confirmMsg);
-    console.log("[session-memory] Confirmation message queued:", confirmMsg);
+    console.log(`[session-memory] Session context saved to ${relPath}`);
   } catch (err) {
     console.error(
       "[session-memory] Failed to save session memory:",
