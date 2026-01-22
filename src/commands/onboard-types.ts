@@ -42,7 +42,8 @@ export type ProviderChoice = ChannelChoice;
 
 export type OnboardOptions = {
   mode?: OnboardMode;
-  flow?: "quickstart" | "advanced";
+  /** "manual" is an alias for "advanced". */
+  flow?: "quickstart" | "advanced" | "manual";
   workspace?: string;
   nonInteractive?: boolean;
   /** Required for non-interactive onboarding; skips the interactive risk prompt when true. */
