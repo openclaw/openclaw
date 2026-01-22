@@ -52,10 +52,10 @@ Instances list, `client.mode === "cli"` is **not** turned into a presence entry.
 Clients can send richer periodic beacons via the `system-event` method. The mac
 app uses this to report host name, IP, and `lastInputSeconds`.
 
-### 4) Node bridge beacons
+### 4) Node connects (role: node)
 
-When a node bridge connection authenticates, the Gateway emits a presence entry
-for that node and refreshes it periodically so it doesn’t expire.
+When a node connects over the Gateway WebSocket with `role: node`, the Gateway
+upserts a presence entry for that node (same flow as other WS clients).
 
 ## Merge + dedupe rules (why `instanceId` matters)
 

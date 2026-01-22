@@ -11,6 +11,10 @@ In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
 are allowed to join. UIs (macOS app, future clients) are just frontends that
 approve or reject pending requests.
 
+**Important:** WS nodes use **device pairing** (role `node`) during `connect`.
+`node.pair.*` is a separate pairing store and does **not** gate the WS handshake.
+Only clients that explicitly call `node.pair.*` use this flow.
+
 ## Concepts
 
 - **Pending request**: a node asked to join; requires approval.

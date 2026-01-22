@@ -5,7 +5,7 @@ read_when:
 ---
 # Gateway architecture
 
-Last updated: 2026-01-19
+Last updated: 2026-01-22
 
 ## Overview
 
@@ -34,7 +34,8 @@ Last updated: 2026-01-19
 
 ### Nodes (macOS / iOS / Android / headless)
 - Connect to the **same WS server** with `role: node`.
-- Pair with the Gateway to receive a token.
+- Provide a device identity in `connect`; pairing is **device‑based** (role `node`) and
+  approval lives in the device pairing store.
 - Expose commands like `canvas.*`, `camera.*`, `screen.record`, `location.get`.
 
 Protocol details:
