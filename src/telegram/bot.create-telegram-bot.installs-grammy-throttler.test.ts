@@ -329,7 +329,7 @@ describe("createTelegramBot", () => {
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0];
       expect(payload.Body).toMatch(
-        /^\[Telegram Ada Lovelace \(@ada_bot\) id:1234 (\+\d+[smhd] )?2025-01-09T00:00Z\]/,
+        /^\[Telegram Ada Lovelace \(@ada_bot\) id:1234 (\+\d+[smhd] )?2025-01-09 01:00 [^\]]+\]/,
       );
       expect(payload.Body).toContain("hello world");
     } finally {

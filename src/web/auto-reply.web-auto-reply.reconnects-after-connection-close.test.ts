@@ -329,11 +329,11 @@ describe("web auto-reply", () => {
       const firstArgs = resolver.mock.calls[0][0];
       const secondArgs = resolver.mock.calls[1][0];
       expect(firstArgs.Body).toMatch(
-        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01T00:00Z\] \[clawdbot\] first/,
+        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01 01:00 [^\]]+\] \[clawdbot\] first/,
       );
       expect(firstArgs.Body).not.toContain("second");
       expect(secondArgs.Body).toMatch(
-        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01T01:00Z\] \[clawdbot\] second/,
+        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01 02:00 [^\]]+\] \[clawdbot\] second/,
       );
       expect(secondArgs.Body).not.toContain("first");
 
