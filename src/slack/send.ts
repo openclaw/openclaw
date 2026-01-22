@@ -94,7 +94,7 @@ async function uploadSlackFile(params: {
     file: buffer,
     filename: fileName,
     ...(params.caption ? { initial_comment: params.caption } : {}),
-    ...(contentType ? { filetype: contentType } : {}),
+    // Note: filetype is deprecated in files.uploadV2, Slack auto-detects from file content
   };
   const payload: FilesUploadV2Arguments = params.threadTs
     ? { ...basePayload, thread_ts: params.threadTs }
