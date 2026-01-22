@@ -227,15 +227,29 @@ fi
 
 echo "📦 Copying Textual resources"
 TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
-TEXTUAL_BUNDLE="$TEXTUAL_BUNDLE_DIR/textual_Textual.bundle"
-if [ ! -d "$TEXTUAL_BUNDLE" ]; then
-  TEXTUAL_BUNDLE="$TEXTUAL_BUNDLE_DIR/Textual_Textual.bundle"
+TEXTUAL_BUNDLE=""
+for candidate in \
+  "$TEXTUAL_BUNDLE_DIR/textual_Textual.bundle" \
+  "$TEXTUAL_BUNDLE_DIR/Textual_Textual.bundle"
+do
+  if [ -d "$candidate" ]; then
+    TEXTUAL_BUNDLE="$candidate"
+    break
+  fi
+done
+if [ -z "$TEXTUAL_BUNDLE" ]; then
+  TEXTUAL_BUNDLE="$(find "$BUILD_ROOT" -type d \( -name "textual_Textual.bundle" -o -name "Textual_Textual.bundle" \) -print -quit)"
 fi
-if [ -d "$TEXTUAL_BUNDLE" ]; then
+if [ -n "$TEXTUAL_BUNDLE" ] && [ -d "$TEXTUAL_BUNDLE" ]; then
   rm -rf "$APP_ROOT/Contents/Resources/$(basename "$TEXTUAL_BUNDLE")"
   cp -R "$TEXTUAL_BUNDLE" "$APP_ROOT/Contents/Resources/"
 else
-  echo "WARN: Textual resource bundle not found in $TEXTUAL_BUNDLE_DIR (continuing)" >&2
+  if [[ "${ALLOW_MISSING_TEXTUAL_BUNDLE:-0}" == "1" ]]; then
+    echo "WARN: Textual resource bundle not found (continuing due to ALLOW_MISSING_TEXTUAL_BUNDLE=1)" >&2
+  else
+    echo "ERROR: Textual resource bundle not found. Set ALLOW_MISSING_TEXTUAL_BUNDLE=1 to bypass." >&2
+    exit 1
+  fi
 fi
 
 echo "⏹  Stopping any running Clawdbot"

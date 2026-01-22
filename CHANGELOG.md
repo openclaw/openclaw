@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
+- macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
 - UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
 
 ## 2026.1.21
