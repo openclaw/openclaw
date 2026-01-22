@@ -34,6 +34,7 @@ Docs: https://docs.clawd.bot
 - Cron: cap reminder context history to 10 messages and honor `contextMessages`. (#1103) Thanks @mkbehr.
 - Exec approvals: treat main as the default agent + migrate legacy default allowlists. (#1417) Thanks @czekaj.
 - Exec: avoid defaulting to elevated mode when elevated is not allowed.
+- Exec approvals: align node/gateway allowlist prechecks and approval gating; avoid null optional params in approval requests. (#1425) Thanks @czekaj.
 - UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
 
 ## 2026.1.21

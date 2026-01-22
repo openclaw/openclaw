@@ -727,6 +727,56 @@ export function isSafeBinUsage(params: {
   return true;
 }
 
+export type ExecAllowlistEvaluation = {
+  allowlistSatisfied: boolean;
+  allowlistMatches: ExecAllowlistEntry[];
+};
+
+export function evaluateExecAllowlist(params: {
+  analysis: ExecCommandAnalysis;
+  allowlist: ExecAllowlistEntry[];
+  safeBins: Set<string>;
+  cwd?: string;
+  skillBins?: Set<string>;
+  autoAllowSkills?: boolean;
+}): ExecAllowlistEvaluation {
+  const allowlistMatches: ExecAllowlistEntry[] = [];
+  if (!params.analysis.ok || params.analysis.segments.length === 0) {
+    return { allowlistSatisfied: false, allowlistMatches };
+  }
+  const allowSkills = params.autoAllowSkills === true && (params.skillBins?.size ?? 0) > 0;
+  const allowlistSatisfied = params.analysis.segments.every((segment) => {
+    const match = matchAllowlist(params.allowlist, segment.resolution);
+    if (match) allowlistMatches.push(match);
+    const safe = isSafeBinUsage({
+      argv: segment.argv,
+      resolution: segment.resolution,
+      safeBins: params.safeBins,
+      cwd: params.cwd,
+    });
+    const skillAllow =
+      allowSkills && segment.resolution?.executableName
+        ? params.skillBins?.has(segment.resolution.executableName)
+        : false;
+    return Boolean(match || safe || skillAllow);
+  });
+  return { allowlistSatisfied, allowlistMatches };
+}
+
+export function requiresExecApproval(params: {
+  ask: ExecAsk;
+  security: ExecSecurity;
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+}): boolean {
+  return (
+    params.ask === "always" ||
+    (params.ask === "on-miss" &&
+      params.security === "allowlist" &&
+      (!params.analysisOk || !params.allowlistSatisfied))
+  );
+}
+
 export function recordAllowlistUse(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
