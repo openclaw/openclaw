@@ -360,11 +360,14 @@ function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS
   }
   const envPath = env?.PATH ?? process.env.PATH ?? "";
   const entries = envPath.split(path.delimiter).filter(Boolean);
+  const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
   const extensions =
     process.platform === "win32"
-      ? (env?.PATHEXT ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-          .split(";")
-          .map((ext) => ext.toLowerCase())
+      ? hasExtension
+        ? [""]
+        : (env?.PATHEXT ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+            .split(";")
+            .map((ext) => ext.toLowerCase())
       : [""];
   for (const entry of entries) {
     for (const ext of extensions) {
