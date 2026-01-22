@@ -9,15 +9,15 @@ read_when:
 
 Clawdbot standardizes timestamps so the model sees a **single reference time**.
 
-## Message envelopes (UTC by default)
+## Message envelopes (local by default)
 
 Inbound messages are wrapped in an envelope like:
 
 ```
-[Provider ... 2026-01-05T21:26Z] message text
+[Provider ... 2026-01-05 16:26 PST] message text
 ```
 
-The timestamp in the envelope is **UTC by default**, with minutes precision.
+The timestamp in the envelope is **host-local by default**, with minutes precision.
 
 You can override this with:
 
@@ -25,7 +25,7 @@ You can override this with:
 {
   agents: {
     defaults: {
-      envelopeTimezone: "user", // "utc" | "local" | "user" | IANA timezone
+      envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
       envelopeTimestamp: "on", // "on" | "off"
       envelopeElapsed: "on" // "on" | "off"
     }
@@ -33,6 +33,7 @@ You can override this with:
 }
 ```
 
+- `envelopeTimezone: "utc"` uses UTC.
 - `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
 - Use an explicit IANA timezone (e.g., `"Europe/Vienna"`) for a fixed offset.
 - `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
@@ -40,10 +41,10 @@ You can override this with:
 
 ### Examples
 
-**UTC (default):**
+**Local (default):**
 
 ```
-[Signal Alice +1555 2026-01-18T05:19Z] hello
+[Signal Alice +1555 2026-01-18 00:19 PST] hello
 ```
 
 **Fixed timezone:**
