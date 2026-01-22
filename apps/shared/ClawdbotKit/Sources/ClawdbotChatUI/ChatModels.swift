@@ -235,6 +235,22 @@ public struct ClawdbotChatHistoryPayload: Codable, Sendable {
     public let thinkingLevel: String?
 }
 
+public struct ClawdbotSessionPreviewItem: Codable, Hashable, Sendable {
+    public let role: String
+    public let text: String
+}
+
+public struct ClawdbotSessionPreviewEntry: Codable, Sendable {
+    public let key: String
+    public let status: String
+    public let items: [ClawdbotSessionPreviewItem]
+}
+
+public struct ClawdbotSessionsPreviewPayload: Codable, Sendable {
+    public let ts: Int
+    public let previews: [ClawdbotSessionPreviewEntry]
+}
+
 public struct ClawdbotChatSendResponse: Codable, Sendable {
     public let runId: String
     public let status: String

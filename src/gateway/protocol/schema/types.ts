@@ -101,6 +101,7 @@ import type {
   SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
+  SessionsPreviewParamsSchema,
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
 } from "./sessions.js";
@@ -144,6 +145,7 @@ export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
+export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
 export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;

@@ -38,6 +38,7 @@ export {
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionPreviewItemsFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -47,6 +48,8 @@ export type {
   GatewaySessionsDefaults,
   SessionsListResult,
   SessionsPatchResult,
+  SessionsPreviewEntry,
+  SessionsPreviewResult,
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;

@@ -188,6 +188,13 @@ extension MenuSessionsInjector {
                 if rhs.key == mainKey { return false }
                 return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
             }
+            if !rows.isEmpty {
+                let previewKeys = rows.prefix(20).map(\.key)
+                let task = Task {
+                    await SessionMenuPreviewLoader.prewarm(sessionKeys: previewKeys, maxItems: 10)
+                }
+                self.previewTasks.append(task)
+            }
 
             let headerItem = NSMenuItem()
             headerItem.tag = self.tag
