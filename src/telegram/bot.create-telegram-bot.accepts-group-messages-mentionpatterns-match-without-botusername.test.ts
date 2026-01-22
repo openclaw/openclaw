@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { createTelegramBot } from "./bot.js";
 
@@ -89,6 +89,7 @@ vi.mock("grammy", () => ({
 const sequentializeMiddleware = vi.fn();
 const sequentializeSpy = vi.fn(() => sequentializeMiddleware);
 let _sequentializeKey: ((ctx: unknown) => string) | undefined;
+let originalTz: string | undefined;
 vi.mock("@grammyjs/runner", () => ({
   sequentialize: (keyFn: (ctx: unknown) => string) => {
     _sequentializeKey = keyFn;
@@ -120,6 +121,8 @@ const getOnHandler = (event: string) => {
 
 describe("createTelegramBot", () => {
   beforeEach(() => {
+    originalTz = process.env.TZ;
+    process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
       channels: {
@@ -136,6 +139,10 @@ describe("createTelegramBot", () => {
     sequentializeSpy.mockReset();
     botCtorSpy.mockReset();
     _sequentializeKey = undefined;
+  });
+
+  afterEach(() => {
+    process.env.TZ = originalTz;
   });
 
   // groupPolicy tests
@@ -176,7 +183,9 @@ describe("createTelegramBot", () => {
     expect(payload.WasMentioned).toBe(true);
     expect(payload.SenderName).toBe("Ada");
     expect(payload.SenderId).toBe("9");
-    expect(payload.Body).toMatch(/^\[Telegram Test Group id:7 (\+\d+[smhd] )?2025-01-09T00:00Z\]/);
+    expect(payload.Body).toMatch(
+      /^\[Telegram Test Group id:7 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
+    );
   });
   it("keeps group envelope headers stable (sender identity is separate)", async () => {
     onSpy.mockReset();
@@ -217,7 +226,7 @@ describe("createTelegramBot", () => {
     expect(payload.SenderName).toBe("Ada Lovelace");
     expect(payload.SenderId).toBe("99");
     expect(payload.SenderUsername).toBe("ada");
-    expect(payload.Body).toMatch(/^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09T00:00Z\]/);
+    expect(payload.Body).toMatch(/^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/);
   });
   it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
     onSpy.mockReset();
