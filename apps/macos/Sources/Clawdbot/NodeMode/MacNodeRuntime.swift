@@ -480,62 +480,22 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DISABLED: security=deny")
         }
 
-        let requiresAsk = ExecApprovalHelpers.requiresAsk(
-            ask: ask,
-            security: security,
-            allowlistMatch: allowlistMatch,
-            skillAllow: skillAllow)
-
-        let decisionFromParams = ExecApprovalHelpers.parseDecision(params.approvalDecision)
-        var approvedByAsk = params.approved == true || decisionFromParams != nil
-        var persistAllowlist = decisionFromParams == .allowAlways
-        if decisionFromParams == .deny {
-            await self.emitExecEvent(
-                "exec.denied",
-                payload: ExecEventPayload(
-                    sessionKey: sessionKey,
-                    runId: runId,
-                    host: "node",
-                    command: displayCommand,
-                    reason: "user-denied"))
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "SYSTEM_RUN_DENIED: user denied")
-        }
-        if requiresAsk, !approvedByAsk {
-            let decision = await MainActor.run {
-                ExecApprovalsPromptPresenter.prompt(
-                    ExecApprovalPromptRequest(
-                        command: displayCommand,
-                        cwd: params.cwd,
-                        host: "node",
-                        security: security.rawValue,
-                        ask: ask.rawValue,
-                        agentId: agentId,
-                        resolvedPath: resolution?.resolvedPath))
-            }
-            switch decision {
-            case .deny:
-                await self.emitExecEvent(
-                    "exec.denied",
-                    payload: ExecEventPayload(
-                        sessionKey: sessionKey,
-                        runId: runId,
-                        host: "node",
-                        command: displayCommand,
-                        reason: "user-denied"))
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "SYSTEM_RUN_DENIED: user denied")
-            case .allowAlways:
-                approvedByAsk = true
-                persistAllowlist = true
-            case .allowOnce:
-                approvedByAsk = true
-            }
-        }
+        let approval = await self.resolveSystemRunApproval(
+            req: req,
+            params: params,
+            context: ExecRunContext(
+                displayCommand: displayCommand,
+                security: security,
+                ask: ask,
+                agentId: agentId,
+                resolution: resolution,
+                allowlistMatch: allowlistMatch,
+                skillAllow: skillAllow,
+                sessionKey: sessionKey,
+                runId: runId))
+        if let response = approval.response { return response }
+        let approvedByAsk = approval.approvedByAsk
+        let persistAllowlist = approval.persistAllowlist
         if persistAllowlist, security == .allowlist,
            let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
         {
@@ -657,6 +617,99 @@ actor MacNodeRuntime {
         }
         let payload = try Self.encodePayload(WhichPayload(bins: matches, paths: paths))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private struct ExecApprovalOutcome {
+        var approvedByAsk: Bool
+        var persistAllowlist: Bool
+        var response: BridgeInvokeResponse?
+    }
+
+    private struct ExecRunContext {
+        var displayCommand: String
+        var security: ExecSecurity
+        var ask: ExecAsk
+        var agentId: String?
+        var resolution: ExecCommandResolution?
+        var allowlistMatch: ExecAllowlistEntry?
+        var skillAllow: Bool
+        var sessionKey: String
+        var runId: String
+    }
+
+    private func resolveSystemRunApproval(
+        req: BridgeInvokeRequest,
+        params: ClawdbotSystemRunParams,
+        context: ExecRunContext) async -> ExecApprovalOutcome
+    {
+        let requiresAsk = ExecApprovalHelpers.requiresAsk(
+            ask: context.ask,
+            security: context.security,
+            allowlistMatch: context.allowlistMatch,
+            skillAllow: context.skillAllow)
+
+        let decisionFromParams = ExecApprovalHelpers.parseDecision(params.approvalDecision)
+        var approvedByAsk = params.approved == true || decisionFromParams != nil
+        var persistAllowlist = decisionFromParams == .allowAlways
+        if decisionFromParams == .deny {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: context.sessionKey,
+                    runId: context.runId,
+                    host: "node",
+                    command: context.displayCommand,
+                    reason: "user-denied"))
+            return ExecApprovalOutcome(
+                approvedByAsk: approvedByAsk,
+                persistAllowlist: persistAllowlist,
+                response: Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "SYSTEM_RUN_DENIED: user denied"))
+        }
+
+        if requiresAsk, !approvedByAsk {
+            let decision = await MainActor.run {
+                ExecApprovalsPromptPresenter.prompt(
+                    ExecApprovalPromptRequest(
+                        command: context.displayCommand,
+                        cwd: params.cwd,
+                        host: "node",
+                        security: context.security.rawValue,
+                        ask: context.ask.rawValue,
+                        agentId: context.agentId,
+                        resolvedPath: context.resolution?.resolvedPath))
+            }
+            switch decision {
+            case .deny:
+                await self.emitExecEvent(
+                    "exec.denied",
+                    payload: ExecEventPayload(
+                        sessionKey: context.sessionKey,
+                        runId: context.runId,
+                        host: "node",
+                        command: context.displayCommand,
+                        reason: "user-denied"))
+                return ExecApprovalOutcome(
+                    approvedByAsk: approvedByAsk,
+                    persistAllowlist: persistAllowlist,
+                    response: Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "SYSTEM_RUN_DENIED: user denied"))
+            case .allowAlways:
+                approvedByAsk = true
+                persistAllowlist = true
+            case .allowOnce:
+                approvedByAsk = true
+            }
+        }
+
+        return ExecApprovalOutcome(
+            approvedByAsk: approvedByAsk,
+            persistAllowlist: persistAllowlist,
+            response: nil)
     }
 
     private func handleSystemExecApprovalsGet(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
