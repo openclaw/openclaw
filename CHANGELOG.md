@@ -25,6 +25,7 @@ Docs: https://docs.clawd.bot
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
 - OpenCode Zen: route models to the Zen API shape per family so proxy endpoints are used. (#1416)
 - Browser: suppress Chrome restore prompts for managed profiles. (#1419) Thanks @jamesgroat.
+- Logs: align rolling log filenames with local time and fall back to latest file when today's log is missing. (#1343)
 - Models: inherit session model overrides in thread/topic sessions (Telegram topics, Slack/Discord threads). (#1376)
 - macOS: keep local auto bind loopback-first; only use tailnet when bind=tailnet.
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
