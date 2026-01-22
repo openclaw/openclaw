@@ -126,7 +126,7 @@ describe("agents set-identity command", () => {
         "- Name: Clawd",
         "- Theme: space lobster",
         "- Emoji: :)",
-        "- Avatar: avatars/base.png",
+        "- Avatar: avatars/clawd.png",
         "",
       ].join("\n"),
       "utf-8",
@@ -138,7 +138,13 @@ describe("agents set-identity command", () => {
     });
 
     await agentsSetIdentityCommand(
-      { workspace, fromIdentity: true, name: "Nova", emoji: "🦞", avatar: "avatars/custom.png" },
+      {
+        workspace,
+        fromIdentity: true,
+        name: "Nova",
+        emoji: "🦞",
+        avatar: "https://example.com/override.png",
+      },
       runtime,
     );
 
@@ -150,7 +156,7 @@ describe("agents set-identity command", () => {
       name: "Nova",
       theme: "space lobster",
       emoji: "🦞",
-      avatar: "avatars/custom.png",
+      avatar: "https://example.com/override.png",
     });
   });
 
@@ -213,6 +219,26 @@ describe("agents set-identity command", () => {
     const main = written.agents?.list?.find((entry) => entry.id === "main");
     expect(main?.identity).toEqual({
       avatar: "avatars/only.png",
+    });
+  });
+
+  it("accepts avatar-only updates via flags", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: { agents: { list: [{ id: "main" }] } },
+    });
+
+    await agentsSetIdentityCommand(
+      { agent: "main", avatar: "https://example.com/avatar.png" },
+      runtime,
+    );
+
+    const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      agents?: { list?: Array<{ id: string; identity?: Record<string, string> }> };
+    };
+    const main = written.agents?.list?.find((entry) => entry.id === "main");
+    expect(main?.identity).toEqual({
+      avatar: "https://example.com/avatar.png",
     });
   });
 
