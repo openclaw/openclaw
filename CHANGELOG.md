@@ -31,6 +31,7 @@ Docs: https://docs.clawd.bot
 - Models: inherit session model overrides in thread/topic sessions (Telegram topics, Slack/Discord threads). (#1376)
 - macOS: keep local auto bind loopback-first; only use tailnet when bind=tailnet.
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
+- macOS: keep chat pinned to bottom during streaming replies. (#1279)
 - Cron: cap reminder context history to 10 messages and honor `contextMessages`. (#1103) Thanks @mkbehr.
 - Exec approvals: treat main as the default agent + migrate legacy default allowlists. (#1417) Thanks @czekaj.
 - Exec: avoid defaulting to elevated mode when elevated is not allowed.
