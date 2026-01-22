@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -81,6 +82,35 @@ async function writeFileIfMissing(filePath: string, content: string) {
   }
 }
 
+async function hasGitRepo(dir: string): Promise<boolean> {
+  try {
+    await fs.stat(path.join(dir, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isGitAvailable(): Promise<boolean> {
+  try {
+    const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
+    return result.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
+  if (!isBrandNewWorkspace) return;
+  if (await hasGitRepo(dir)) return;
+  if (!(await isGitAvailable())) return;
+  try {
+    await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });
+  } catch {
+    // Ignore git init failures; workspace creation should still succeed.
+  }
+}
+
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
@@ -140,6 +170,7 @@ export async function ensureAgentWorkspace(params?: {
   if (isBrandNewWorkspace) {
     await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
   }
+  await ensureGitRepo(dir, isBrandNewWorkspace);
 
   return {
     dir,

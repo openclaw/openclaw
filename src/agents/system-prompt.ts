@@ -148,6 +148,7 @@ export function buildAgentSystemPrompt(params: {
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
+  workspaceNotes?: string[];
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
   runtimeInfo?: {
@@ -327,6 +328,7 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
+  const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -403,6 +405,7 @@ export function buildAgentSystemPrompt(params: {
     "## Workspace",
     `Your working directory is: ${params.workspaceDir}`,
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
+    ...workspaceNotes,
     "",
     ...docsSection,
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
