@@ -267,8 +267,8 @@ export function registerNodesInvokeCommands(nodes: Command) {
               security: hostSecurity,
               ask: hostAsk,
               agentId,
-              resolvedPath: null,
-              sessionKey: null,
+              resolvedPath: undefined,
+              sessionKey: undefined,
               timeoutMs: 120_000,
             })) as { decision?: string } | null;
             const decision =

@@ -1,10 +1,54 @@
 import { describe, expect, it, vi } from "vitest";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
+import { validateExecApprovalRequestParams } from "../protocol/index.js";
 
 const noop = () => {};
 
 describe("exec approval handlers", () => {
+  describe("ExecApprovalRequestParams validation", () => {
+    it("accepts request with resolvedPath omitted", () => {
+      const params = {
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "node",
+      };
+      expect(validateExecApprovalRequestParams(params)).toBe(true);
+    });
+
+    it("accepts request with resolvedPath as string", () => {
+      const params = {
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "node",
+        resolvedPath: "/usr/bin/echo",
+      };
+      expect(validateExecApprovalRequestParams(params)).toBe(true);
+    });
+
+    it("accepts request with resolvedPath as undefined", () => {
+      const params = {
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "node",
+        resolvedPath: undefined,
+      };
+      expect(validateExecApprovalRequestParams(params)).toBe(true);
+    });
+
+    // This documents the TypeBox/AJV behavior that caused the Discord exec bug:
+    // Type.Optional(Type.String()) does NOT accept null, only string or undefined.
+    it("rejects request with resolvedPath as null", () => {
+      const params = {
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "node",
+        resolvedPath: null,
+      };
+      expect(validateExecApprovalRequestParams(params)).toBe(false);
+    });
+  });
+
   it("broadcasts request + resolve", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
