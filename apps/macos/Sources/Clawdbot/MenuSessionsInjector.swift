@@ -145,10 +145,11 @@ extension MenuSessionsInjector {
             let headerItem = NSMenuItem()
             headerItem.tag = self.tag
             headerItem.isEnabled = false
+            let statusText = self.cachedErrorText ?? (isConnected ? nil : self.controlChannelStatusText(for: channelState))
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
                     count: rows.count,
-                    statusText: isConnected ? nil : self.controlChannelStatusText(for: channelState))),
+                    statusText: statusText)),
                 width: width,
                 highlighted: false)
             headerItem.view = hosted
@@ -598,8 +599,11 @@ extension MenuSessionsInjector {
         }
 
         guard self.isControlChannelConnected else {
-            self.cachedSnapshot = nil
-            self.cachedErrorText = nil
+            if self.cachedSnapshot != nil {
+                self.cachedErrorText = "Gateway disconnected (showing cached)"
+            } else {
+                self.cachedErrorText = nil
+            }
             self.cacheUpdatedAt = Date()
             return
         }
@@ -624,8 +628,6 @@ extension MenuSessionsInjector {
         }
 
         guard self.isControlChannelConnected else {
-            self.cachedUsageSummary = nil
-            self.cachedUsageErrorText = nil
             self.usageCacheUpdatedAt = Date()
             return
         }
@@ -648,8 +650,6 @@ extension MenuSessionsInjector {
         }
 
         guard self.isControlChannelConnected else {
-            self.cachedCostSummary = nil
-            self.cachedCostErrorText = nil
             self.costCacheUpdatedAt = Date()
             return
         }
