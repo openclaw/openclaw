@@ -10,10 +10,7 @@ import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
-import {
-  escapeRegExp,
-  formatLocalEnvelopeTimestamp,
-} from "../../test/helpers/envelope-timestamp.js";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
@@ -454,7 +451,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0];
-      const expectedTimestamp = formatLocalEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+      const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
       const timestampPattern = escapeRegExp(expectedTimestamp);
       expect(payload.Body).toMatch(
         new RegExp(
@@ -593,7 +590,7 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expectInboundContextContract(payload);
     expect(payload.WasMentioned).toBe(true);
-    const expectedTimestamp = formatLocalEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
     const timestampPattern = escapeRegExp(expectedTimestamp);
     expect(payload.Body).toMatch(
       new RegExp(`^\\[Telegram Test Group id:7 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
@@ -639,7 +636,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expectInboundContextContract(payload);
-    const expectedTimestamp = formatLocalEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
     const timestampPattern = escapeRegExp(expectedTimestamp);
     expect(payload.Body).toMatch(
       new RegExp(`^\\[Telegram Ops id:42 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
