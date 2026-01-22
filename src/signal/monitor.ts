@@ -279,8 +279,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
+  const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
+  const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
   let daemonHandle: ReturnType<typeof spawnSignalDaemon> | null = null;
 
   if (autoStart) {
@@ -295,7 +297,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
-      sendReadReceipts: opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts,
+      sendReadReceipts,
       runtime,
     });
   }
@@ -335,6 +337,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       reactionAllowlist,
       mediaMaxBytes,
       ignoreAttachments,
+      sendReadReceipts,
+      readReceiptsViaDaemon,
       fetchAttachment,
       deliverReplies,
       resolveSignalReactionTargets,

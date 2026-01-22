@@ -34,6 +34,8 @@ describe("signal createSignalEventHandler inbound contract", () => {
       reactionAllowlist: [],
       mediaMaxBytes: 1024,
       ignoreAttachments: true,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
       fetchAttachment: async () => null,
       deliverReplies: async () => {},
       resolveSignalReactionTargets: () => [],

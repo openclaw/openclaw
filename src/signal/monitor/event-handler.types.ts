@@ -76,6 +76,8 @@ export type SignalEventHandlerDeps = {
   reactionAllowlist: string[];
   mediaMaxBytes: number;
   ignoreAttachments: boolean;
+  sendReadReceipts: boolean;
+  readReceiptsViaDaemon: boolean;
   fetchAttachment: (params: {
     baseUrl: string;
     account?: string;

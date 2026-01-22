@@ -100,6 +100,11 @@ Groups:
 - Use `channels.signal.ignoreAttachments` to skip downloading media.
 - Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
+## Typing + read receipts
+- **Typing indicators**: Clawdbot sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
+- **Read receipts**: when `channels.signal.sendReadReceipts` is true, Clawdbot forwards read receipts for allowed DMs.
+- Signal-cli does not expose read receipts for groups.
+
 ## Delivery targets (CLI/cron)
 - DMs: `signal:+15551234567` (or plain E.164).
 - Groups: `signal:group:<groupId>`.

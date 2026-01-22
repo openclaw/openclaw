@@ -57,6 +57,8 @@ describe("signal event handler sender prefix", () => {
       reactionAllowlist: [],
       mediaMaxBytes: 1000,
       ignoreAttachments: true,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
       fetchAttachment: async () => null,
       deliverReplies: async () => undefined,
       resolveSignalReactionTargets: () => [],
