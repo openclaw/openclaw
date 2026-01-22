@@ -1,5 +1,6 @@
 import ClawdbotKit
 import ClawdbotProtocol
+import CoreGraphics
 import Foundation
 import OSLog
 
@@ -44,6 +45,7 @@ final class ExecApprovalsGatewayPrompter {
         do {
             let data = try JSONEncoder().encode(payload)
             let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
+            guard self.shouldPresent(request: request) else { return }
             let decision = ExecApprovalsPromptPresenter.prompt(request.request)
             try await GatewayConnection.shared.requestVoid(
                 method: .execApprovalResolve,
@@ -55,5 +57,36 @@ final class ExecApprovalsGatewayPrompter {
         } catch {
             self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func shouldPresent(request: GatewayApprovalRequest) -> Bool {
+        let mode = AppStateStore.shared.connectionMode
+        let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let recentlyActive = self.isRecentlyActive(mode: mode, thresholdSeconds: 120)
+
+        if let session = requestSession, !session.isEmpty {
+            if let active = activeSession, !active.isEmpty {
+                return active == session
+            }
+            return recentlyActive
+        }
+
+        if let active = activeSession, !active.isEmpty {
+            return true
+        }
+        return mode == .local
+    }
+
+    private func isRecentlyActive(mode: AppState.ConnectionMode, thresholdSeconds: Int) -> Bool {
+        guard let seconds = Self.lastInputSeconds() else { return mode == .local }
+        return seconds <= thresholdSeconds
+    }
+
+    private static func lastInputSeconds() -> Int? {
+        let anyEvent = CGEventType(rawValue: UInt32.max) ?? .null
+        let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEvent)
+        if seconds.isNaN || seconds.isInfinite || seconds < 0 { return nil }
+        return Int(seconds.rounded())
     }
 }

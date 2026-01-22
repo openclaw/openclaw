@@ -13,6 +13,7 @@ struct ExecApprovalPromptRequest: Codable, Sendable {
     var ask: String?
     var agentId: String?
     var resolvedPath: String?
+    var sessionKey: String?
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -412,7 +413,8 @@ private enum ExecHostExecutor {
                     security: context.security.rawValue,
                     ask: context.ask.rawValue,
                     agentId: context.trimmedAgent,
-                    resolvedPath: context.resolution?.resolvedPath))
+                    resolvedPath: context.resolution?.resolvedPath,
+                    sessionKey: request.sessionKey))
 
             switch decision {
             case .deny:
