@@ -30,8 +30,8 @@ export function renderReadingIndicatorGroup(assistantAvatarUrl?: string | null) 
 export function renderStreamingGroup(
   text: string,
   startedAt: number,
-  onOpenSidebar?: (content: string) => void,
   assistantAvatarUrl?: string | null,
+  onOpenSidebar?: (content: string) => void,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",

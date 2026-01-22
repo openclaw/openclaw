@@ -122,8 +122,8 @@ export function renderChat(props: ChatProps) {
                 return renderStreamingGroup(
                   item.text,
                   item.startedAt,
-                  props.onOpenSidebar,
                   props.assistantAvatarUrl ?? null,
+                  props.onOpenSidebar,
                 );
               }
 

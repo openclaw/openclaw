@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  escapeRegExp,
+  formatLocalEnvelopeTimestamp,
+} from "../../test/helpers/envelope-timestamp.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -328,12 +332,16 @@ describe("web auto-reply", () => {
       expect(resolver).toHaveBeenCalledTimes(2);
       const firstArgs = resolver.mock.calls[0][0];
       const secondArgs = resolver.mock.calls[1][0];
+      const firstTimestamp = formatLocalEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"));
+      const secondTimestamp = formatLocalEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"));
+      const firstPattern = escapeRegExp(firstTimestamp);
+      const secondPattern = escapeRegExp(secondTimestamp);
       expect(firstArgs.Body).toMatch(
-        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01T00:00Z\] \[clawdbot\] first/,
+        new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[clawdbot\\] first`),
       );
       expect(firstArgs.Body).not.toContain("second");
       expect(secondArgs.Body).toMatch(
-        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01T01:00Z\] \[clawdbot\] second/,
+        new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[clawdbot\\] second`),
       );
       expect(secondArgs.Body).not.toContain("first");
 
