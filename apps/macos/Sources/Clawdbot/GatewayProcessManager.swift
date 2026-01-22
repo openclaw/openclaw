@@ -242,13 +242,12 @@ final class GatewayProcessManager {
     private func describe(details instance: String?, port: Int, snap: HealthSnapshot?) -> String {
         let instanceText = instance ?? "pid unknown"
         if let snap {
-            let linkId = snap.channelOrder?.first(where: {
-                if let summary = snap.channels[$0] { return summary.linked != nil }
-                return false
-            }) ?? snap.channels.keys.first(where: {
-                if let summary = snap.channels[$0] { return summary.linked != nil }
-                return false
-            })
+            let order = snap.channelOrder ?? Array(snap.channels.keys)
+            let linkId = order.first(where: { snap.channels[$0]?.linked == true })
+                ?? order.first(where: { snap.channels[$0]?.linked != nil })
+            guard let linkId else {
+                return "port \(port), health probe succeeded, \(instanceText)"
+            }
             let linked = linkId.flatMap { snap.channels[$0]?.linked } ?? false
             let authAge = linkId.flatMap { snap.channels[$0]?.authAgeMs }.flatMap(msToAge) ?? "unknown age"
             let label =
