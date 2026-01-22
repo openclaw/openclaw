@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
@@ -147,8 +147,11 @@ const getOnHandler = (event: string) => {
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
+const ORIGINAL_TZ = process.env.TZ;
+
 describe("createTelegramBot", () => {
   beforeEach(() => {
+    process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
       channels: {
@@ -166,6 +169,9 @@ describe("createTelegramBot", () => {
     sequentializeSpy.mockReset();
     botCtorSpy.mockReset();
     sequentializeKey = undefined;
+  });
+  afterEach(() => {
+    process.env.TZ = ORIGINAL_TZ;
   });
 
   it("installs grammY throttler", () => {

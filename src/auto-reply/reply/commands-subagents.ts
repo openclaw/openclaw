@@ -45,7 +45,7 @@ function formatTimestampWithAge(valueMs?: number) {
 }
 
 function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): string | undefined {
-  const raw = params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
+  const raw = params.sessionKey?.trim() || params.ctx.CommandTargetSessionKey?.trim();
   if (!raw) return undefined;
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   return resolveInternalSessionKey({ key: raw, alias, mainKey });

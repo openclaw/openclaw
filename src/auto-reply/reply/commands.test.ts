@@ -215,6 +215,33 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagents: none");
   });
 
+  it("lists subagents for the current command session over the target session", async () => {
+    resetSubagentRegistryForTests();
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:slack:slash:U1",
+      requesterDisplayKey: "agent:main:slack:slash:U1",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/subagents list", cfg, {
+      CommandSource: "native",
+      CommandTargetSessionKey: "agent:main:main",
+    });
+    params.sessionKey = "agent:main:slack:slash:U1";
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Subagents (current session)");
+    expect(result.reply?.text).toContain("agent:main:subagent:abc");
+  });
+
   it("omits subagent status line when none exist", async () => {
     resetSubagentRegistryForTests();
     const cfg = {
