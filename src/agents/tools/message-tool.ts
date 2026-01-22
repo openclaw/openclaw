@@ -340,6 +340,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+
+      // Handle path and filePath parameters: convert to media with file:// URL
+      if (action === "send" && !params.media) {
+        const filePath =
+          (params.path as string | undefined) || (params.filePath as string | undefined);
+        if (filePath) {
+          params.media = filePath.startsWith("file://") ? filePath : `file://${filePath}`;
+        }
+      }
+
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
 
       const gateway = {
