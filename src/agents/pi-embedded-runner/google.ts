@@ -91,7 +91,8 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
       out.push(msg);
       continue;
     }
-    const nextContent = [];
+    type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
+    const nextContent: AssistantContentBlock[] = [];
     let contentChanged = false;
     for (const block of assistant.content) {
       if (
@@ -115,7 +116,11 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
         continue;
       }
       if (rec.thinkingSignature !== candidate) {
-        nextContent.push({ ...rec, thinkingSignature: candidate });
+        const nextBlock = {
+          ...(block as unknown as Record<string, unknown>),
+          thinkingSignature: candidate,
+        } as AssistantContentBlock;
+        nextContent.push(nextBlock);
         contentChanged = true;
       } else {
         nextContent.push(block);
