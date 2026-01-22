@@ -7,6 +7,7 @@ import {
   extractAssistantText,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  sanitizeTextContent,
   stripToolMessages,
 } from "../../agents/tools/sessions-helpers.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
@@ -110,7 +111,8 @@ function extractMessageText(message: ChatMessage): { role: string; text: string 
   const role = typeof message.role === "string" ? message.role : "";
   const content = message.content;
   if (typeof content === "string") {
-    const normalized = normalizeMessageText(content);
+    const sanitized = sanitizeTextContent(content);
+    const normalized = normalizeMessageText(sanitized);
     return normalized ? { role, text: normalized } : null;
   }
   if (!Array.isArray(content)) return null;
@@ -119,8 +121,11 @@ function extractMessageText(message: ChatMessage): { role: string; text: string 
     if (!block || typeof block !== "object") continue;
     if ((block as { type?: unknown }).type !== "text") continue;
     const text = (block as { text?: unknown }).text;
-    if (typeof text === "string" && text.trim()) {
-      chunks.push(text);
+    if (typeof text === "string") {
+      const sanitized = sanitizeTextContent(text);
+      if (sanitized) {
+        chunks.push(sanitized);
+      }
     }
   }
   const joined = normalizeMessageText(chunks.join(" "));

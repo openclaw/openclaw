@@ -1,4 +1,10 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
+import {
+  stripDowngradedToolCallText,
+  stripMinimaxToolCallXml,
+  stripThinkingTagsFromText,
+} from "../pi-embedded-utils.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
@@ -100,6 +106,16 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
   });
 }
 
+/**
+ * Sanitize text content to strip tool call markers and thinking tags.
+ * This ensures user-facing text doesn't leak internal tool representations.
+ */
+export function sanitizeTextContent(text: string): string {
+  return stripThinkingTagsFromText(
+    stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+  ).trim();
+}
+
 export function extractAssistantText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") return undefined;
   if ((message as { role?: unknown }).role !== "assistant") return undefined;
@@ -110,10 +126,13 @@ export function extractAssistantText(message: unknown): string | undefined {
     if (!block || typeof block !== "object") continue;
     if ((block as { type?: unknown }).type !== "text") continue;
     const text = (block as { text?: unknown }).text;
-    if (typeof text === "string" && text.trim()) {
-      chunks.push(text);
+    if (typeof text === "string") {
+      const sanitized = sanitizeTextContent(text);
+      if (sanitized) {
+        chunks.push(sanitized);
+      }
     }
   }
-  const joined = chunks.join("").trim();
-  return joined ? joined : undefined;
+  const joined = chunks.join("\n").trim();
+  return joined ? sanitizeUserFacingText(joined) : undefined;
 }
