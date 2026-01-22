@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - BlueBubbles: stop typing indicator on idle/no-reply. (#1439) Thanks @Nicell.
 - Auto-reply: only report a model switch when session state is available. (#1465) Thanks @robbyczgw-cla.
+- Hooks: suppress session-memory confirmation output. (#1464) Thanks @alfranli123.
 
 ## 2026.1.21-2
 
