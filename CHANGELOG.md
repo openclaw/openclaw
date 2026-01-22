@@ -33,6 +33,14 @@ Docs: https://docs.clawd.bot
 - BlueBubbles: resolve short message IDs safely and expose full IDs in templates. (#1387) Thanks @tyler6204.
 - Infra: preserve fetch helper methods when wrapping abort signals. (#1387)
 
+## 2026.1.22
+
+### Changes
+- Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
+
+### Fixes
+- Doctor: warn when gateway.mode is unset with configure/config guidance.
+
 ## 2026.1.20
 
 ### Changes

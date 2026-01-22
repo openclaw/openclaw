@@ -82,6 +82,34 @@ Doctor/service will show runtime state (PID/last exit) and log hints.
 
 See [/logging](/logging) for a full overview of formats, config, and access.
 
+### "Gateway start blocked: set gateway.mode=local"
+
+This means the config exists but `gateway.mode` is unset (or not `local`), so the
+Gateway refuses to start.
+
+**Fix (recommended):**
+- Run the wizard and set the Gateway run mode to **Local**:
+  ```bash
+  clawdbot configure
+  ```
+- Or set it directly:
+  ```bash
+  clawdbot config set gateway.mode local
+  ```
+
+**If you meant to run a remote Gateway instead:**
+- Set a remote URL and keep `gateway.mode=remote`:
+  ```bash
+  clawdbot config set gateway.mode remote
+  clawdbot config set gateway.remote.url "wss://gateway.example.com"
+  ```
+
+**Ad-hoc/dev only:** pass `--allow-unconfigured` to start the gateway without
+`gateway.mode=local`.
+
+**No config file yet?** Run `clawdbot setup` to create a starter config, then rerun
+the gateway.
+
 ### Service Environment (PATH + runtime)
 
 The gateway service runs with a **minimal PATH** to avoid shell/manager cruft:
