@@ -1,8 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveAssistantAvatarUrl } from "./control-ui.js";
+import {
+  buildControlUiAvatarUrl,
+  normalizeControlUiBasePath,
+  resolveAssistantAvatarUrl,
+} from "./control-ui-shared.js";
 
 describe("resolveAssistantAvatarUrl", () => {
+  it("normalizes base paths", () => {
+    expect(normalizeControlUiBasePath()).toBe("");
+    expect(normalizeControlUiBasePath("")).toBe("");
+    expect(normalizeControlUiBasePath(" ")).toBe("");
+    expect(normalizeControlUiBasePath("/")).toBe("");
+    expect(normalizeControlUiBasePath("ui")).toBe("/ui");
+    expect(normalizeControlUiBasePath("/ui/")).toBe("/ui");
+  });
+
+  it("builds avatar URLs", () => {
+    expect(buildControlUiAvatarUrl("", "main")).toBe("/avatar/main");
+    expect(buildControlUiAvatarUrl("/ui", "main")).toBe("/ui/avatar/main");
+  });
+
   it("keeps remote and data URLs", () => {
     expect(
       resolveAssistantAvatarUrl({
@@ -52,6 +70,15 @@ describe("resolveAssistantAvatarUrl", () => {
         basePath: "/ui",
       }),
     ).toBe("/ui/avatar/main");
+  });
+
+  it("leaves local paths untouched when agentId is missing", () => {
+    expect(
+      resolveAssistantAvatarUrl({
+        avatar: "avatars/me.png",
+        basePath: "/ui",
+      }),
+    ).toBe("avatars/me.png");
   });
 
   it("keeps short text avatars", () => {

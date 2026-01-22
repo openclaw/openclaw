@@ -5,25 +5,20 @@ import { fileURLToPath } from "node:url";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  buildControlUiAvatarUrl,
+  CONTROL_UI_AVATAR_PREFIX,
+  normalizeControlUiBasePath,
+  resolveAssistantAvatarUrl,
+} from "./control-ui-shared.js";
 
 const ROOT_PREFIX = "/";
-const AVATAR_PREFIX = "/avatar";
 
 export type ControlUiRequestOptions = {
   basePath?: string;
   config?: ClawdbotConfig;
   agentId?: string;
 };
-
-export function normalizeControlUiBasePath(basePath?: string): string {
-  if (!basePath) return "";
-  let normalized = basePath.trim();
-  if (!normalized) return "";
-  if (!normalized.startsWith("/")) normalized = `/${normalized}`;
-  if (normalized === "/") return "";
-  if (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
-  return normalized;
-}
 
 function resolveControlUiRoot(): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -98,10 +93,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-export function buildAvatarUrl(basePath: string, agentId: string): string {
-  return basePath ? `${basePath}${AVATAR_PREFIX}/${agentId}` : `${AVATAR_PREFIX}/${agentId}`;
-}
-
 function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
@@ -118,7 +109,9 @@ export function handleControlUiAvatarRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts.basePath);
   const pathname = url.pathname;
-  const pathWithBase = basePath ? `${basePath}${AVATAR_PREFIX}/` : `${AVATAR_PREFIX}/`;
+  const pathWithBase = basePath
+    ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
+    : `${CONTROL_UI_AVATAR_PREFIX}/`;
   if (!pathname.startsWith(pathWithBase)) return false;
 
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
@@ -132,7 +125,7 @@ export function handleControlUiAvatarRequest(
     const resolved = opts.resolveAvatar(agentId);
     const avatarUrl =
       resolved.kind === "local"
-        ? buildAvatarUrl(basePath, agentId)
+        ? buildControlUiAvatarUrl(basePath, agentId)
         : resolved.kind === "remote" || resolved.kind === "data"
           ? resolved.url
           : null;
@@ -204,34 +197,6 @@ interface ServeIndexHtmlOpts {
   basePath: string;
   config?: ClawdbotConfig;
   agentId?: string;
-}
-
-function looksLikeLocalAvatarPath(value: string): boolean {
-  if (/[\\/]/.test(value)) return true;
-  return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(value);
-}
-
-export function resolveAssistantAvatarUrl(params: {
-  avatar?: string | null;
-  agentId?: string | null;
-  basePath?: string;
-}): string | undefined {
-  const avatar = params.avatar?.trim();
-  if (!avatar) return undefined;
-  if (/^https?:\/\//i.test(avatar) || /^data:image\//i.test(avatar)) return avatar;
-
-  const basePath = normalizeControlUiBasePath(params.basePath);
-  const baseAvatarPrefix = basePath ? `${basePath}${AVATAR_PREFIX}/` : `${AVATAR_PREFIX}/`;
-  if (basePath && avatar.startsWith(`${AVATAR_PREFIX}/`)) {
-    return `${basePath}${avatar}`;
-  }
-  if (avatar.startsWith(baseAvatarPrefix)) return avatar;
-
-  if (!params.agentId) return avatar;
-  if (looksLikeLocalAvatarPath(avatar)) {
-    return buildAvatarUrl(basePath, params.agentId);
-  }
-  return avatar;
 }
 
 function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndexHtmlOpts) {
