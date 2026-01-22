@@ -2,7 +2,7 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.22
+## 2026.1.22 (unreleased)
 
 ### Fixes
 - BlueBubbles: stop typing indicator on idle/no-reply. (#1439) Thanks @Nicell.

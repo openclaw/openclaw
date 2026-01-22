@@ -89,8 +89,8 @@ export async function resolveReplyDirectives(params: {
   workspaceDir: string;
   agentCfg: AgentDefaults;
   sessionCtx: TemplateContext;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
   sessionScope: Parameters<typeof applyInlineDirectiveOverrides>[0]["sessionScope"];

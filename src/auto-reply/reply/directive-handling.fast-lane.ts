@@ -15,8 +15,8 @@ export async function applyInlineDirectivesFastLane(params: {
   cfg: ClawdbotConfig;
   agentId?: string;
   isGroup: boolean;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
   elevatedEnabled: boolean;
