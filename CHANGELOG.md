@@ -20,6 +20,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Config: avoid stack traces for invalid configs and log the config path.
+- CLI: read Codex CLI account_id for workspace billing. (#1422) Thanks @aj47.
 - Doctor: avoid recreating WhatsApp config when only legacy routing keys remain. (#900)
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
 - OpenCode Zen: route models to the Zen API shape per family so proxy endpoints are used. (#1416)
