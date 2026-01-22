@@ -115,7 +115,7 @@ extension GatewayLaunchAgentManager {
         quiet: Bool) async -> CommandResult
     {
         let command = CommandResolver.clawdbotCommand(
-            subcommand: "daemon",
+            subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),
             // Launchd management must always run locally, even if remote mode is configured.
             configRoot: ["gateway": ["mode": "local"]])
