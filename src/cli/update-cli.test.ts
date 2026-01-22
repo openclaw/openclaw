@@ -273,7 +273,7 @@ describe("update-cli", () => {
     try {
       await fs.writeFile(
         path.join(tempDir, "package.json"),
-        JSON.stringify({ name: "clawdbot", version: "2026.1.18-1" }),
+        JSON.stringify({ name: "clawdbot", version: "1.0.0" }),
         "utf-8",
       );
 
