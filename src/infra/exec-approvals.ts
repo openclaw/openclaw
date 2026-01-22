@@ -519,7 +519,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       escaped = false;
       continue;
     }
-    if (!inSingle && ch === "\\") {
+    if (!inSingle && !inDouble && ch === "\\") {
       escaped = true;
       buf += ch;
       continue;
@@ -595,7 +595,7 @@ function tokenizeShellSegment(segment: string): string[] | null {
       escaped = false;
       continue;
     }
-    if (!inSingle && ch === "\\") {
+    if (!inSingle && !inDouble && ch === "\\") {
       escaped = true;
       continue;
     }
