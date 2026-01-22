@@ -358,14 +358,20 @@ function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS
     const candidate = path.resolve(base, expanded);
     return isExecutableFile(candidate) ? candidate : undefined;
   }
-  const envPath = env?.PATH ?? process.env.PATH ?? "";
+  const envPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
   const entries = envPath.split(path.delimiter).filter(Boolean);
   const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
   const extensions =
     process.platform === "win32"
       ? hasExtension
         ? [""]
-        : (env?.PATHEXT ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+        : (
+            env?.PATHEXT ??
+            env?.Pathext ??
+            process.env.PATHEXT ??
+            process.env.Pathext ??
+            ".EXE;.CMD;.BAT;.COM"
+          )
             .split(";")
             .map((ext) => ext.toLowerCase())
       : [""];
