@@ -14,6 +14,7 @@ Docs: https://docs.clawd.bot
 - Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
 - Signal: add typing indicators and DM read receipts via signal-cli.
 - MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.
+- CLI: add `clawdbot update wizard` for interactive channel selection and restart prompts. https://docs.clawd.bot/cli/update
 
 ### Breaking
 - **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
@@ -31,6 +32,7 @@ Docs: https://docs.clawd.bot
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
 - Cron: cap reminder context history to 10 messages and honor `contextMessages`. (#1103) Thanks @mkbehr.
 - Exec approvals: treat main as the default agent + migrate legacy default allowlists. (#1417) Thanks @czekaj.
+- Exec: avoid defaulting to elevated mode when elevated is not allowed.
 - UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
 
 ## 2026.1.21
