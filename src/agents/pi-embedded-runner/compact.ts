@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  estimateTokens,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
@@ -370,6 +375,21 @@ export async function compactEmbeddedPiSession(params: {
               session.agent.replaceMessages(limited);
             }
             const result = await session.compact(params.customInstructions);
+            // Estimate tokens after compaction by summing token estimates for remaining messages
+            let tokensAfter: number | undefined;
+            try {
+              tokensAfter = 0;
+              for (const message of session.messages) {
+                tokensAfter += estimateTokens(message);
+              }
+              // Sanity check: tokensAfter should be less than tokensBefore
+              if (tokensAfter > result.tokensBefore) {
+                tokensAfter = undefined; // Don't trust the estimate
+              }
+            } catch {
+              // If estimation fails, leave tokensAfter undefined
+              tokensAfter = undefined;
+            }
             return {
               ok: true,
               compacted: true,
@@ -377,6 +397,7 @@ export async function compactEmbeddedPiSession(params: {
                 summary: result.summary,
                 firstKeptEntryId: result.firstKeptEntryId,
                 tokensBefore: result.tokensBefore,
+                tokensAfter,
                 details: result.details,
               },
             };

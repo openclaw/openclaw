@@ -83,18 +83,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
-  const totalTokens =
-    params.sessionEntry.totalTokens ??
-    (params.sessionEntry.inputTokens ?? 0) + (params.sessionEntry.outputTokens ?? 0);
-  const contextSummary = formatContextUsageShort(
-    totalTokens > 0 ? totalTokens : null,
-    params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
-  );
   const compactLabel = result.ok
     ? result.compacted
-      ? result.result?.tokensBefore
-        ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
-        : "Compacted"
+      ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+        ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+        : result.result?.tokensBefore
+          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
+          : "Compacted"
       : "Compaction skipped"
     : "Compaction failed";
   if (result.ok && result.compacted) {
@@ -103,8 +98,19 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
+      // Update token counts after compaction
+      tokensAfter: result.result?.tokensAfter,
     });
   }
+  // Use the post-compaction token count for context summary if available
+  const tokensAfterCompaction = result.result?.tokensAfter;
+  const totalTokens = tokensAfterCompaction ??
+    params.sessionEntry.totalTokens ??
+    (params.sessionEntry.inputTokens ?? 0) + (params.sessionEntry.outputTokens ?? 0);
+  const contextSummary = formatContextUsageShort(
+    totalTokens > 0 ? totalTokens : null,
+    params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
+  );
   const reason = result.reason?.trim();
   const line = reason
     ? `${compactLabel}: ${reason} • ${contextSummary}`
