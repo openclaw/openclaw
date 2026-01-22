@@ -552,6 +552,44 @@ public struct AgentParams: Codable, Sendable {
     }
 }
 
+public struct AgentIdentityParams: Codable, Sendable {
+    public let agentid: String?
+    public let sessionkey: String?
+
+    public init(
+        agentid: String?,
+        sessionkey: String?
+    ) {
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct AgentIdentityResult: Codable, Sendable {
+    public let agentid: String
+    public let name: String?
+    public let avatar: String?
+
+    public init(
+        agentid: String,
+        name: String?,
+        avatar: String?
+    ) {
+        self.agentid = agentid
+        self.name = name
+        self.avatar = avatar
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case avatar
+    }
+}
+
 public struct AgentWaitParams: Codable, Sendable {
     public let runid: String
     public let timeoutms: Int?
@@ -1447,17 +1485,21 @@ public struct WebLoginWaitParams: Codable, Sendable {
 public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let name: String?
+    public let identity: [String: AnyCodable]?
 
     public init(
         id: String,
-        name: String?
+        name: String?,
+        identity: [String: AnyCodable]?
     ) {
         self.id = id
         self.name = name
+        self.identity = identity
     }
     private enum CodingKeys: String, CodingKey {
         case id
         case name
+        case identity
     }
 }
 

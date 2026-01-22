@@ -31,11 +31,12 @@ describe("resolveAgentAvatar", () => {
       },
     };
 
-    const expectedPath = await fs.realpath(avatarPath);
+    const workspaceReal = await fs.realpath(workspace);
     const resolved = resolveAgentAvatar(cfg, "main");
     expect(resolved.kind).toBe("local");
     if (resolved.kind === "local") {
-      expect(resolved.filePath).toBe(expectedPath);
+      const resolvedReal = await fs.realpath(resolved.filePath);
+      expect(path.relative(workspaceReal, resolvedReal)).toBe(path.join("avatars", "main.png"));
     }
   });
 
@@ -83,11 +84,12 @@ describe("resolveAgentAvatar", () => {
       },
     };
 
-    const expectedPath = await fs.realpath(avatarPath);
+    const workspaceReal = await fs.realpath(workspace);
     const resolved = resolveAgentAvatar(cfg, "main");
     expect(resolved.kind).toBe("local");
     if (resolved.kind === "local") {
-      expect(resolved.filePath).toBe(expectedPath);
+      const resolvedReal = await fs.realpath(resolved.filePath);
+      expect(path.relative(workspaceReal, resolvedReal)).toBe(path.join("avatars", "fallback.png"));
     }
   });
 
