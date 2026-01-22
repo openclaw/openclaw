@@ -59,6 +59,7 @@ export type EmbeddedPiCompactResult = {
     summary: string;
     firstKeptEntryId: string;
     tokensBefore: number;
+    tokensAfter?: number;
     details?: unknown;
   };
 };
