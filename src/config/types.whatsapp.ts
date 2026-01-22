@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -86,6 +87,8 @@ export type WhatsAppConfig = {
   };
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type WhatsAppAccountConfig = {
@@ -147,4 +150,6 @@ export type WhatsAppAccountConfig = {
   };
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Heartbeat visibility settings for this account. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };

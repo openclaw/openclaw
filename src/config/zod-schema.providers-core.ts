@@ -15,6 +15,7 @@ import {
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -122,6 +123,7 @@ export const TelegramAccountSchemaBase = z
       .optional(),
     reactionNotifications: z.enum(["off", "own", "all"]).optional(),
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict();
 
@@ -241,6 +243,7 @@ export const DiscordAccountSchema = z
     replyToMode: ReplyToModeSchema.optional(),
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict();
 
@@ -351,6 +354,7 @@ export const SlackAccountSchema = z
       .optional(),
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict();
 
@@ -416,6 +420,7 @@ export const SignalAccountSchemaBase = z
     mediaMaxMb: z.number().int().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict();
 
@@ -477,6 +482,7 @@ export const IMessageAccountSchemaBase = z
           .optional(),
       )
       .optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict();
 
@@ -553,6 +559,7 @@ export const BlueBubblesAccountSchemaBase = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict();
 
@@ -630,6 +637,7 @@ export const MSTeamsConfigSchema = z
     mediaMaxMb: z.number().positive().optional(),
     /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
     sharePointSiteId: z.string().optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict()
   .superRefine((value, ctx) => {

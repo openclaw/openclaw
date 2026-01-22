@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -63,6 +64,8 @@ export type SignalAccountConfig = {
   reactionNotifications?: SignalReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
   reactionAllowlist?: Array<string | number>;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type SignalConfig = {

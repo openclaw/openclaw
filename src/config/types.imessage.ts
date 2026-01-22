@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -63,6 +64,8 @@ export type IMessageAccountConfig = {
       tools?: GroupToolPolicyConfig;
     }
   >;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type IMessageConfig = {

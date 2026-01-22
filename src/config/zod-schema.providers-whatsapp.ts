@@ -8,6 +8,7 @@ import {
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 export const WhatsAppAccountSchema = z
   .object({
@@ -53,6 +54,7 @@ export const WhatsAppAccountSchema = z
       .strict()
       .optional(),
     debounceMs: z.number().int().nonnegative().optional().default(0),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -115,6 +117,7 @@ export const WhatsAppConfigSchema = z
       .strict()
       .optional(),
     debounceMs: z.number().int().nonnegative().optional().default(0),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
   })
   .strict()
   .superRefine((value, ctx) => {

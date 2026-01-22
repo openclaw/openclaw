@@ -7,6 +7,7 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -113,6 +114,8 @@ export type TelegramAccountConfig = {
    * - "extensive": agent can react liberally when appropriate
    */
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type TelegramTopicConfig = {

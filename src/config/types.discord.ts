@@ -6,6 +6,7 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -121,6 +122,8 @@ export type DiscordAccountConfig = {
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type DiscordConfig = {
