@@ -19,6 +19,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Config: avoid stack traces for invalid configs and log the config path.
+- Doctor: avoid recreating WhatsApp config when only legacy routing keys remain. (#900)
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
 - OpenCode Zen: route models to the Zen API shape per family so proxy endpoints are used. (#1416)
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
