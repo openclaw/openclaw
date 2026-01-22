@@ -82,14 +82,12 @@ Defaults (can be overridden via env/flags/config):
 - `CLAWDBOT_STATE_DIR=~/.clawdbot-dev`
 - `CLAWDBOT_CONFIG_PATH=~/.clawdbot-dev/clawdbot.json`
 - `CLAWDBOT_GATEWAY_PORT=19001` (Gateway WS + HTTP)
-- `bridge.port=19002` (derived: `gateway.port+1`)
 - `browser.controlUrl=http://127.0.0.1:19003` (derived: `gateway.port+2`)
 - `canvasHost.port=19005` (derived: `gateway.port+4`)
 - `agents.defaults.workspace` default becomes `~/clawd-dev` when you run `setup`/`onboard` under `--dev`.
 
 Derived ports (rules of thumb):
 - Base port = `gateway.port` (or `CLAWDBOT_GATEWAY_PORT` / `--port`)
-- `bridge.port = base + 1` (or `CLAWDBOT_BRIDGE_PORT` / config override)
 - `browser.controlUrl port = base + 2` (or `CLAWDBOT_BROWSER_CONTROL_URL` / config override)
 - `canvasHost.port = base + 4` (or `CLAWDBOT_CANVAS_HOST_PORT` / config override)
 - Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108` (persisted per profile).
@@ -114,7 +112,7 @@ CLAWDBOT_CONFIG_PATH=~/.clawdbot/b.json CLAWDBOT_STATE_DIR=~/.clawdbot-b clawdbo
 ```
 
 ## Protocol (operator view)
-- Full docs: [Gateway protocol](/gateway/protocol) and [Bridge protocol](/gateway/bridge-protocol).
+- Full docs: [Gateway protocol](/gateway/protocol) and [Bridge protocol (legacy)](/gateway/bridge-protocol).
 - Mandatory first frame from client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
 - Gateway replies `res {type:"res", id, ok:true, payload:hello-ok }` (or `ok:false` with an error, then closes).
 - After handshake:
@@ -130,7 +128,7 @@ CLAWDBOT_CONFIG_PATH=~/.clawdbot/b.json CLAWDBOT_STATE_DIR=~/.clawdbot-b clawdbo
 - `system-event` — post a presence/system note (structured).
 - `send` — send a message via the active channel(s).
 - `agent` — run an agent turn (streams events back on same connection).
-- `node.list` — list paired + currently-connected bridge nodes (includes `caps`, `deviceFamily`, `modelIdentifier`, `paired`, `connected`, and advertised `commands`).
+- `node.list` — list paired + currently-connected nodes (includes `caps`, `deviceFamily`, `modelIdentifier`, `paired`, `connected`, and advertised `commands`).
 - `node.describe` — describe a node (capabilities + supported `node.invoke` commands; works for paired nodes and for currently-connected unpaired nodes).
 - `node.invoke` — invoke a command on a node (e.g. `canvas.*`, `camera.*`).
 - `node.pair.*` — pairing lifecycle (`request`, `list`, `approve`, `reject`, `verify`).

@@ -3,7 +3,7 @@ summary: "Node discovery and transports (Bonjour, Tailscale, SSH) for finding th
 read_when:
   - Implementing or changing Bonjour discovery/advertising
   - Adjusting remote connection modes (direct vs SSH)
-  - Designing bridge + pairing for remote nodes
+  - Designing node discovery + pairing for remote nodes
 ---
 # Discovery & transports
 
@@ -17,17 +17,18 @@ The design goal is to keep all network discovery/advertising in the **Node Gatew
 ## Terms
 
 - **Gateway**: a single long-running gateway process that owns state (sessions, pairing, node registry) and runs channels. Most setups use one per host; isolated multi-gateway setups are possible.
-- **Gateway WS (loopback)**: the existing gateway WebSocket control endpoint on `127.0.0.1:18789`.
-- **Bridge (direct transport)**: a LAN/tailnet-facing endpoint owned by the gateway that allows authenticated clients/nodes to call a scoped subset of gateway methods. The bridge exists so the gateway can remain loopback-only.
+- **Gateway WS (control plane)**: the WebSocket endpoint on `127.0.0.1:18789` by default; can be bound to LAN/tailnet via `gateway.bind`.
+- **Direct WS transport**: a LAN/tailnet-facing Gateway WS endpoint (no SSH).
 - **SSH transport (fallback)**: remote control by forwarding `127.0.0.1:18789` over SSH.
+- **Legacy TCP bridge (deprecated/removed)**: older node transport (see [Bridge protocol](/gateway/bridge-protocol)); no longer advertised for discovery.
 
 Protocol details:
 - [Gateway protocol](/gateway/protocol)
-- [Bridge protocol](/gateway/bridge-protocol)
+- [Bridge protocol (legacy)](/gateway/bridge-protocol)
 
 ## Why we keep both “direct” and SSH
 
-- **Direct bridge** is the best UX on the same network and within a tailnet:
+- **Direct WS** is the best UX on the same network and within a tailnet:
   - auto-discovery on LAN via Bonjour
   - pairing tokens + ACLs owned by the gateway
   - no shell access required; protocol surface can stay tight and auditable
@@ -43,7 +44,7 @@ Protocol details:
 Bonjour is best-effort and does not cross networks. It is only used for “same LAN” convenience.
 
 Target direction:
-- The **gateway** advertises its bridge via Bonjour.
+- The **gateway** advertises its WS endpoint via Bonjour.
 - Clients browse and show a “pick a gateway” list, then store the chosen endpoint.
 
 Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
@@ -56,19 +57,19 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   - `role=gateway`
   - `lanHost=<hostname>.local`
   - `sshPort=22` (or whatever is advertised)
-  - `gatewayPort=18789` (loopback WS port; informational)
-  - `bridgePort=18790` (when bridge is enabled)
+  - `gatewayPort=18789` (Gateway WS + HTTP)
+  - `gatewayTls=1` (only when TLS is enabled)
+  - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
   - `canvasPort=18793` (default canvas host port; serves `/__clawdbot__/canvas/`)
   - `cliPath=<path>` (optional; absolute path to a runnable `clawdbot` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 
 Disable/override:
 - `CLAWDBOT_DISABLE_BONJOUR=1` disables advertising.
-- `CLAWDBOT_BRIDGE_ENABLED=0` disables the bridge listener.
-- `bridge.bind` / `bridge.port` in `~/.clawdbot/clawdbot.json` control bridge bind/port (preferred).
-- `CLAWDBOT_BRIDGE_HOST` / `CLAWDBOT_BRIDGE_PORT` still work as a back-compat override when `bridge.bind` / `bridge.port` are not set.
-- `CLAWDBOT_SSH_PORT` overrides the SSH port advertised in the bridge beacon (defaults to 22).
-- `CLAWDBOT_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in the bridge beacon (auto-detected if unset).
+- `gateway.bind` in `~/.clawdbot/clawdbot.json` controls the Gateway bind mode.
+- `CLAWDBOT_SSH_PORT` overrides the SSH port advertised in TXT (defaults to 22).
+- `CLAWDBOT_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
+- `CLAWDBOT_CLI_PATH` overrides the advertised CLI path.
 
 ### 2) Tailnet (cross-network)
 
@@ -97,13 +98,13 @@ Recommended client behavior:
 The gateway is the source of truth for node/client admission.
 
 - Pairing requests are created/approved/rejected in the gateway (see [Gateway pairing](/gateway/pairing)).
-- The bridge enforces:
+- The gateway enforces:
   - auth (token / keypair)
-  - scopes/ACLs (bridge is not a raw proxy to every gateway method)
+  - scopes/ACLs (the gateway is not a raw proxy to every method)
   - rate limits
 
 ## Responsibilities by component
 
-- **Gateway**: advertises discovery beacons, owns pairing decisions, runs the bridge listener.
+- **Gateway**: advertises discovery beacons, owns pairing decisions, and hosts the WS endpoint.
 - **macOS app**: helps you pick a gateway, shows pairing prompts, and uses SSH only as a fallback.
-- **iOS/Android nodes**: browse Bonjour as a convenience and connect via the paired bridge.
+- **iOS/Android nodes**: browse Bonjour as a convenience and connect to the paired Gateway WS.

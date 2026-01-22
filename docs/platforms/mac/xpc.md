@@ -1,5 +1,5 @@
 ---
-summary: "macOS IPC architecture for Clawdbot app, gateway node bridge, and PeekabooBridge"
+summary: "macOS IPC architecture for Clawdbot app, gateway node transport, and PeekabooBridge"
 read_when:
   - Editing IPC contracts or menu bar app IPC
 ---
@@ -13,21 +13,21 @@ read_when:
 - Predictable permissions: always the same signed bundle ID, launched by launchd, so TCC grants stick.
 
 ## How it works
-### Gateway + node bridge
+### Gateway + node transport
 - The app runs the Gateway (local mode) and connects to it as a node.
 - Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
 
 ### Node service + app IPC
-- A headless node host service connects to the Gateway bridge.
+- A headless node host service connects to the Gateway WebSocket.
 - `system.run` requests are forwarded to the macOS app over a local Unix socket.
 - The app performs the exec in UI context, prompts if needed, and returns output.
 
 Diagram (SCI):
 ```
-Agent -> Gateway -> Bridge -> Node Service (TS)
-                         |  IPC (UDS + token + HMAC + TTL)
-                         v
-                     Mac App (UI + TCC + system.run)
+Agent -> Gateway -> Node Service (WS)
+                      |  IPC (UDS + token + HMAC + TTL)
+                      v
+                  Mac App (UI + TCC + system.run)
 ```
 
 ### PeekabooBridge (UI automation)

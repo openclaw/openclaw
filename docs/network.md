@@ -36,7 +36,7 @@ Local trust:
 - [Remote access (SSH)](/gateway/remote)
 - [Tailscale](/gateway/tailscale)
 
-## Nodes + bridge
+## Nodes + transports
 
 - [Nodes overview](/nodes)
 - [Bridge protocol (legacy nodes)](/gateway/bridge-protocol)

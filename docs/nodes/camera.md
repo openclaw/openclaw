@@ -138,7 +138,7 @@ Notes:
 ## Safety + practical limits
 
 - Camera and microphone access trigger the usual OS permission prompts (and require usage strings in Info.plist).
-- Video clips are capped (currently `<= 60s`) to avoid oversized bridge payloads (base64 overhead + message limits).
+- Video clips are capped (currently `<= 60s`) to avoid oversized node payloads (base64 overhead + message limits).
 
 ## macOS screen video (OS-level)
 

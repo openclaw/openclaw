@@ -719,11 +719,11 @@ See the full config examples in [Browser](/tools/browser#use-brave-or-another-ch
 ### How do commands propagate between Telegram, the gateway, and nodes?
 
 Telegram messages are handled by the **gateway**. The gateway runs the agent and
-only then calls nodes over the **Bridge** when a node tool is needed:
+only then calls nodes over the **Gateway WebSocket** when a node tool is needed:
 
 Telegram → Gateway → Agent → `node.*` → Node → Gateway → Telegram
 
-Nodes don’t see inbound provider traffic; they only receive bridge RPC calls.
+Nodes don’t see inbound provider traffic; they only receive node RPC calls.
 
 ### How can my agent access my computer if the Gateway is hosted remotely?
 
@@ -733,29 +733,28 @@ call `node.*` tools (screen, camera, system) on your local machine over the Brid
 Typical setup:
 1) Run the Gateway on the always‑on host (VPS/home server).
 2) Put the Gateway host + your computer on the same tailnet.
-3) Enable the bridge on the Gateway host:
-   ```json5
-   { bridge: { enabled: true, bind: "auto" } }
-   ```
-4) Open the macOS app locally and connect in **Remote over SSH** mode so it can tunnel
-   the bridge port and register as a node.
+3) Ensure the Gateway WS is reachable (tailnet bind or SSH tunnel).
+4) Open the macOS app locally and connect in **Remote over SSH** mode (or direct tailnet)
+   so it can register as a node.
 5) Approve the node on the Gateway:
    ```bash
    clawdbot nodes pending
    clawdbot nodes approve <requestId>
    ```
 
+No separate TCP bridge is required; nodes connect over the Gateway WebSocket.
+
 Security reminder: pairing a macOS node allows `system.run` on that machine. Only
 pair devices you trust, and review [Security](/gateway/security).
 
-Docs: [Nodes](/nodes), [Bridge protocol](/gateway/bridge-protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
+Docs: [Nodes](/nodes), [Gateway protocol](/gateway/protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
 
 ### Do nodes run a gateway service?
 
 No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect
 to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app).
 
-A full restart is required for `gateway`, `bridge`, `discovery`, and `canvasHost` changes.
+A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
 
 ### Is there an API / RPC way to apply config?
 
@@ -797,26 +796,19 @@ This keeps the gateway bound to loopback and exposes HTTPS via Tailscale. See [T
 
 ### How do I connect a Mac node to a remote Gateway (Tailscale Serve)?
 
-Serve only exposes the **Gateway Control UI**. Nodes use the **bridge port**.
+Serve exposes the **Gateway Control UI + WS**. Nodes connect over the same Gateway WS endpoint.
 
 Recommended setup:
-1) **Enable the bridge on the gateway host**:
-   ```json5
-   {
-     bridge: { enabled: true, bind: "auto" }
-   }
-   ```
-   `auto` prefers a tailnet IP when Tailscale is present.
-2) **Make sure the VPS + Mac are on the same tailnet**.
-3) **Use the macOS app in Remote mode** (SSH target can be the tailnet hostname).
-   The app will tunnel the bridge port and connect as a node.
-4) **Approve the node** on the gateway:
+1) **Make sure the VPS + Mac are on the same tailnet**.
+2) **Use the macOS app in Remote mode** (SSH target can be the tailnet hostname).
+   The app will tunnel the Gateway port and connect as a node.
+3) **Approve the node** on the gateway:
    ```bash
    clawdbot nodes pending
    clawdbot nodes approve <requestId>
    ```
 
-Docs: [Bridge protocol](/gateway/bridge-protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).
+Docs: [Gateway protocol](/gateway/protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).
 
 ## Env vars and .env loading
 

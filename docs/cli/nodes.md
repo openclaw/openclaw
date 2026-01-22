@@ -14,6 +14,9 @@ Related:
 - Camera: [Camera nodes](/nodes/camera)
 - Images: [Image nodes](/nodes/images)
 
+Common options:
+- `--url`, `--token`, `--timeout`, `--json`
+
 ## Common commands
 
 ```bash
@@ -40,6 +43,11 @@ clawdbot nodes run --raw "git status"
 clawdbot nodes run --agent main --node <id|name|ip> --raw "git status"
 ```
 
+Invoke flags:
+- `--params <json>`: JSON object string (default `{}`).
+- `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
+- `--idempotency-key <key>`: optional idempotency key.
+
 ### Exec-style defaults
 
 `nodes run` mirrors the model’s exec behavior (defaults + approvals):
@@ -47,8 +55,14 @@ clawdbot nodes run --agent main --node <id|name|ip> --raw "git status"
 - Reads `tools.exec.*` (plus `agents.list[].tools.exec.*` overrides).
 - Uses exec approvals (`exec.approval.request`) before invoking `system.run`.
 - `--node` can be omitted when `tools.exec.node` is set.
+- Requires a node that advertises `system.run` (macOS companion app or headless node host).
 
 Flags:
+- `--cwd <path>`: working directory.
+- `--env <key=val>`: env override (repeatable).
+- `--command-timeout <ms>`: command timeout.
+- `--invoke-timeout <ms>`: node invoke timeout (default `30000`).
+- `--needs-screen-recording`: require screen recording permission.
 - `--raw <command>`: run a shell string (`/bin/sh -lc` or `cmd.exe /c`).
 - `--agent <id>`: agent-scoped approvals/allowlists (defaults to configured agent).
 - `--ask <off|on-miss|always>`, `--security <deny|allowlist|full>`: overrides.

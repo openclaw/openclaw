@@ -52,7 +52,7 @@ the workspace is writable. See [Memory](/concepts/memory) and
 - Other sources:
   - Cron jobs: `cron:<job.id>`
   - Webhooks: `hook:<uuid>` (unless explicitly set by the hook)
-  - Node bridge runs: `node-<nodeId>`
+  - Node runs: `node-<nodeId>`
 
 ## Lifecycle
 - Reset policy: sessions are reused until they expire, and expiry is evaluated on the next inbound message.
