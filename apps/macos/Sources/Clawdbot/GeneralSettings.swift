@@ -2,15 +2,12 @@ import AppKit
 import ClawdbotDiscovery
 import ClawdbotIPC
 import ClawdbotKit
-import CoreLocation
 import Observation
 import SwiftUI
 
 struct GeneralSettings: View {
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(locationModeKey) private var locationModeRaw: String = ClawdbotLocationMode.off.rawValue
-    @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
@@ -20,7 +17,6 @@ struct GeneralSettings: View {
     @State private var showRemoteAdvanced = false
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool { ProcessInfo.processInfo.isNixMode }
-    @State private var lastLocationModeRaw: String = ClawdbotLocationMode.off.rawValue
 
     var body: some View {
         ScrollView(.vertical) {
@@ -60,27 +56,6 @@ struct GeneralSettings: View {
                         subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
                         binding: self.$cameraEnabled)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Location Access")
-                            .font(.body)
-
-                        Picker("", selection: self.$locationModeRaw) {
-                            Text("Off").tag(ClawdbotLocationMode.off.rawValue)
-                            Text("While Using").tag(ClawdbotLocationMode.whileUsing.rawValue)
-                            Text("Always").tag(ClawdbotLocationMode.always.rawValue)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-
-                        Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
-                            .disabled(self.locationMode == .off)
-
-                        Text("Always may require System Settings to approve background location.")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
                     SettingsToggleRow(
                         title: "Enable Peekaboo Bridge",
                         subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
@@ -106,25 +81,10 @@ struct GeneralSettings: View {
         .onAppear {
             guard !self.isPreview else { return }
             self.refreshGatewayStatus()
-            self.lastLocationModeRaw = self.locationModeRaw
         }
         .onChange(of: self.state.canvasEnabled) { _, enabled in
             if !enabled {
                 CanvasManager.shared.hideAll()
-            }
-        }
-        .onChange(of: self.locationModeRaw) { _, newValue in
-            let previous = self.lastLocationModeRaw
-            self.lastLocationModeRaw = newValue
-            guard let mode = ClawdbotLocationMode(rawValue: newValue) else { return }
-            Task {
-                let granted = await self.requestLocationAuthorization(mode: mode)
-                if !granted {
-                    await MainActor.run {
-                        self.locationModeRaw = previous
-                        self.lastLocationModeRaw = previous
-                    }
-                }
             }
         }
     }
@@ -133,26 +93,6 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
-    }
-
-    private var locationMode: ClawdbotLocationMode {
-        ClawdbotLocationMode(rawValue: self.locationModeRaw) ?? .off
-    }
-
-    private func requestLocationAuthorization(mode: ClawdbotLocationMode) async -> Bool {
-        guard mode != .off else { return true }
-        guard CLLocationManager.locationServicesEnabled() else {
-            await MainActor.run { LocationPermissionHelper.openSettings() }
-            return false
-        }
-
-        let status = CLLocationManager().authorizationStatus
-        let requireAlways = mode == .always
-        if PermissionManager.isLocationAuthorized(status: status, requireAlways: requireAlways) {
-            return true
-        }
-        let updated = await LocationPermissionRequester.shared.request(always: requireAlways)
-        return PermissionManager.isLocationAuthorized(status: updated, requireAlways: requireAlways)
     }
 
     private var connectionSection: some View {

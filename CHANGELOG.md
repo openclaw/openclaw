@@ -9,16 +9,24 @@ Docs: https://docs.clawd.bot
 - Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
 - Memory: prevent CLI hangs by deferring vector probes, adding sqlite-vec/embedding timeouts, and showing sync progress early.
 - Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
+- Docs: add /model allowlist troubleshooting note. (#1405)
 - Docs: add per-message Gmail search example for gog. (#1220) Thanks @mbelinky.
 - Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
 - Signal: add typing indicators and DM read receipts via signal-cli.
 - MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.
 
+### Breaking
+- **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
+
 ### Fixes
 - Config: avoid stack traces for invalid configs and log the config path.
+- Doctor: avoid recreating WhatsApp config when only legacy routing keys remain. (#900)
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
+- OpenCode Zen: route models to the Zen API shape per family so proxy endpoints are used. (#1416)
+- Browser: suppress Chrome restore prompts for managed profiles. (#1419) Thanks @jamesgroat.
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
 - Cron: cap reminder context history to 10 messages and honor `contextMessages`. (#1103) Thanks @mkbehr.
+- Exec approvals: treat main as the default agent + migrate legacy default allowlists. (#1417) Thanks @czekaj.
 - UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
 
 ## 2026.1.21

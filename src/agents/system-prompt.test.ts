@@ -284,6 +284,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         agentId: "work",
         host: "host",
+        repoRoot: "/repo",
         os: "macOS",
         arch: "arm64",
         node: "v20",
@@ -297,6 +298,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(line).toContain("agent=work");
     expect(line).toContain("host=host");
+    expect(line).toContain("repo=/repo");
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
     expect(line).toContain("model=anthropic/claude");
@@ -320,7 +322,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("You are running in a sandboxed runtime");
     expect(prompt).toContain("Sub-agents stay sandboxed");
-    expect(prompt).toContain("User can toggle with /elevated on|off.");
+    expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
     expect(prompt).toContain("Current elevated level: on");
   });
 

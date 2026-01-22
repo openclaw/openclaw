@@ -160,6 +160,7 @@ export function buildAgentSystemPrompt(params: {
     defaultModel?: string;
     channel?: string;
     capabilities?: string[];
+    repoRoot?: string;
   };
   messageToolHints?: string[];
   sandboxInfo?: {
@@ -175,7 +176,7 @@ export function buildAgentSystemPrompt(params: {
     allowedControlPorts?: number[];
     elevated?: {
       allowed: boolean;
-      defaultLevel: "on" | "off";
+      defaultLevel: "on" | "off" | "ask" | "full";
     };
   };
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
@@ -200,7 +201,7 @@ export function buildAgentSystemPrompt(params: {
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events (use for reminders; include recent context in reminder text if appropriate)",
+    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running Clawdbot process",
     agents_list: "List agent ids allowed for sessions_spawn",
@@ -351,7 +352,7 @@ export function buildAgentSystemPrompt(params: {
           "- browser: control clawd's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events (use for reminders; include recent context in reminder text if appropriate)",
+          "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
@@ -443,12 +444,14 @@ export function buildAgentSystemPrompt(params: {
           params.sandboxInfo.elevated?.allowed
             ? "Elevated exec is available for this session."
             : "",
-          params.sandboxInfo.elevated?.allowed ? "User can toggle with /elevated on|off." : "",
           params.sandboxInfo.elevated?.allowed
-            ? "You may also send /elevated on|off when needed."
+            ? "User can toggle with /elevated on|off|ask|full."
             : "",
           params.sandboxInfo.elevated?.allowed
-            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (on runs exec on host; off runs in sandbox).`
+            ? "You may also send /elevated on|off|ask|full when needed."
+            : "",
+          params.sandboxInfo.elevated?.allowed
+            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
             : "",
         ]
           .filter(Boolean)
@@ -570,6 +573,7 @@ export function buildRuntimeLine(
     node?: string;
     model?: string;
     defaultModel?: string;
+    repoRoot?: string;
   },
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
@@ -578,6 +582,7 @@ export function buildRuntimeLine(
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
+    runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os
       ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
       : runtimeInfo?.arch

@@ -14,6 +14,7 @@ import {
   normalizeSafeBins,
   resolveCommandResolution,
   resolveExecApprovals,
+  resolveExecApprovalsFromFile,
   type ExecAllowlistEntry,
 } from "./exec-approvals.js";
 
@@ -225,5 +226,34 @@ describe("exec approvals wildcard agent", () => {
     } finally {
       homedirSpy.mockRestore();
     }
+  });
+});
+
+describe("exec approvals default agent migration", () => {
+  it("migrates legacy default agent entries to main", () => {
+    const file = {
+      version: 1,
+      agents: {
+        default: { allowlist: [{ pattern: "/bin/legacy" }] },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file });
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
+    expect(resolved.file.agents?.default).toBeUndefined();
+    expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
+  });
+
+  it("prefers main agent settings when both main and default exist", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: { ask: "always", allowlist: [{ pattern: "/bin/main" }] },
+        default: { ask: "off", allowlist: [{ pattern: "/bin/legacy" }] },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file });
+    expect(resolved.agent.ask).toBe("always");
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
+    expect(resolved.file.agents?.default).toBeUndefined();
   });
 });

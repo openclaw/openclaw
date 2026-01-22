@@ -29,13 +29,22 @@ function resolveExecutablePath(lobsterPathRaw: string | undefined) {
   return lobsterPath;
 }
 
-async function runLobsterSubprocess(params: {
-  execPath: string;
-  argv: string[];
-  cwd: string;
-  timeoutMs: number;
-  maxStdoutBytes: number;
-}) {
+function isWindowsSpawnEINVAL(err: unknown) {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: unknown }).code;
+  return code === "EINVAL";
+}
+
+async function runLobsterSubprocessOnce(
+  params: {
+    execPath: string;
+    argv: string[];
+    cwd: string;
+    timeoutMs: number;
+    maxStdoutBytes: number;
+  },
+  useShell: boolean,
+) {
   const { execPath, argv, cwd } = params;
   const timeoutMs = Math.max(200, params.timeoutMs);
   const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
@@ -51,6 +60,8 @@ async function runLobsterSubprocess(params: {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env,
+      shell: useShell,
+      windowsHide: useShell ? true : undefined,
     });
 
     let stdout = "";
@@ -100,6 +111,23 @@ async function runLobsterSubprocess(params: {
       resolve({ stdout });
     });
   });
+}
+
+async function runLobsterSubprocess(params: {
+  execPath: string;
+  argv: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxStdoutBytes: number;
+}) {
+  try {
+    return await runLobsterSubprocessOnce(params, false);
+  } catch (err) {
+    if (process.platform === "win32" && isWindowsSpawnEINVAL(err)) {
+      return await runLobsterSubprocessOnce(params, true);
+    }
+    throw err;
+  }
 }
 
 function parseEnvelope(stdout: string): LobsterEnvelope {

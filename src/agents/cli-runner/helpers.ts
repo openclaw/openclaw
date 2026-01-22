@@ -183,6 +183,8 @@ export function buildSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+    cwd: process.cwd(),
     runtime: {
       host: "clawdbot",
       os: `${os.type()} ${os.release()}`,

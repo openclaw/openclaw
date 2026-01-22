@@ -42,6 +42,7 @@ export const AgentDefaultsSchema = z
       )
       .optional(),
     workspace: z.string().optional(),
+    repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     userTimezone: z.string().optional(),
@@ -112,7 +113,9 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
-    elevatedDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
+    elevatedDefault: z
+      .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
+      .optional(),
     blockStreamingDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
     blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),
     blockStreamingChunk: BlockStreamingChunkSchema.optional(),

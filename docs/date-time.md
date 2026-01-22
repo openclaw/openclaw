@@ -7,18 +7,18 @@ read_when:
 
 # Date & Time
 
-Clawdbot defaults to **UTC for transport timestamps** and **user-local time only in the system prompt**.
+Clawdbot defaults to **host-local time for transport timestamps** and **user-local time only in the system prompt**.
 Provider timestamps are preserved so tools keep their native semantics.
 
-## Message envelopes (UTC by default)
+## Message envelopes (local by default)
 
-Inbound messages are wrapped with a UTC timestamp (minute precision):
+Inbound messages are wrapped with a timestamp (minute precision):
 
 ```
-[Provider ... 2026-01-05T21:26Z] message text
+[Provider ... 2026-01-05 16:26 PST] message text
 ```
 
-This envelope timestamp is **UTC by default**, regardless of the host timezone.
+This envelope timestamp is **host-local by default**, regardless of the provider timezone.
 
 You can override this behavior:
 
@@ -26,7 +26,7 @@ You can override this behavior:
 {
   agents: {
     defaults: {
-      envelopeTimezone: "utc", // "utc" | "local" | "user" | IANA timezone
+      envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
       envelopeTimestamp: "on", // "on" | "off"
       envelopeElapsed: "on" // "on" | "off"
     }
@@ -34,6 +34,7 @@ You can override this behavior:
 }
 ```
 
+- `envelopeTimezone: "utc"` uses UTC.
 - `envelopeTimezone: "local"` uses the host timezone.
 - `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
 - Use an explicit IANA timezone (e.g., `"America/Chicago"`) for a fixed zone.
@@ -42,10 +43,10 @@ You can override this behavior:
 
 ### Examples
 
-**UTC (default):**
+**Local (default):**
 
 ```
-[WhatsApp +1555 2026-01-18T05:19Z] hello
+[WhatsApp +1555 2026-01-18 00:19 PST] hello
 ```
 
 **User timezone:**
@@ -73,12 +74,13 @@ Time format: 12-hour
 If only the timezone is known, we still include the section and instruct the model
 to assume UTC for unknown time references.
 
-## System event lines (UTC)
+## System event lines (local by default)
 
-Queued system events inserted into agent context are prefixed with a UTC timestamp:
+Queued system events inserted into agent context are prefixed with a timestamp using the
+same timezone selection as message envelopes (default: host-local).
 
 ```
-System: [2026-01-12T20:19:17Z] Model switched.
+System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 ### Configure user timezone + format

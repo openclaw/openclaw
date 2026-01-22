@@ -24,7 +24,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **Current Date & Time**: user-local time, timezone, and time format.
 - **Reply Tags**: optional reply tag syntax for supported providers.
 - **Heartbeats**: heartbeat prompt and ack behavior.
-- **Runtime**: host, OS, node, model, thinking level (one line).
+- **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
 ## Prompt modes

@@ -1280,6 +1280,18 @@ Default: `~/clawd`.
 If `agents.defaults.sandbox` is enabled, non-main sessions can override this with their
 own per-scope workspaces under `agents.defaults.sandbox.workspaceRoot`.
 
+### `agents.defaults.repoRoot`
+
+Optional repository root to show in the system prompt’s Runtime line. If unset, Clawdbot
+tries to detect a `.git` directory by walking upward from the workspace (and current
+working directory). The path must exist to be used.
+
+```json5
+{
+  agents: { defaults: { repoRoot: "~/Projects/clawdbot" } }
+}
+```
+
 ### `agents.defaults.skipBootstrap`
 
 Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`).
@@ -1983,7 +1995,7 @@ Per-agent override (further restrict):
 
 Notes:
 - `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can only further restrict (both must allow).
-- `/elevated on|off` stores state per session key; inline directives apply to a single message.
+- `/elevated on|off|ask|full` stores state per session key; inline directives apply to a single message.
 - Elevated `exec` runs on the host and bypasses sandboxing.
 - Tool policy still applies; if `exec` is denied, elevated cannot be used.
 

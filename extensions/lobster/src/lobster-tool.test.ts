@@ -7,17 +7,30 @@ import { describe, expect, it } from "vitest";
 import type { ClawdbotPluginApi, ClawdbotPluginToolContext } from "../../../src/plugins/types.js";
 import { createLobsterTool } from "./lobster-tool.js";
 
-async function writeFakeLobster(params: {
-  payload: unknown;
-}) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lobster-plugin-"));
+async function writeFakeLobsterScript(scriptBody: string, prefix = "clawdbot-lobster-plugin-") {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const isWindows = process.platform === "win32";
+
+  if (isWindows) {
+    const scriptPath = path.join(dir, "lobster.js");
+    const cmdPath = path.join(dir, "lobster.cmd");
+    await fs.writeFile(scriptPath, scriptBody, { encoding: "utf8" });
+    const cmd = `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`;
+    await fs.writeFile(cmdPath, cmd, { encoding: "utf8" });
+    return { dir, binPath: cmdPath };
+  }
+
   const binPath = path.join(dir, "lobster");
-
-  const file = `#!/usr/bin/env node\n` +
-    `process.stdout.write(JSON.stringify(${JSON.stringify(params.payload)}));\n`;
-
+  const file = `#!/usr/bin/env node\n${scriptBody}\n`;
   await fs.writeFile(binPath, file, { encoding: "utf8", mode: 0o755 });
   return { dir, binPath };
+}
+
+async function writeFakeLobster(params: { payload: unknown }) {
+  const scriptBody =
+    `const payload = ${JSON.stringify(params.payload)};\n` +
+    `process.stdout.write(JSON.stringify(payload));\n`;
+  return await writeFakeLobsterScript(scriptBody);
 }
 
 function fakeApi(): ClawdbotPluginApi {
@@ -82,12 +95,10 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects invalid JSON from lobster", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lobster-plugin-bad-"));
-    const binPath = path.join(dir, "lobster");
-    await fs.writeFile(binPath, `#!/usr/bin/env node\nprocess.stdout.write('nope');\n`, {
-      encoding: "utf8",
-      mode: 0o755,
-    });
+    const { binPath } = await writeFakeLobsterScript(
+      `process.stdout.write("nope");\n`,
+      "clawdbot-lobster-plugin-bad-",
+    );
 
     const tool = createLobsterTool(fakeApi());
     await expect(

@@ -87,18 +87,18 @@ export function resolveOpencodeZenAlias(modelIdOrAlias: string): string {
 }
 
 /**
- * OpenCode Zen routes models to different APIs based on model family.
+ * OpenCode Zen routes models to specific API shapes by family.
  */
 export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
   const lower = modelId.toLowerCase();
-  if (lower.startsWith("claude-") || lower.startsWith("minimax") || lower.startsWith("alpha-gd4")) {
+  if (lower.startsWith("gpt-")) {
+    return "openai-responses";
+  }
+  if (lower.startsWith("claude-") || lower.startsWith("minimax-")) {
     return "anthropic-messages";
   }
   if (lower.startsWith("gemini-")) {
     return "google-generative-ai";
-  }
-  if (lower.startsWith("gpt-")) {
-    return "openai-responses";
   }
   return "openai-completions";
 }

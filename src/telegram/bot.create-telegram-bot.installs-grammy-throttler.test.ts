@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
@@ -122,8 +122,11 @@ const getOnHandler = (event: string) => {
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
+const ORIGINAL_TZ = process.env.TZ;
+
 describe("createTelegramBot", () => {
   beforeEach(() => {
+    process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
       channels: {
@@ -140,6 +143,9 @@ describe("createTelegramBot", () => {
     sequentializeSpy.mockReset();
     botCtorSpy.mockReset();
     sequentializeKey = undefined;
+  });
+  afterEach(() => {
+    process.env.TZ = ORIGINAL_TZ;
   });
 
   // groupPolicy tests

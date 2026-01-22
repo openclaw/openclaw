@@ -99,6 +99,8 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
+  /** Optional repository root for system prompt runtime line (overrides auto-detect). */
+  repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
@@ -134,7 +136,7 @@ export type AgentDefaultsConfig = {
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
-  elevatedDefault?: "off" | "on";
+  elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
   /**
