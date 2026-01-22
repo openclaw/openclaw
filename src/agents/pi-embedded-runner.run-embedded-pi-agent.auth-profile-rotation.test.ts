@@ -248,4 +248,143 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("skips profiles in cooldown during initial selection", async () => {
+    vi.useFakeTimers();
+    try {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      try {
+        const authPath = path.join(agentDir, "auth-profiles.json");
+        const payload = {
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1, cooldownUntil: now + 60 * 60 * 1000 }, // p1 in cooldown for 1 hour
+            "openai:p2": { lastUsed: 2 },
+          },
+        };
+        await fs.writeFile(authPath, JSON.stringify(payload));
+
+        runEmbeddedAttemptMock.mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+        await runEmbeddedPiAgent({
+          sessionId: "session:test",
+          sessionKey: "agent:test:skip-cooldown",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: undefined,
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:skip-cooldown",
+        });
+
+        expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+
+        const stored = JSON.parse(
+          await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+        ) as { usageStats?: Record<string, { lastUsed?: number; cooldownUntil?: number }> };
+        expect(stored.usageStats?.["openai:p1"]?.cooldownUntil).toBe(now + 60 * 60 * 1000);
+        expect(typeof stored.usageStats?.["openai:p2"]?.lastUsed).toBe("number");
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips profiles in cooldown when rotating after failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      try {
+        const authPath = path.join(agentDir, "auth-profiles.json");
+        const payload = {
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "openai:p2": { cooldownUntil: now + 60 * 60 * 1000 }, // p2 in cooldown
+          },
+        };
+        await fs.writeFile(authPath, JSON.stringify(payload));
+
+        runEmbeddedAttemptMock
+          .mockResolvedValueOnce(
+            makeAttempt({
+              assistantTexts: [],
+              lastAssistant: buildAssistant({
+                stopReason: "error",
+                errorMessage: "rate limit",
+              }),
+            }),
+          )
+          .mockResolvedValueOnce(
+            makeAttempt({
+              assistantTexts: ["ok"],
+              lastAssistant: buildAssistant({
+                stopReason: "stop",
+                content: [{ type: "text", text: "ok" }],
+              }),
+            }),
+          );
+
+        await runEmbeddedPiAgent({
+          sessionId: "session:test",
+          sessionKey: "agent:test:rotate-skip-cooldown",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: "openai:p1",
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:rotate-skip-cooldown",
+        });
+
+        expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+
+        const stored = JSON.parse(
+          await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+        ) as { usageStats?: Record<string, { lastUsed?: number }> };
+        expect(typeof stored.usageStats?.["openai:p1"]?.lastUsed).toBe("number");
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

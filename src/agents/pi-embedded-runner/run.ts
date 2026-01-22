@@ -5,6 +5,7 @@ import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import {
+  isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
@@ -187,6 +188,10 @@ export async function runEmbeddedPiAgent(
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
+          if (candidate && isProfileInCooldown(authStore, candidate)) {
+            nextIndex += 1;
+            continue;
+          }
           try {
             await applyApiKeyInfo(candidate);
             profileIndex = nextIndex;
@@ -202,7 +207,20 @@ export async function runEmbeddedPiAgent(
       };
 
       try {
-        await applyApiKeyInfo(profileCandidates[profileIndex]);
+        while (profileIndex < profileCandidates.length) {
+          const candidate = profileCandidates[profileIndex];
+          if (candidate && isProfileInCooldown(authStore, candidate)) {
+            profileIndex += 1;
+            continue;
+          }
+          await applyApiKeyInfo(profileCandidates[profileIndex]);
+          break;
+        }
+        if (profileIndex >= profileCandidates.length) {
+          throw new Error(
+            `No available auth profile for ${provider} (all in cooldown or unavailable).`,
+          );
+        }
       } catch (err) {
         if (profileCandidates[profileIndex] === lockedProfileId) throw err;
         const advanced = await advanceAuthProfile();
