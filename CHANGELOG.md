@@ -24,6 +24,7 @@ Docs: https://docs.clawd.bot
 - Doctor: warn when gateway.mode is unset with configure/config guidance.
 - OpenCode Zen: route models to the Zen API shape per family so proxy endpoints are used. (#1416)
 - Browser: suppress Chrome restore prompts for managed profiles. (#1419) Thanks @jamesgroat.
+- Models: inherit session model overrides in thread/topic sessions (Telegram topics, Slack/Discord threads). (#1376)
 - macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
 - Cron: cap reminder context history to 10 messages and honor `contextMessages`. (#1103) Thanks @mkbehr.
 - Exec approvals: treat main as the default agent + migrate legacy default allowlists. (#1417) Thanks @czekaj.
