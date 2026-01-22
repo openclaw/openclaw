@@ -7,7 +7,7 @@ read_when:
 # Bonjour / mDNS discovery
 
 Clawdbot uses Bonjour (mDNS / DNS‑SD) as a **LAN‑only convenience** to discover
-an active Gateway bridge. It is best‑effort and does **not** replace SSH or
+an active Gateway (WebSocket endpoint). It is best‑effort and does **not** replace SSH or
 Tailnet-based connectivity.
 
 ## Wide‑area Bonjour (Unicast DNS‑SD) over Tailscale
@@ -31,7 +31,7 @@ browse both `local.` and `clawdbot.internal.` automatically.
 
 ```json5
 {
-  bridge: { bind: "tailnet" }, // tailnet-only (recommended)
+  gateway: { bind: "tailnet" }, // tailnet-only (recommended)
   discovery: { wideArea: { enabled: true } } // enables clawdbot.internal DNS-SD publishing
 }
 ```
@@ -63,13 +63,13 @@ In the Tailscale admin console:
 Once clients accept tailnet DNS, iOS nodes can browse
 `_clawdbot-gw._tcp` in `clawdbot.internal.` without multicast.
 
-### Bridge listener security (recommended)
+### Gateway listener security (recommended)
 
-The bridge port (default `18790`) is a plain TCP service. By default it binds to
-`0.0.0.0`, which makes it reachable from any interface on the gateway host.
+The Gateway WS port (default `18789`) binds to loopback by default. For LAN/tailnet
+access, bind explicitly and keep auth enabled.
 
 For tailnet‑only setups:
-- Set `bridge.bind: "tailnet"` in `~/.clawdbot/clawdbot.json`.
+- Set `gateway.bind: "tailnet"` in `~/.clawdbot/clawdbot.json`.
 - Restart the Gateway (or restart the macOS menubar app).
 
 ## What advertises
@@ -87,11 +87,12 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `role=gateway`
 - `displayName=<friendly name>`
 - `lanHost=<hostname>.local`
-- `gatewayPort=<port>` (informational; Gateway WS is usually loopback‑only)
-- `bridgePort=<port>` (only when bridge is enabled)
+- `gatewayPort=<port>` (Gateway WS + HTTP)
+- `gatewayTls=1` (only when TLS is enabled)
+- `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
 - `canvasPort=<port>` (only when the canvas host is enabled; default `18793`)
 - `sshPort=<port>` (defaults to 22 when not overridden)
-- `transport=bridge`
+- `transport=gateway`
 - `cliPath=<path>` (optional; absolute path to a runnable `clawdbot` entrypoint)
 - `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
 
@@ -125,8 +126,8 @@ The Gateway writes a rolling log file (printed on startup as
 The iOS node uses `NWBrowser` to discover `_clawdbot-gw._tcp`.
 
 To capture logs:
-- Settings → Bridge → Advanced → **Discovery Debug Logs**
-- Settings → Bridge → Advanced → **Discovery Logs** → reproduce → **Copy**
+- Settings → Gateway → Advanced → **Discovery Debug Logs**
+- Settings → Gateway → Advanced → **Discovery Logs** → reproduce → **Copy**
 
 The log includes browser state transitions and result‑set changes.
 
@@ -136,7 +137,7 @@ The log includes browser state transitions and result‑set changes.
 - **Multicast blocked**: some Wi‑Fi networks disable mDNS.
 - **Sleep / interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or
-  punctuation), then restart the Gateway. The bridge instance name derives from
+  punctuation), then restart the Gateway. The service instance name derives from
   the host name, so overly complex names can confuse some resolvers.
 
 ## Escaped instance names (`\032`)
@@ -150,9 +151,7 @@ sequences (e.g. spaces become `\032`).
 ## Disabling / configuration
 
 - `CLAWDBOT_DISABLE_BONJOUR=1` disables advertising.
-- `CLAWDBOT_BRIDGE_ENABLED=0` disables the bridge listener (and the bridge beacon).
-- `bridge.bind` / `bridge.port` in `~/.clawdbot/clawdbot.json` control bridge bind/port.
-- `CLAWDBOT_BRIDGE_HOST` / `CLAWDBOT_BRIDGE_PORT` still work as back‑compat overrides.
+- `gateway.bind` in `~/.clawdbot/clawdbot.json` controls the Gateway bind mode.
 - `CLAWDBOT_SSH_PORT` overrides the SSH port advertised in TXT.
 - `CLAWDBOT_TAILNET_DNS` publishes a MagicDNS hint in TXT.
 - `CLAWDBOT_CLI_PATH` overrides the advertised CLI path.

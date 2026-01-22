@@ -22,7 +22,7 @@ Exec approvals are enforced locally on the execution host:
 - **gateway host** → `clawdbot` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
-Planned macOS split:
+macOS split:
 - **node host service** forwards `system.run` to the **macOS app** over local IPC.
 - **macOS app** enforces approvals + executes the command in UI context.
 
@@ -103,8 +103,8 @@ Each allowlist entry tracks:
 ## Auto-allow skill CLIs
 
 When **Auto-allow skill CLIs** is enabled, executables referenced by known skills
-are treated as allowlisted on nodes (macOS node or headless node host). This uses the Bridge RPC to ask the
-gateway for the skill bin list. Disable this if you want strict manual allowlists.
+are treated as allowlisted on nodes (macOS node or headless node host). This uses
+`skills.bins` over the Gateway RPC to fetch the skill bin list. Disable this if you want strict manual allowlists.
 
 ## Safe bins (stdin-only)
 
@@ -151,12 +151,12 @@ Actions:
 - **Always allow** → add to allowlist + run
 - **Deny** → block
 
-### macOS IPC flow (planned)
+### macOS IPC flow
 ```
-Gateway -> Bridge -> Node Service (TS)
-                    |  IPC (UDS + token + HMAC + TTL)
-                    v
-                Mac App (UI + approvals + system.run)
+Gateway -> Node Service (WS)
+                 |  IPC (UDS + token + HMAC + TTL)
+                 v
+             Mac App (UI + approvals + system.run)
 ```
 
 Security notes:

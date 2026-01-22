@@ -46,7 +46,7 @@ Common methods + events:
 | Messaging | `send`, `poll`, `agent`, `agent.wait` | side-effects need `idempotencyKey` |
 | Chat | `chat.history`, `chat.send`, `chat.abort`, `chat.inject` | WebChat uses these |
 | Sessions | `sessions.list`, `sessions.patch`, `sessions.delete` | session admin |
-| Nodes | `node.list`, `node.invoke`, `node.pair.*` | bridge + node actions |
+| Nodes | `node.list`, `node.invoke`, `node.pair.*` | Gateway WS + node actions |
 | Events | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | server push |
 
 Authoritative list lives in `src/gateway/server.ts` (`METHODS`, `EVENTS`).
