@@ -6,6 +6,7 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import { spawn } from "node:child_process";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -21,6 +22,7 @@ import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import { createSearchableSelectList } from "./components/selectors.js";
 import { formatTokens } from "./tui-formatters.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
@@ -43,19 +45,30 @@ export function createEditorSubmitHandler(params: {
   };
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
+  handleBangLine: (value: string) => Promise<void> | void;
 }) {
   return (text: string) => {
-    const value = text.trim();
+    // NOTE: We intentionally do not trim here.
+    // The caller decides how to interpret whitespace.
+    const value = text;
     params.editor.setText("");
     if (!value) return;
 
     // Enable built-in editor prompt history navigation (up/down).
     params.editor.addToHistory(value);
 
+    // Bash mode: only if the very first character is '!' and it's not just '!'.
+    // Per requirement: a lone '!' should be treated as a normal message.
+    if (value.startsWith("!") && value !== "!") {
+      void params.handleBangLine(value);
+      return;
+    }
+
     if (value.startsWith("/")) {
       void params.handleCommand(value);
       return;
     }
+
     void params.sendMessage(value);
   };
 }
@@ -77,6 +90,12 @@ export async function runTui(opts: TuiOptions) {
   let isConnected = false;
   let toolsExpanded = false;
   let showThinking = false;
+
+  // Local "bash mode" (lines starting with '!') state.
+  // Permission is asked once per TUI session.
+  let localExecAsked = false;
+  let localExecAllowed = false;
+
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
@@ -496,11 +515,105 @@ export async function runTui(opts: TuiOptions) {
       formatSessionKey,
     });
 
+  const ensureLocalExecAllowed = async (): Promise<boolean> => {
+    if (localExecAllowed) return true;
+    if (localExecAsked) return false;
+    localExecAsked = true;
+
+    return await new Promise<boolean>((resolve) => {
+      chatLog.addSystem("Allow local shell commands for this session?");
+      chatLog.addSystem("Select Yes/No (arrows + Enter), Esc to cancel.");
+      const selector = createSearchableSelectList(
+        [
+          { value: "no", label: "No" },
+          { value: "yes", label: "Yes" },
+        ],
+        2,
+      );
+      selector.onSelect = (item) => {
+        closeOverlay();
+        if (item.value === "yes") {
+          localExecAllowed = true;
+          chatLog.addSystem("local shell: enabled for this session");
+          resolve(true);
+        } else {
+          chatLog.addSystem("local shell: not enabled");
+          resolve(false);
+        }
+        tui.requestRender();
+      };
+      selector.onCancel = () => {
+        closeOverlay();
+        chatLog.addSystem("local shell: cancelled");
+        tui.requestRender();
+        resolve(false);
+      };
+      openOverlay(selector);
+      tui.requestRender();
+    });
+  };
+
+  const runLocalShellLine = async (line: string) => {
+    // line starts with '!'
+    const cmd = line.slice(1);
+    // NOTE: A lone '!' is handled by the submit handler as a normal message.
+    // Keep this guard anyway in case this is called directly.
+    if (cmd === "") return;
+
+    const allowed = await ensureLocalExecAllowed();
+    if (!allowed) return;
+
+    chatLog.addSystem(`[local] $ ${cmd}`);
+    tui.requestRender();
+
+    await new Promise<void>((resolve) => {
+      const child = spawn(cmd, {
+        shell: true,
+        cwd: process.cwd(),
+        env: process.env,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (buf) => {
+        stdout += buf.toString("utf8");
+      });
+      child.stderr.on("data", (buf) => {
+        stderr += buf.toString("utf8");
+      });
+
+      child.on("close", (code, signal) => {
+        const maxChars = 40_000;
+        const combined = (stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""))
+          .slice(0, maxChars)
+          .trimEnd();
+
+        if (combined) {
+          for (const line of combined.split("\n")) {
+            chatLog.addSystem(`[local] ${line}`);
+          }
+        }
+        chatLog.addSystem(
+          `[local] exit ${code ?? "?"}${signal ? ` (signal ${String(signal)})` : ""}`,
+        );
+        tui.requestRender();
+        resolve();
+      });
+
+      child.on("error", (err) => {
+        chatLog.addSystem(`[local] error: ${String(err)}`);
+        tui.requestRender();
+        resolve();
+      });
+    });
+  };
+
   updateAutocompleteProvider();
   editor.onSubmit = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
+    handleBangLine: runLocalShellLine,
   });
 
   editor.onEscape = () => {
