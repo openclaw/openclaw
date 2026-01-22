@@ -12,6 +12,60 @@ app.use(express.json());
 const PYTHON = "/Users/justinmassa/chief-of-staff/.venv/bin/python";
 const GCHAT_SENDER = "/Users/justinmassa/chief-of-staff/scripts/gchat_send_file.py";
 
+// Message queue per space to prevent race conditions
+interface QueuedMessage {
+  text: string;
+  sessionId: string;
+  spaceId: string;
+}
+
+const messageQueues: Map<string, QueuedMessage[]> = new Map();
+const processingSpaces: Set<string> = new Set();
+
+function enqueueMessage(spaceId: string, message: QueuedMessage): void {
+  if (!messageQueues.has(spaceId)) {
+    messageQueues.set(spaceId, []);
+  }
+  messageQueues.get(spaceId)!.push(message);
+  console.log(`[googlechat] Queued message for space ${spaceId} (queue size: ${messageQueues.get(spaceId)!.length})`);
+  processQueue(spaceId);
+}
+
+function processQueue(spaceId: string): void {
+  // If already processing this space, wait
+  if (processingSpaces.has(spaceId)) {
+    console.log(`[googlechat] Space ${spaceId} busy, message queued`);
+    return;
+  }
+
+  const queue = messageQueues.get(spaceId);
+  if (!queue || queue.length === 0) {
+    return;
+  }
+
+  // Take the next message
+  const message = queue.shift()!;
+  processingSpaces.add(spaceId);
+
+  console.log(`[googlechat] Processing message for space ${spaceId}...`);
+
+  runAgent(message.text, message.sessionId, (err, response) => {
+    processingSpaces.delete(spaceId);
+
+    if (err) {
+      console.error(`[googlechat] AI error:`, err.message);
+      sendChatMessage(spaceId, "Sorry, I encountered an error processing your message.");
+    } else {
+      const responseText = response || "I processed your message but have no response.";
+      console.log(`[googlechat] AI Response (${responseText.length} chars): ${responseText.slice(0, 100)}...`);
+      sendChatMessage(spaceId, responseText);
+    }
+
+    // Process next message in queue
+    processQueue(spaceId);
+  });
+}
+
 // Send message via Chat API using temp file (avoids escaping issues)
 function sendChatMessage(spaceId: string, text: string): void {
   const tmpFile = join(tmpdir(), `gchat-${Date.now()}.txt`);
@@ -138,20 +192,9 @@ app.post("/webhook/googlechat", async (req: Request, res: Response) => {
       res.json({});
 
       const sessionId = `googlechat:${spaceId}`;
-      console.log(`[googlechat] Processing async for space ${spaceId}...`);
-
-      runAgent(text, sessionId, (err, response) => {
-        if (err) {
-          console.error(`[googlechat] AI error:`, err.message);
-          sendChatMessage(spaceId, "Sorry, I encountered an error processing your message.");
-          return;
-        }
-
-        const responseText = response || "I processed your message but have no response.";
-        console.log(`[googlechat] AI Response (${responseText.length} chars): ${responseText.slice(0, 100)}...`);
-
-        sendChatMessage(spaceId, responseText);
-      });
+      
+      // Queue the message instead of processing immediately
+      enqueueMessage(spaceId, { text, sessionId, spaceId });
 
       return;
     }
