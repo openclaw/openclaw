@@ -12,7 +12,7 @@ vi.mock("./send.js", () => ({
 vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
   dispatchReplyFromConfig: vi.fn(
     async (params: { replyOptions?: { onReplyStart?: () => void } }) => {
-      await params.replyOptions?.onReplyStart?.();
+      await Promise.resolve(params.replyOptions?.onReplyStart?.());
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     },
   ),
