@@ -40,14 +40,17 @@ async function runLobsterSubprocess(params: {
   const timeoutMs = Math.max(200, params.timeoutMs);
   const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
 
+  const env = { ...process.env, LOBSTER_MODE: "tool" } as Record<string, string | undefined>;
+  const nodeOptions = env.NODE_OPTIONS ?? "";
+  if (nodeOptions.includes("--inspect")) {
+    delete env.NODE_OPTIONS;
+  }
+
   return await new Promise<{ stdout: string }>((resolve, reject) => {
     const child = spawn(execPath, argv, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        LOBSTER_MODE: "tool",
-      },
+      env,
     });
 
     let stdout = "";
