@@ -49,7 +49,7 @@ WhatsApp / Telegram / Discord / Mattermost
         ▼
   ┌───────────────────────────┐
   │          Gateway          │  ws://127.0.0.1:18789 (loopback-only)
-  │     (single source)       │  tcp://0.0.0.0:18790 (Bridge)
+  │     (single source)       │
   │                           │  http://<gateway-host>:18793
   │                           │    /__clawdbot__/canvas/ (Canvas host)
   └───────────┬───────────────┘
@@ -58,8 +58,8 @@ WhatsApp / Telegram / Discord / Mattermost
               ├─ CLI (clawdbot …)
               ├─ Chat UI (SwiftUI)
               ├─ macOS app (Clawdbot.app)
-              ├─ iOS node via Bridge + pairing
-              └─ Android node via Bridge + pairing
+              ├─ iOS node via Gateway WS + pairing
+              └─ Android node via Gateway WS + pairing
 ```
 
 Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns channel connections and the WebSocket control plane.
@@ -70,7 +70,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - **Loopback-first**: Gateway WS defaults to `ws://127.0.0.1:18789`.
   - The wizard now generates a gateway token by default (even for loopback).
   - For Tailnet access, run `clawdbot gateway --bind tailnet --token ...` (token is required for non-loopback binds).
-- **Bridge for nodes**: optional LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
+- **Nodes**: connect to the Gateway WebSocket (LAN/tailnet/SSH as needed); legacy TCP bridge is deprecated/removed.
 - **Canvas host**: HTTP file server on `canvasHost.port` (default `18793`), serving `/__clawdbot__/canvas/` for node WebViews; see [Gateway configuration](/gateway/configuration) (`canvasHost`).
 - **Remote use**: SSH tunnel or tailnet/VPN; see [Remote access](/gateway/remote) and [Discovery](/gateway/discovery).
 

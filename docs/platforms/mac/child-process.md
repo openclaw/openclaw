@@ -45,6 +45,13 @@ present. To reset manually:
 rm ~/.clawdbot/disable-launchagent
 ```
 
+## Attach-only mode
+
+To force the macOS app to **never install or manage launchd**, launch it with
+`--attach-only` (or `--no-launchd`). This sets `~/.clawdbot/disable-launchagent`,
+so the app only attaches to an already running Gateway. You can toggle the same
+behavior in Debug Settings.
+
 ## Remote mode
 
 Remote mode never starts a local Gateway. The app uses an SSH tunnel to the

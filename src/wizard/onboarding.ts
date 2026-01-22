@@ -82,10 +82,9 @@ export async function runOnboardingWizard(
   const snapshot = await readConfigFileSnapshot();
   let baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
 
-  if (snapshot.exists) {
-    const title = snapshot.valid ? "Existing config detected" : "Invalid config";
-    await prompter.note(summarizeExistingConfig(baseConfig), title);
-    if (!snapshot.valid && snapshot.issues.length > 0) {
+  if (snapshot.exists && !snapshot.valid) {
+    await prompter.note(summarizeExistingConfig(baseConfig), "Invalid config");
+    if (snapshot.issues.length > 0) {
       await prompter.note(
         [
           ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
@@ -95,14 +94,51 @@ export async function runOnboardingWizard(
         "Config issues",
       );
     }
+    await prompter.outro(
+      `Config invalid. Run \`${formatCliCommand("clawdbot doctor")}\` to repair it, then re-run onboarding.`,
+    );
+    runtime.exit(1);
+    return;
+  }
 
-    if (!snapshot.valid) {
-      await prompter.outro(
-        `Config invalid. Run \`${formatCliCommand("clawdbot doctor")}\` to repair it, then re-run onboarding.`,
-      );
-      runtime.exit(1);
-      return;
-    }
+  const quickstartHint = `Configure details later via ${formatCliCommand("clawdbot configure")}.`;
+  const manualHint = "Configure port, network, Tailscale, and auth options.";
+  const explicitFlowRaw = opts.flow?.trim();
+  const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
+  if (
+    normalizedExplicitFlow &&
+    normalizedExplicitFlow !== "quickstart" &&
+    normalizedExplicitFlow !== "advanced"
+  ) {
+    runtime.error("Invalid --flow (use quickstart, manual, or advanced).");
+    runtime.exit(1);
+    return;
+  }
+  const explicitFlow: WizardFlow | undefined =
+    normalizedExplicitFlow === "quickstart" || normalizedExplicitFlow === "advanced"
+      ? normalizedExplicitFlow
+      : undefined;
+  let flow: WizardFlow =
+    explicitFlow ??
+    ((await prompter.select({
+      message: "Onboarding mode",
+      options: [
+        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
+        { value: "advanced", label: "Manual", hint: manualHint },
+      ],
+      initialValue: "quickstart",
+    })) as "quickstart" | "advanced");
+
+  if (opts.mode === "remote" && flow === "quickstart") {
+    await prompter.note(
+      "QuickStart only supports local gateways. Switching to Manual mode.",
+      "QuickStart",
+    );
+    flow = "advanced";
+  }
+
+  if (snapshot.exists) {
+    await prompter.note(summarizeExistingConfig(baseConfig), "Existing config detected");
 
     const action = (await prompter.select({
       message: "Config handling",
@@ -132,37 +168,6 @@ export async function runOnboardingWizard(
       await handleReset(resetScope, resolveUserPath(workspaceDefault), runtime);
       baseConfig = {};
     }
-  }
-
-  const quickstartHint = `Configure details later via ${formatCliCommand("clawdbot configure")}.`;
-  const advancedHint = "Configure port, network, Tailscale, and auth options.";
-  const explicitFlowRaw = opts.flow?.trim();
-  if (explicitFlowRaw && explicitFlowRaw !== "quickstart" && explicitFlowRaw !== "advanced") {
-    runtime.error("Invalid --flow (use quickstart or advanced).");
-    runtime.exit(1);
-    return;
-  }
-  const explicitFlow: WizardFlow | undefined =
-    explicitFlowRaw === "quickstart" || explicitFlowRaw === "advanced"
-      ? explicitFlowRaw
-      : undefined;
-  let flow: WizardFlow =
-    explicitFlow ??
-    ((await prompter.select({
-      message: "Onboarding mode",
-      options: [
-        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
-        { value: "advanced", label: "Advanced", hint: advancedHint },
-      ],
-      initialValue: "quickstart",
-    })) as "quickstart" | "advanced");
-
-  if (opts.mode === "remote" && flow === "quickstart") {
-    await prompter.note(
-      "QuickStart only supports local gateways. Switching to Advanced mode.",
-      "QuickStart",
-    );
-    flow = "advanced";
   }
 
   const quickstartGateway: QuickstartGatewayDefaults = (() => {
