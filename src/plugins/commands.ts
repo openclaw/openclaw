@@ -17,20 +17,103 @@ type RegisteredPluginCommand = ClawdbotPluginCommandDefinition & {
 const pluginCommands: Map<string, RegisteredPluginCommand> = new Map();
 
 /**
+ * Reserved command names that plugins cannot override.
+ * These are built-in commands from commands-registry.data.ts.
+ */
+const RESERVED_COMMANDS = new Set([
+  // Core commands
+  "help",
+  "commands",
+  "status",
+  "whoami",
+  "context",
+  // Session management
+  "stop",
+  "restart",
+  "reset",
+  "new",
+  "compact",
+  // Configuration
+  "config",
+  "debug",
+  "allowlist",
+  "activation",
+  // Agent control
+  "skill",
+  "subagents",
+  "model",
+  "models",
+  "queue",
+  // Messaging
+  "send",
+  // Execution
+  "bash",
+  "exec",
+  // Mode toggles
+  "think",
+  "verbose",
+  "reasoning",
+  "elevated",
+  // Billing
+  "usage",
+]);
+
+/**
+ * Validate a command name.
+ * Returns an error message if invalid, or null if valid.
+ */
+export function validateCommandName(name: string): string | null {
+  const trimmed = name.trim().toLowerCase();
+
+  if (!trimmed) {
+    return "Command name cannot be empty";
+  }
+
+  // Must start with a letter, contain only letters, numbers, hyphens, underscores
+  if (!/^[a-z][a-z0-9_-]*$/i.test(trimmed)) {
+    return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
+  }
+
+  // Check reserved commands
+  if (RESERVED_COMMANDS.has(trimmed)) {
+    return `Command name "${trimmed}" is reserved by a built-in command`;
+  }
+
+  return null;
+}
+
+export type CommandRegistrationResult = {
+  ok: boolean;
+  error?: string;
+};
+
+/**
  * Register a plugin command.
+ * Returns an error if the command name is invalid or reserved.
  */
 export function registerPluginCommand(
   pluginId: string,
   command: ClawdbotPluginCommandDefinition,
-): void {
-  const key = `/${command.name.toLowerCase()}`;
-  if (pluginCommands.has(key)) {
-    logVerbose(
-      `Plugin command ${key} already registered, overwriting with plugin ${pluginId}`,
-    );
+): CommandRegistrationResult {
+  const validationError = validateCommandName(command.name);
+  if (validationError) {
+    return { ok: false, error: validationError };
   }
+
+  const key = `/${command.name.toLowerCase()}`;
+
+  // Check for duplicate registration
+  if (pluginCommands.has(key)) {
+    const existing = pluginCommands.get(key)!;
+    return {
+      ok: false,
+      error: `Command "${command.name}" already registered by plugin "${existing.pluginId}"`,
+    };
+  }
+
   pluginCommands.set(key, { ...command, pluginId });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
+  return { ok: true };
 }
 
 /**
@@ -55,6 +138,10 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
 /**
  * Check if a command body matches a registered plugin command.
  * Returns the command definition and parsed args if matched.
+ *
+ * Note: If a command has `acceptsArgs: false` and the user provides arguments,
+ * the command will not match. This allows the message to fall through to
+ * built-in handlers or the agent. Document this behavior to plugin authors.
  */
 export function matchPluginCommand(
   commandBody: string,
@@ -99,7 +186,8 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} blocked: unauthorized sender ${senderId || "<unknown>"}`,
     );
-    return null; // Silently ignore unauthorized commands
+    // Return a message instead of silently ignoring
+    return { text: "⚠️ This command requires authorization." };
   }
 
   const ctx: PluginCommandContext = {
@@ -117,7 +205,8 @@ export async function executePluginCommand(params: {
   } catch (err) {
     const error = err as Error;
     logVerbose(`Plugin command /${command.name} error: ${error.message}`);
-    return { text: `⚠️ Command failed: ${error.message}` };
+    // Don't leak internal error details - return a safe generic message
+    return { text: "⚠️ Command failed. Please try again later." };
   }
 }
 

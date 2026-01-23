@@ -374,14 +374,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+
+    // Register with the plugin command system (validates name and checks for duplicates)
+    const result = registerPluginCommand(record.id, command);
+    if (!result.ok) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `command registration failed: ${result.error}`,
+      });
+      return;
+    }
+
     record.commands.push(name);
     registry.commands.push({
       pluginId: record.id,
       command,
       source: record.source,
     });
-    // Register with the plugin command system
-    registerPluginCommand(record.id, command);
   };
 
   const registerTypedHook = <K extends PluginHookName>(

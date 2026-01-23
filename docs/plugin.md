@@ -526,8 +526,8 @@ Command options:
 
 - `name`: Command name (without the leading `/`)
 - `description`: Help text shown in command lists
-- `acceptsArgs`: Whether the command accepts arguments (default: false)
-- `requireAuth`: Whether to require authorized sender (default: false)
+- `acceptsArgs`: Whether the command accepts arguments (default: false). If false and arguments are provided, the command won't match and the message falls through to other handlers
+- `requireAuth`: Whether to require authorized sender (default: true)
 - `handler`: Function that returns `{ text: string }` (can be async)
 
 Example with authorization and arguments:
@@ -550,6 +550,9 @@ Notes:
 - Plugin commands are processed **before** built-in commands and the AI agent
 - Commands are registered globally and work across all channels
 - Command names are case-insensitive (`/MyStatus` matches `/mystatus`)
+- Command names must start with a letter and contain only letters, numbers, hyphens, and underscores
+- Reserved command names (like `help`, `status`, `reset`, etc.) cannot be overridden by plugins
+- Duplicate command registration across plugins will fail with a diagnostic error
 
 ### Register background services
 
