@@ -53,6 +53,7 @@ export type SlackThreadStarter = {
   text: string;
   userId?: string;
   ts?: string;
+  files?: SlackFile[];
 };
 
 const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarter>();
@@ -71,7 +72,7 @@ export async function resolveSlackThreadStarter(params: {
       ts: params.threadTs,
       limit: 1,
       inclusive: true,
-    })) as { messages?: Array<{ text?: string; user?: string; ts?: string }> };
+    })) as { messages?: Array<{ text?: string; user?: string; ts?: string; files?: SlackFile[] }> };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
     if (!message || !text) return null;
@@ -79,6 +80,7 @@ export async function resolveSlackThreadStarter(params: {
       text,
       userId: message.user,
       ts: message.ts,
+      files: message.files,
     };
     THREAD_STARTER_CACHE.set(cacheKey, starter);
     return starter;
