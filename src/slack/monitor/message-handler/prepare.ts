@@ -19,6 +19,10 @@ import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import {
+  shouldAckReaction as shouldAckReactionGate,
+  type AckReactionScope,
+} from "../../../channels/ack-reactions.js";
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
@@ -324,19 +328,20 @@ export async function prepareSlackMessage(params: {
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const ackReactionValue = ackReaction ?? "";
 
-  const shouldAckReaction = () => {
-    if (!ackReaction) return false;
-    if (ctx.ackReactionScope === "all") return true;
-    if (ctx.ackReactionScope === "direct") return isDirectMessage;
-    if (ctx.ackReactionScope === "group-all") return isRoomish;
-    if (ctx.ackReactionScope === "group-mentions") {
-      if (!isRoom) return false;
-      if (!shouldRequireMention) return false;
-      if (!canDetectMention) return false;
-      return effectiveWasMentioned;
-    }
-    return false;
-  };
+  const shouldAckReaction = () =>
+    Boolean(
+      ackReaction &&
+      shouldAckReactionGate({
+        scope: ctx.ackReactionScope as AckReactionScope | undefined,
+        isDirect: isDirectMessage,
+        isGroup: isRoomish,
+        isMentionableGroup: isRoom,
+        requireMention: Boolean(shouldRequireMention),
+        canDetectMention,
+        effectiveWasMentioned,
+        shouldBypassMention: mentionGate.shouldBypassMention,
+      }),
+    );
 
   const ackReactionMessageTs = message.ts;
   const ackReactionPromise =

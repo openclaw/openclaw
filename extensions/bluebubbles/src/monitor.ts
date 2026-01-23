@@ -1521,19 +1521,20 @@ async function processMessage(
     core,
     runtime,
   });
-  const shouldAckReaction = () => {
-    if (!ackReactionValue) return false;
-    if (ackReactionScope === "all") return true;
-    if (ackReactionScope === "direct") return !isGroup;
-    if (ackReactionScope === "group-all") return isGroup;
-    if (ackReactionScope === "group-mentions") {
-      if (!isGroup) return false;
-      if (!requireMention) return false;
-      if (!canDetectMention) return false;
-      return effectiveWasMentioned;
-    }
-    return false;
-  };
+  const shouldAckReaction = () =>
+    Boolean(
+      ackReactionValue &&
+        core.channel.reactions.shouldAckReaction({
+          scope: ackReactionScope,
+          isDirect: !isGroup,
+          isGroup,
+          isMentionableGroup: isGroup,
+          requireMention: Boolean(requireMention),
+          canDetectMention,
+          effectiveWasMentioned,
+          shouldBypassMention,
+        }),
+    );
   const ackMessageId = message.messageId?.trim() || "";
   const ackReactionPromise =
     shouldAckReaction() && ackMessageId && chatGuidForActions && ackReactionValue

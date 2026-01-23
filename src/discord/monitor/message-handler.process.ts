@@ -8,6 +8,7 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
+import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-reactions.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
@@ -73,6 +74,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     shouldRequireMention,
     canDetectMention,
     effectiveWasMentioned,
+    shouldBypassMention,
     threadChannel,
     threadParentId,
     threadParentName,
@@ -95,20 +97,20 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const shouldAckReaction = () => {
-    if (!ackReaction) return false;
-    if (ackReactionScope === "all") return true;
-    if (ackReactionScope === "direct") return isDirectMessage;
-    const isGroupChat = isGuildMessage || isGroupDm;
-    if (ackReactionScope === "group-all") return isGroupChat;
-    if (ackReactionScope === "group-mentions") {
-      if (!isGuildMessage) return false;
-      if (!shouldRequireMention) return false;
-      if (!canDetectMention) return false;
-      return effectiveWasMentioned;
-    }
-    return false;
-  };
+  const shouldAckReaction = () =>
+    Boolean(
+      ackReaction &&
+      shouldAckReactionGate({
+        scope: ackReactionScope,
+        isDirect: isDirectMessage,
+        isGroup: isGuildMessage || isGroupDm,
+        isMentionableGroup: isGuildMessage,
+        requireMention: Boolean(shouldRequireMention),
+        canDetectMention,
+        effectiveWasMentioned,
+        shouldBypassMention,
+      }),
+    );
   const ackReactionPromise = shouldAckReaction()
     ? reactMessageDiscord(message.channelId, message.id, ackReaction, {
         rest: client.rest,

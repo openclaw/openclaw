@@ -24,6 +24,7 @@ import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../conf
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import {
@@ -369,19 +370,20 @@ export const buildTelegramMessageContext = async ({
   // ACK reactions
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const shouldAckReaction = () => {
-    if (!ackReaction) return false;
-    if (ackReactionScope === "all") return true;
-    if (ackReactionScope === "direct") return !isGroup;
-    if (ackReactionScope === "group-all") return isGroup;
-    if (ackReactionScope === "group-mentions") {
-      if (!isGroup) return false;
-      if (!requireMention) return false;
-      if (!canDetectMention) return false;
-      return effectiveWasMentioned;
-    }
-    return false;
-  };
+  const shouldAckReaction = () =>
+    Boolean(
+      ackReaction &&
+      shouldAckReactionGate({
+        scope: ackReactionScope,
+        isDirect: !isGroup,
+        isGroup,
+        isMentionableGroup: isGroup,
+        requireMention: Boolean(requireMention),
+        canDetectMention,
+        effectiveWasMentioned,
+        shouldBypassMention: mentionGate.shouldBypassMention,
+      }),
+    );
   const api = bot.api as unknown as {
     setMessageReaction?: (
       chatId: number | string,

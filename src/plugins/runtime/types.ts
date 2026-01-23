@@ -19,6 +19,7 @@ type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
+type ShouldAckReaction = typeof import("../../channels/ack-reactions.js").shouldAckReaction;
 type ResolveChannelGroupPolicy =
   typeof import("../../config/group-policy.js").resolveChannelGroupPolicy;
 type ResolveChannelGroupRequireMention =
@@ -210,6 +211,9 @@ export type PluginRuntime = {
     mentions: {
       buildMentionRegexes: BuildMentionRegexes;
       matchesMentionPatterns: MatchesMentionPatterns;
+    };
+    reactions: {
+      shouldAckReaction: ShouldAckReaction;
     };
     groups: {
       resolveGroupPolicy: ResolveChannelGroupPolicy;

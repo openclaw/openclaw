@@ -410,6 +410,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         !hasExplicitMention &&
         commandAuthorized &&
         core.channel.text.hasControlCommand(bodyText);
+      const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info({ roomId, reason: "no-mention" }, "skipping room message");
         return;
@@ -515,18 +516,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
       const ackScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-      const shouldAckReaction = () => {
-        if (!ackReaction) return false;
-        if (ackScope === "all") return true;
-        if (ackScope === "direct") return isDirectMessage;
-        if (ackScope === "group-all") return isRoom;
-        if (ackScope === "group-mentions") {
-          if (!isRoom) return false;
-          if (!shouldRequireMention) return false;
-          return wasMentioned || shouldBypassMention;
-        }
-        return false;
-      };
+      const shouldAckReaction = () =>
+        Boolean(
+          ackReaction &&
+            core.channel.reactions.shouldAckReaction({
+              scope: ackScope,
+              isDirect: isDirectMessage,
+              isGroup: isRoom,
+              isMentionableGroup: isRoom,
+              requireMention: Boolean(shouldRequireMention),
+              canDetectMention,
+              effectiveWasMentioned: wasMentioned || shouldBypassMention,
+              shouldBypassMention,
+            }),
+        );
       if (shouldAckReaction() && messageId) {
         reactMatrixMessage(roomId, messageId, ackReaction, client).catch((err) => {
           logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
