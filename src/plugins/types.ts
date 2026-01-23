@@ -129,6 +129,59 @@ export type ClawdbotPluginGatewayMethod = {
   handler: GatewayRequestHandler;
 };
 
+// =============================================================================
+// Plugin Commands
+// =============================================================================
+
+/**
+ * Context passed to plugin command handlers.
+ */
+export type PluginCommandContext = {
+  /** The sender's identifier (e.g., Telegram user ID) */
+  senderId?: string;
+  /** The channel/surface (e.g., "telegram", "discord") */
+  channel: string;
+  /** Whether the sender is on the allowlist */
+  isAuthorizedSender: boolean;
+  /** Raw command arguments after the command name */
+  args?: string;
+  /** The full normalized command body */
+  commandBody: string;
+  /** Current clawdbot configuration */
+  config: ClawdbotConfig;
+};
+
+/**
+ * Result returned by a plugin command handler.
+ */
+export type PluginCommandResult = {
+  /** Text response to send back to the user */
+  text: string;
+};
+
+/**
+ * Handler function for plugin commands.
+ */
+export type PluginCommandHandler = (
+  ctx: PluginCommandContext,
+) => PluginCommandResult | Promise<PluginCommandResult>;
+
+/**
+ * Definition for a plugin-registered command.
+ */
+export type ClawdbotPluginCommandDefinition = {
+  /** Command name without leading slash (e.g., "tts_on") */
+  name: string;
+  /** Description shown in /help and command menus */
+  description: string;
+  /** Whether this command accepts arguments */
+  acceptsArgs?: boolean;
+  /** Whether only authorized senders can use this command (default: true) */
+  requireAuth?: boolean;
+  /** The handler function */
+  handler: PluginCommandHandler;
+};
+
 export type ClawdbotPluginHttpHandler = (
   req: IncomingMessage,
   res: ServerResponse,
@@ -201,6 +254,12 @@ export type ClawdbotPluginApi = {
   registerCli: (registrar: ClawdbotPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: ClawdbotPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  /**
+   * Register a custom command that bypasses the LLM agent.
+   * Plugin commands are processed before built-in commands and before agent invocation.
+   * Use this for simple state-toggling or status commands that don't need AI reasoning.
+   */
+  registerCommand: (command: ClawdbotPluginCommandDefinition) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

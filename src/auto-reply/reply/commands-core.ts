@@ -24,6 +24,7 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
+import { handlePluginCommand } from "./commands-plugin.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -31,6 +32,8 @@ import type {
 } from "./commands-types.js";
 
 const HANDLERS: CommandHandler[] = [
+  // Plugin commands are processed first, before built-in commands
+  handlePluginCommand,
   handleBashCommand,
   handleActivationCommand,
   handleSendPolicyCommand,

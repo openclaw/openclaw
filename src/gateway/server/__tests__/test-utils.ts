@@ -12,6 +12,7 @@ export const createTestRegistry = (overrides: Partial<PluginRegistry> = {}): Plu
     httpHandlers: [],
     cliRegistrars: [],
     services: [],
+    commands: [],
     diagnostics: [],
   };
   const merged = { ...base, ...overrides };

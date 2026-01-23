@@ -11,6 +11,7 @@ import type {
   ClawdbotPluginApi,
   ClawdbotPluginChannelRegistration,
   ClawdbotPluginCliRegistrar,
+  ClawdbotPluginCommandDefinition,
   ClawdbotPluginHttpHandler,
   ClawdbotPluginHookOptions,
   ProviderPlugin,
@@ -26,6 +27,7 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
+import { registerPluginCommand } from "./commands.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import path from "node:path";
@@ -77,6 +79,12 @@ export type PluginServiceRegistration = {
   source: string;
 };
 
+export type PluginCommandRegistration = {
+  pluginId: string;
+  command: ClawdbotPluginCommandDefinition;
+  source: string;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -96,6 +104,7 @@ export type PluginRecord = {
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
+  commands: string[];
   httpHandlers: number;
   hookCount: number;
   configSchema: boolean;
@@ -114,6 +123,7 @@ export type PluginRegistry = {
   httpHandlers: PluginHttpRegistration[];
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
+  commands: PluginCommandRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -135,6 +145,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     httpHandlers: [],
     cliRegistrars: [],
     services: [],
+    commands: [],
     diagnostics: [],
   };
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
@@ -352,6 +363,27 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerCommand = (record: PluginRecord, command: ClawdbotPluginCommandDefinition) => {
+    const name = command.name.trim();
+    if (!name) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "command registration missing name",
+      });
+      return;
+    }
+    record.commands.push(name);
+    registry.commands.push({
+      pluginId: record.id,
+      command,
+      source: record.source,
+    });
+    // Register with the plugin command system
+    registerPluginCommand(record.id, command);
+  };
+
   const registerTypedHook = <K extends PluginHookName>(
     record: PluginRecord,
     hookName: K,
@@ -401,6 +433,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
+      registerCommand: (command) => registerCommand(record, command),
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
     };
@@ -416,6 +449,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerGatewayMethod,
     registerCli,
     registerService,
+    registerCommand,
     registerHook,
     registerTypedHook,
   };
