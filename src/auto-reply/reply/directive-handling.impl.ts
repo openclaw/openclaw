@@ -62,8 +62,8 @@ function resolveExecDefaults(params: {
 export async function handleDirectiveOnly(params: {
   cfg: ClawdbotConfig;
   directives: InlineDirectives;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
   elevatedEnabled: boolean;
@@ -288,112 +288,110 @@ export async function handleDirectiveOnly(params: {
     nextThinkLevel === "xhigh" &&
     !supportsXHighThinking(resolvedProvider, resolvedModel);
 
-  if (sessionEntry && sessionStore && sessionKey) {
-    const prevElevatedLevel =
-      currentElevatedLevel ??
-      (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
-      (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
-    const prevReasoningLevel =
-      currentReasoningLevel ?? (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
-    let elevatedChanged =
-      directives.hasElevatedDirective &&
-      directives.elevatedLevel !== undefined &&
-      elevatedEnabled &&
-      elevatedAllowed;
-    let reasoningChanged =
-      directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
-    if (directives.hasThinkDirective && directives.thinkLevel) {
-      if (directives.thinkLevel === "off") delete sessionEntry.thinkingLevel;
-      else sessionEntry.thinkingLevel = directives.thinkLevel;
+  const prevElevatedLevel =
+    currentElevatedLevel ??
+    (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
+    (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
+  const prevReasoningLevel =
+    currentReasoningLevel ?? (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+  let elevatedChanged =
+    directives.hasElevatedDirective &&
+    directives.elevatedLevel !== undefined &&
+    elevatedEnabled &&
+    elevatedAllowed;
+  let reasoningChanged =
+    directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
+  if (directives.hasThinkDirective && directives.thinkLevel) {
+    if (directives.thinkLevel === "off") delete sessionEntry.thinkingLevel;
+    else sessionEntry.thinkingLevel = directives.thinkLevel;
+  }
+  if (shouldDowngradeXHigh) {
+    sessionEntry.thinkingLevel = "high";
+  }
+  if (directives.hasVerboseDirective && directives.verboseLevel) {
+    applyVerboseOverride(sessionEntry, directives.verboseLevel);
+  }
+  if (directives.hasReasoningDirective && directives.reasoningLevel) {
+    if (directives.reasoningLevel === "off") delete sessionEntry.reasoningLevel;
+    else sessionEntry.reasoningLevel = directives.reasoningLevel;
+    reasoningChanged =
+      directives.reasoningLevel !== prevReasoningLevel && directives.reasoningLevel !== undefined;
+  }
+  if (directives.hasElevatedDirective && directives.elevatedLevel) {
+    // Unlike other toggles, elevated defaults can be "on".
+    // Persist "off" explicitly so `/elevated off` actually overrides defaults.
+    sessionEntry.elevatedLevel = directives.elevatedLevel;
+    elevatedChanged =
+      elevatedChanged ||
+      (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
+  }
+  if (directives.hasExecDirective && directives.hasExecOptions) {
+    if (directives.execHost) {
+      sessionEntry.execHost = directives.execHost;
     }
-    if (shouldDowngradeXHigh) {
-      sessionEntry.thinkingLevel = "high";
+    if (directives.execSecurity) {
+      sessionEntry.execSecurity = directives.execSecurity;
     }
-    if (directives.hasVerboseDirective && directives.verboseLevel) {
-      applyVerboseOverride(sessionEntry, directives.verboseLevel);
+    if (directives.execAsk) {
+      sessionEntry.execAsk = directives.execAsk;
     }
-    if (directives.hasReasoningDirective && directives.reasoningLevel) {
-      if (directives.reasoningLevel === "off") delete sessionEntry.reasoningLevel;
-      else sessionEntry.reasoningLevel = directives.reasoningLevel;
-      reasoningChanged =
-        directives.reasoningLevel !== prevReasoningLevel && directives.reasoningLevel !== undefined;
+    if (directives.execNode) {
+      sessionEntry.execNode = directives.execNode;
     }
-    if (directives.hasElevatedDirective && directives.elevatedLevel) {
-      // Unlike other toggles, elevated defaults can be "on".
-      // Persist "off" explicitly so `/elevated off` actually overrides defaults.
-      sessionEntry.elevatedLevel = directives.elevatedLevel;
-      elevatedChanged =
-        elevatedChanged ||
-        (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
+  }
+  if (modelSelection) {
+    applyModelOverrideToSessionEntry({
+      entry: sessionEntry,
+      selection: modelSelection,
+      profileOverride,
+    });
+  }
+  if (directives.hasQueueDirective && directives.queueReset) {
+    delete sessionEntry.queueMode;
+    delete sessionEntry.queueDebounceMs;
+    delete sessionEntry.queueCap;
+    delete sessionEntry.queueDrop;
+  } else if (directives.hasQueueDirective) {
+    if (directives.queueMode) sessionEntry.queueMode = directives.queueMode;
+    if (typeof directives.debounceMs === "number") {
+      sessionEntry.queueDebounceMs = directives.debounceMs;
     }
-    if (directives.hasExecDirective && directives.hasExecOptions) {
-      if (directives.execHost) {
-        sessionEntry.execHost = directives.execHost;
-      }
-      if (directives.execSecurity) {
-        sessionEntry.execSecurity = directives.execSecurity;
-      }
-      if (directives.execAsk) {
-        sessionEntry.execAsk = directives.execAsk;
-      }
-      if (directives.execNode) {
-        sessionEntry.execNode = directives.execNode;
-      }
+    if (typeof directives.cap === "number") {
+      sessionEntry.queueCap = directives.cap;
     }
-    if (modelSelection) {
-      applyModelOverrideToSessionEntry({
-        entry: sessionEntry,
-        selection: modelSelection,
-        profileOverride,
-      });
+    if (directives.dropPolicy) {
+      sessionEntry.queueDrop = directives.dropPolicy;
     }
-    if (directives.hasQueueDirective && directives.queueReset) {
-      delete sessionEntry.queueMode;
-      delete sessionEntry.queueDebounceMs;
-      delete sessionEntry.queueCap;
-      delete sessionEntry.queueDrop;
-    } else if (directives.hasQueueDirective) {
-      if (directives.queueMode) sessionEntry.queueMode = directives.queueMode;
-      if (typeof directives.debounceMs === "number") {
-        sessionEntry.queueDebounceMs = directives.debounceMs;
-      }
-      if (typeof directives.cap === "number") {
-        sessionEntry.queueCap = directives.cap;
-      }
-      if (directives.dropPolicy) {
-        sessionEntry.queueDrop = directives.dropPolicy;
-      }
-    }
-    sessionEntry.updatedAt = Date.now();
-    sessionStore[sessionKey] = sessionEntry;
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
-      });
-    }
-    if (modelSelection) {
-      const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
-      if (nextLabel !== initialModelLabel) {
-        enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
-          sessionKey,
-          contextKey: `model:${nextLabel}`,
-        });
-      }
-    }
-    if (elevatedChanged) {
-      const nextElevated = (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
-      enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+  }
+  sessionEntry.updatedAt = Date.now();
+  sessionStore[sessionKey] = sessionEntry;
+  if (storePath) {
+    await updateSessionStore(storePath, (store) => {
+      store[sessionKey] = sessionEntry;
+    });
+  }
+  if (modelSelection) {
+    const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
+    if (nextLabel !== initialModelLabel) {
+      enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
         sessionKey,
-        contextKey: "mode:elevated",
+        contextKey: `model:${nextLabel}`,
       });
     }
-    if (reasoningChanged) {
-      const nextReasoning = (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
-      enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
-        sessionKey,
-        contextKey: "mode:reasoning",
-      });
-    }
+  }
+  if (elevatedChanged) {
+    const nextElevated = (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+    enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+      sessionKey,
+      contextKey: "mode:elevated",
+    });
+  }
+  if (reasoningChanged) {
+    const nextReasoning = (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+    enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+      sessionKey,
+      contextKey: "mode:reasoning",
+    });
   }
 
   const parts: string[] = [];

@@ -293,7 +293,7 @@ Options:
 - `--reset` (reset config + credentials + sessions + workspace before wizard)
 - `--non-interactive`
 - `--mode <local|remote>`
-- `--flow <quickstart|advanced>`
+- `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
 - `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|codex-cli|gemini-api-key|zai-api-key|apiKey|minimax-api|opencode-zen|skip>`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
@@ -352,7 +352,7 @@ Options:
 ## Channel helpers
 
 ### `channels`
-Manage chat channel accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/MS Teams).
+Manage chat channel accounts (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
 
 Subcommands:
 - `channels list`: show configured channels and auth profiles (Claude Code + Codex CLI OAuth sync included).
@@ -365,7 +365,7 @@ Subcommands:
 - `channels logout`: log out of a channel session (if supported).
 
 Common options:
-- `--channel <name>`: `whatsapp|telegram|discord|slack|signal|imessage|msteams`
+- `--channel <name>`: `whatsapp|telegram|discord|slack|mattermost|signal|imessage|msteams`
 - `--account <id>`: channel account id (default `default`)
 - `--name <label>`: display name for the account
 
@@ -472,7 +472,7 @@ Options:
 - `--session-id <id>`
 - `--thinking <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
 - `--verbose <on|full|off>`
-- `--channel <whatsapp|telegram|discord|slack|signal|imessage>`
+- `--channel <whatsapp|telegram|discord|slack|mattermost|signal|imessage|msteams>`
 - `--local`
 - `--deliver`
 - `--json`
@@ -791,11 +791,10 @@ All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 [`clawdbot node`](/cli/node).
 
 Subcommands:
-- `node run --host <gateway-host> --port 18790`
+- `node run --host <gateway-host> --port 18789`
 - `node status`
 - `node install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
 - `node uninstall`
-- `node run`
 - `node stop`
 - `node restart`
 

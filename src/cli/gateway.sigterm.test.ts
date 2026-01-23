@@ -1,66 +1,66 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-const waitForPortOpen = async (
+const waitForReady = async (
   proc: ReturnType<typeof spawn>,
   chunksOut: string[],
   chunksErr: string[],
-  port: number,
   timeoutMs: number,
 ) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (proc.exitCode !== null) {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
       const stdout = chunksOut.join("");
       const stderr = chunksErr.join("");
-      throw new Error(
-        `gateway exited before listening (code=${String(proc.exitCode)} signal=${String(proc.signalCode)})\n` +
-          `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+      cleanup();
+      reject(
+        new Error(
+          `timeout waiting for gateway to start\n` +
+            `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+        ),
       );
-    }
+    }, timeoutMs);
 
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.connect({ host: "127.0.0.1", port });
-        socket.once("connect", () => {
-          socket.destroy();
-          resolve();
-        });
-        socket.once("error", (err) => {
-          socket.destroy();
-          reject(err);
-        });
-      });
-      return;
-    } catch {
-      // keep polling
-    }
+    const cleanup = () => {
+      clearTimeout(timer);
+      proc.off("exit", onExit);
+      proc.off("message", onMessage);
+      proc.stdout?.off("data", onStdout);
+    };
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  const stdout = chunksOut.join("");
-  const stderr = chunksErr.join("");
-  throw new Error(
-    `timeout waiting for gateway to listen on port ${port}\n` +
-      `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
-  );
-};
+    const onExit = () => {
+      const stdout = chunksOut.join("");
+      const stderr = chunksErr.join("");
+      cleanup();
+      reject(
+        new Error(
+          `gateway exited before ready (code=${String(proc.exitCode)} signal=${String(proc.signalCode)})\n` +
+            `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+        ),
+      );
+    };
 
-const getFreePort = async () => {
-  const srv = net.createServer();
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-  const addr = srv.address();
-  if (!addr || typeof addr === "string") {
-    srv.close();
-    throw new Error("failed to bind ephemeral port");
-  }
-  await new Promise<void>((resolve) => srv.close(() => resolve()));
-  return addr.port;
+    const onMessage = (msg: unknown) => {
+      if (msg && typeof msg === "object" && "ready" in msg) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const onStdout = (chunk: unknown) => {
+      if (String(chunk).includes("READY")) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    proc.once("exit", onExit);
+    proc.on("message", onMessage);
+    proc.stdout?.on("data", onStdout);
+  });
 };
 
 describe("gateway SIGTERM", () => {
@@ -77,67 +77,50 @@ describe("gateway SIGTERM", () => {
   });
 
   it("exits 0 on SIGTERM", { timeout: 180_000 }, async () => {
-    const port = await getFreePort();
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-gateway-test-"));
-    const configPath = path.join(stateDir, "clawdbot.json");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local", port } }, null, 2),
-      "utf8",
-    );
     const out: string[] = [];
     const err: string[] = [];
 
     const nodeBin = process.execPath;
-    const entryArgs = [
-      "gateway",
-      "--port",
-      String(port),
-      "--bind",
-      "loopback",
-      "--allow-unconfigured",
-    ];
     const env = {
       ...process.env,
       CLAWDBOT_NO_RESPAWN: "1",
       CLAWDBOT_STATE_DIR: stateDir,
-      CLAWDBOT_CONFIG_PATH: configPath,
       CLAWDBOT_SKIP_CHANNELS: "1",
+      CLAWDBOT_SKIP_GMAIL_WATCHER: "1",
+      CLAWDBOT_SKIP_CRON: "1",
       CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
       CLAWDBOT_SKIP_CANVAS_HOST: "1",
-      // Avoid port collisions with other test processes that may also start a gateway server.
-      CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
-      CLAWDBOT_BRIDGE_PORT: "0",
     };
     const bootstrapPath = path.join(stateDir, "clawdbot-entry-bootstrap.mjs");
-    const runMainPath = path.resolve("src/cli/run-main.ts");
+    const runLoopPath = path.resolve("src/cli/gateway-cli/run-loop.ts");
+    const runtimePath = path.resolve("src/runtime.ts");
     fs.writeFileSync(
       bootstrapPath,
       [
         'import { pathToFileURL } from "node:url";',
-        'const rawArgs = process.env.CLAWDBOT_ENTRY_ARGS ?? "[]";',
-        "let entryArgs = [];",
-        "try {",
-        "  entryArgs = JSON.parse(rawArgs);",
-        "} catch (err) {",
-        '  console.error("Failed to parse CLAWDBOT_ENTRY_ARGS", err);',
-        "  process.exit(1);",
-        "}",
-        "if (!Array.isArray(entryArgs)) entryArgs = [];",
-        'entryArgs = entryArgs.filter((arg) => typeof arg === "string" && !arg.toLowerCase().includes("node.exe"));',
-        `const runMainUrl = ${JSON.stringify(pathToFileURL(runMainPath).href)};`,
-        "const { runCli } = await import(runMainUrl);",
-        'await runCli(["node", "clawdbot", ...entryArgs]);',
+        `const runLoopUrl = ${JSON.stringify(pathToFileURL(runLoopPath).href)};`,
+        `const runtimeUrl = ${JSON.stringify(pathToFileURL(runtimePath).href)};`,
+        "const { runGatewayLoop } = await import(runLoopUrl);",
+        "const { defaultRuntime } = await import(runtimeUrl);",
+        "await runGatewayLoop({",
+        "  start: async () => {",
+        '    process.stdout.write("READY\\\\n");',
+        "    if (process.send) process.send({ ready: true });",
+        "    const keepAlive = setInterval(() => {}, 1000);",
+        "    return { close: async () => clearInterval(keepAlive) };",
+        "  },",
+        "  runtime: defaultRuntime,",
+        "});",
       ].join("\n"),
       "utf8",
     );
     const childArgs = ["--import", "tsx", bootstrapPath];
-    env.CLAWDBOT_ENTRY_ARGS = JSON.stringify(entryArgs);
 
     child = spawn(nodeBin, childArgs, {
       cwd: process.cwd(),
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
 
     const proc = child;
@@ -148,7 +131,7 @@ describe("gateway SIGTERM", () => {
     child.stdout?.on("data", (d) => out.push(String(d)));
     child.stderr?.on("data", (d) => err.push(String(d)));
 
-    await waitForPortOpen(proc, out, err, port, 150_000);
+    await waitForReady(proc, out, err, 150_000);
 
     proc.kill("SIGTERM");
 

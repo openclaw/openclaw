@@ -39,8 +39,8 @@ export async function applyInlineDirectiveOverrides(params: {
   agentId: string;
   agentDir: string;
   agentCfg: AgentDefaults;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
   sessionScope: Parameters<typeof buildStatusReply>[0]["sessionScope"];

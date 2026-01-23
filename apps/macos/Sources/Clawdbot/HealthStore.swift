@@ -167,6 +167,11 @@ final class HealthStore {
     {
         let order = snap.channelOrder ?? Array(snap.channels.keys)
         for id in order {
+            if let summary = snap.channels[id], summary.linked == true {
+                return (id: id, summary: summary)
+            }
+        }
+        for id in order {
             if let summary = snap.channels[id], summary.linked != nil {
                 return (id: id, summary: summary)
             }

@@ -73,7 +73,7 @@ export function buildEmbeddedExtensionPaths(params: {
   modelId: string;
   model: Model<Api> | undefined;
 }): string[] {
-  const paths = [resolvePiExtensionPath("transcript-sanitize")];
+  const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
     paths.push(resolvePiExtensionPath("compaction-safeguard"));
   }

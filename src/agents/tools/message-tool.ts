@@ -340,6 +340,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
 
       const gateway = {

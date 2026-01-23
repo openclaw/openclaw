@@ -5,25 +5,20 @@ import { fileURLToPath } from "node:url";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  buildControlUiAvatarUrl,
+  CONTROL_UI_AVATAR_PREFIX,
+  normalizeControlUiBasePath,
+  resolveAssistantAvatarUrl,
+} from "./control-ui-shared.js";
 
 const ROOT_PREFIX = "/";
-const AVATAR_PREFIX = "/avatar";
 
 export type ControlUiRequestOptions = {
   basePath?: string;
   config?: ClawdbotConfig;
   agentId?: string;
 };
-
-export function normalizeControlUiBasePath(basePath?: string): string {
-  if (!basePath) return "";
-  let normalized = basePath.trim();
-  if (!normalized) return "";
-  if (!normalized.startsWith("/")) normalized = `/${normalized}`;
-  if (normalized === "/") return "";
-  if (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
-  return normalized;
-}
 
 function resolveControlUiRoot(): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -98,10 +93,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function buildAvatarUrl(basePath: string, agentId: string): string {
-  return basePath ? `${basePath}${AVATAR_PREFIX}/${agentId}` : `${AVATAR_PREFIX}/${agentId}`;
-}
-
 function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
@@ -118,7 +109,9 @@ export function handleControlUiAvatarRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts.basePath);
   const pathname = url.pathname;
-  const pathWithBase = basePath ? `${basePath}${AVATAR_PREFIX}/` : `${AVATAR_PREFIX}/`;
+  const pathWithBase = basePath
+    ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
+    : `${CONTROL_UI_AVATAR_PREFIX}/`;
   if (!pathname.startsWith(pathWithBase)) return false;
 
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
@@ -132,7 +125,7 @@ export function handleControlUiAvatarRequest(
     const resolved = opts.resolveAvatar(agentId);
     const avatarUrl =
       resolved.kind === "local"
-        ? buildAvatarUrl(basePath, agentId)
+        ? buildControlUiAvatarUrl(basePath, agentId)
         : resolved.kind === "remote" || resolved.kind === "data"
           ? resolved.url
           : null;
@@ -211,6 +204,16 @@ function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndex
   const identity = config
     ? resolveAssistantIdentity({ cfg: config, agentId })
     : DEFAULT_ASSISTANT_IDENTITY;
+  const resolvedAgentId =
+    typeof (identity as { agentId?: string }).agentId === "string"
+      ? (identity as { agentId?: string }).agentId
+      : agentId;
+  const avatarValue =
+    resolveAssistantAvatarUrl({
+      avatar: identity.avatar,
+      agentId: resolvedAgentId,
+      basePath,
+    }) ?? identity.avatar;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   const raw = fs.readFileSync(indexPath, "utf8");
@@ -218,7 +221,7 @@ function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndex
     injectControlUiConfig(raw, {
       basePath,
       assistantName: identity.name,
-      assistantAvatar: identity.avatar,
+      assistantAvatar: avatarValue,
     }),
   );
 }

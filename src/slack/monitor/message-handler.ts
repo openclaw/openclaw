@@ -8,6 +8,7 @@ import type { SlackMessageEvent } from "../types.js";
 import type { SlackMonitorContext } from "./context.js";
 import { dispatchPreparedSlackMessage } from "./message-handler/dispatch.js";
 import { prepareSlackMessage } from "./message-handler/prepare.js";
+import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 export type SlackMessageHandler = (
   message: SlackMessageEvent,
@@ -20,6 +21,7 @@ export function createSlackMessageHandler(params: {
 }): SlackMessageHandler {
   const { ctx, account } = params;
   const debounceMs = resolveInboundDebounceMs({ cfg: ctx.cfg, channel: "slack" });
+  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
 
   const debouncer = createInboundDebouncer<{
     message: SlackMessageEvent;
@@ -29,9 +31,13 @@ export function createSlackMessageHandler(params: {
     buildKey: (entry) => {
       const senderId = entry.message.user ?? entry.message.bot_id;
       if (!senderId) return null;
+      const messageTs = entry.message.ts ?? entry.message.event_ts;
+      // If Slack flags a thread reply but omits thread_ts, isolate it from root debouncing.
       const threadKey = entry.message.thread_ts
         ? `${entry.message.channel}:${entry.message.thread_ts}`
-        : entry.message.channel;
+        : entry.message.parent_user_id && messageTs
+          ? `${entry.message.channel}:maybe-thread:${messageTs}`
+          : entry.message.channel;
       return `slack:${ctx.accountId}:${threadKey}:${senderId}`;
     },
     shouldDebounce: (entry) => {
@@ -91,6 +97,7 @@ export function createSlackMessageHandler(params: {
       return;
     }
     if (ctx.markMessageSeen(message.channel, message.ts)) return;
-    await debouncer.enqueue({ message, opts });
+    const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
+    await debouncer.enqueue({ message: resolvedMessage, opts });
   };
 }

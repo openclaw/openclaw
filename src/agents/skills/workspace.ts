@@ -17,6 +17,7 @@ import {
   resolveClawdbotMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
+import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import type {
   ParsedSkillFrontmatter,
@@ -120,6 +121,11 @@ function loadSkillEntries(
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter(Boolean);
+  const pluginSkillDirs = resolvePluginSkillDirs({
+    workspaceDir,
+    config: opts?.config,
+  });
+  const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
   const bundledSkills = bundledSkillsDir
     ? loadSkills({
@@ -127,7 +133,7 @@ function loadSkillEntries(
         source: "clawdbot-bundled",
       })
     : [];
-  const extraSkills = extraDirs.flatMap((dir) => {
+  const extraSkills = mergedExtraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadSkills({
       dir: resolved,

@@ -11,6 +11,7 @@ export type PluginManifest = {
   kind?: PluginKind;
   channels?: string[];
   providers?: string[];
+  skills?: string[];
   name?: string;
   description?: string;
   version?: string;
@@ -67,6 +68,7 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
+  const skills = normalizeStringList(raw.skills);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
   if (isRecord(raw.uiHints)) {
@@ -81,6 +83,7 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
       kind,
       channels,
       providers,
+      skills,
       name,
       description,
       version,

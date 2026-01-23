@@ -14,7 +14,11 @@ export type GuardedSessionManager = SessionManager & {
  */
 export function guardSessionManager(
   sessionManager: SessionManager,
-  opts?: { agentId?: string; sessionKey?: string },
+  opts?: {
+    agentId?: string;
+    sessionKey?: string;
+    allowSyntheticToolResults?: boolean;
+  },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
     return sessionManager as GuardedSessionManager;
@@ -43,6 +47,7 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     transformToolResultForPersistence: transform,
+    allowSyntheticToolResults: opts?.allowSyntheticToolResults,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   return sessionManager as GuardedSessionManager;

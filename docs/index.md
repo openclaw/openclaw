@@ -13,6 +13,7 @@ read_when:
 
 <p align="center">
   <strong>Any OS + WhatsApp/Telegram/Discord/iMessage gateway for AI agents (Pi).</strong><br />
+  Plugins add Mattermost and more.
   Send a message, get an agent response — from your pocket.
 </p>
 
@@ -23,7 +24,7 @@ read_when:
   <a href="/start/clawd">Clawdbot assistant setup</a>
 </p>
 
-Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / channels.discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
+Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / channels.discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono). Plugins add Mattermost (Bot API + WebSocket) and more.
 Clawdbot also powers [Clawd](https://clawd.me), the space‑lobster assistant.
 
 ## Start here
@@ -44,12 +45,12 @@ Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 ## How it works
 
 ```
-WhatsApp / Telegram / Discord
+WhatsApp / Telegram / Discord / iMessage (+ plugins)
         │
         ▼
   ┌───────────────────────────┐
   │          Gateway          │  ws://127.0.0.1:18789 (loopback-only)
-  │     (single source)       │  tcp://0.0.0.0:18790 (Bridge)
+  │     (single source)       │
   │                           │  http://<gateway-host>:18793
   │                           │    /__clawdbot__/canvas/ (Canvas host)
   └───────────┬───────────────┘
@@ -58,8 +59,8 @@ WhatsApp / Telegram / Discord
               ├─ CLI (clawdbot …)
               ├─ Chat UI (SwiftUI)
               ├─ macOS app (Clawdbot.app)
-              ├─ iOS node via Bridge + pairing
-              └─ Android node via Bridge + pairing
+              ├─ iOS node via Gateway WS + pairing
+              └─ Android node via Gateway WS + pairing
 ```
 
 Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns channel connections and the WebSocket control plane.
@@ -70,7 +71,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - **Loopback-first**: Gateway WS defaults to `ws://127.0.0.1:18789`.
   - The wizard now generates a gateway token by default (even for loopback).
   - For Tailnet access, run `clawdbot gateway --bind tailnet --token ...` (token is required for non-loopback binds).
-- **Bridge for nodes**: optional LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
+- **Nodes**: connect to the Gateway WebSocket (LAN/tailnet/SSH as needed); legacy TCP bridge is deprecated/removed.
 - **Canvas host**: HTTP file server on `canvasHost.port` (default `18793`), serving `/__clawdbot__/canvas/` for node WebViews; see [Gateway configuration](/gateway/configuration) (`canvasHost`).
 - **Remote use**: SSH tunnel or tailnet/VPN; see [Remote access](/gateway/remote) and [Discovery](/gateway/discovery).
 
@@ -79,6 +80,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - 📱 **WhatsApp Integration** — Uses Baileys for WhatsApp Web protocol
 - ✈️ **Telegram Bot** — DMs + groups via grammY
 - 🎮 **Discord Bot** — DMs + guild channels via channels.discord.js
+- 🧩 **Mattermost Bot (plugin)** — Bot token + WebSocket events
 - 💬 **iMessage** — Local imsg CLI integration (macOS)
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
 - ⏱️ **Streaming + chunking** — Block streaming + Telegram draft streaming details ([/concepts/streaming](/concepts/streaming))
@@ -190,6 +192,7 @@ Example:
   - [Control UI (browser)](/web/control-ui)
   - [Telegram](/channels/telegram)
   - [Discord](/channels/discord)
+  - [Mattermost (plugin)](/channels/mattermost)
   - [iMessage](/channels/imessage)
   - [Groups](/concepts/groups)
   - [WhatsApp group messages](/concepts/group-messages)

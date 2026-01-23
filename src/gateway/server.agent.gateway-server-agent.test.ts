@@ -25,46 +25,7 @@ function _expectChannels(call: Record<string, unknown>, channel: string) {
 }
 
 describe("gateway server agent", () => {
-  test("agent events include sessionKey in agent payloads", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws, {
-      client: {
-        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
-        version: "1.0.0",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
-    });
-
-    registerAgentRunContext("run-tool-1", {
-      sessionKey: "main",
-      verboseLevel: "on",
-    });
-
-    const agentEvtP = onceMessage(
-      ws,
-      (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
-      8000,
-    );
-
-    emitAgentEvent({
-      runId: "run-tool-1",
-      stream: "tool",
-      data: { phase: "start", name: "read", toolCallId: "tool-1" },
-    });
-
-    const evt = await agentEvtP;
-    const payload =
-      evt.payload && typeof evt.payload === "object"
-        ? (evt.payload as Record<string, unknown>)
-        : {};
-    expect(payload.sessionKey).toBe("main");
-
-    ws.close();
-    await server.close();
-  });
-
-  test("suppresses tool stream events when verbose is off", async () => {
+  test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
@@ -87,153 +48,153 @@ describe("gateway server agent", () => {
       },
     });
 
-    registerAgentRunContext("run-tool-off", { sessionKey: "agent:main:main" });
-
-    emitAgentEvent({
-      runId: "run-tool-off",
-      stream: "tool",
-      data: { phase: "start", name: "read", toolCallId: "tool-1" },
-    });
-    emitAgentEvent({
-      runId: "run-tool-off",
-      stream: "assistant",
-      data: { text: "hello" },
+    registerAgentRunContext("run-tool-1", {
+      sessionKey: "main",
+      verboseLevel: "on",
     });
 
-    const evt = await onceMessage(
-      ws,
-      (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-off",
-      8000,
-    );
-    const payload =
-      evt.payload && typeof evt.payload === "object"
-        ? (evt.payload as Record<string, unknown>)
-        : {};
-    expect(payload.stream).toBe("assistant");
+    {
+      const agentEvtP = onceMessage(
+        ws,
+        (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
+        8000,
+      );
 
-    ws.close();
-    await server.close();
-  });
-
-  test("agent.wait resolves after lifecycle end", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    const waitP = rpcReq(ws, "agent.wait", {
-      runId: "run-wait-1",
-      timeoutMs: 1000,
-    });
-
-    setTimeout(() => {
       emitAgentEvent({
+        runId: "run-tool-1",
+        stream: "tool",
+        data: { phase: "start", name: "read", toolCallId: "tool-1" },
+      });
+
+      const evt = await agentEvtP;
+      const payload =
+        evt.payload && typeof evt.payload === "object"
+          ? (evt.payload as Record<string, unknown>)
+          : {};
+      expect(payload.sessionKey).toBe("main");
+    }
+
+    {
+      registerAgentRunContext("run-tool-off", { sessionKey: "agent:main:main" });
+
+      emitAgentEvent({
+        runId: "run-tool-off",
+        stream: "tool",
+        data: { phase: "start", name: "read", toolCallId: "tool-1" },
+      });
+      emitAgentEvent({
+        runId: "run-tool-off",
+        stream: "assistant",
+        data: { text: "hello" },
+      });
+
+      const evt = await onceMessage(
+        ws,
+        (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-off",
+        8000,
+      );
+      const payload =
+        evt.payload && typeof evt.payload === "object"
+          ? (evt.payload as Record<string, unknown>)
+          : {};
+      expect(payload.stream).toBe("assistant");
+    }
+
+    {
+      const waitP = rpcReq(ws, "agent.wait", {
         runId: "run-wait-1",
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 200, endedAt: 210 },
+        timeoutMs: 1000,
       });
-    }, 10);
 
-    const res = await waitP;
-    expect(res.ok).toBe(true);
-    expect(res.payload.status).toBe("ok");
-    expect(res.payload.startedAt).toBe(200);
+      setTimeout(() => {
+        emitAgentEvent({
+          runId: "run-wait-1",
+          stream: "lifecycle",
+          data: { phase: "end", startedAt: 200, endedAt: 210 },
+        });
+      }, 5);
 
-    ws.close();
-    await server.close();
-  });
+      const res = await waitP;
+      expect(res.ok).toBe(true);
+      expect(res.payload.status).toBe("ok");
+      expect(res.payload.startedAt).toBe(200);
+    }
 
-  test("agent.wait resolves when lifecycle ended before wait call", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    emitAgentEvent({
-      runId: "run-wait-early",
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 50, endedAt: 55 },
-    });
-
-    const res = await rpcReq(ws, "agent.wait", {
-      runId: "run-wait-early",
-      timeoutMs: 1000,
-    });
-    expect(res.ok).toBe(true);
-    expect(res.payload.status).toBe("ok");
-    expect(res.payload.startedAt).toBe(50);
-
-    ws.close();
-    await server.close();
-  });
-
-  test("agent.wait times out when no lifecycle ends", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    const res = await rpcReq(ws, "agent.wait", {
-      runId: "run-wait-3",
-      timeoutMs: 20,
-    });
-    expect(res.ok).toBe(true);
-    expect(res.payload.status).toBe("timeout");
-
-    ws.close();
-    await server.close();
-  });
-
-  test("agent.wait returns error on lifecycle error", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    const waitP = rpcReq(ws, "agent.wait", {
-      runId: "run-wait-err",
-      timeoutMs: 1000,
-    });
-
-    setTimeout(() => {
+    {
       emitAgentEvent({
-        runId: "run-wait-err",
+        runId: "run-wait-early",
         stream: "lifecycle",
-        data: { phase: "error", error: "boom" },
+        data: { phase: "end", startedAt: 50, endedAt: 55 },
       });
-    }, 10);
 
-    const res = await waitP;
-    expect(res.ok).toBe(true);
-    expect(res.payload.status).toBe("error");
-    expect(res.payload.error).toBe("boom");
+      const res = await rpcReq(ws, "agent.wait", {
+        runId: "run-wait-early",
+        timeoutMs: 1000,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload.status).toBe("ok");
+      expect(res.payload.startedAt).toBe(50);
+    }
 
-    ws.close();
-    await server.close();
-  });
+    {
+      const res = await rpcReq(ws, "agent.wait", {
+        runId: "run-wait-3",
+        timeoutMs: 30,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload.status).toBe("timeout");
+    }
 
-  test("agent.wait uses lifecycle start timestamp when end omits it", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    {
+      const waitP = rpcReq(ws, "agent.wait", {
+        runId: "run-wait-err",
+        timeoutMs: 1000,
+      });
 
-    const waitP = rpcReq(ws, "agent.wait", {
-      runId: "run-wait-start",
-      timeoutMs: 1000,
-    });
+      setTimeout(() => {
+        emitAgentEvent({
+          runId: "run-wait-err",
+          stream: "lifecycle",
+          data: { phase: "error", error: "boom" },
+        });
+      }, 5);
 
-    emitAgentEvent({
-      runId: "run-wait-start",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 123 },
-    });
+      const res = await waitP;
+      expect(res.ok).toBe(true);
+      expect(res.payload.status).toBe("error");
+      expect(res.payload.error).toBe("boom");
+    }
 
-    setTimeout(() => {
+    {
+      const waitP = rpcReq(ws, "agent.wait", {
+        runId: "run-wait-start",
+        timeoutMs: 1000,
+      });
+
       emitAgentEvent({
         runId: "run-wait-start",
         stream: "lifecycle",
-        data: { phase: "end", endedAt: 456 },
+        data: { phase: "start", startedAt: 123 },
       });
-    }, 10);
 
-    const res = await waitP;
-    expect(res.ok).toBe(true);
-    expect(res.payload.status).toBe("ok");
-    expect(res.payload.startedAt).toBe(123);
-    expect(res.payload.endedAt).toBe(456);
+      setTimeout(() => {
+        emitAgentEvent({
+          runId: "run-wait-start",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 456 },
+        });
+      }, 5);
+
+      const res = await waitP;
+      expect(res.ok).toBe(true);
+      expect(res.payload.status).toBe("ok");
+      expect(res.payload.startedAt).toBe(123);
+      expect(res.payload.endedAt).toBe(456);
+    }
 
     ws.close();
     await server.close();
+    await fs.rm(dir, { recursive: true, force: true });
+    testState.sessionStorePath = undefined;
   });
 });

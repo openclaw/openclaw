@@ -16,11 +16,15 @@ vi.mock("./tools/nodes-utils.js", () => ({
 
 describe("exec approvals", () => {
   let previousHome: string | undefined;
+  let previousUserProfile: string | undefined;
 
   beforeEach(async () => {
     previousHome = process.env.HOME;
+    previousUserProfile = process.env.USERPROFILE;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-"));
     process.env.HOME = tempDir;
+    // Windows uses USERPROFILE for os.homedir()
+    process.env.USERPROFILE = tempDir;
   });
 
   afterEach(() => {
@@ -29,6 +33,11 @@ describe("exec approvals", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
     }
   });
 
@@ -80,58 +89,44 @@ describe("exec approvals", () => {
     if (process.platform !== "win32") {
       await fs.chmod(exePath, 0o755);
     }
-    const prevPath = process.env.PATH;
-    const prevPathExt = process.env.PATHEXT;
-    process.env.PATH = binDir;
-    if (process.platform === "win32") {
-      process.env.PATHEXT = ".CMD";
-    }
-
-    try {
-      const approvalsFile = {
-        version: 1,
-        defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
-        agents: {
-          main: {
-            allowlist: [{ pattern: exePath }],
-          },
+    const approvalsFile = {
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: exePath }],
         },
-      };
+      },
+    };
 
-      const calls: string[] = [];
-      vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-        calls.push(method);
-        if (method === "exec.approvals.node.get") {
-          return { file: approvalsFile };
-        }
-        if (method === "node.invoke") {
-          return { payload: { success: true, stdout: "ok" } };
-        }
-        if (method === "exec.approval.request") {
-          return { decision: "allow-once" };
-        }
-        return { ok: true };
-      });
-
-      const { createExecTool } = await import("./bash-tools.exec.js");
-      const tool = createExecTool({
-        host: "node",
-        ask: "on-miss",
-        approvalRunningNoticeMs: 0,
-      });
-
-      const result = await tool.execute("call2", { command: `${exeName} --help` });
-      expect(result.details.status).toBe("completed");
-      expect(calls).toContain("exec.approvals.node.get");
-      expect(calls).toContain("node.invoke");
-      expect(calls).not.toContain("exec.approval.request");
-    } finally {
-      process.env.PATH = prevPath;
-      if (prevPathExt === undefined) {
-        delete process.env.PATHEXT;
-      } else {
-        process.env.PATHEXT = prevPathExt;
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      if (method === "exec.approvals.node.get") {
+        return { file: approvalsFile };
       }
-    }
+      if (method === "node.invoke") {
+        return { payload: { success: true, stdout: "ok" } };
+      }
+      if (method === "exec.approval.request") {
+        return { decision: "allow-once" };
+      }
+      return { ok: true };
+    });
+
+    const { createExecTool } = await import("./bash-tools.exec.js");
+    const tool = createExecTool({
+      host: "node",
+      ask: "on-miss",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call2", {
+      command: `"${exePath}" --help`,
+    });
+    expect(result.details.status).toBe("completed");
+    expect(calls).toContain("exec.approvals.node.get");
+    expect(calls).toContain("node.invoke");
+    expect(calls).not.toContain("exec.approval.request");
   });
 });

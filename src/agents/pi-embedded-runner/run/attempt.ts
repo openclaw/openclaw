@@ -39,6 +39,7 @@ import {
 import { createClawdbotCodingTools } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import {
   applySkillEnvOverrides,
@@ -369,10 +370,17 @@ export async function runEmbeddedAttempt(
         .then(() => true)
         .catch(() => false);
 
+      const transcriptPolicy = resolveTranscriptPolicy({
+        modelApi: params.model?.api,
+        provider: params.provider,
+        modelId: params.modelId,
+      });
+
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
+        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       });
       trackSessionManagerAccess(params.sessionFile);
 
@@ -473,10 +481,15 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
           sessionManager,
           sessionId: params.sessionId,
+          policy: transcriptPolicy,
         });
         cacheTrace?.recordStage("session:sanitized", { messages: prior });
-        const validatedGemini = validateGeminiTurns(prior);
-        const validated = validateAnthropicTurns(validatedGemini);
+        const validatedGemini = transcriptPolicy.validateGeminiTurns
+          ? validateGeminiTurns(prior)
+          : prior;
+        const validated = transcriptPolicy.validateAnthropicTurns
+          ? validateAnthropicTurns(validatedGemini)
+          : validatedGemini;
         const limited = limitHistoryTurns(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),

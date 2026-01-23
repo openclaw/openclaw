@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
+- Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.clawd.bot/tools/lobster
 - Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
 - Memory: prevent CLI hangs by deferring vector probes, adding sqlite-vec/embedding timeouts, and showing sync progress early.
 - Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
@@ -21,26 +22,28 @@ Docs: https://docs.clawd.bot
 - **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
 
 ### Fixes
+- BlueBubbles: stop typing indicator on idle/no-reply. (#1439) Thanks @Nicell.
+- Message tool: keep path/filePath as-is for send; hydrate buffers only for sendAttachment. (#1444) Thanks @hopyky.
+- Auto-reply: only report a model switch when session state is available. (#1465) Thanks @robbyczgw-cla.
+- Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.
+- Agents: surface concrete API error details instead of generic AI service errors.
+- Exec approvals: allow per-segment allowlists for chained shell commands on gateway + node hosts. (#1458) Thanks @czekaj.
+- Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.
+- Doctor: honor CLAWDBOT_GATEWAY_TOKEN for auth checks and security audit token reuse. (#1448) Thanks @azade-c.
+- Agents: make tool summaries more readable and only show optional params when set.
+- Agents: centralize transcript sanitization in the runner; keep <final> tags and error turns intact.
 - Auth: skip auth profiles in cooldown during initial selection and rotation. (#1316) Thanks @odrobnik.
 - Agents/TUI: honor user-pinned auth profiles during cooldown and preserve search picker ranking. (#1432) Thanks @tobiasbischoff.
-- Media: accept MEDIA paths with spaces/tilde and prefer the message tool hint for image replies.
-- Google Antigravity: drop unsigned thinking blocks for Claude models to avoid signature errors.
-- Config: avoid stack traces for invalid configs and log the config path.
-- CLI: read Codex CLI account_id for workspace billing. (#1422) Thanks @aj47.
-- Doctor: avoid recreating WhatsApp config when only legacy routing keys remain. (#900)
-- Doctor: warn when gateway.mode is unset with configure/config guidance.
-- OpenCode Zen: route models to the Zen API shape per family so proxy endpoints are used. (#1416)
-- Browser: suppress Chrome restore prompts for managed profiles. (#1419) Thanks @jamesgroat.
-- Logs: align rolling log filenames with local time and fall back to latest file when today's log is missing. (#1343)
-- Models: inherit session model overrides in thread/topic sessions (Telegram topics, Slack/Discord threads). (#1376)
-- macOS: keep local auto bind loopback-first; only use tailnet when bind=tailnet.
-- macOS: include Textual syntax highlighting resources in packaged app to prevent chat crashes. (#1362)
-- macOS: keep chat pinned to bottom during streaming replies. (#1279)
-- Cron: cap reminder context history to 10 messages and honor `contextMessages`. (#1103) Thanks @mkbehr.
-- Exec approvals: treat main as the default agent + migrate legacy default allowlists. (#1417) Thanks @czekaj.
-- Exec: avoid defaulting to elevated mode when elevated is not allowed.
-- Exec approvals: align node/gateway allowlist prechecks and approval gating; avoid null optional params in approval requests. (#1425) Thanks @czekaj.
-- UI: refresh debug panel on route-driven tab changes. (#1373) Thanks @yazinsai.
+- Mattermost (plugin): enforce pairing/allowlist gating, keep @username targets, and clarify plugin-only docs. (#1428) Thanks @damoahdominic.
+- Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
+- macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
+- Providers: improve GitHub Copilot integration (enterprise support, base URL, and auth flow alignment).
+
+## 2026.1.21-2
+
+### Fixes
+- Control UI: ignore bootstrap identity placeholder text for avatar values and fall back to the default avatar. https://docs.clawd.bot/cli/agents https://docs.clawd.bot/web/control-ui
+- Slack: remove deprecated `filetype` field from `files.uploadV2` to eliminate API warnings. (#1447)
 
 ## 2026.1.21
 

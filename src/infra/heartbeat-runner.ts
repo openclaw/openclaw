@@ -39,7 +39,10 @@ import {
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
-import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
+import {
+  resolveHeartbeatDeliveryTarget,
+  resolveHeartbeatSenderContext,
+} from "./outbound/targets.js";
 
 type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -362,34 +365,6 @@ function resolveHeartbeatReasoningPayloads(
   });
 }
 
-function resolveHeartbeatSender(params: {
-  allowFrom: Array<string | number>;
-  lastTo?: string;
-  provider?: string | null;
-}) {
-  const { allowFrom, lastTo, provider } = params;
-  const candidates = [
-    lastTo?.trim(),
-    provider && lastTo ? `${provider}:${lastTo}` : undefined,
-  ].filter((val): val is string => Boolean(val?.trim()));
-
-  const allowList = allowFrom
-    .map((entry) => String(entry))
-    .filter((entry) => entry && entry !== "*");
-  if (allowFrom.includes("*")) {
-    return candidates[0] ?? "heartbeat";
-  }
-  if (candidates.length > 0 && allowList.length > 0) {
-    const matched = candidates.find((candidate) => allowList.includes(candidate));
-    if (matched) return matched;
-  }
-  if (candidates.length > 0 && allowList.length === 0) {
-    return candidates[0];
-  }
-  if (allowList.length > 0) return allowList[0];
-  return candidates[0] ?? "heartbeat";
-}
-
 async function restoreHeartbeatUpdatedAt(params: {
   storePath: string;
   sessionKey: string;
@@ -468,20 +443,7 @@ export async function runHeartbeatOnce(opts: {
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
-  const lastChannel = delivery.lastChannel;
-  const lastAccountId = delivery.lastAccountId;
-  const senderProvider = delivery.channel !== "none" ? delivery.channel : lastChannel;
-  const senderAllowFrom = senderProvider
-    ? (getChannelPlugin(senderProvider)?.config.resolveAllowFrom?.({
-        cfg,
-        accountId: senderProvider === lastChannel ? lastAccountId : undefined,
-      }) ?? [])
-    : [];
-  const sender = resolveHeartbeatSender({
-    allowFrom: senderAllowFrom,
-    lastTo: entry?.lastTo,
-    provider: senderProvider,
-  });
+  const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
   const prompt = resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: prompt,

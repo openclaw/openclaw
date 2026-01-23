@@ -543,7 +543,7 @@ Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
 
-### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
+### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
 Run multiple accounts per channel (each account has its own `accountId` and optional `name`):
 
@@ -1204,6 +1204,44 @@ Slack action groups (gate `slack` tool actions):
 | memberInfo | enabled | Member info |
 | emojiList | enabled | Custom emoji list |
 
+### `channels.mattermost` (bot token)
+
+Mattermost ships as a plugin and is not bundled with the core install.
+Install it first: `clawdbot plugins install @clawdbot/mattermost` (or `./extensions/mattermost` from a git checkout).
+
+Mattermost requires a bot token plus the base URL for your server:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      enabled: true,
+      botToken: "mm-token",
+      baseUrl: "https://chat.example.com",
+      dmPolicy: "pairing",
+      chatmode: "oncall", // oncall | onmessage | onchar
+      oncharPrefixes: [">", "!"],
+      textChunkLimit: 4000
+    }
+  }
+}
+```
+
+Clawdbot starts Mattermost when the account is configured (bot token + base URL) and enabled. The token + base URL are resolved from `channels.mattermost.botToken` + `channels.mattermost.baseUrl` or `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` for the default account (unless `channels.mattermost.enabled` is `false`).
+
+Chat modes:
+- `oncall` (default): respond to channel messages only when @mentioned.
+- `onmessage`: respond to every channel message.
+- `onchar`: respond when a message starts with a trigger prefix (`channels.mattermost.oncharPrefixes`, default `[">", "!"]`).
+
+Access control:
+- Default DMs: `channels.mattermost.dmPolicy="pairing"` (unknown senders get a pairing code).
+- Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]`.
+- Groups: `channels.mattermost.groupPolicy="allowlist"` by default (mention-gated). Use `channels.mattermost.groupAllowFrom` to restrict senders.
+
+Multi-account support lives under `channels.mattermost.accounts` (see the multi-account section above). Env vars only apply to the default account.
+Use `channel:<id>` or `user:<id>` (or `@username`) when specifying delivery targets; bare ids are treated as channel ids.
+
 ### `channels.signal` (signal-cli)
 
 Signal reactions can emit system events (shared reaction tooling):
@@ -1690,7 +1728,7 @@ auto-compaction, instructing the model to store durable memories on disk (e.g.
 `memory/YYYY-MM-DD.md`). It triggers when the session token estimate crosses a
 soft threshold below the compaction limit.
 
-Defaults:
+Legacy defaults:
 - `memoryFlush.enabled`: `true`
 - `memoryFlush.softThresholdTokens`: `4000`
 - `memoryFlush.prompt` / `memoryFlush.systemPrompt`: built-in defaults with `NO_REPLY`
@@ -1735,8 +1773,9 @@ Block streaming:
   with `maxChars` capped to the channel text limit. Signal/Slack/Discord default
   to `minChars: 1500` unless overridden.
   Channel overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
-  `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.signal.blockStreamingCoalesce`,
-  `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce` (and per-account variants).
+  `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.mattermost.blockStreamingCoalesce`,
+  `channels.signal.blockStreamingCoalesce`, `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce`
+  (and per-account variants).
 - `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
   Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
   Per-agent override: `agents.list[].humanDelay`.
@@ -2784,7 +2823,7 @@ Hot-applied (no full gateway restart):
 
 Requires full Gateway restart:
 - `gateway` (port/bind/auth/control UI/tailscale)
-- `bridge`
+- `bridge` (legacy)
 - `discovery`
 - `canvasHost`
 - `plugins`
@@ -2802,7 +2841,7 @@ Convenience flags (CLI):
 - `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
 - `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
-See [Gateway runbook](/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
+See [Gateway runbook](/gateway) for the derived port mapping (gateway/browser/canvas).
 See [Multiple gateways](/gateway/multiple-gateways) for browser/CDP port isolation details.
 
 Example:
@@ -2921,7 +2960,7 @@ The Gateway serves a directory of HTML/CSS/JS over HTTP so iOS/Android nodes can
 
 Default root: `~/clawd/canvas`  
 Default port: `18793` (chosen to avoid the clawd browser CDP port `18792`)  
-The server listens on the **bridge bind host** (LAN or Tailnet) so nodes can reach it.
+The server listens on the **gateway bind host** (LAN or Tailnet) so nodes can reach it.
 
 The server:
 - serves files under `canvasHost.root`
@@ -2950,9 +2989,13 @@ Disable with:
 - config: `canvasHost: { enabled: false }`
 - env: `CLAWDBOT_SKIP_CANVAS_HOST=1`
 
-### `bridge` (node bridge server)
+### `bridge` (legacy TCP bridge, removed)
 
-The Gateway can expose a simple TCP bridge for nodes (iOS/Android), typically on port `18790`.
+Current builds no longer include the TCP bridge listener; `bridge.*` config keys are ignored.
+Nodes connect over the Gateway WebSocket. This section is kept for historical reference.
+
+Legacy behavior:
+- The Gateway could expose a simple TCP bridge for nodes (iOS/Android), typically on port `18790`.
 
 Defaults:
 - enabled: `true`

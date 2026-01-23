@@ -22,6 +22,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
+import { createLocalShellRunner } from "./tui-local-shell.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
@@ -43,11 +44,24 @@ export function createEditorSubmitHandler(params: {
   };
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
+  handleBangLine: (value: string) => Promise<void> | void;
 }) {
   return (text: string) => {
-    const value = text.trim();
+    const raw = text;
+    const value = raw.trim();
     params.editor.setText("");
+
+    // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) return;
+
+    // Bash mode: only if the very first character is '!' and it's not just '!'.
+    // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
+    // Per requirement: a lone '!' should be treated as a normal message.
+    if (raw.startsWith("!") && raw !== "!") {
+      params.editor.addToHistory(raw);
+      void params.handleBangLine(raw);
+      return;
+    }
 
     // Enable built-in editor prompt history navigation (up/down).
     params.editor.addToHistory(value);
@@ -56,6 +70,7 @@ export function createEditorSubmitHandler(params: {
       void params.handleCommand(value);
       return;
     }
+
     void params.sendMessage(value);
   };
 }
@@ -77,6 +92,7 @@ export async function runTui(opts: TuiOptions) {
   let isConnected = false;
   let toolsExpanded = false;
   let showThinking = false;
+
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
@@ -496,11 +512,18 @@ export async function runTui(opts: TuiOptions) {
       formatSessionKey,
     });
 
+  const { runLocalShellLine } = createLocalShellRunner({
+    chatLog,
+    tui,
+    openOverlay,
+    closeOverlay,
+  });
   updateAutocompleteProvider();
   editor.onSubmit = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
+    handleBangLine: runLocalShellLine,
   });
 
   editor.onEscape = () => {

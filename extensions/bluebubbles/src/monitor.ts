@@ -1713,8 +1713,17 @@ async function processMessage(
             runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
           }
         },
-        onIdle: () => {
-          // BlueBubbles typing stop (DELETE) does not clear bubbles reliably; wait for timeout.
+        onIdle: async () => {
+          if (!chatGuidForActions) return;
+          if (!baseUrl || !password) return;
+          try {
+            await sendBlueBubblesTyping(chatGuidForActions, false, {
+              cfg: config,
+              accountId: account.accountId,
+            });
+          } catch (err) {
+            logVerbose(core, runtime, `typing stop failed: ${String(err)}`);
+          }
         },
         onError: (err, info) => {
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
@@ -1754,7 +1763,13 @@ async function processMessage(
       });
     }
     if (chatGuidForActions && baseUrl && password && !sentMessage) {
-      // BlueBubbles typing stop (DELETE) does not clear bubbles reliably; wait for timeout.
+      // Stop typing indicator when no message was sent (e.g., NO_REPLY)
+      sendBlueBubblesTyping(chatGuidForActions, false, {
+        cfg: config,
+        accountId: account.accountId,
+      }).catch((err) => {
+        logVerbose(core, runtime, `typing stop (no reply) failed: ${String(err)}`);
+      });
     }
   }
 }

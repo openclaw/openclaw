@@ -142,26 +142,4 @@ describe("installSessionToolResultGuard", () => {
       .map((e) => (e as { message: AgentMessage }).message);
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
   });
-
-  it("strips <final> tags from assistant text blocks", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    sm.appendMessage({
-      role: "assistant",
-      content: [
-        { type: "text", text: "<final>Hey!</final>" },
-        { type: "text", text: "More <final>text</final> here." },
-      ],
-    } as AgentMessage);
-
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    const assistant = messages[0] as { content?: Array<{ type?: string; text?: string }> };
-    expect(assistant.content?.[0]?.text).toBe("Hey!");
-    expect(assistant.content?.[1]?.text).toBe("More text here.");
-  });
 });

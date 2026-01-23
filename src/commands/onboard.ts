@@ -12,7 +12,9 @@ import type { OnboardOptions } from "./onboard-types.js";
 export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
   assertSupportedRuntime(runtime);
   const authChoice = opts.authChoice === "oauth" ? ("setup-token" as const) : opts.authChoice;
-  const normalizedOpts = authChoice === opts.authChoice ? opts : { ...opts, authChoice };
+  const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
+  const normalizedOpts =
+    authChoice === opts.authChoice && flow === opts.flow ? opts : { ...opts, authChoice, flow };
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     runtime.error(

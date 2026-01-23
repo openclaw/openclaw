@@ -5,6 +5,7 @@ import chokidar, { type FSWatcher } from "chokidar";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { resolvePluginSkillDirs } from "./plugin-skills.js";
 
 type SkillsChangeEvent = {
   workspaceDir?: string;
@@ -59,6 +60,8 @@ function resolveWatchPaths(workspaceDir: string, config?: ClawdbotConfig): strin
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
   paths.push(...extraDirs);
+  const pluginSkillDirs = resolvePluginSkillDirs({ workspaceDir, config });
+  paths.push(...pluginSkillDirs);
   return paths;
 }
 

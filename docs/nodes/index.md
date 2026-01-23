@@ -8,9 +8,11 @@ read_when:
 
 # Nodes
 
-A **node** is a companion device (iOS/Android today) that connects to the Gateway over the **Bridge** and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Bridge protocol details: [Bridge protocol](/gateway/bridge-protocol).
+A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s bridge and exposes its local canvas/camera commands as a node (so `clawdbot nodes …` works against this Mac).
+Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
+
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `clawdbot nodes …` works against this Mac).
 
 Notes:
 - Nodes are **peripherals**, not gateways. They don’t run the gateway service.
@@ -18,21 +20,23 @@ Notes:
 
 ## Pairing + status
 
-Pairing is gateway-owned and approval-based. See [Gateway pairing](/gateway/pairing) for the full flow.
+**WS nodes use device pairing.** Nodes present a device identity during `connect`; the Gateway
+creates a device pairing request for `role: node`. Approve via the devices CLI (or UI).
 
 Quick CLI:
 
 ```bash
-clawdbot nodes pending
-clawdbot nodes approve <requestId>
-clawdbot nodes reject <requestId>
+clawdbot devices list
+clawdbot devices approve <requestId>
+clawdbot devices reject <requestId>
 clawdbot nodes status
 clawdbot nodes describe --node <idOrNameOrIp>
-clawdbot nodes rename --node <idOrNameOrIp> --name "Kitchen iPad"
 ```
 
 Notes:
-- `nodes rename` stores a display name override in the gateway pairing store.
+- `nodes status` marks a node as **paired** when its device pairing role includes `node`.
+- `node.pair.*` (CLI: `clawdbot nodes pending/approve/reject`) is a separate gateway-owned
+  node pairing store; it does **not** gate the WS `connect` handshake.
 
 ## Remote node host (system.run)
 
@@ -57,7 +61,7 @@ clawdbot node run --host <gateway-host> --port 18789 --display-name "Build Node"
 
 ```bash
 clawdbot node install --host <gateway-host> --port 18789 --display-name "Build Node"
-clawdbot node start
+clawdbot node restart
 ```
 
 ### Pair + name
@@ -239,6 +243,7 @@ Notes:
 - `system.notify` respects notification permission state on the macOS app.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
+- macOS nodes drop `PATH` overrides; headless node hosts only accept `PATH` when it prepends the node host PATH.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by exec approvals (`~/.clawdbot/exec-approvals.json`).
@@ -275,26 +280,26 @@ Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by
 ## Headless node host (cross-platform)
 
 Clawdbot can run a **headless node host** (no UI) that connects to the Gateway
-bridge and exposes `system.run` / `system.which`. This is useful on Linux/Windows
+WebSocket and exposes `system.run` / `system.which`. This is useful on Linux/Windows
 or for running a minimal node alongside a server.
 
 Start it:
 
 ```bash
-clawdbot node run --host <gateway-host> --port 18790
+clawdbot node run --host <gateway-host> --port 18789
 ```
 
 Notes:
 - Pairing is still required (the Gateway will show a node approval prompt).
-- The node host stores its node id + pairing token in `~/.clawdbot/node.json`.
+- The node host stores its node id, token, display name, and gateway connection info in `~/.clawdbot/node.json`.
 - Exec approvals are enforced locally via `~/.clawdbot/exec-approvals.json`
   (see [Exec approvals](/tools/exec-approvals)).
 - On macOS, the headless node host prefers the companion app exec host when reachable and falls
   back to local execution if the app is unavailable. Set `CLAWDBOT_NODE_EXEC_HOST=app` to require
   the app, or `CLAWDBOT_NODE_EXEC_FALLBACK=0` to disable fallback.
-- Add `--tls` / `--tls-fingerprint` when the bridge requires TLS.
+- Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 
 ## Mac node mode
 
-- The macOS menubar app connects to the Gateway bridge as a node (so `clawdbot nodes …` works against this Mac).
-- In remote mode, the app opens an SSH tunnel for the bridge port and connects to `localhost`.
+- The macOS menubar app connects to the Gateway WS server as a node (so `clawdbot nodes …` works against this Mac).
+- In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.

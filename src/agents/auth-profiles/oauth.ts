@@ -39,6 +39,15 @@ async function refreshOAuthTokenWithLock(params: {
     const cred = store.profiles[params.profileId];
     if (!cred || cred.type !== "oauth") return null;
 
+    if (
+      cred.provider === "github-copilot" &&
+      (!Number.isFinite(cred.expires) || cred.expires <= 0)
+    ) {
+      return {
+        apiKey: buildOAuthApiKey(cred.provider, cred),
+        newCredentials: cred,
+      };
+    }
     if (Date.now() < cred.expires) {
       return {
         apiKey: buildOAuthApiKey(cred.provider, cred),
@@ -103,6 +112,20 @@ async function tryResolveOAuthProfile(params: {
   if (profileConfig && profileConfig.provider !== cred.provider) return null;
   if (profileConfig && profileConfig.mode !== cred.type) return null;
 
+  if (cred.provider === "github-copilot" && (!Number.isFinite(cred.expires) || cred.expires <= 0)) {
+    return {
+      apiKey: buildOAuthApiKey(cred.provider, cred),
+      provider: cred.provider,
+      email: cred.email,
+    };
+  }
+  if (cred.provider === "github-copilot" && (!Number.isFinite(cred.expires) || cred.expires <= 0)) {
+    return {
+      apiKey: buildOAuthApiKey(cred.provider, cred),
+      provider: cred.provider,
+      email: cred.email,
+    };
+  }
   if (Date.now() < cred.expires) {
     return {
       apiKey: buildOAuthApiKey(cred.provider, cred),

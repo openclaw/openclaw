@@ -40,7 +40,7 @@ node commands return `CANVAS_DISABLED`.
 
 ## Agent API surface
 
-Canvas is exposed via the **node bridge**, so the agent can:
+Canvas is exposed via the **Gateway WebSocket**, so the agent can:
 
 - show/hide the panel
 - navigate to a path or URL

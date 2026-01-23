@@ -6,41 +6,6 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ToolCall = { id: string; name?: string };
 
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-
-function stripFinalTagsFromText(text: string): string {
-  if (!text) return text;
-  return text.replace(FINAL_TAG_RE, "");
-}
-
-function stripFinalTagsFromAssistant(message: Extract<AgentMessage, { role: "assistant" }>) {
-  const content = message.content;
-  if (typeof content === "string") {
-    const cleaned = stripFinalTagsFromText(content);
-    return cleaned === content
-      ? message
-      : ({ ...message, content: cleaned } as unknown as AgentMessage);
-  }
-  if (!Array.isArray(content)) return message;
-
-  let changed = false;
-  const next = content.map((block) => {
-    if (!block || typeof block !== "object") return block;
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
-      const cleaned = stripFinalTagsFromText(record.text);
-      if (cleaned !== record.text) {
-        changed = true;
-        return { ...record, text: cleaned };
-      }
-    }
-    return block;
-  });
-
-  if (!changed) return message;
-  return { ...message, content: next } as AgentMessage;
-}
-
 function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
   const content = msg.content;
   if (!Array.isArray(content)) return [];
@@ -79,6 +44,11 @@ export function installSessionToolResultGuard(
       message: AgentMessage,
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
     ) => AgentMessage;
+    /**
+     * Whether to synthesize missing tool results to satisfy strict providers.
+     * Defaults to true.
+     */
+    allowSyntheticToolResults?: boolean;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -95,17 +65,21 @@ export function installSessionToolResultGuard(
     return transformer ? transformer(message, meta) : message;
   };
 
+  const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
+
   const flushPendingToolResults = () => {
     if (pending.size === 0) return;
-    for (const [id, name] of pending.entries()) {
-      const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
-      originalAppend(
-        persistToolResult(synthetic, {
-          toolCallId: id,
-          toolName: name,
-          isSynthetic: true,
-        }) as never,
-      );
+    if (allowSyntheticToolResults) {
+      for (const [id, name] of pending.entries()) {
+        const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+        originalAppend(
+          persistToolResult(synthetic, {
+            toolCallId: id,
+            toolName: name,
+            isSynthetic: true,
+          }) as never,
+        );
+      }
     }
     pending.clear();
   };
@@ -126,25 +100,23 @@ export function installSessionToolResultGuard(
       );
     }
 
-    const sanitized =
-      role === "assistant"
-        ? stripFinalTagsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
-        : message;
     const toolCalls =
       role === "assistant"
-        ? extractAssistantToolCalls(sanitized as Extract<AgentMessage, { role: "assistant" }>)
+        ? extractAssistantToolCalls(message as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
-    // If previous tool calls are still pending, flush before non-tool results.
-    if (pending.size > 0 && (toolCalls.length === 0 || role !== "assistant")) {
-      flushPendingToolResults();
-    }
-    // If new tool calls arrive while older ones are pending, flush the old ones first.
-    if (pending.size > 0 && toolCalls.length > 0) {
-      flushPendingToolResults();
+    if (allowSyntheticToolResults) {
+      // If previous tool calls are still pending, flush before non-tool results.
+      if (pending.size > 0 && (toolCalls.length === 0 || role !== "assistant")) {
+        flushPendingToolResults();
+      }
+      // If new tool calls arrive while older ones are pending, flush the old ones first.
+      if (pending.size > 0 && toolCalls.length > 0) {
+        flushPendingToolResults();
+      }
     }
 
-    const result = originalAppend(sanitized as never);
+    const result = originalAppend(message as never);
 
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }

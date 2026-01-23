@@ -88,13 +88,17 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, params.maxBytes);
+  const {
+    buffer,
+    contentType: _contentType,
+    fileName,
+  } = await loadWebMedia(params.mediaUrl, params.maxBytes);
   const basePayload = {
     channel_id: params.channelId,
     file: buffer,
     filename: fileName,
     ...(params.caption ? { initial_comment: params.caption } : {}),
-    ...(contentType ? { filetype: contentType } : {}),
+    // Note: filetype is deprecated in files.uploadV2, Slack auto-detects from file content
   };
   const payload: FilesUploadV2Arguments = params.threadTs
     ? { ...basePayload, thread_ts: params.threadTs }

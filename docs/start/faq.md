@@ -178,7 +178,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ### What is Clawdbot, in one paragraph?
 
-Clawdbot is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always‑on control plane; the assistant is the product.
+Clawdbot is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
 
 ## Quick start and first-run setup
 
@@ -235,7 +235,7 @@ Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** fo
 - **Model/auth setup** (Anthropic **setup-token** recommended for Claude subscriptions, OpenAI Codex OAuth supported, API keys optional, LM Studio local models supported)
 - **Workspace** location + bootstrap files
 - **Gateway settings** (bind/port/auth/tailscale)
-- **Providers** (WhatsApp, Telegram, Discord, Signal, iMessage)
+- **Providers** (WhatsApp, Telegram, Discord, Mattermost (plugin), Signal, iMessage)
 - **Daemon install** (LaunchAgent on macOS; systemd user unit on Linux/WSL2)
 - **Health checks** and **skills** selection
 
@@ -363,7 +363,7 @@ lowest friction and you’re okay with sleep/restarts, run it locally.
 - **Pros:** always‑on, stable network, no laptop sleep issues, easier to keep running.
 - **Cons:** often run headless (use screenshots), remote file access only, you must SSH for updates.
 
-**Clawdbot‑specific note:** WhatsApp/Telegram/Slack/Discord all work fine from a VPS. The only real trade‑off is **headless browser** vs a visible window. See [Browser](/tools/browser).
+**Clawdbot-specific note:** WhatsApp/Telegram/Slack/Mattermost (plugin)/Discord all work fine from a VPS. The only real trade-off is **headless browser** vs a visible window. See [Browser](/tools/browser).
 
 **Recommended default:** VPS if you had gateway disconnects before. Local is great when you’re actively using the Mac and want local file access or UI automation with a visible browser.
 
@@ -719,43 +719,42 @@ See the full config examples in [Browser](/tools/browser#use-brave-or-another-ch
 ### How do commands propagate between Telegram, the gateway, and nodes?
 
 Telegram messages are handled by the **gateway**. The gateway runs the agent and
-only then calls nodes over the **Bridge** when a node tool is needed:
+only then calls nodes over the **Gateway WebSocket** when a node tool is needed:
 
 Telegram → Gateway → Agent → `node.*` → Node → Gateway → Telegram
 
-Nodes don’t see inbound provider traffic; they only receive bridge RPC calls.
+Nodes don’t see inbound provider traffic; they only receive node RPC calls.
 
 ### How can my agent access my computer if the Gateway is hosted remotely?
 
 Short answer: **pair your computer as a node**. The Gateway runs elsewhere, but it can
-call `node.*` tools (screen, camera, system) on your local machine over the Bridge.
+call `node.*` tools (screen, camera, system) on your local machine over the Gateway WebSocket.
 
 Typical setup:
 1) Run the Gateway on the always‑on host (VPS/home server).
 2) Put the Gateway host + your computer on the same tailnet.
-3) Enable the bridge on the Gateway host:
-   ```json5
-   { bridge: { enabled: true, bind: "auto" } }
-   ```
-4) Open the macOS app locally and connect in **Remote over SSH** mode so it can tunnel
-   the bridge port and register as a node.
+3) Ensure the Gateway WS is reachable (tailnet bind or SSH tunnel).
+4) Open the macOS app locally and connect in **Remote over SSH** mode (or direct tailnet)
+   so it can register as a node.
 5) Approve the node on the Gateway:
    ```bash
    clawdbot nodes pending
    clawdbot nodes approve <requestId>
    ```
 
+No separate TCP bridge is required; nodes connect over the Gateway WebSocket.
+
 Security reminder: pairing a macOS node allows `system.run` on that machine. Only
 pair devices you trust, and review [Security](/gateway/security).
 
-Docs: [Nodes](/nodes), [Bridge protocol](/gateway/bridge-protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
+Docs: [Nodes](/nodes), [Gateway protocol](/gateway/protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
 
 ### Do nodes run a gateway service?
 
 No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect
 to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app).
 
-A full restart is required for `gateway`, `bridge`, `discovery`, and `canvasHost` changes.
+A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
 
 ### Is there an API / RPC way to apply config?
 
@@ -797,26 +796,19 @@ This keeps the gateway bound to loopback and exposes HTTPS via Tailscale. See [T
 
 ### How do I connect a Mac node to a remote Gateway (Tailscale Serve)?
 
-Serve only exposes the **Gateway Control UI**. Nodes use the **bridge port**.
+Serve exposes the **Gateway Control UI + WS**. Nodes connect over the same Gateway WS endpoint.
 
 Recommended setup:
-1) **Enable the bridge on the gateway host**:
-   ```json5
-   {
-     bridge: { enabled: true, bind: "auto" }
-   }
-   ```
-   `auto` prefers a tailnet IP when Tailscale is present.
-2) **Make sure the VPS + Mac are on the same tailnet**.
-3) **Use the macOS app in Remote mode** (SSH target can be the tailnet hostname).
-   The app will tunnel the bridge port and connect as a node.
-4) **Approve the node** on the gateway:
+1) **Make sure the VPS + Mac are on the same tailnet**.
+2) **Use the macOS app in Remote mode** (SSH target can be the tailnet hostname).
+   The app will tunnel the Gateway port and connect as a node.
+3) **Approve the node** on the gateway:
    ```bash
    clawdbot nodes pending
    clawdbot nodes approve <requestId>
    ```
 
-Docs: [Bridge protocol](/gateway/bridge-protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).
+Docs: [Gateway protocol](/gateway/protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).
 
 ## Env vars and .env loading
 
@@ -1066,6 +1058,17 @@ You can also force a specific auth profile for the provider (per session):
 
 Tip: `/model status` shows which agent is active, which `auth-profiles.json` file is being used, and which auth profile will be tried next.
 It also shows the configured provider endpoint (`baseUrl`) and API mode (`api`) when available.
+
+### How do I unpin a profile I set with `@profile`?
+
+Re-run `/model` **without** the `@profile` suffix:
+
+```
+/model anthropic/claude-opus-4-5
+```
+
+If you want to return to the default, pick it from `/model` (or send `/model <default provider/model>`).
+Use `/model status` to confirm which auth profile is active.
 
 ### Why do I see “Model … is not allowed” and then no reply?
 

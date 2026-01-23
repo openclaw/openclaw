@@ -61,6 +61,7 @@ Plugins can register:
 - CLI commands
 - Background services
 - Optional config validation
+- **Skills** (by listing `skills` directories in the plugin manifest)
 
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).

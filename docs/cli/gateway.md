@@ -122,7 +122,7 @@ clawdbot gateway probe --ssh user@gateway-host
 Options:
 - `--ssh <target>`: `user@host` or `user@host:port` (port defaults to `22`).
 - `--ssh-identity <path>`: identity file.
-- `--ssh-auto`: pick the first discovered bridge host as SSH target (LAN/WAB only).
+- `--ssh-auto`: pick the first discovered gateway host as SSH target (LAN/WAB only).
 
 Config (optional, used as defaults):
 - `gateway.remote.sshTarget`

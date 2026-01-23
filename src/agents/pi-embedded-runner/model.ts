@@ -7,8 +7,19 @@ import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { resolveGithubCopilotUserAgent } from "../../providers/github-copilot-utils.js";
 
 type InlineModelEntry = ModelDefinitionConfig & { provider: string };
+
+function applyProviderModelOverrides(model: Model<Api>): Model<Api> {
+  if (model.provider === "github-copilot") {
+    const headers = model.headers
+      ? { ...model.headers, "User-Agent": resolveGithubCopilotUserAgent() }
+      : { "User-Agent": resolveGithubCopilotUserAgent() };
+    return { ...model, headers };
+  }
+  return model;
+}
 
 export function buildInlineProviderModels(
   providers: Record<string, { models?: ModelDefinitionConfig[] }>,
@@ -60,7 +71,7 @@ export function resolveModel(
     if (inlineMatch) {
       const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
       return {
-        model: normalized,
+        model: applyProviderModelOverrides(normalized),
         authStorage,
         modelRegistry,
       };
@@ -78,7 +89,7 @@ export function resolveModel(
         contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
       } as Model<Api>);
-      return { model: fallbackModel, authStorage, modelRegistry };
+      return { model: applyProviderModelOverrides(fallbackModel), authStorage, modelRegistry };
     }
     return {
       error: `Unknown model: ${provider}/${modelId}`,
@@ -86,5 +97,9 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  return {
+    model: applyProviderModelOverrides(normalizeModelCompat(model)),
+    authStorage,
+    modelRegistry,
+  };
 }

@@ -38,10 +38,12 @@ applies: workspace wins, then managed/local, then bundled.
 
 ## Plugins + skills
 
-Plugins can ship their own skills (for example, `voice-call`) and gate them via
-`metadata.clawdbot.requires.config` on the plugin’s config entry. See
-[Plugins](/plugin) for plugin discovery/config and [Tools](/tools) for the tool
-surface those skills teach.
+Plugins can ship their own skills by listing `skills` directories in
+`clawdbot.plugin.json` (paths relative to the plugin root). Plugin skills load
+when the plugin is enabled and participate in the normal skill precedence rules.
+You can gate them via `metadata.clawdbot.requires.config` on the plugin’s config
+entry. See [Plugins](/plugin) for discovery/config and [Tools](/tools) for the
+tool surface those skills teach.
 
 ## ClawdHub (install + sync)
 

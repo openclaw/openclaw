@@ -35,7 +35,7 @@ export async function applyAuthChoiceGitHubCopilot(
   nextConfig = applyAuthProfileConfig(nextConfig, {
     profileId: "github-copilot:github",
     provider: "github-copilot",
-    mode: "token",
+    mode: "oauth",
   });
 
   if (params.setDefaultModel) {

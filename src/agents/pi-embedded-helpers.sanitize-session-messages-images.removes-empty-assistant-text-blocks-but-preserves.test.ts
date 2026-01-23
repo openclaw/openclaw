@@ -23,40 +23,6 @@ describe("sanitizeSessionMessagesImages", () => {
     expect((content as Array<{ type?: string }>)[0]?.type).toBe("toolCall");
   });
 
-  it("sanitizes tool ids in standard mode (preserves underscores)", async () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolUse", id: "call_abc|item:123", name: "test", input: {} },
-          {
-            type: "toolCall",
-            id: "call_abc|item:456",
-            name: "exec",
-            arguments: {},
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolUseId: "call_abc|item:123",
-        content: [{ type: "text", text: "ok" }],
-      },
-    ] satisfies AgentMessage[];
-
-    const out = await sanitizeSessionMessagesImages(input, "test", {
-      sanitizeToolCallIds: true,
-    });
-
-    // Standard mode preserves underscores for readability
-    const assistant = out[0] as { content?: Array<{ id?: string }> };
-    expect(assistant.content?.[0]?.id).toBe("call_abc_item_123");
-    expect(assistant.content?.[1]?.id).toBe("call_abc_item_456");
-
-    const toolResult = out[1] as { toolUseId?: string };
-    expect(toolResult.toolUseId).toBe("call_abc_item_123");
-  });
-
   it("sanitizes tool ids in strict mode (alphanumeric only)", async () => {
     const input = [
       {
@@ -121,7 +87,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
   });
-  it("drops empty assistant error messages", async () => {
+  it("keeps empty assistant error messages", async () => {
     const input = [
       { role: "user", content: "hello" },
       { role: "assistant", stopReason: "error", content: [] },
@@ -130,8 +96,10 @@ describe("sanitizeSessionMessagesImages", () => {
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(3);
     expect(out[0]?.role).toBe("user");
+    expect(out[1]?.role).toBe("assistant");
+    expect(out[2]?.role).toBe("assistant");
   });
   it("leaves non-assistant messages unchanged", async () => {
     const input = [

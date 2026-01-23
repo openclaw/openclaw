@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  estimateTokens,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
@@ -35,6 +40,7 @@ import {
 import { createClawdbotCodingTools } from "../pi-tools.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import {
   applySkillEnvOverrides,
@@ -122,13 +128,6 @@ export async function compactEmbeddedPiSession(params: {
               `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
             );
           }
-        } else if (model.provider === "github-copilot") {
-          const { resolveCopilotApiToken } =
-            await import("../../providers/github-copilot-token.js");
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken: apiKeyInfo.apiKey,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
@@ -310,9 +309,15 @@ export async function compactEmbeddedPiSession(params: {
         });
         try {
           await prewarmSessionFile(params.sessionFile);
+          const transcriptPolicy = resolveTranscriptPolicy({
+            modelApi: model.api,
+            provider,
+            modelId,
+          });
           const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
             agentId: sessionAgentId,
             sessionKey: params.sessionKey,
+            allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
           });
           trackSessionManagerAccess(params.sessionFile);
           const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
@@ -359,9 +364,14 @@ export async function compactEmbeddedPiSession(params: {
               provider,
               sessionManager,
               sessionId: params.sessionId,
+              policy: transcriptPolicy,
             });
-            const validatedGemini = validateGeminiTurns(prior);
-            const validated = validateAnthropicTurns(validatedGemini);
+            const validatedGemini = transcriptPolicy.validateGeminiTurns
+              ? validateGeminiTurns(prior)
+              : prior;
+            const validated = transcriptPolicy.validateAnthropicTurns
+              ? validateAnthropicTurns(validatedGemini)
+              : validatedGemini;
             const limited = limitHistoryTurns(
               validated,
               getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
@@ -370,6 +380,21 @@ export async function compactEmbeddedPiSession(params: {
               session.agent.replaceMessages(limited);
             }
             const result = await session.compact(params.customInstructions);
+            // Estimate tokens after compaction by summing token estimates for remaining messages
+            let tokensAfter: number | undefined;
+            try {
+              tokensAfter = 0;
+              for (const message of session.messages) {
+                tokensAfter += estimateTokens(message);
+              }
+              // Sanity check: tokensAfter should be less than tokensBefore
+              if (tokensAfter > result.tokensBefore) {
+                tokensAfter = undefined; // Don't trust the estimate
+              }
+            } catch {
+              // If estimation fails, leave tokensAfter undefined
+              tokensAfter = undefined;
+            }
             return {
               ok: true,
               compacted: true,
@@ -377,6 +402,7 @@ export async function compactEmbeddedPiSession(params: {
                 summary: result.summary,
                 firstKeptEntryId: result.firstKeptEntryId,
                 tokensBefore: result.tokensBefore,
+                tokensAfter,
                 details: result.details,
               },
             };

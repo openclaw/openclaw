@@ -43,8 +43,6 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service returned an error. Please try again.",
-    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
 });

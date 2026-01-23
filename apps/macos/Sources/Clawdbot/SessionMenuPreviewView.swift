@@ -1,5 +1,6 @@
 import ClawdbotChatUI
 import ClawdbotKit
+import ClawdbotProtocol
 import OSLog
 import SwiftUI
 
@@ -31,24 +32,24 @@ actor SessionPreviewCache {
     static let shared = SessionPreviewCache()
 
     private struct CacheEntry {
-        let items: [SessionPreviewItem]
+        let snapshot: SessionMenuPreviewSnapshot
         let updatedAt: Date
     }
 
     private var entries: [String: CacheEntry] = [:]
 
-    func cachedItems(for sessionKey: String, maxAge: TimeInterval) -> [SessionPreviewItem]? {
+    func cachedSnapshot(for sessionKey: String, maxAge: TimeInterval) -> SessionMenuPreviewSnapshot? {
         guard let entry = self.entries[sessionKey] else { return nil }
         guard Date().timeIntervalSince(entry.updatedAt) < maxAge else { return nil }
-        return entry.items
+        return entry.snapshot
     }
 
-    func store(items: [SessionPreviewItem], for sessionKey: String) {
-        self.entries[sessionKey] = CacheEntry(items: items, updatedAt: Date())
+    func store(snapshot: SessionMenuPreviewSnapshot, for sessionKey: String) {
+        self.entries[sessionKey] = CacheEntry(snapshot: snapshot, updatedAt: Date())
     }
 
-    func lastItems(for sessionKey: String) -> [SessionPreviewItem]? {
-        self.entries[sessionKey]?.items
+    func lastSnapshot(for sessionKey: String) -> SessionMenuPreviewSnapshot? {
+        self.entries[sessionKey]?.snapshot
     }
 }
 
@@ -99,8 +100,12 @@ actor SessionPreviewLimiter {
 
 #if DEBUG
 extension SessionPreviewCache {
-    func _testSet(items: [SessionPreviewItem], for sessionKey: String, updatedAt: Date = Date()) {
-        self.entries[sessionKey] = CacheEntry(items: items, updatedAt: updatedAt)
+    func _testSet(
+        snapshot: SessionMenuPreviewSnapshot,
+        for sessionKey: String,
+        updatedAt: Date = Date())
+    {
+        self.entries[sessionKey] = CacheEntry(snapshot: snapshot, updatedAt: updatedAt)
     }
 
     func _testReset() {
@@ -219,50 +224,44 @@ enum SessionMenuPreviewLoader {
     private static let logger = Logger(subsystem: "com.clawdbot", category: "SessionPreview")
     private static let previewTimeoutSeconds: Double = 4
     private static let cacheMaxAgeSeconds: TimeInterval = 30
+    private static let previewMaxChars = 240
 
     private struct PreviewTimeoutError: LocalizedError {
         var errorDescription: String? { "preview timeout" }
     }
 
+    static func prewarm(sessionKeys: [String], maxItems: Int) async {
+        let keys = self.uniqueKeys(sessionKeys)
+        guard !keys.isEmpty else { return }
+        do {
+            let payload = try await self.requestPreview(keys: keys, maxItems: maxItems)
+            await self.cache(payload: payload, maxItems: maxItems)
+        } catch {
+            if self.isUnknownMethodError(error) { return }
+            let errorDescription = String(describing: error)
+            Self.logger.debug(
+                "Session preview prewarm failed count=\(keys.count, privacy: .public) " +
+                    "error=\(errorDescription, privacy: .public)")
+        }
+    }
+
     static func load(sessionKey: String, maxItems: Int) async -> SessionMenuPreviewSnapshot {
-        if let cached = await SessionPreviewCache.shared.cachedItems(for: sessionKey, maxAge: cacheMaxAgeSeconds) {
-            return self.snapshot(from: cached)
-        }
-
-        let isConnected = await MainActor.run {
-            if case .connected = ControlChannel.shared.state { return true }
-            return false
-        }
-
-        guard isConnected else {
-            if let fallback = await SessionPreviewCache.shared.lastItems(for: sessionKey) {
-                return Self.snapshot(from: fallback)
-            }
-            return SessionMenuPreviewSnapshot(items: [], status: .error("Gateway disconnected"))
+        if let cached = await SessionPreviewCache.shared.cachedSnapshot(
+            for: sessionKey,
+            maxAge: cacheMaxAgeSeconds)
+        {
+            return cached
         }
 
         do {
-            let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
-            let payload = try await SessionPreviewLimiter.shared.withPermit {
-                try await AsyncTimeout.withTimeout(
-                    seconds: self.previewTimeoutSeconds,
-                    onTimeout: { PreviewTimeoutError() },
-                    operation: {
-                        try await GatewayConnection.shared.chatHistory(
-                            sessionKey: sessionKey,
-                            limit: self.previewLimit(for: maxItems),
-                            timeoutMs: timeoutMs)
-                    })
-            }
-            let built = Self.previewItems(from: payload, maxItems: maxItems)
-            await SessionPreviewCache.shared.store(items: built, for: sessionKey)
-            return Self.snapshot(from: built)
+            let snapshot = try await self.fetchSnapshot(sessionKey: sessionKey, maxItems: maxItems)
+            await SessionPreviewCache.shared.store(snapshot: snapshot, for: sessionKey)
+            return snapshot
         } catch is CancellationError {
             return SessionMenuPreviewSnapshot(items: [], status: .loading)
         } catch {
-            let fallback = await SessionPreviewCache.shared.lastItems(for: sessionKey)
-            if let fallback {
-                return Self.snapshot(from: fallback)
+            if let fallback = await SessionPreviewCache.shared.lastSnapshot(for: sessionKey) {
+                return fallback
             }
             let errorDescription = String(describing: error)
             Self.logger.warning(
@@ -272,18 +271,120 @@ enum SessionMenuPreviewLoader {
         }
     }
 
+    private static func fetchSnapshot(sessionKey: String, maxItems: Int) async throws -> SessionMenuPreviewSnapshot {
+        do {
+            let payload = try await self.requestPreview(keys: [sessionKey], maxItems: maxItems)
+            if let entry = payload.previews.first(where: { $0.key == sessionKey }) ?? payload.previews.first {
+                return self.snapshot(from: entry, maxItems: maxItems)
+            }
+            return SessionMenuPreviewSnapshot(items: [], status: .error("Preview unavailable"))
+        } catch {
+            if self.isUnknownMethodError(error) {
+                return try await self.fetchHistorySnapshot(sessionKey: sessionKey, maxItems: maxItems)
+            }
+            throw error
+        }
+    }
+
+    private static func requestPreview(
+        keys: [String],
+        maxItems: Int) async throws -> ClawdbotSessionsPreviewPayload
+    {
+        let boundedItems = self.normalizeMaxItems(maxItems)
+        let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
+        return try await SessionPreviewLimiter.shared.withPermit {
+            try await AsyncTimeout.withTimeout(
+                seconds: self.previewTimeoutSeconds,
+                onTimeout: { PreviewTimeoutError() },
+                operation: {
+                    try await GatewayConnection.shared.sessionsPreview(
+                        keys: keys,
+                        limit: boundedItems,
+                        maxChars: self.previewMaxChars,
+                        timeoutMs: timeoutMs)
+                })
+        }
+    }
+
+    private static func fetchHistorySnapshot(
+        sessionKey: String,
+        maxItems: Int) async throws -> SessionMenuPreviewSnapshot
+    {
+        let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
+        let payload = try await SessionPreviewLimiter.shared.withPermit {
+            try await AsyncTimeout.withTimeout(
+                seconds: self.previewTimeoutSeconds,
+                onTimeout: { PreviewTimeoutError() },
+                operation: {
+                    try await GatewayConnection.shared.chatHistory(
+                        sessionKey: sessionKey,
+                        limit: self.previewLimit(for: maxItems),
+                        timeoutMs: timeoutMs)
+                })
+        }
+        let built = Self.previewItems(from: payload, maxItems: maxItems)
+        return Self.snapshot(from: built)
+    }
+
     private static func snapshot(from items: [SessionPreviewItem]) -> SessionMenuPreviewSnapshot {
         SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
     }
 
+    private static func snapshot(
+        from entry: ClawdbotSessionPreviewEntry,
+        maxItems: Int) -> SessionMenuPreviewSnapshot
+    {
+        let items = self.previewItems(from: entry, maxItems: maxItems)
+        let normalized = entry.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "ok":
+            return SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
+        case "empty":
+            return SessionMenuPreviewSnapshot(items: items, status: .empty)
+        case "missing":
+            return SessionMenuPreviewSnapshot(items: items, status: .error("Session missing"))
+        default:
+            return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
+        }
+    }
+
+    private static func cache(payload: ClawdbotSessionsPreviewPayload, maxItems: Int) async {
+        for entry in payload.previews {
+            let snapshot = self.snapshot(from: entry, maxItems: maxItems)
+            await SessionPreviewCache.shared.store(snapshot: snapshot, for: entry.key)
+        }
+    }
+
     private static func previewLimit(for maxItems: Int) -> Int {
-        min(max(maxItems * 3, 20), 120)
+        let boundedItems = self.normalizeMaxItems(maxItems)
+        return min(max(boundedItems * 3, 20), 120)
+    }
+
+    private static func normalizeMaxItems(_ maxItems: Int) -> Int {
+        max(1, min(maxItems, 50))
+    }
+
+    private static func previewItems(
+        from entry: ClawdbotSessionPreviewEntry,
+        maxItems: Int) -> [SessionPreviewItem]
+    {
+        let boundedItems = self.normalizeMaxItems(maxItems)
+        let built: [SessionPreviewItem] = entry.items.enumerated().compactMap { index, item in
+            let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            let role = self.previewRoleFromRaw(item.role)
+            return SessionPreviewItem(id: "\(entry.key)-\(index)", role: role, text: text)
+        }
+
+        let trimmed = built.suffix(boundedItems)
+        return Array(trimmed.reversed())
     }
 
     private static func previewItems(
         from payload: ClawdbotChatHistoryPayload,
         maxItems: Int) -> [SessionPreviewItem]
     {
+        let boundedItems = self.normalizeMaxItems(maxItems)
         let raw: [ClawdbotKit.AnyCodable] = payload.messages ?? []
         let messages = self.decodeMessages(raw)
         let built = messages.compactMap { message -> SessionPreviewItem? in
@@ -294,7 +395,7 @@ enum SessionMenuPreviewLoader {
             return SessionPreviewItem(id: id, role: role, text: text)
         }
 
-        let trimmed = built.suffix(maxItems)
+        let trimmed = built.suffix(boundedItems)
         return Array(trimmed.reversed())
     }
 
@@ -307,12 +408,16 @@ enum SessionMenuPreviewLoader {
 
     private static func previewRole(_ raw: String, isTool: Bool) -> PreviewRole {
         if isTool { return .tool }
+        return self.previewRoleFromRaw(raw)
+    }
+
+    private static func previewRoleFromRaw(_ raw: String) -> PreviewRole {
         switch raw.lowercased() {
-        case "user": return .user
-        case "assistant": return .assistant
-        case "system": return .system
-        case "tool": return .tool
-        default: return .other
+        case "user": .user
+        case "assistant": .assistant
+        case "system": .system
+        case "tool": .tool
+        default: .other
         }
     }
 
@@ -374,5 +479,17 @@ enum SessionMenuPreviewLoader {
             result.append(value)
         }
         return result
+    }
+
+    private static func uniqueKeys(_ keys: [String]) -> [String] {
+        let trimmed = keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return self.dedupePreservingOrder(trimmed.filter { !$0.isEmpty })
+    }
+
+    private static func isUnknownMethodError(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        guard response.code == ErrorCode.invalidRequest.rawValue else { return false }
+        let message = response.message.lowercased()
+        return message.contains("unknown method")
     }
 }
