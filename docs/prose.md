@@ -128,4 +128,4 @@ If your tool allowlist blocks these tools, OpenProse programs will fail. See [Sk
 
 Treat `.prose` files like code. Review before running. Use Clawdbot tool allowlists and approval gates to control side effects.
 
-For deterministic, approval-gated workflows, compare with [Lobster](/lobster).
+For deterministic, approval-gated workflows, compare with [Lobster](/tools/lobster).

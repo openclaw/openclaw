@@ -155,7 +155,7 @@ tool usage guidance is injected into prompts. Some plugins ship their own skills
 alongside tools (for example, the voice-call plugin).
 
 Optional plugin tools:
-- [Lobster](/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
+- [Lobster](/tools/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
 
 ## Tool inventory
 
