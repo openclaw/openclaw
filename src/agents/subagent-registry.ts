@@ -31,7 +31,8 @@ const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
-let restoreAttempted = false;
+// Use var to avoid TDZ when init runs across circular imports during bootstrap.
+var restoreAttempted = false;
 
 function persistSubagentRuns() {
   try {

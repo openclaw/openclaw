@@ -33,6 +33,25 @@ export type ToolDisplay = {
 const TOOL_DISPLAY_CONFIG = TOOL_DISPLAY_JSON as ToolDisplayConfig;
 const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
 const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
+  agentId: "agent",
+  sessionKey: "session",
+  targetId: "target",
+  targetUrl: "url",
+  nodeId: "node",
+  requestId: "request",
+  messageId: "message",
+  threadId: "thread",
+  channelId: "channel",
+  guildId: "guild",
+  userId: "user",
+  runTimeoutSeconds: "timeout",
+  timeoutSeconds: "timeout",
+  includeTools: "tools",
+  pollQuestion: "poll",
+  maxChars: "max chars",
+};
+const MAX_DETAIL_ENTRIES = 8;
 
 function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
@@ -66,7 +85,11 @@ function coerceDisplayValue(value: unknown): string | undefined {
     if (!firstLine) return undefined;
     return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine;
   }
-  if (typeof value === "number" || typeof value === "boolean") {
+  if (typeof value === "boolean") {
+    return value ? "true" : undefined;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value === 0) return undefined;
     return String(value);
   }
   if (Array.isArray(value)) {
@@ -92,13 +115,40 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
+function formatDetailKey(raw: string): string {
+  const segments = raw.split(".").filter(Boolean);
+  const last = segments.at(-1) ?? raw;
+  const override = DETAIL_LABEL_OVERRIDES[last];
+  if (override) return override;
+  const cleaned = last.replace(/_/g, " ").replace(/-/g, " ");
+  const spaced = cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  return spaced.trim().toLowerCase() || last.toLowerCase();
+}
+
 function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefined {
+  const entries: Array<{ label: string; value: string }> = [];
   for (const key of keys) {
     const value = lookupValueByPath(args, key);
     const display = coerceDisplayValue(value);
-    if (display) return display;
+    if (!display) continue;
+    entries.push({ label: formatDetailKey(key), value: display });
   }
-  return undefined;
+  if (entries.length === 0) return undefined;
+  if (entries.length === 1) return entries[0].value;
+
+  const seen = new Set<string>();
+  const unique: Array<{ label: string; value: string }> = [];
+  for (const entry of entries) {
+    const token = `${entry.label}:${entry.value}`;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    unique.push(entry);
+  }
+  if (unique.length === 0) return undefined;
+  return unique
+    .slice(0, MAX_DETAIL_ENTRIES)
+    .map((entry) => `${entry.label} ${entry.value}`)
+    .join(" · ");
 }
 
 function resolveReadDetail(args: unknown): string | undefined {
@@ -139,7 +189,7 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? name;
+  const label = spec?.label ?? title;
   const actionRaw =
     params.args && typeof params.args === "object"
       ? ((params.args as Record<string, unknown>).action as string | undefined)

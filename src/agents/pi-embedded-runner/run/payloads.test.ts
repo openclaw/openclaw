@@ -127,7 +127,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("browser");
+    expect(payloads[0]?.text).toContain("Browser");
     expect(payloads[0]?.text).toContain("tab not found");
   });
 
