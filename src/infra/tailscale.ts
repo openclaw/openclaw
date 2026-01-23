@@ -206,6 +206,25 @@ export async function ensureTailscaledInstalled(
   await exec("brew", ["install", "tailscale"]);
 }
 
+// Helper to attempt a command, and retry with sudo if it fails.
+async function execWithSudoFallback(
+  exec: typeof runExec,
+  bin: string,
+  args: string[],
+  opts: { maxBuffer?: number; timeoutMs?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await exec(bin, args, opts);
+  } catch (err) {
+    // If the error suggests permission denied or access denied, try with sudo.
+    // Or honestly, for any error in these specific ops, trying sudo is a reasonable fallback
+    // given the context of what we're doing (system-level network config).
+    // We'll log a verbose message that we're falling back.
+    logVerbose(`Command failed, retrying with sudo: ${bin} ${args.join(" ")}`);
+    return await exec("sudo", ["-n", bin, ...args], opts);
+  }
+}
+
 export async function ensureFunnel(
   port: number,
   exec: typeof runExec = runExec,
@@ -237,10 +256,16 @@ export async function ensureFunnel(
     }
 
     logVerbose(`Enabling funnel on port ${port}…`);
-    const { stdout } = await exec("sudo", ["-n", tailscaleBin, "funnel", "--yes", "--bg", `${port}`], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
+    // Attempt with fallback
+    const { stdout } = await execWithSudoFallback(
+      exec,
+      tailscaleBin,
+      ["funnel", "--yes", "--bg", `${port}`],
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 15_000,
+      },
+    );
     if (stdout.trim()) console.log(stdout.trim());
   } catch (err) {
     const errOutput = err as { stdout?: unknown; stderr?: unknown };
@@ -288,32 +313,52 @@ export async function ensureFunnel(
 
 export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec("sudo", ["-n", tailscaleBin, "serve", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["serve", "--bg", "--yes", `${port}`],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function disableTailscaleServe(exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec("sudo", ["-n", tailscaleBin, "serve", "reset"], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["serve", "reset"],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec("sudo", ["-n", tailscaleBin, "funnel", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["funnel", "--bg", "--yes", `${port}`],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec("sudo", ["-n", tailscaleBin, "funnel", "reset"], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["funnel", "reset"],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
