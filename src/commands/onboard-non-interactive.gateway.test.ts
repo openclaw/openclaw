@@ -139,6 +139,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
     skipCron: process.env.CLAWDBOT_SKIP_CRON,
     skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+    skipBrowser: process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER,
     token: process.env.CLAWDBOT_GATEWAY_TOKEN,
     password: process.env.CLAWDBOT_GATEWAY_PASSWORD,
   };
@@ -160,6 +161,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
     process.env.CLAWDBOT_SKIP_CRON = "1";
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+    process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER = "1";
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
 
@@ -178,6 +180,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
     process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
+    process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
     process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
     process.env.CLAWDBOT_GATEWAY_PASSWORD = prev.password;
   });

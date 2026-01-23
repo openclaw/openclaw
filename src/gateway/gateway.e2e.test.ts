@@ -35,6 +35,7 @@ describe("gateway e2e", () => {
         skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
         skipCron: process.env.CLAWDBOT_SKIP_CRON,
         skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+        skipBrowser: process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER,
       };
 
       const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
@@ -45,6 +46,7 @@ describe("gateway e2e", () => {
       process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
       process.env.CLAWDBOT_SKIP_CRON = "1";
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+      process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER = "1";
 
       const token = `test-${randomUUID()}`;
       process.env.CLAWDBOT_GATEWAY_TOKEN = token;
@@ -145,6 +147,7 @@ describe("gateway e2e", () => {
         process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
         process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
         process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
+        process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
       }
     },
   );
@@ -159,12 +162,14 @@ describe("gateway e2e", () => {
       skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
       skipCron: process.env.CLAWDBOT_SKIP_CRON,
       skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+      skipBrowser: process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER,
     };
 
     process.env.CLAWDBOT_SKIP_CHANNELS = "1";
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
     process.env.CLAWDBOT_SKIP_CRON = "1";
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+    process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER = "1";
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
 
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-wizard-home-"));
@@ -264,6 +269,7 @@ describe("gateway e2e", () => {
       process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
       process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
+      process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
     }
   });
 });
