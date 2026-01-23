@@ -251,6 +251,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         lastChannel: entry?.lastChannel,
         lastTo: entry?.lastTo,
         skillsSnapshot: entry?.skillsSnapshot,
+        // Reset token counts to 0 on session reset (#1523)
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
       };
       store[primaryKey] = nextEntry;
       return nextEntry;
