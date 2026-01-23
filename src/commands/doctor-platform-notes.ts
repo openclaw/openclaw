@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
+import { shortenHomePath } from "../utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,10 +20,11 @@ export async function noteMacLaunchAgentOverrides() {
   const hasMarker = fs.existsSync(markerPath);
   if (!hasMarker) return;
 
+  const displayMarkerPath = shortenHomePath(markerPath);
   const lines = [
-    `- LaunchAgent writes are disabled via ${markerPath}.`,
+    `- LaunchAgent writes are disabled via ${displayMarkerPath}.`,
     "- To restore default behavior:",
-    `  rm ${markerPath}`,
+    `  rm ${displayMarkerPath}`,
   ].filter((line): line is string => Boolean(line));
   note(lines.join("\n"), "Gateway (macOS)");
 }

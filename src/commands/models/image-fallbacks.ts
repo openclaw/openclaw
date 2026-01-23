@@ -1,6 +1,7 @@
 import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { shortenHomePath } from "../../utils.js";
 import {
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
@@ -78,7 +79,7 @@ export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: 
     };
   });
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   runtime.log(
     `Image fallbacks: ${(updated.agents?.defaults?.imageModel?.fallbacks ?? []).join(", ")}`,
   );
@@ -126,7 +127,7 @@ export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtim
     };
   });
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   runtime.log(
     `Image fallbacks: ${(updated.agents?.defaults?.imageModel?.fallbacks ?? []).join(", ")}`,
   );
@@ -152,6 +153,6 @@ export async function modelsImageFallbacksClearCommand(runtime: RuntimeEnv) {
     };
   });
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   runtime.log("Image fallback list cleared.");
 }

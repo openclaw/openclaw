@@ -6,6 +6,7 @@ import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 import { renderTable } from "../../terminal/table.js";
 import { parseDurationMs } from "../parse-duration.js";
+import { shortenHomeInString } from "../../utils.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -49,8 +50,9 @@ function formatPathEnv(raw?: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const parts = trimmed.split(":").filter(Boolean);
-  if (parts.length <= 3) return trimmed;
-  return `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
+  const display =
+    parts.length <= 3 ? trimmed : `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
+  return shortenHomeInString(display);
 }
 
 function parseSinceMs(raw: unknown, label: string): number | undefined {

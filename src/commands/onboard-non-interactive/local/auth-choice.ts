@@ -36,6 +36,7 @@ import {
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { applyOpenAICodexModelDefault } from "../../openai-codex-model-default.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
+import { shortenHomePath } from "../../../utils.js";
 
 export async function applyNonInteractiveAuthChoice(params: {
   nextConfig: ClawdbotConfig;
@@ -172,7 +173,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     const key = resolved.key;
     const result = upsertSharedEnvVar({ key: "OPENAI_API_KEY", value: key });
     process.env.OPENAI_API_KEY = key;
-    runtime.log(`Saved OPENAI_API_KEY to ${result.path}`);
+    runtime.log(`Saved OPENAI_API_KEY to ${shortenHomePath(result.path)}`);
     return nextConfig;
   }
 

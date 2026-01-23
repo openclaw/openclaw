@@ -25,7 +25,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 
 export type HooksListOptions = {
   json?: boolean;
@@ -224,8 +224,8 @@ export function formatHookInfo(
   } else {
     lines.push(`${theme.muted("  Source:")} ${hook.source}`);
   }
-  lines.push(`${theme.muted("  Path:")} ${hook.filePath}`);
-  lines.push(`${theme.muted("  Handler:")} ${hook.handlerPath}`);
+  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`);
+  lines.push(`${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`);
   if (hook.homepage) {
     lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
   }
@@ -577,7 +577,7 @@ export function registerHooksCli(program: Command): void {
           });
 
           await writeConfigFile(next);
-          defaultRuntime.log(`Linked hook path: ${resolved}`);
+          defaultRuntime.log(`Linked hook path: ${shortenHomePath(resolved)}`);
           defaultRuntime.log(`Restart the gateway to load hooks.`);
           return;
         }

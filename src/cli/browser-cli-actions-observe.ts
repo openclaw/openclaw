@@ -9,6 +9,7 @@ import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { shortenHomePath } from "../utils.js";
 
 function runBrowserObserve(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -61,7 +62,7 @@ export function registerBrowserActionObserveCommands(
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`PDF: ${result.path}`);
+        defaultRuntime.log(`PDF: ${shortenHomePath(result.path)}`);
       });
     });
 

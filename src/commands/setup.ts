@@ -7,6 +7,7 @@ import { type ClawdbotConfig, CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../c
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 
 async function readConfigFileRaw(): Promise<{
   exists: boolean;
@@ -54,20 +55,20 @@ export async function setupCommand(
     await writeConfigFile(next);
     runtime.log(
       !existingRaw.exists
-        ? `Wrote ${CONFIG_PATH_CLAWDBOT}`
-        : `Updated ${CONFIG_PATH_CLAWDBOT} (set agents.defaults.workspace)`,
+        ? `Wrote ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`
+        : `Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)} (set agents.defaults.workspace)`,
     );
   } else {
-    runtime.log(`Config OK: ${CONFIG_PATH_CLAWDBOT}`);
+    runtime.log(`Config OK: ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   }
 
   const ws = await ensureAgentWorkspace({
     dir: workspace,
     ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
   });
-  runtime.log(`Workspace OK: ${ws.dir}`);
+  runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
   const sessionsDir = resolveSessionTranscriptsDir();
   await fs.mkdir(sessionsDir, { recursive: true });
-  runtime.log(`Sessions OK: ${sessionsDir}`);
+  runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }

@@ -4,6 +4,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import { shortenHomePath } from "../utils.js";
 import { confirm, select } from "./configure.shared.js";
 import { guardCancel } from "./onboard-helpers.js";
 
@@ -51,7 +52,7 @@ export async function removeChannelConfigWizard(
     const label = getChannelPlugin(channel)?.meta.label ?? channel;
     const confirmed = guardCancel(
       await confirm({
-        message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,
+        message: `Delete ${label} configuration from ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}?`,
         initialValue: false,
       }),
       runtime,

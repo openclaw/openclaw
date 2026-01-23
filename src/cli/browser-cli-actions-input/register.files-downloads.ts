@@ -9,6 +9,7 @@ import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { resolveBrowserActionContext } from "./shared.js";
+import { shortenHomePath } from "../../utils.js";
 
 export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
@@ -73,7 +74,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`downloaded: ${result.download.path}`);
+        defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -105,7 +106,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`downloaded: ${result.download.path}`);
+        defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

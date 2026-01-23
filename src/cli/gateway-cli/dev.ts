@@ -6,7 +6,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveUserPath } from "../../utils.js";
+import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
 const DEV_IDENTITY_NAME = "C3-PO";
 const DEV_IDENTITY_THEME = "protocol droid";
@@ -117,6 +117,6 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
     },
   });
   await ensureDevWorkspace(workspace);
-  defaultRuntime.log(`Dev config ready: ${CONFIG_PATH_CLAWDBOT}`);
-  defaultRuntime.log(`Dev workspace ready: ${resolveUserPath(workspace)}`);
+  defaultRuntime.log(`Dev config ready: ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+  defaultRuntime.log(`Dev workspace ready: ${shortenHomePath(resolveUserPath(workspace))}`);
 }

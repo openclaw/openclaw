@@ -2,6 +2,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { CONFIG_PATH_CLAWDBOT, resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { shortenHomePath } from "../../utils.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { healthCommand } from "../health.js";
 import {
@@ -74,7 +75,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

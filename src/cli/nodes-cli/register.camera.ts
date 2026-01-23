@@ -13,6 +13,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 import { renderTable } from "../../terminal/table.js";
+import { shortenHomePath } from "../../utils.js";
 
 const parseFacing = (value: string): CameraFacing => {
   const v = String(value ?? "")
@@ -165,7 +166,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             defaultRuntime.log(JSON.stringify({ files: results }, null, 2));
             return;
           }
-          defaultRuntime.log(results.map((r) => `MEDIA:${r.path}`).join("\n"));
+          defaultRuntime.log(results.map((r) => `MEDIA:${shortenHomePath(r.path)}`).join("\n"));
         });
       }),
     { timeoutMs: 60_000 },
@@ -239,7 +240,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             );
             return;
           }
-          defaultRuntime.log(`MEDIA:${filePath}`);
+          defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);
         });
       }),
     { timeoutMs: 90_000 },

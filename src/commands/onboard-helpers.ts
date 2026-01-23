@@ -18,7 +18,13 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { CONFIG_DIR, resolveUserPath, sleep } from "../utils.js";
+import {
+  CONFIG_DIR,
+  resolveUserPath,
+  shortenHomeInString,
+  shortenHomePath,
+  sleep,
+} from "../utils.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 
@@ -33,21 +39,21 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
 export function summarizeExistingConfig(config: ClawdbotConfig): string {
   const rows: string[] = [];
   const defaults = config.agents?.defaults;
-  if (defaults?.workspace) rows.push(`workspace: ${defaults.workspace}`);
+  if (defaults?.workspace) rows.push(shortenHomeInString(`workspace: ${defaults.workspace}`));
   if (defaults?.model) {
     const model = typeof defaults.model === "string" ? defaults.model : defaults.model.primary;
-    if (model) rows.push(`model: ${model}`);
+    if (model) rows.push(shortenHomeInString(`model: ${model}`));
   }
-  if (config.gateway?.mode) rows.push(`gateway.mode: ${config.gateway.mode}`);
+  if (config.gateway?.mode) rows.push(shortenHomeInString(`gateway.mode: ${config.gateway.mode}`));
   if (typeof config.gateway?.port === "number") {
-    rows.push(`gateway.port: ${config.gateway.port}`);
+    rows.push(shortenHomeInString(`gateway.port: ${config.gateway.port}`));
   }
-  if (config.gateway?.bind) rows.push(`gateway.bind: ${config.gateway.bind}`);
+  if (config.gateway?.bind) rows.push(shortenHomeInString(`gateway.bind: ${config.gateway.bind}`));
   if (config.gateway?.remote?.url) {
-    rows.push(`gateway.remote.url: ${config.gateway.remote.url}`);
+    rows.push(shortenHomeInString(`gateway.remote.url: ${config.gateway.remote.url}`));
   }
   if (config.skills?.install?.nodeManager) {
-    rows.push(`skills.nodeManager: ${config.skills.install.nodeManager}`);
+    rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
 }
@@ -220,10 +226,10 @@ export async function ensureWorkspaceAndSessions(
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
   });
-  runtime.log(`Workspace OK: ${ws.dir}`);
+  runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
-  runtime.log(`Sessions OK: ${sessionsDir}`);
+  runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 
 export function resolveNodeManagerOptions(): Array<{
@@ -246,9 +252,9 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
   }
   try {
     await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
-    runtime.log(`Moved to Trash: ${pathname}`);
+    runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
   } catch {
-    runtime.log(`Failed to move to Trash (manual delete): ${pathname}`);
+    runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
   }
 }
 

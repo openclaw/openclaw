@@ -1,4 +1,5 @@
 import { visibleWidth } from "./ansi.js";
+import { shortenHomeInString } from "../utils.js";
 
 type Align = "left" | "right" | "center";
 
@@ -168,11 +169,18 @@ function normalizeWidth(n: number | undefined): number | undefined {
 }
 
 export function renderTable(opts: RenderTableOptions): string {
+  const rows = opts.rows.map((row) => {
+    const next: Record<string, string> = {};
+    for (const [key, value] of Object.entries(row)) {
+      next[key] = shortenHomeInString(value);
+    }
+    return next;
+  });
   const border = opts.border ?? "unicode";
   if (border === "none") {
     const columns = opts.columns;
     const header = columns.map((c) => c.header).join(" | ");
-    const lines = [header, ...opts.rows.map((r) => columns.map((c) => r[c.key] ?? "").join(" | "))];
+    const lines = [header, ...rows.map((r) => columns.map((c) => r[c.key] ?? "").join(" | "))];
     return `${lines.join("\n")}\n`;
   }
 
@@ -181,7 +189,7 @@ export function renderTable(opts: RenderTableOptions): string {
 
   const metrics = columns.map((c) => {
     const headerW = visibleWidth(c.header);
-    const cellW = Math.max(0, ...opts.rows.map((r) => visibleWidth(r[c.key] ?? "")));
+    const cellW = Math.max(0, ...rows.map((r) => visibleWidth(r[c.key] ?? "")));
     return { headerW, cellW };
   });
 
@@ -328,7 +336,7 @@ export function renderTable(opts: RenderTableOptions): string {
   lines.push(hLine(box.tl, box.t, box.tr));
   lines.push(...renderRow({}, true));
   lines.push(hLine(box.ml, box.m, box.mr));
-  for (const row of opts.rows) {
+  for (const row of rows) {
     lines.push(...renderRow(row, false));
   }
   lines.push(hLine(box.bl, box.b, box.br));
