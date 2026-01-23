@@ -1,4 +1,9 @@
-import { resolveControlCommandGate, type ClawdbotConfig, type RuntimeEnv } from "clawdbot/plugin-sdk";
+import {
+  logInboundDrop,
+  resolveControlCommandGate,
+  type ClawdbotConfig,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
@@ -196,9 +201,12 @@ export async function handleNextcloudTalkInbound(params: {
   }
 
   if (isGroup && commandGate.shouldBlock) {
-    runtime.log?.(
-      `nextcloud-talk: drop control command from unauthorized sender ${senderId}`,
-    );
+    logInboundDrop({
+      log: (message) => runtime.log?.(message),
+      channel: CHANNEL_ID,
+      reason: "control command (unauthorized)",
+      target: senderId,
+    });
     return;
   }
 

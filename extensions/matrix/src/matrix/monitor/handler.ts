@@ -4,6 +4,8 @@ import {
   createReplyPrefixContext,
   createTypingCallbacks,
   formatAllowlistMatchMeta,
+  logInboundDrop,
+  logTypingFailure,
   resolveControlCommandGate,
   type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
@@ -392,7 +394,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       const commandAuthorized = commandGate.commandAuthorized;
       if (isRoom && commandGate.shouldBlock) {
-        logVerboseMessage(`matrix: drop control command from unauthorized sender ${senderId}`);
+        logInboundDrop({
+          log: logVerboseMessage,
+          channel: "matrix",
+          reason: "control command (unauthorized)",
+          target: senderId,
+        });
         return;
       }
       const shouldRequireMention = isRoom
@@ -559,10 +566,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         start: () => sendTypingMatrix(roomId, true, undefined, client),
         stop: () => sendTypingMatrix(roomId, false, undefined, client),
         onStartError: (err) => {
-          logVerboseMessage(`matrix typing cue failed for room ${roomId}: ${String(err)}`);
+          logTypingFailure({
+            log: logVerboseMessage,
+            channel: "matrix",
+            action: "start",
+            target: roomId,
+            error: err,
+          });
         },
         onStopError: (err) => {
-          logVerboseMessage(`matrix typing stop failed for room ${roomId}: ${String(err)}`);
+          logTypingFailure({
+            log: logVerboseMessage,
+            channel: "matrix",
+            action: "stop",
+            target: roomId,
+            error: err,
+          });
         },
       });
       const { dispatcher, replyOptions, markDispatchIdle } =

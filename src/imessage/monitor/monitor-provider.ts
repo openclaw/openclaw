@@ -23,6 +23,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { logInboundDrop } from "../../channels/logging.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
@@ -384,7 +385,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
     const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
     if (isGroup && commandGate.shouldBlock) {
-      logVerbose(`imessage: drop control command from unauthorized sender ${sender}`);
+      logInboundDrop({
+        log: logVerbose,
+        channel: "imessage",
+        reason: "control command (unauthorized)",
+        target: sender,
+      });
       return;
     }
     const shouldBypassMention =

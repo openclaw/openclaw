@@ -21,6 +21,7 @@ import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { sendMessageDiscord } from "../send.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
+import { logInboundDrop } from "../../channels/logging.js";
 import {
   allowListMatches,
   isDiscordGroupAllowedByPolicy,
@@ -385,7 +386,12 @@ export async function preflightDiscordMessage(
     commandAuthorized = commandGate.commandAuthorized;
 
     if (commandGate.shouldBlock) {
-      logVerbose(`Blocked discord control command from unauthorized sender ${author.id}`);
+      logInboundDrop({
+        log: logVerbose,
+        channel: "discord",
+        reason: "control command (unauthorized)",
+        target: author.id,
+      });
       return null;
     }
   }

@@ -9,6 +9,8 @@ import type {
 import {
   createReplyPrefixContext,
   createTypingCallbacks,
+  logInboundDrop,
+  logTypingFailure,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -487,9 +489,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
 
     if (kind !== "dm" && commandGate.shouldBlock) {
-      logVerboseMessage(
-        `mattermost: drop control command from unauthorized sender ${senderId}`,
-      );
+      logInboundDrop({
+        log: logVerboseMessage,
+        channel: "mattermost",
+        reason: "control command (unauthorized)",
+        target: senderId,
+      });
       return;
     }
 
@@ -716,7 +721,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const typingCallbacks = createTypingCallbacks({
       start: () => sendTypingIndicator(channelId, threadRootId),
       onStartError: (err) => {
-        logger.debug?.(`mattermost typing cue failed for channel ${channelId}: ${String(err)}`);
+        logTypingFailure({
+          log: (message) => logger.debug?.(message),
+          channel: "mattermost",
+          target: channelId,
+          error: err,
+        });
       },
     });
     const { dispatcher, replyOptions, markDispatchIdle } =

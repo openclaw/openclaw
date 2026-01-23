@@ -2,6 +2,7 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  logInboundDrop,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveMentionGating,
@@ -264,7 +265,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
     const commandAuthorized = commandGate.commandAuthorized;
     if (commandGate.shouldBlock) {
-      logVerboseMessage(`msteams: drop control command from unauthorized sender ${senderId}`);
+      logInboundDrop({
+        log: logVerboseMessage,
+        channel: "msteams",
+        reason: "control command (unauthorized)",
+        target: senderId,
+      });
       return;
     }
 

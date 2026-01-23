@@ -1,6 +1,7 @@
 import {
   createReplyPrefixContext,
   createTypingCallbacks,
+  logTypingFailure,
   resolveChannelMediaMaxBytes,
   type ClawdbotConfig,
   type MSTeamsReplyStyle,
@@ -45,8 +46,13 @@ export function createMSTeamsReplyDispatcher(params: {
   };
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
-    onStartError: () => {
-      // Typing indicator is best-effort.
+    onStartError: (err) => {
+      logTypingFailure({
+        log: (message) => params.log.debug(message),
+        channel: "msteams",
+        action: "start",
+        error: err,
+      });
     },
   });
   const prefixContext = createReplyPrefixContext({

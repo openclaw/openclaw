@@ -2,6 +2,7 @@ import { resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
+import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
 import { createReplyPrefixContext } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
@@ -55,6 +56,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     hasRepliedRef,
   });
 
+  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
       didSetStatus = true;
@@ -73,10 +75,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
     onStartError: (err) => {
-      runtime.error?.(danger(`slack typing cue failed: ${String(err)}`));
+      logTypingFailure({
+        log: (message) => runtime.error?.(danger(message)),
+        channel: "slack",
+        action: "start",
+        target: typingTarget,
+        error: err,
+      });
     },
     onStopError: (err) => {
-      runtime.error?.(danger(`slack typing stop failed: ${String(err)}`));
+      logTypingFailure({
+        log: (message) => runtime.error?.(danger(message)),
+        channel: "slack",
+        action: "stop",
+        target: typingTarget,
+        error: err,
+      });
     },
   });
 
@@ -159,9 +173,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         },
       ),
     onError: (err) => {
-      logVerbose(
-        `slack: failed to remove ack reaction from ${message.channel}/${message.ts}: ${String(err)}`,
-      );
+      logAckFailure({
+        log: logVerbose,
+        channel: "slack",
+        target: `${message.channel}/${message.ts}`,
+        error: err,
+      });
     },
   });
 

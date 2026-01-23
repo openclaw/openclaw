@@ -23,6 +23,7 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { logInboundDrop } from "../channels/logging.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -306,7 +307,12 @@ export const buildTelegramMessageContext = async ({
     (ent) => ent.type === "mention",
   );
   if (isGroup && commandGate.shouldBlock) {
-    logVerbose(`telegram: drop control command from unauthorized sender ${senderId ?? "unknown"}`);
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "control command (unauthorized)",
+      target: senderId ?? "unknown",
+    });
     return null;
   }
   const activationOverride = resolveGroupActivation({
