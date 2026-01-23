@@ -43,7 +43,15 @@ export type ModelProviderConfig = {
   models: ModelDefinitionConfig[];
 };
 
+export type BedrockDiscoveryConfig = {
+  enabled?: boolean;
+  region?: string;
+  providerFilter?: string[];
+  refreshInterval?: number;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
+  bedrockDiscovery?: BedrockDiscoveryConfig;
 };

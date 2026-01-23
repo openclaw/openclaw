@@ -5,6 +5,7 @@ import {
 } from "../providers/github-copilot-token.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -373,5 +374,29 @@ export async function resolveImplicitCopilotProvider(params: {
   return {
     baseUrl,
     models: [],
+  } satisfies ProviderConfig;
+}
+
+export async function resolveImplicitBedrockProvider(params: {
+  agentDir: string;
+  config?: ClawdbotConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderConfig | null> {
+  const env = params.env ?? process.env;
+  const discoveryConfig = params.config?.models?.bedrockDiscovery;
+  const enabled = discoveryConfig?.enabled;
+  const hasAwsCreds = resolveAwsSdkEnvVarName() !== undefined;
+  if (enabled === false) return null;
+  if (enabled !== true && !hasAwsCreds) return null;
+
+  const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  const models = await discoverBedrockModels({ region, config: discoveryConfig });
+  if (models.length === 0) return null;
+
+  return {
+    baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,
+    api: "bedrock-converse-stream",
+    auth: "aws-sdk",
+    models,
   } satisfies ProviderConfig;
 }

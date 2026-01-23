@@ -59,10 +59,21 @@ export const ModelProviderSchema = z
   })
   .strict();
 
+export const BedrockDiscoverySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    region: z.string().optional(),
+    providerFilter: z.array(z.string()).optional(),
+    refreshInterval: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
+    bedrockDiscovery: BedrockDiscoverySchema,
   })
   .strict()
   .optional();

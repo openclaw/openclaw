@@ -17,6 +17,33 @@ not an API key.
 - Auth: AWS credentials (env vars, shared config, or instance role)
 - Region: `AWS_REGION` or `AWS_DEFAULT_REGION` (default: `us-east-1`)
 
+## Automatic model discovery
+
+If AWS credentials are detected, Clawdbot can automatically discover Bedrock
+models that support **streaming** and **text output**. Discovery uses
+`bedrock:ListFoundationModels` and is cached (default: 1 hour).
+
+Config options live under `models.bedrockDiscovery`:
+
+```json5
+{
+  models: {
+    bedrockDiscovery: {
+      enabled: true,
+      region: "us-east-1",
+      providerFilter: ["anthropic", "amazon"],
+      refreshInterval: 3600
+    }
+  }
+}
+```
+
+Notes:
+- `enabled` defaults to `true` when AWS credentials are present.
+- `region` defaults to `AWS_REGION` or `AWS_DEFAULT_REGION`, then `us-east-1`.
+- `providerFilter` matches Bedrock provider names (for example `anthropic`).
+- `refreshInterval` is seconds; set to `0` to disable caching.
+
 ## Setup (manual)
 
 1) Ensure AWS credentials are available on the **gateway host**:
@@ -67,6 +94,7 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 ## Notes
 
 - Bedrock requires **model access** enabled in your AWS account/region.
+- Automatic discovery needs the `bedrock:ListFoundationModels` permission.
 - If you use profiles, set `AWS_PROFILE` on the gateway host.
 - Clawdbot surfaces the credential source in this order: `AWS_BEARER_TOKEN_BEDROCK`,
   then `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, then `AWS_PROFILE`, then the
