@@ -379,7 +379,55 @@ You can configure different threading behavior per chat type by setting `channel
 }
 ```
 
-When a chat-type override is set, it takes precedence for that chat type. Otherwise the top-level `replyToMode` is used. Legacy `channels.slack.dm.replyToMode` is still accepted as a fallback for `direct` when no chat-type override is set.
+Supported chat types:
+- `direct`: 1:1 DMs (Slack `im`)
+- `group`: group DMs / MPIMs (Slack `mpim`)
+- `channel`: standard channels (public/private)
+
+Precedence:
+1) `replyToModeByChatType.<chatType>`
+2) `replyToMode`
+3) Provider default (`off`)
+
+Legacy `channels.slack.dm.replyToMode` is still accepted as a fallback for `direct` when no chat-type override is set.
+
+Examples:
+
+Thread DMs only:
+```json5
+{
+  channels: {
+    slack: {
+      replyToMode: "off",
+      replyToModeByChatType: { direct: "all" }
+    }
+  }
+}
+```
+
+Thread group DMs but keep channels in the root:
+```json5
+{
+  channels: {
+    slack: {
+      replyToMode: "off",
+      replyToModeByChatType: { group: "first" }
+    }
+  }
+}
+```
+
+Make channels thread, keep DMs in the root:
+```json5
+{
+  channels: {
+    slack: {
+      replyToMode: "first",
+      replyToModeByChatType: { direct: "off", group: "off" }
+    }
+  }
+}
+```
 
 ### Manual threading tags
 For fine-grained control, use these tags in agent responses:
