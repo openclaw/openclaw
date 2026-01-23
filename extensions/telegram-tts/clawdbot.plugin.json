@@ -6,7 +6,8 @@
       "help": "Automatically convert text responses to voice messages"
     },
     "provider": {
-      "label": "TTS Provider"
+      "label": "TTS Provider",
+      "help": "Choose between ElevenLabs or OpenAI for voice synthesis"
     },
     "elevenlabs.apiKey": {
       "label": "ElevenLabs API Key",
@@ -20,6 +21,18 @@
       "label": "ElevenLabs Model ID",
       "help": "Default: eleven_multilingual_v2"
     },
+    "openai.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true
+    },
+    "openai.model": {
+      "label": "OpenAI TTS Model",
+      "help": "tts-1 (faster) or tts-1-hd (higher quality)"
+    },
+    "openai.voice": {
+      "label": "OpenAI Voice",
+      "help": "alloy, echo, fable, onyx, nova, or shimmer"
+    },
     "prefsPath": {
       "label": "User Preferences File",
       "help": "Path to JSON file storing TTS state",
@@ -28,6 +41,11 @@
     "maxTextLength": {
       "label": "Max Text Length",
       "help": "Maximum characters to convert to speech",
+      "advanced": true
+    },
+    "timeoutMs": {
+      "label": "Request Timeout (ms)",
+      "help": "Maximum time to wait for TTS API response (default: 30000)",
       "advanced": true
     }
   },
@@ -61,6 +79,25 @@
           }
         }
       },
+      "openai": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "enum": ["tts-1", "tts-1-hd"],
+            "default": "tts-1"
+          },
+          "voice": {
+            "type": "string",
+            "enum": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+            "default": "alloy"
+          }
+        }
+      },
       "prefsPath": {
         "type": "string"
       },
@@ -69,12 +106,11 @@
         "minimum": 1,
         "default": 4000
       },
-      "channels": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "default": ["telegram"]
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 120000,
+        "default": 30000
       }
     }
   }

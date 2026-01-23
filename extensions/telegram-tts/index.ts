@@ -1,21 +1,32 @@
 /**
  * telegram-tts - Automatic TTS for chat responses
  *
- * This plugin provides a `speak` tool that converts text to speech using
- * ElevenLabs API and sends the response as a voice message.
+ * Self-contained TTS extension that calls ElevenLabs/OpenAI APIs directly.
+ * No external CLI dependencies.
  *
- * When TTS mode is enabled (via user preferences or config), the agent
- * is instructed to use the speak tool for all responses.
+ * Features:
+ * - speak tool for programmatic TTS
+ * - Multi-provider support (ElevenLabs, OpenAI)
+ * - RPC methods for status and control
+ *
+ * Note: Slash commands (/tts_on, /tts_off, /audio) should be configured
+ * via Telegram customCommands and handled by the agent workspace.
  */
 
-import { execSync } from "child_process";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "fs";
 import { join } from "path";
-import type { PluginApi, PluginConfig } from "clawdbot";
+import { tmpdir } from "os";
+import type { PluginApi } from "clawdbot";
 
 const PLUGIN_ID = "telegram-tts";
+const DEFAULT_TIMEOUT_MS = 30000;
+const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
-interface TelegramTtsConfig {
+// =============================================================================
+// Types
+// =============================================================================
+
+interface TtsConfig {
   enabled?: boolean;
   provider?: "elevenlabs" | "openai";
   elevenlabs?: {
@@ -23,9 +34,14 @@ interface TelegramTtsConfig {
     voiceId?: string;
     modelId?: string;
   };
+  openai?: {
+    apiKey?: string;
+    model?: string;
+    voice?: string;
+  };
   prefsPath?: string;
   maxTextLength?: number;
-  channels?: string[];
+  timeoutMs?: number;
 }
 
 interface UserPreferences {
@@ -34,39 +50,44 @@ interface UserPreferences {
   };
 }
 
-/**
- * Load environment variables from .clawdbot/.env
- */
-function loadEnv(): Record<string, string> {
-  const envPath = join(process.env.HOME || "/home/dev", ".clawdbot", ".env");
-  const env: Record<string, string> = { ...process.env } as Record<string, string>;
+interface TtsResult {
+  success: boolean;
+  audioPath?: string;
+  error?: string;
+}
 
-  if (existsSync(envPath)) {
-    const content = readFileSync(envPath, "utf8");
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("#")) {
-        const [key, ...valueParts] = trimmed.split("=");
-        if (key && valueParts.length > 0) {
-          let value = valueParts.join("=");
-          // Remove quotes if present
-          if (
-            (value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))
-          ) {
-            value = value.slice(1, -1);
-          }
-          env[key.trim()] = value;
-        }
-      }
-    }
-  }
-  return env;
+// =============================================================================
+// Validation
+// =============================================================================
+
+/**
+ * Validates ElevenLabs voiceId format to prevent URL injection.
+ * Voice IDs are alphanumeric strings, typically 20 characters.
+ */
+function isValidVoiceId(voiceId: string): boolean {
+  return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
 }
 
 /**
- * Check if TTS is enabled in user preferences
+ * Validates OpenAI voice name.
  */
+function isValidOpenAIVoice(voice: string): boolean {
+  const validVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+  return validVoices.includes(voice);
+}
+
+// =============================================================================
+// Configuration & Preferences
+// =============================================================================
+
+function getPrefsPath(config: TtsConfig): string {
+  return (
+    config.prefsPath ||
+    process.env.CLAWDBOT_TTS_PREFS ||
+    join(process.env.HOME || "/home/dev", "clawd", ".user-preferences.json")
+  );
+}
+
 function isTtsEnabled(prefsPath: string): boolean {
   try {
     if (!existsSync(prefsPath)) return false;
@@ -77,9 +98,6 @@ function isTtsEnabled(prefsPath: string): boolean {
   }
 }
 
-/**
- * Set TTS enabled state in user preferences
- */
 function setTtsEnabled(prefsPath: string, enabled: boolean): void {
   let prefs: UserPreferences = {};
   try {
@@ -93,132 +111,368 @@ function setTtsEnabled(prefsPath: string, enabled: boolean): void {
   writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
 }
 
+function getApiKey(config: TtsConfig, provider: string): string | undefined {
+  if (provider === "elevenlabs") {
+    return (
+      config.elevenlabs?.apiKey ||
+      process.env.ELEVENLABS_API_KEY ||
+      process.env.XI_API_KEY
+    );
+  }
+  if (provider === "openai") {
+    return config.openai?.apiKey || process.env.OPENAI_API_KEY;
+  }
+  return undefined;
+}
+
+// =============================================================================
+// Temp File Cleanup
+// =============================================================================
+
 /**
- * Convert text to audio using sag CLI (ElevenLabs wrapper)
+ * Schedules cleanup of a temp directory after a delay.
+ * This ensures the file is consumed before deletion.
  */
-function textToAudio(text: string): string | null {
-  try {
-    const escapedText = text.replace(/'/g, "'\\''");
-    const env = loadEnv();
-
-    const result = execSync(`sag '${escapedText}'`, {
-      encoding: "utf8",
-      timeout: 60000,
-      env,
-    }).trim();
-
-    if (result && existsSync(result)) {
-      return result;
+function scheduleCleanup(tempDir: string, delayMs: number = TEMP_FILE_CLEANUP_DELAY_MS): void {
+  setTimeout(() => {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
     }
-    return null;
-  } catch (err) {
-    console.error(`[${PLUGIN_ID}] TTS error:`, (err as Error).message);
-    return null;
+  }, delayMs);
+}
+
+// =============================================================================
+// TTS Providers
+// =============================================================================
+
+async function elevenLabsTTS(
+  text: string,
+  apiKey: string,
+  voiceId: string = "pMsXgVXv3BLzUgSXRplE",
+  modelId: string = "eleven_multilingual_v2",
+  timeoutMs: number = DEFAULT_TIMEOUT_MS
+): Promise<Buffer> {
+  // Validate voiceId to prevent URL injection
+  if (!isValidVoiceId(voiceId)) {
+    throw new Error(`Invalid voiceId format`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+          text,
+          model_id: modelId,
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            style: 0.0,
+            use_speaker_boost: true,
+          },
+        }),
+        signal: controller.signal,
+      }
+    );
+
+    if (!response.ok) {
+      // Don't leak API error details to users
+      throw new Error(`ElevenLabs API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-/**
- * Plugin registration
- */
+async function openaiTTS(
+  text: string,
+  apiKey: string,
+  model: string = "tts-1",
+  voice: string = "alloy",
+  timeoutMs: number = DEFAULT_TIMEOUT_MS
+): Promise<Buffer> {
+  // Validate voice
+  if (!isValidOpenAIVoice(voice)) {
+    throw new Error(`Invalid voice: ${voice}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: text,
+        voice,
+        response_format: "mp3",
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      // Don't leak API error details to users
+      throw new Error(`OpenAI TTS API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// =============================================================================
+// Core TTS Function
+// =============================================================================
+
+async function textToSpeech(text: string, config: TtsConfig): Promise<TtsResult> {
+  const provider = config.provider || "elevenlabs";
+  const apiKey = getApiKey(config, provider);
+  const timeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
+
+  if (!apiKey) {
+    return {
+      success: false,
+      error: `No API key configured for ${provider}`,
+    };
+  }
+
+  const maxLen = config.maxTextLength || 4000;
+  if (text.length > maxLen) {
+    return {
+      success: false,
+      error: `Text too long (${text.length} chars, max ${maxLen})`,
+    };
+  }
+
+  try {
+    let audioBuffer: Buffer;
+
+    if (provider === "elevenlabs") {
+      audioBuffer = await elevenLabsTTS(
+        text,
+        apiKey,
+        config.elevenlabs?.voiceId,
+        config.elevenlabs?.modelId,
+        timeoutMs
+      );
+    } else if (provider === "openai") {
+      audioBuffer = await openaiTTS(
+        text,
+        apiKey,
+        config.openai?.model,
+        config.openai?.voice,
+        timeoutMs
+      );
+    } else {
+      return { success: false, error: `Unknown provider: ${provider}` };
+    }
+
+    // Save to temp file
+    const tempDir = mkdtempSync(join(tmpdir(), "tts-"));
+    const audioPath = join(tempDir, `voice-${Date.now()}.mp3`);
+    writeFileSync(audioPath, audioBuffer);
+
+    // Schedule cleanup after delay (file should be consumed by then)
+    scheduleCleanup(tempDir);
+
+    return { success: true, audioPath };
+  } catch (err) {
+    const error = err as Error;
+    if (error.name === "AbortError") {
+      return { success: false, error: "TTS request timed out" };
+    }
+    return {
+      success: false,
+      error: `TTS conversion failed: ${error.message}`,
+    };
+  }
+}
+
+// =============================================================================
+// Plugin Registration
+// =============================================================================
+
 export default function register(api: PluginApi) {
   const log = api.logger;
-  const config = (api.pluginConfig || {}) as TelegramTtsConfig;
-  const prefsPath =
-    config.prefsPath ||
-    process.env.CLAWDBOT_TTS_PREFS ||
-    join(process.env.HOME || "/home/dev", "clawd", ".user-preferences.json");
+  const config: TtsConfig = {
+    enabled: false,
+    provider: "elevenlabs",
+    maxTextLength: 4000,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    ...(api.pluginConfig || {}),
+  };
+  const prefsPath = getPrefsPath(config);
 
   log.info(`[${PLUGIN_ID}] Registering plugin...`);
-  log.info(`[${PLUGIN_ID}] Preferences path: ${prefsPath}`);
+  log.info(`[${PLUGIN_ID}] Provider: ${config.provider}`);
+  log.info(`[${PLUGIN_ID}] Preferences: ${prefsPath}`);
 
-  // Register the 'speak' tool for TTS
+  // ===========================================================================
+  // Tool: speak
+  // ===========================================================================
   api.registerTool({
     name: "speak",
-    description:
-      "Convert text to speech and send as voice message. Use this tool when TTS mode is enabled or when the user requests an audio response.",
+    description: `Convert text to speech and generate voice message.
+Use this tool when TTS mode is enabled or user requests audio.
+
+IMPORTANT: After calling this tool, you MUST output the result exactly as returned.
+The tool returns "MEDIA:/path/to/audio.mp3" - copy this EXACTLY to your response.
+This MEDIA: directive tells the system to send the audio file.
+
+Example flow:
+1. User asks a question with TTS enabled
+2. You call speak({text: "Your answer here"})
+3. Tool returns: MEDIA:/tmp/tts-xxx/voice-123.mp3
+4. You output: MEDIA:/tmp/tts-xxx/voice-123.mp3
+
+Do NOT add extra text around the MEDIA directive.`,
     parameters: {
       type: "object",
       properties: {
         text: {
           type: "string",
-          description: "The text to convert to speech and send as voice message",
+          description: "The text to convert to speech",
         },
       },
       required: ["text"],
     },
-    execute: async (_id: string, params: { text: string }) => {
-      const { text } = params;
-      log.info(`[${PLUGIN_ID}] speak() called, text length: ${text?.length || 0}`);
-
-      if (!text) {
-        return { content: [{ type: "text", text: "Error: No text provided" }] };
+    execute: async (_id: string, params: { text?: unknown }) => {
+      // Validate text parameter
+      if (typeof params?.text !== "string" || params.text.length === 0) {
+        return { content: [{ type: "text", text: "Error: Invalid or missing text parameter" }] };
       }
 
-      const maxLen = config.maxTextLength || 4000;
-      if (text.length > maxLen) {
+      const text = params.text;
+      log.info(`[${PLUGIN_ID}] speak() called, length: ${text.length}`);
+
+      const result = await textToSpeech(text, config);
+
+      if (result.success && result.audioPath) {
+        log.info(`[${PLUGIN_ID}] Audio generated: ${result.audioPath}`);
+        // Return with MEDIA directive for clawdbot to send
         return {
           content: [
             {
               type: "text",
-              text: `Error: Text too long (${text.length} chars, max ${maxLen})`,
+              text: `MEDIA:${result.audioPath}`,
             },
           ],
         };
       }
 
-      const audioPath = textToAudio(text);
-
-      if (audioPath) {
-        log.info(`[${PLUGIN_ID}] Audio generated: ${audioPath}`);
-        return {
-          content: [{ type: "text", text: `Voice message generated successfully.` }],
-          media: audioPath,
-          asVoice: true,
-        };
-      }
-
-      log.error(`[${PLUGIN_ID}] TTS conversion failed`);
+      log.error(`[${PLUGIN_ID}] TTS failed: ${result.error}`);
       return {
-        content: [{ type: "text", text: `TTS conversion failed. Original: ${text}` }],
+        content: [
+          {
+            type: "text",
+            text: result.error || "TTS conversion failed",
+          },
+        ],
       };
     },
   });
 
-  // Register Gateway RPC methods
+  // ===========================================================================
+  // RPC Methods
+  // ===========================================================================
+
+  // tts.status - Check if TTS is enabled
   api.registerGatewayMethod("tts.status", async () => ({
     enabled: isTtsEnabled(prefsPath),
+    provider: config.provider,
     prefsPath,
-    pluginId: PLUGIN_ID,
-    config: {
-      provider: config.provider || "elevenlabs",
-      maxTextLength: config.maxTextLength || 4000,
-    },
+    hasApiKey: !!getApiKey(config, config.provider || "elevenlabs"),
   }));
 
+  // tts.enable - Enable TTS mode
   api.registerGatewayMethod("tts.enable", async () => {
     setTtsEnabled(prefsPath, true);
+    log.info(`[${PLUGIN_ID}] TTS enabled via RPC`);
     return { ok: true, enabled: true };
   });
 
+  // tts.disable - Disable TTS mode
   api.registerGatewayMethod("tts.disable", async () => {
     setTtsEnabled(prefsPath, false);
+    log.info(`[${PLUGIN_ID}] TTS disabled via RPC`);
     return { ok: true, enabled: false };
   });
 
-  api.registerGatewayMethod("tts.convert", async (params: { text: string }) => {
-    if (!params.text) return { ok: false, error: "No text provided" };
-    const audioPath = textToAudio(params.text);
-    return audioPath ? { ok: true, audioPath } : { ok: false, error: "Conversion failed" };
+  // tts.convert - Convert text to audio (returns path)
+  api.registerGatewayMethod("tts.convert", async (params: { text?: unknown }) => {
+    // Validate text parameter
+    if (typeof params?.text !== "string" || params.text.length === 0) {
+      return { ok: false, error: "Invalid or missing 'text' parameter" };
+    }
+    const result = await textToSpeech(params.text, config);
+    if (result.success) {
+      return { ok: true, audioPath: result.audioPath };
+    }
+    return { ok: false, error: result.error };
   });
 
-  log.info(
-    `[${PLUGIN_ID}] Plugin ready. TTS is currently ${isTtsEnabled(prefsPath) ? "ENABLED" : "disabled"}`
-  );
+  // tts.providers - List available providers and their status
+  api.registerGatewayMethod("tts.providers", async () => ({
+    providers: [
+      {
+        id: "elevenlabs",
+        name: "ElevenLabs",
+        configured: !!getApiKey(config, "elevenlabs"),
+        models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+      },
+      {
+        id: "openai",
+        name: "OpenAI",
+        configured: !!getApiKey(config, "openai"),
+        models: ["tts-1", "tts-1-hd"],
+        voices: ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+      },
+    ],
+    active: config.provider,
+  }));
+
+  // ===========================================================================
+  // Startup
+  // ===========================================================================
+
+  const ttsEnabled = isTtsEnabled(prefsPath);
+  const hasKey = !!getApiKey(config, config.provider || "elevenlabs");
+
+  log.info(`[${PLUGIN_ID}] Ready. TTS: ${ttsEnabled ? "ON" : "OFF"}, API Key: ${hasKey ? "OK" : "MISSING"}`);
+
+  if (!hasKey) {
+    log.warn(
+      `[${PLUGIN_ID}] No API key configured. Set ELEVENLABS_API_KEY or OPENAI_API_KEY.`
+    );
+  }
 }
+
+// =============================================================================
+// Plugin Metadata
+// =============================================================================
 
 export const meta = {
   id: PLUGIN_ID,
   name: "Telegram TTS",
-  description: "Automatic text-to-speech for chat responses using ElevenLabs",
-  version: "0.1.0",
+  description: "Text-to-speech for chat responses using ElevenLabs or OpenAI",
+  version: "0.3.0",
 };

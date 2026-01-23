@@ -1,18 +1,18 @@
 # Telegram TTS Extension
 
-Automatic text-to-speech for chat responses using ElevenLabs.
+Automatic text-to-speech for chat responses using ElevenLabs or OpenAI.
 
 ## Features
 
 - **`speak` Tool**: Converts text to speech and sends as voice message
-- **RPC Methods**: Control TTS via Gateway (`tts.status`, `tts.enable`, `tts.disable`, `tts.convert`)
+- **RPC Methods**: Control TTS via Gateway (`tts.status`, `tts.enable`, `tts.disable`, `tts.convert`, `tts.providers`)
 - **User Preferences**: Persistent TTS state via JSON file
-- **Multi-channel**: Works with Telegram and other channels
+- **Multi-provider**: ElevenLabs and OpenAI TTS support
+- **Self-contained**: No external CLI dependencies - calls APIs directly
 
 ## Requirements
 
-- ElevenLabs API key
-- `sag` CLI tool (ElevenLabs TTS wrapper)
+- ElevenLabs API key OR OpenAI API key
 
 ## Installation
 
@@ -24,6 +24,7 @@ The extension is bundled with Clawdbot. Enable it in your config:
     "entries": {
       "telegram-tts": {
         "enabled": true,
+        "provider": "elevenlabs",
         "elevenlabs": {
           "apiKey": "your-api-key"
         }
@@ -33,10 +34,35 @@ The extension is bundled with Clawdbot. Enable it in your config:
 }
 ```
 
-Or set the API key via environment variable:
+Or use OpenAI:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "telegram-tts": {
+        "enabled": true,
+        "provider": "openai",
+        "openai": {
+          "apiKey": "your-api-key",
+          "voice": "nova"
+        }
+      }
+    }
+  }
+}
+```
+
+Or set API keys via environment variables:
 
 ```bash
+# For ElevenLabs
 export ELEVENLABS_API_KEY=your-api-key
+# or
+export XI_API_KEY=your-api-key
+
+# For OpenAI
+export OPENAI_API_KEY=your-api-key
 ```
 
 ## Configuration
@@ -44,12 +70,19 @@ export ELEVENLABS_API_KEY=your-api-key
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | boolean | `false` | Enable the plugin |
-| `provider` | string | `"elevenlabs"` | TTS provider |
+| `provider` | string | `"elevenlabs"` | TTS provider (`elevenlabs` or `openai`) |
 | `elevenlabs.apiKey` | string | - | ElevenLabs API key |
-| `elevenlabs.voiceId` | string | `"pMsXgVXv3BLzUgSXRplE"` | Voice ID |
-| `elevenlabs.modelId` | string | `"eleven_multilingual_v2"` | Model ID |
+| `elevenlabs.voiceId` | string | `"pMsXgVXv3BLzUgSXRplE"` | ElevenLabs Voice ID |
+| `elevenlabs.modelId` | string | `"eleven_multilingual_v2"` | ElevenLabs Model ID |
+| `openai.apiKey` | string | - | OpenAI API key |
+| `openai.model` | string | `"tts-1"` | OpenAI model (`tts-1` or `tts-1-hd`) |
+| `openai.voice` | string | `"alloy"` | OpenAI voice |
 | `prefsPath` | string | `~/clawd/.user-preferences.json` | User preferences file |
 | `maxTextLength` | number | `4000` | Max characters for TTS |
+
+### OpenAI Voices
+
+Available voices: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
 
 ## Usage
 
@@ -74,6 +107,9 @@ clawdbot gateway call tts.disable
 
 # Convert text to audio
 clawdbot gateway call tts.convert '{"text": "Hello world"}'
+
+# List available providers
+clawdbot gateway call tts.providers
 ```
 
 ### Telegram Commands
@@ -86,7 +122,8 @@ Add custom commands to toggle TTS mode:
     "telegram": {
       "customCommands": [
         {"command": "tts_on", "description": "Enable voice responses"},
-        {"command": "tts_off", "description": "Disable voice responses"}
+        {"command": "tts_off", "description": "Disable voice responses"},
+        {"command": "audio", "description": "Send response as voice message"}
       ]
     }
   }
@@ -94,28 +131,6 @@ Add custom commands to toggle TTS mode:
 ```
 
 Then add handling instructions to your agent workspace (CLAUDE.md or TOOLS.md).
-
-## Dependencies
-
-This extension requires the `sag` CLI tool. On Linux, you can create a Python wrapper:
-
-```python
-#!/usr/bin/env python3
-# ~/.local/bin/sag
-from elevenlabs.client import ElevenLabs
-import sys, os, tempfile
-
-client = ElevenLabs(api_key=os.environ["ELEVENLABS_API_KEY"])
-audio = client.text_to_speech.convert(
-    voice_id=os.environ.get("ELEVENLABS_VOICE_ID", "pMsXgVXv3BLzUgSXRplE"),
-    model_id="eleven_multilingual_v2",
-    text=sys.argv[1]
-)
-with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-    for chunk in audio:
-        f.write(chunk)
-    print(f.name)
-```
 
 ## License
 
