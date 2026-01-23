@@ -27,11 +27,8 @@ import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
 import { formatAllowlistMatchMeta } from "../../../channels/allowlist-match.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-} from "../../../config/sessions.js";
+import { recordInboundSession } from "../../../channels/session.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -511,19 +508,28 @@ export async function prepareSlackMessage(params: {
     OriginatingTo: slackTo,
   }) satisfies FinalizedMsgContext;
 
-  void recordSessionMetaFromInbound({
+  await recordInboundSession({
     storePath,
-    sessionKey: sessionKey,
+    sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    ctx.logger.warn(
-      {
-        error: String(err),
-        storePath,
-        sessionKey,
-      },
-      "failed updating session meta",
-    );
+    updateLastRoute: isDirectMessage
+      ? {
+          sessionKey: route.mainSessionKey,
+          channel: "slack",
+          to: `user:${message.user}`,
+          accountId: route.accountId,
+        }
+      : undefined,
+    onRecordError: (err) => {
+      ctx.logger.warn(
+        {
+          error: String(err),
+          storePath,
+          sessionKey,
+        },
+        "failed updating session meta",
+      );
+    },
   });
 
   const replyTarget = ctxPayload.To ?? undefined;

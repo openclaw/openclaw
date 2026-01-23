@@ -31,17 +31,13 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../config/sessions.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -509,29 +505,24 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       OriginatingTo: imessageTo,
     });
 
-    void recordSessionMetaFromInbound({
+    const updateTarget = (isGroup ? chatTarget : undefined) || sender;
+    await recordInboundSession({
       storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
-    }).catch((err) => {
-      logVerbose(`imessage: failed updating session meta: ${String(err)}`);
+      updateLastRoute:
+        !isGroup && updateTarget
+          ? {
+              sessionKey: route.mainSessionKey,
+              channel: "imessage",
+              to: updateTarget,
+              accountId: route.accountId,
+            }
+          : undefined,
+      onRecordError: (err) => {
+        logVerbose(`imessage: failed updating session meta: ${String(err)}`);
+      },
     });
-
-    if (!isGroup) {
-      const to = (isGroup ? chatTarget : undefined) || sender;
-      if (to) {
-        await updateLastRoute({
-          storePath,
-          sessionKey: route.mainSessionKey,
-          deliveryContext: {
-            channel: "imessage",
-            to,
-            accountId: route.accountId,
-          },
-          ctx: ctxPayload,
-        });
-      }
-    }
 
     if (shouldLogVerbose()) {
       const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");

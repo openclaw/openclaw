@@ -24,12 +24,8 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../config/sessions.js";
+import { recordInboundSession } from "../../channels/session.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -159,26 +155,22 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       OriginatingTo: signalTo,
     });
 
-    void recordSessionMetaFromInbound({
+    await recordInboundSession({
       storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
-    }).catch((err) => {
-      logVerbose(`signal: failed updating session meta: ${String(err)}`);
+      updateLastRoute: !entry.isGroup
+        ? {
+            sessionKey: route.mainSessionKey,
+            channel: "signal",
+            to: entry.senderRecipient,
+            accountId: route.accountId,
+          }
+        : undefined,
+      onRecordError: (err) => {
+        logVerbose(`signal: failed updating session meta: ${String(err)}`);
+      },
     });
-
-    if (!entry.isGroup) {
-      await updateLastRoute({
-        storePath,
-        sessionKey: route.mainSessionKey,
-        deliveryContext: {
-          channel: "signal",
-          to: entry.senderRecipient,
-          accountId: route.accountId,
-        },
-        ctx: ctxPayload,
-      });
-    }
 
     if (shouldLogVerbose()) {
       const preview = body.slice(0, 200).replace(/\\n/g, "\\\\n");

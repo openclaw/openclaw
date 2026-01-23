@@ -140,6 +140,7 @@ export {
   resolveTelegramGroupRequireMention,
   resolveWhatsAppGroupRequireMention,
 } from "../channels/plugins/group-mentions.js";
+export { recordInboundSession } from "../channels/session.js";
 export {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
