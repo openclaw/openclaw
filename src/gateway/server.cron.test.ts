@@ -36,7 +36,11 @@ async function rmTempDir(dir: string) {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
-async function waitForCronFinished(ws: { send: (data: string) => void }, jobId: string) {
+async function waitForCronFinished(
+  ws: { send: (data: string) => void },
+  jobId: string,
+  timeoutMs = 20_000,
+) {
   await onceMessage(
     ws as never,
     (o) =>
@@ -44,7 +48,7 @@ async function waitForCronFinished(ws: { send: (data: string) => void }, jobId: 
       o.event === "cron" &&
       o.payload?.action === "finished" &&
       o.payload?.jobId === jobId,
-    20_000,
+    timeoutMs,
   );
 }
 
@@ -345,6 +349,7 @@ describe("gateway server cron", () => {
       const autoJobId = typeof autoJobIdValue === "string" ? autoJobIdValue : "";
       expect(autoJobId.length > 0).toBe(true);
 
+      await waitForCronFinished(ws, autoJobId);
       await waitForCronFinished(ws, autoJobId);
 
       await waitForNonEmptyFile(path.join(dir, "cron", "runs", `${autoJobId}.jsonl`));
