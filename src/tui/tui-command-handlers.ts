@@ -428,7 +428,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         process.exit(0);
         break;
       default:
-        chatLog.addSystem(`unknown command: /${name}`);
+        await sendMessage(raw);
         break;
     }
     tui.requestRender();
