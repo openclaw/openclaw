@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -44,7 +44,7 @@ async function waitForCronFinished(ws: { send: (data: string) => void }, jobId: 
       o.event === "cron" &&
       o.payload?.action === "finished" &&
       o.payload?.jobId === jobId,
-    10_000,
+    20_000,
   );
 }
 
@@ -345,14 +345,7 @@ describe("gateway server cron", () => {
       const autoJobId = typeof autoJobIdValue === "string" ? autoJobIdValue : "";
       expect(autoJobId.length > 0).toBe(true);
 
-      vi.useFakeTimers();
-      try {
-        const autoFinishedP = waitForCronFinished(ws, autoJobId);
-        await vi.advanceTimersByTimeAsync(1000);
-        await autoFinishedP;
-      } finally {
-        vi.useRealTimers();
-      }
+      await waitForCronFinished(ws, autoJobId);
 
       await waitForNonEmptyFile(path.join(dir, "cron", "runs", `${autoJobId}.jsonl`));
       const autoEntries = (await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })).payload as

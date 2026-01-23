@@ -1,11 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let enabledServer: Awaited<ReturnType<typeof startServer>>;
+let enabledPort: number;
+
+beforeAll(async () => {
+  enabledPort = await getFreePort();
+  enabledServer = await startServer(enabledPort);
+});
+
+afterAll(async () => {
+  await enabledServer.close({ reason: "openai http enabled suite done" });
+});
 
 async function startServerWithDefaultConfig(port: number) {
   const { startGatewayServer } = await import("./server.js");
@@ -82,8 +94,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it("handles request validation and routing", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
+    const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
       agentCommand.mockReset();
       agentCommand.mockResolvedValueOnce({ payloads } as never);
@@ -330,13 +341,12 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         );
       }
     } finally {
-      await server.close({ reason: "test done" });
+      // shared server
     }
   });
 
   it("streams SSE chunks when stream=true", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
+    const port = enabledPort;
     try {
       {
         agentCommand.mockReset();
@@ -416,7 +426,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(fallbackText).toContain("hello");
       }
     } finally {
-      await server.close({ reason: "test done" });
+      // shared server
     }
   });
 });
