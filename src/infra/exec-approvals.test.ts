@@ -8,6 +8,7 @@ import {
   analyzeArgvCommand,
   analyzeShellCommand,
   evaluateExecAllowlist,
+  evaluateShellAllowlist,
   isSafeBinUsage,
   matchAllowlist,
   maxAsk,
@@ -121,15 +122,70 @@ describe("exec approvals shell parsing", () => {
     expect(res.segments.map((seg) => seg.argv[0])).toEqual(["echo", "jq"]);
   });
 
-  it("rejects chained commands", () => {
+  it("parses chained commands", () => {
     const res = analyzeShellCommand({ command: "ls && rm -rf /" });
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
+    expect(res.chains?.map((chain) => chain[0]?.argv[0])).toEqual(["ls", "rm"]);
   });
 
   it("parses argv commands", () => {
     const res = analyzeArgvCommand({ argv: ["/bin/echo", "ok"] });
     expect(res.ok).toBe(true);
     expect(res.segments[0]?.argv).toEqual(["/bin/echo", "ok"]);
+  });
+});
+
+describe("exec approvals shell allowlist (chained commands)", () => {
+  it("allows chained commands when all parts are allowlisted", () => {
+    const allowlist: ExecAllowlistEntry[] = [
+      { pattern: "/usr/bin/obsidian-cli" },
+      { pattern: "/usr/bin/head" },
+    ];
+    const result = evaluateShellAllowlist({
+      command:
+        "/usr/bin/obsidian-cli print-default && /usr/bin/obsidian-cli search foo | /usr/bin/head",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("rejects chained commands when any part is not allowlisted", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/obsidian-cli" }];
+    const result = evaluateShellAllowlist({
+      command: "/usr/bin/obsidian-cli print-default && /usr/bin/rm -rf /",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("returns analysisOk=false for malformed chains", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/echo" }];
+    const result = evaluateShellAllowlist({
+      command: "/usr/bin/echo ok &&",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("respects quotes when splitting chains", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/echo" }];
+    const result = evaluateShellAllowlist({
+      command: '/usr/bin/echo "foo && bar"',
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
   });
 });
 

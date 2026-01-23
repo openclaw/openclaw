@@ -6,8 +6,8 @@ import path from "node:path";
 import {
   addAllowlistEntry,
   analyzeArgvCommand,
-  analyzeShellCommand,
   evaluateExecAllowlist,
+  evaluateShellAllowlist,
   requiresExecApproval,
   normalizeExecApprovals,
   recordAllowlistUse,
@@ -18,6 +18,8 @@ import {
   resolveExecApprovalsSocketPath,
   saveExecApprovals,
   type ExecApprovalsFile,
+  type ExecAllowlistEntry,
+  type ExecCommandSegment,
 } from "../infra/exec-approvals.js";
 import {
   requestExecHostViaSocket,
@@ -585,24 +587,45 @@ async function handleInvoke(
   const sessionKey = params.sessionKey?.trim() || "node";
   const runId = params.runId?.trim() || crypto.randomUUID();
   const env = sanitizeEnv(params.env ?? undefined);
-  const analysis = rawCommand
-    ? analyzeShellCommand({ command: rawCommand, cwd: params.cwd ?? undefined, env })
-    : analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
   const cfg = loadConfig();
   const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
-  const allowlistEval = evaluateExecAllowlist({
-    analysis,
-    allowlist: approvals.allowlist,
-    safeBins,
-    cwd: params.cwd ?? undefined,
-    skillBins: bins,
-    autoAllowSkills,
-  });
-  const allowlistMatches = allowlistEval.allowlistMatches;
-  const allowlistSatisfied =
-    security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false;
+  let analysisOk = false;
+  let allowlistMatches: ExecAllowlistEntry[] = [];
+  let allowlistSatisfied = false;
+  let segments: ExecCommandSegment[] = [];
+  if (rawCommand) {
+    const allowlistEval = evaluateShellAllowlist({
+      command: rawCommand,
+      allowlist: approvals.allowlist,
+      safeBins,
+      cwd: params.cwd ?? undefined,
+      env,
+      skillBins: bins,
+      autoAllowSkills,
+    });
+    analysisOk = allowlistEval.analysisOk;
+    allowlistMatches = allowlistEval.allowlistMatches;
+    allowlistSatisfied =
+      security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+    segments = allowlistEval.segments;
+  } else {
+    const analysis = analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
+    const allowlistEval = evaluateExecAllowlist({
+      analysis,
+      allowlist: approvals.allowlist,
+      safeBins,
+      cwd: params.cwd ?? undefined,
+      skillBins: bins,
+      autoAllowSkills,
+    });
+    analysisOk = analysis.ok;
+    allowlistMatches = allowlistEval.allowlistMatches;
+    allowlistSatisfied =
+      security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+    segments = analysis.segments;
+  }
 
   const useMacAppExec = process.platform === "darwin";
   if (useMacAppExec) {
@@ -709,7 +732,7 @@ async function handleInvoke(
   const requiresAsk = requiresExecApproval({
     ask,
     security,
-    analysisOk: analysis.ok,
+    analysisOk,
     allowlistSatisfied,
   });
 
@@ -737,15 +760,15 @@ async function handleInvoke(
     return;
   }
   if (approvalDecision === "allow-always" && security === "allowlist") {
-    if (analysis.ok) {
-      for (const segment of analysis.segments) {
+    if (analysisOk) {
+      for (const segment of segments) {
         const pattern = segment.resolution?.resolvedPath ?? "";
         if (pattern) addAllowlistEntry(approvals.file, agentId, pattern);
       }
     }
   }
 
-  if (security === "allowlist" && (!analysis.ok || !allowlistSatisfied) && !approvedByAsk) {
+  if (security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
     await sendNodeEvent(
       client,
       "exec.denied",
@@ -774,7 +797,7 @@ async function handleInvoke(
         agentId,
         match,
         cmdText,
-        analysis.segments[0]?.resolution?.resolvedPath,
+        segments[0]?.resolution?.resolvedPath,
       );
     }
   }

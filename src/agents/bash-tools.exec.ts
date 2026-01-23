@@ -10,8 +10,7 @@ import {
   type ExecSecurity,
   type ExecApprovalsFile,
   addAllowlistEntry,
-  analyzeShellCommand,
-  evaluateExecAllowlist,
+  evaluateShellAllowlist,
   maxAsk,
   minSecurity,
   requiresExecApproval,
@@ -871,9 +870,16 @@ export function createExecTool(
         if (nodeEnv) {
           applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
         }
-        const analysis = analyzeShellCommand({ command: params.command, cwd: workdir, env });
+        const baseAllowlistEval = evaluateShellAllowlist({
+          command: params.command,
+          allowlist: [],
+          safeBins: new Set(),
+          cwd: workdir,
+          env,
+        });
+        let analysisOk = baseAllowlistEval.analysisOk;
         let allowlistSatisfied = false;
-        if (hostAsk === "on-miss" && hostSecurity === "allowlist") {
+        if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
           try {
             const approvalsSnapshot = (await callGatewayTool(
               "exec.approvals.node.get",
@@ -891,12 +897,15 @@ export function createExecTool(
                 overrides: { security: "allowlist" },
               });
               // Allowlist-only precheck; safe bins are node-local and may diverge.
-              allowlistSatisfied = evaluateExecAllowlist({
-                analysis,
+              const allowlistEval = evaluateShellAllowlist({
+                command: params.command,
                 allowlist: resolved.allowlist,
                 safeBins: new Set(),
                 cwd: workdir,
-              }).allowlistSatisfied;
+                env,
+              });
+              allowlistSatisfied = allowlistEval.allowlistSatisfied;
+              analysisOk = allowlistEval.analysisOk;
             }
           } catch {
             // Fall back to requiring approval if node approvals cannot be fetched.
@@ -905,7 +914,7 @@ export function createExecTool(
         const requiresAsk = requiresExecApproval({
           ask: hostAsk,
           security: hostSecurity,
-          analysisOk: analysis.ok,
+          analysisOk,
           allowlistSatisfied,
         });
         const commandText = params.command;
@@ -1095,20 +1104,21 @@ export function createExecTool(
         if (hostSecurity === "deny") {
           throw new Error("exec denied: host=gateway security=deny");
         }
-        const analysis = analyzeShellCommand({ command: params.command, cwd: workdir, env });
-        const allowlistEval = evaluateExecAllowlist({
-          analysis,
+        const allowlistEval = evaluateShellAllowlist({
+          command: params.command,
           allowlist: approvals.allowlist,
           safeBins,
           cwd: workdir,
+          env,
         });
         const allowlistMatches = allowlistEval.allowlistMatches;
+        const analysisOk = allowlistEval.analysisOk;
         const allowlistSatisfied =
-          hostSecurity === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false;
+          hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
         const requiresAsk = requiresExecApproval({
           ask: hostAsk,
           security: hostSecurity,
-          analysisOk: analysis.ok,
+          analysisOk,
           allowlistSatisfied,
         });
 
@@ -1117,7 +1127,7 @@ export function createExecTool(
           const approvalSlug = createApprovalSlug(approvalId);
           const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
           const contextKey = `exec:${approvalId}`;
-          const resolvedPath = analysis.segments[0]?.resolution?.resolvedPath;
+          const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
           const commandText = params.command;
           const effectiveTimeout =
@@ -1164,7 +1174,7 @@ export function createExecTool(
               if (askFallback === "full") {
                 approvedByAsk = true;
               } else if (askFallback === "allowlist") {
-                if (!analysis.ok || !allowlistSatisfied) {
+                if (!analysisOk || !allowlistSatisfied) {
                   deniedReason = "approval-timeout (allowlist-miss)";
                 } else {
                   approvedByAsk = true;
@@ -1177,7 +1187,7 @@ export function createExecTool(
             } else if (decision === "allow-always") {
               approvedByAsk = true;
               if (hostSecurity === "allowlist") {
-                for (const segment of analysis.segments) {
+                for (const segment of allowlistEval.segments) {
                   const pattern = segment.resolution?.resolvedPath ?? "";
                   if (pattern) {
                     addAllowlistEntry(approvals.file, agentId, pattern);
@@ -1188,7 +1198,7 @@ export function createExecTool(
 
             if (
               hostSecurity === "allowlist" &&
-              (!analysis.ok || !allowlistSatisfied) &&
+              (!analysisOk || !allowlistSatisfied) &&
               !approvedByAsk
             ) {
               deniedReason = deniedReason ?? "allowlist-miss";
@@ -1288,7 +1298,7 @@ export function createExecTool(
           };
         }
 
-        if (hostSecurity === "allowlist" && (!analysis.ok || !allowlistSatisfied)) {
+        if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
           throw new Error("exec denied: allowlist miss");
         }
 
@@ -1302,7 +1312,7 @@ export function createExecTool(
               agentId,
               match,
               params.command,
-              analysis.segments[0]?.resolution?.resolvedPath,
+              allowlistEval.segments[0]?.resolution?.resolvedPath,
             );
           }
         }

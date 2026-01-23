@@ -113,6 +113,9 @@ that can run in allowlist mode **without** explicit allowlist entries. Safe bins
 positional file args and path-like tokens, so they can only operate on the incoming stream.
 Shell chaining and redirections are not auto-allowed in allowlist mode.
 
+Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist
+(including safe bins or skill auto-allow). Redirections remain unsupported in allowlist mode.
+
 Default safe bins: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
 ## Control UI editing

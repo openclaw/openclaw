@@ -16,11 +16,15 @@ vi.mock("./tools/nodes-utils.js", () => ({
 
 describe("exec approvals", () => {
   let previousHome: string | undefined;
+  let previousUserProfile: string | undefined;
 
   beforeEach(async () => {
     previousHome = process.env.HOME;
+    previousUserProfile = process.env.USERPROFILE;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-"));
     process.env.HOME = tempDir;
+    // Windows uses USERPROFILE for os.homedir()
+    process.env.USERPROFILE = tempDir;
   });
 
   afterEach(() => {
@@ -29,6 +33,11 @@ describe("exec approvals", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
     }
   });
 

@@ -506,29 +506,44 @@ export type ExecCommandAnalysis = {
   ok: boolean;
   reason?: string;
   segments: ExecCommandSegment[];
+  chains?: ExecCommandSegment[][]; // Segments grouped by chain operator (&&, ||, ;)
 };
 
-const DISALLOWED_TOKENS = new Set([";", "&", ">", "<", "`", "\n", "\r", "(", ")"]);
+const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
 
-function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
-  const segments: string[] = [];
+type IteratorAction = "split" | "skip" | "include" | { reject: string };
+
+/**
+ * Iterates through a command string while respecting shell quoting rules.
+ * The callback receives each character and the next character, and returns an action:
+ * - "split": push current buffer as a segment and start a new one
+ * - "skip": skip this character (and optionally the next via skip count)
+ * - "include": add this character to the buffer
+ * - { reject: reason }: abort with an error
+ */
+function iterateQuoteAware(
+  command: string,
+  onChar: (ch: string, next: string | undefined, index: number) => IteratorAction,
+): { ok: true; parts: string[]; hasSplit: boolean } | { ok: false; reason: string } {
+  const parts: string[] = [];
   let buf = "";
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let hasSplit = false;
 
-  const pushSegment = () => {
+  const pushPart = () => {
     const trimmed = buf.trim();
-    if (!trimmed) {
-      return false;
+    if (trimmed) {
+      parts.push(trimmed);
     }
-    segments.push(trimmed);
     buf = "";
-    return true;
   };
 
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
+    const next = command[i + 1];
+
     if (escaped) {
       buf += ch;
       escaped = false;
@@ -559,34 +574,66 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       buf += ch;
       continue;
     }
-    if (ch === "|" && command[i + 1] === "|") {
-      return { ok: false, reason: "unsupported shell token: ||", segments: [] };
+
+    const action = onChar(ch, next, i);
+    if (typeof action === "object" && "reject" in action) {
+      return { ok: false, reason: action.reject };
     }
-    if (ch === "|" && command[i + 1] === "&") {
-      return { ok: false, reason: "unsupported shell token: |&", segments: [] };
-    }
-    if (ch === "|") {
-      if (!pushSegment()) {
-        return { ok: false, reason: "empty pipeline segment", segments: [] };
-      }
+    if (action === "split") {
+      pushPart();
+      hasSplit = true;
       continue;
     }
-    if (DISALLOWED_TOKENS.has(ch)) {
-      return { ok: false, reason: `unsupported shell token: ${ch}`, segments: [] };
-    }
-    if (ch === "$" && command[i + 1] === "(") {
-      return { ok: false, reason: "unsupported shell token: $()", segments: [] };
+    if (action === "skip") {
+      continue;
     }
     buf += ch;
   }
 
   if (escaped || inSingle || inDouble) {
-    return { ok: false, reason: "unterminated shell quote/escape", segments: [] };
+    return { ok: false, reason: "unterminated shell quote/escape" };
   }
-  if (!pushSegment()) {
-    return { ok: false, reason: "empty command", segments: [] };
+  pushPart();
+  return { ok: true, parts, hasSplit };
+}
+
+function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
+  let emptySegment = false;
+  const result = iterateQuoteAware(command, (ch, next) => {
+    if (ch === "|" && next === "|") {
+      return { reject: "unsupported shell token: ||" };
+    }
+    if (ch === "|" && next === "&") {
+      return { reject: "unsupported shell token: |&" };
+    }
+    if (ch === "|") {
+      emptySegment = true;
+      return "split";
+    }
+    if (ch === "&" || ch === ";") {
+      return { reject: `unsupported shell token: ${ch}` };
+    }
+    if (DISALLOWED_PIPELINE_TOKENS.has(ch)) {
+      return { reject: `unsupported shell token: ${ch}` };
+    }
+    if (ch === "$" && next === "(") {
+      return { reject: "unsupported shell token: $()" };
+    }
+    emptySegment = false;
+    return "include";
+  });
+
+  if (!result.ok) {
+    return { ok: false, reason: result.reason, segments: [] };
   }
-  return { ok: true, segments };
+  if (emptySegment || result.parts.length === 0) {
+    return {
+      ok: false,
+      reason: result.parts.length === 0 ? "empty command" : "empty pipeline segment",
+      segments: [],
+    };
+  }
+  return { ok: true, segments: result.parts };
 }
 
 function tokenizeShellSegment(segment: string): string[] | null {
@@ -652,26 +699,61 @@ function tokenizeShellSegment(segment: string): string[] | null {
   return tokens;
 }
 
+function parseSegmentsFromParts(
+  parts: string[],
+  cwd?: string,
+  env?: NodeJS.ProcessEnv,
+): ExecCommandSegment[] | null {
+  const segments: ExecCommandSegment[] = [];
+  for (const raw of parts) {
+    const argv = tokenizeShellSegment(raw);
+    if (!argv || argv.length === 0) {
+      return null;
+    }
+    segments.push({
+      raw,
+      argv,
+      resolution: resolveCommandResolutionFromArgv(argv, cwd, env),
+    });
+  }
+  return segments;
+}
+
 export function analyzeShellCommand(params: {
   command: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
 }): ExecCommandAnalysis {
+  // First try splitting by chain operators (&&, ||, ;)
+  const chainParts = splitCommandChain(params.command);
+  if (chainParts) {
+    const chains: ExecCommandSegment[][] = [];
+    const allSegments: ExecCommandSegment[] = [];
+
+    for (const part of chainParts) {
+      const pipelineSplit = splitShellPipeline(part);
+      if (!pipelineSplit.ok) {
+        return { ok: false, reason: pipelineSplit.reason, segments: [] };
+      }
+      const segments = parseSegmentsFromParts(pipelineSplit.segments, params.cwd, params.env);
+      if (!segments) {
+        return { ok: false, reason: "unable to parse shell segment", segments: [] };
+      }
+      chains.push(segments);
+      allSegments.push(...segments);
+    }
+
+    return { ok: true, segments: allSegments, chains };
+  }
+
+  // No chain operators, parse as simple pipeline
   const split = splitShellPipeline(params.command);
   if (!split.ok) {
     return { ok: false, reason: split.reason, segments: [] };
   }
-  const segments: ExecCommandSegment[] = [];
-  for (const raw of split.segments) {
-    const argv = tokenizeShellSegment(raw);
-    if (!argv || argv.length === 0) {
-      return { ok: false, reason: "unable to parse shell segment", segments: [] };
-    }
-    segments.push({
-      raw,
-      argv,
-      resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
-    });
+  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env);
+  if (!segments) {
+    return { ok: false, reason: "unable to parse shell segment", segments: [] };
   }
   return { ok: true, segments };
 }
@@ -771,27 +853,27 @@ export type ExecAllowlistEvaluation = {
   allowlistMatches: ExecAllowlistEntry[];
 };
 
-export function evaluateExecAllowlist(params: {
-  analysis: ExecCommandAnalysis;
-  allowlist: ExecAllowlistEntry[];
-  safeBins: Set<string>;
-  cwd?: string;
-  skillBins?: Set<string>;
-  autoAllowSkills?: boolean;
-}): ExecAllowlistEvaluation {
-  const allowlistMatches: ExecAllowlistEntry[] = [];
-  if (!params.analysis.ok || params.analysis.segments.length === 0) {
-    return { allowlistSatisfied: false, allowlistMatches };
-  }
+function evaluateSegments(
+  segments: ExecCommandSegment[],
+  params: {
+    allowlist: ExecAllowlistEntry[];
+    safeBins: Set<string>;
+    cwd?: string;
+    skillBins?: Set<string>;
+    autoAllowSkills?: boolean;
+  },
+): { satisfied: boolean; matches: ExecAllowlistEntry[] } {
+  const matches: ExecAllowlistEntry[] = [];
   const allowSkills = params.autoAllowSkills === true && (params.skillBins?.size ?? 0) > 0;
-  const allowlistSatisfied = params.analysis.segments.every((segment) => {
+
+  const satisfied = segments.every((segment) => {
     const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
     const candidateResolution =
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
         : segment.resolution;
     const match = matchAllowlist(params.allowlist, candidateResolution);
-    if (match) allowlistMatches.push(match);
+    if (match) matches.push(match);
     const safe = isSafeBinUsage({
       argv: segment.argv,
       resolution: segment.resolution,
@@ -804,7 +886,230 @@ export function evaluateExecAllowlist(params: {
         : false;
     return Boolean(match || safe || skillAllow);
   });
-  return { allowlistSatisfied, allowlistMatches };
+
+  return { satisfied, matches };
+}
+
+export function evaluateExecAllowlist(params: {
+  analysis: ExecCommandAnalysis;
+  allowlist: ExecAllowlistEntry[];
+  safeBins: Set<string>;
+  cwd?: string;
+  skillBins?: Set<string>;
+  autoAllowSkills?: boolean;
+}): ExecAllowlistEvaluation {
+  const allowlistMatches: ExecAllowlistEntry[] = [];
+  if (!params.analysis.ok || params.analysis.segments.length === 0) {
+    return { allowlistSatisfied: false, allowlistMatches };
+  }
+
+  // If the analysis contains chains, evaluate each chain part separately
+  if (params.analysis.chains) {
+    for (const chainSegments of params.analysis.chains) {
+      const result = evaluateSegments(chainSegments, {
+        allowlist: params.allowlist,
+        safeBins: params.safeBins,
+        cwd: params.cwd,
+        skillBins: params.skillBins,
+        autoAllowSkills: params.autoAllowSkills,
+      });
+      if (!result.satisfied) {
+        return { allowlistSatisfied: false, allowlistMatches: [] };
+      }
+      allowlistMatches.push(...result.matches);
+    }
+    return { allowlistSatisfied: true, allowlistMatches };
+  }
+
+  // No chains, evaluate all segments together
+  const result = evaluateSegments(params.analysis.segments, {
+    allowlist: params.allowlist,
+    safeBins: params.safeBins,
+    cwd: params.cwd,
+    skillBins: params.skillBins,
+    autoAllowSkills: params.autoAllowSkills,
+  });
+  return { allowlistSatisfied: result.satisfied, allowlistMatches: result.matches };
+}
+
+/**
+ * Splits a command string by chain operators (&&, ||, ;) while respecting quotes.
+ * Returns null when no chain is present or when the chain is malformed.
+ */
+function splitCommandChain(command: string): string[] | null {
+  const parts: string[] = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let foundChain = false;
+  let invalidChain = false;
+
+  const pushPart = () => {
+    const trimmed = buf.trim();
+    if (trimmed) {
+      parts.push(trimmed);
+      buf = "";
+      return true;
+    }
+    buf = "";
+    return false;
+  };
+
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (escaped) {
+      buf += ch;
+      escaped = false;
+      continue;
+    }
+    if (!inSingle && !inDouble && ch === "\\") {
+      escaped = true;
+      buf += ch;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      buf += ch;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === '"') inDouble = false;
+      buf += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      buf += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      buf += ch;
+      continue;
+    }
+
+    if (ch === "&" && command[i + 1] === "&") {
+      if (!pushPart()) invalidChain = true;
+      i += 1;
+      foundChain = true;
+      continue;
+    }
+    if (ch === "|" && command[i + 1] === "|") {
+      if (!pushPart()) invalidChain = true;
+      i += 1;
+      foundChain = true;
+      continue;
+    }
+    if (ch === ";") {
+      if (!pushPart()) invalidChain = true;
+      foundChain = true;
+      continue;
+    }
+
+    buf += ch;
+  }
+
+  const pushedFinal = pushPart();
+  if (!foundChain) return null;
+  if (invalidChain || !pushedFinal) return null;
+  return parts.length > 0 ? parts : null;
+}
+
+export type ExecAllowlistAnalysis = {
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+  allowlistMatches: ExecAllowlistEntry[];
+  segments: ExecCommandSegment[];
+};
+
+/**
+ * Evaluates allowlist for shell commands (including &&, ||, ;) and returns analysis metadata.
+ */
+export function evaluateShellAllowlist(params: {
+  command: string;
+  allowlist: ExecAllowlistEntry[];
+  safeBins: Set<string>;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  skillBins?: Set<string>;
+  autoAllowSkills?: boolean;
+}): ExecAllowlistAnalysis {
+  const chainParts = splitCommandChain(params.command);
+  if (!chainParts) {
+    const analysis = analyzeShellCommand({
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+    });
+    if (!analysis.ok) {
+      return {
+        analysisOk: false,
+        allowlistSatisfied: false,
+        allowlistMatches: [],
+        segments: [],
+      };
+    }
+    const evaluation = evaluateExecAllowlist({
+      analysis,
+      allowlist: params.allowlist,
+      safeBins: params.safeBins,
+      cwd: params.cwd,
+      skillBins: params.skillBins,
+      autoAllowSkills: params.autoAllowSkills,
+    });
+    return {
+      analysisOk: true,
+      allowlistSatisfied: evaluation.allowlistSatisfied,
+      allowlistMatches: evaluation.allowlistMatches,
+      segments: analysis.segments,
+    };
+  }
+
+  const allowlistMatches: ExecAllowlistEntry[] = [];
+  const segments: ExecCommandSegment[] = [];
+
+  for (const part of chainParts) {
+    const analysis = analyzeShellCommand({
+      command: part,
+      cwd: params.cwd,
+      env: params.env,
+    });
+    if (!analysis.ok) {
+      return {
+        analysisOk: false,
+        allowlistSatisfied: false,
+        allowlistMatches: [],
+        segments: [],
+      };
+    }
+
+    segments.push(...analysis.segments);
+    const evaluation = evaluateExecAllowlist({
+      analysis,
+      allowlist: params.allowlist,
+      safeBins: params.safeBins,
+      cwd: params.cwd,
+      skillBins: params.skillBins,
+      autoAllowSkills: params.autoAllowSkills,
+    });
+    allowlistMatches.push(...evaluation.allowlistMatches);
+    if (!evaluation.allowlistSatisfied) {
+      return {
+        analysisOk: true,
+        allowlistSatisfied: false,
+        allowlistMatches,
+        segments,
+      };
+    }
+  }
+
+  return {
+    analysisOk: true,
+    allowlistSatisfied: true,
+    allowlistMatches,
+    segments,
+  };
 }
 
 export function requiresExecApproval(params: {
