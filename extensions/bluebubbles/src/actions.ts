@@ -3,7 +3,6 @@ import {
   BLUEBUBBLES_ACTIONS,
   createActionGate,
   jsonResult,
-  readBooleanParam,
   readNumberParam,
   readReactionParams,
   readStringParam,
@@ -49,6 +48,17 @@ function mapTarget(raw: string): BlueBubblesSendTarget {
 
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
+}
+
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
+  const raw = params[key];
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === "true") return true;
+    if (trimmed === "false") return false;
+  }
+  return undefined;
 }
 
 /** Supported action names for BlueBubbles */

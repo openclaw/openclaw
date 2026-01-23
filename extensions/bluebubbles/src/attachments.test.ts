@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-import { downloadBlueBubblesAttachment } from "./attachments.js";
+import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
 vi.mock("./accounts.js", () => ({
@@ -236,5 +236,111 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(calledUrl).toContain("config-server:5678");
     expect(calledUrl).toContain("password=config-password");
     expect(result.buffer).toEqual(new Uint8Array([1]));
+  });
+});
+
+describe("sendBlueBubblesAttachment", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function decodeBody(body: Uint8Array) {
+    return Buffer.from(body).toString("utf8");
+  }
+
+  it("marks voice memos when asVoice is true and mp3 is provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-1" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice.mp3",
+      contentType: "audio/mpeg",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('name="isAudioMessage"');
+    expect(bodyText).toContain("true");
+    expect(bodyText).toContain('filename="voice.mp3"');
+  });
+
+  it("normalizes mp3 filenames for voice memos", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-2" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice",
+      contentType: "audio/mpeg",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('filename="voice.mp3"');
+    expect(bodyText).toContain('name="voice.mp3"');
+  });
+
+  it("throws when asVoice is true but media is not audio", async () => {
+    await expect(
+      sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "image.png",
+        contentType: "image/png",
+        asVoice: true,
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      }),
+    ).rejects.toThrow("voice messages require audio");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("throws when asVoice is true but audio is not mp3 or caf", async () => {
+    await expect(
+      sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "voice.wav",
+        contentType: "audio/wav",
+        asVoice: true,
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      }),
+    ).rejects.toThrow("require mp3 or caf");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes filenames before sending", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-3" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "../evil.mp3",
+      contentType: "audio/mpeg",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('filename="evil.mp3"');
+    expect(bodyText).toContain('name="evil.mp3"');
   });
 });

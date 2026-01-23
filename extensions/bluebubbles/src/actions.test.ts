@@ -521,6 +521,42 @@ describe("bluebubblesMessageActions", () => {
       });
     });
 
+    it("passes asVoice through sendAttachment", async () => {
+      const { sendBlueBubblesAttachment } = await import("./attachments.js");
+
+      const cfg: ClawdbotConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+
+      const base64Buffer = Buffer.from("voice").toString("base64");
+
+      await bluebubblesMessageActions.handleAction({
+        action: "sendAttachment",
+        params: {
+          to: "+15551234567",
+          filename: "voice.mp3",
+          buffer: base64Buffer,
+          contentType: "audio/mpeg",
+          asVoice: true,
+        },
+        cfg,
+        accountId: null,
+      });
+
+      expect(sendBlueBubblesAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filename: "voice.mp3",
+          contentType: "audio/mpeg",
+          asVoice: true,
+        }),
+      );
+    });
+
     it("throws when buffer is missing for setGroupIcon", async () => {
       const cfg: ClawdbotConfig = {
         channels: {
