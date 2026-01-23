@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
@@ -8,16 +9,30 @@ const runs = [
     args: ["vitest", "run", "--config", "vitest.unit.config.ts"],
   },
   {
+    name: "extensions",
+    args: ["vitest", "run", "--config", "vitest.extensions.config.ts"],
+  },
+  {
     name: "gateway",
     args: ["vitest", "run", "--config", "vitest.gateway.config.ts"],
   },
 ];
 
+const parallelRuns = runs.filter((entry) => entry.name !== "gateway");
+const serialRuns = runs.filter((entry) => entry.name === "gateway");
+
 const children = new Set();
+const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
+const overrideWorkers = Number.parseInt(process.env.CLAWDBOT_TEST_WORKERS ?? "", 10);
+const resolvedOverride = Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
+const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
+const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelRuns.length));
+const maxWorkers = isCI ? null : resolvedOverride ?? perRunWorkers;
 
 const run = (entry) =>
   new Promise((resolve) => {
-    const child = spawn(pnpm, entry.args, {
+    const args = maxWorkers ? [...entry.args, "--maxWorkers", String(maxWorkers)] : entry.args;
+    const child = spawn(pnpm, args, {
       stdio: "inherit",
       env: { ...process.env, VITEST_GROUP: entry.name },
       shell: process.platform === "win32",
@@ -38,6 +53,18 @@ const shutdown = (signal) => {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-const codes = await Promise.all(runs.map(run));
-const failed = codes.find((code) => code !== 0);
-process.exit(failed ?? 0);
+const parallelCodes = await Promise.all(parallelRuns.map(run));
+const failedParallel = parallelCodes.find((code) => code !== 0);
+if (failedParallel !== undefined) {
+  process.exit(failedParallel);
+}
+
+for (const entry of serialRuns) {
+  // eslint-disable-next-line no-await-in-loop
+  const code = await run(entry);
+  if (code !== 0) {
+    process.exit(code);
+  }
+}
+
+process.exit(0);
