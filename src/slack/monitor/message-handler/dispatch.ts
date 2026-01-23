@@ -8,7 +8,7 @@ import {
   type ResponsePrefixContext,
 } from "../../../auto-reply/reply/response-prefix-template.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
-import { clearHistoryEntries } from "../../../auto-reply/reply/history.js";
+import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
@@ -137,10 +137,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (!queuedFinal) {
-    if (prepared.isRoomish && ctx.historyLimit > 0) {
-      clearHistoryEntries({
+    if (prepared.isRoomish) {
+      clearHistoryEntriesIfEnabled({
         historyMap: ctx.channelHistories,
         historyKey: prepared.historyKey,
+        limit: ctx.historyLimit,
       });
     }
     return;
@@ -174,10 +175,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
 
-  if (prepared.isRoomish && ctx.historyLimit > 0) {
-    clearHistoryEntries({
+  if (prepared.isRoomish) {
+    clearHistoryEntriesIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey: prepared.historyKey,
+      limit: ctx.historyLimit,
     });
   }
 }

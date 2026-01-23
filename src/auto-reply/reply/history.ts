@@ -47,6 +47,22 @@ export function recordPendingHistoryEntry<T extends HistoryEntry>(params: {
   return appendHistoryEntry(params);
 }
 
+export function recordPendingHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
+  historyMap: Map<string, T[]>;
+  historyKey: string;
+  entry?: T | null;
+  limit: number;
+}): T[] {
+  if (!params.entry) return [];
+  if (params.limit <= 0) return [];
+  return recordPendingHistoryEntry({
+    historyMap: params.historyMap,
+    historyKey: params.historyKey,
+    entry: params.entry,
+    limit: params.limit,
+  });
+}
+
 export function buildPendingHistoryContextFromMap(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -99,6 +115,15 @@ export function clearHistoryEntries(params: {
   historyKey: string;
 }): void {
   params.historyMap.set(params.historyKey, []);
+}
+
+export function clearHistoryEntriesIfEnabled(params: {
+  historyMap: Map<string, HistoryEntry[]>;
+  historyKey: string;
+  limit: number;
+}): void {
+  if (params.limit <= 0) return;
+  clearHistoryEntries({ historyMap: params.historyMap, historyKey: params.historyKey });
 }
 
 export function buildHistoryContextFromEntries(params: {

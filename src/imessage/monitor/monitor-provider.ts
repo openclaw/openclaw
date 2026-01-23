@@ -24,9 +24,9 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
@@ -405,19 +405,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const effectiveWasMentioned = mentioned || shouldBypassMention;
     if (isGroup && requireMention && canDetectMention && !mentioned && !shouldBypassMention) {
       logVerbose(`imessage: skipping group message (no mention)`);
-      if (historyKey && historyLimit > 0) {
-        recordPendingHistoryEntry({
-          historyMap: groupHistories,
-          historyKey,
-          limit: historyLimit,
-          entry: {
-            sender: senderNormalized,
-            body: bodyText,
-            timestamp: createdAt,
-            messageId: message.id ? String(message.id) : undefined,
-          },
-        });
-      }
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: groupHistories,
+        historyKey: historyKey ?? "",
+        limit: historyLimit,
+        entry: historyKey
+          ? {
+              sender: senderNormalized,
+              body: bodyText,
+              timestamp: createdAt,
+              messageId: message.id ? String(message.id) : undefined,
+            }
+          : null,
+      });
       return;
     }
 
@@ -454,7 +454,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       envelope: envelopeOptions,
     });
     let combinedBody = body;
-    if (isGroup && historyKey && historyLimit > 0) {
+    if (isGroup && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: groupHistories,
         historyKey,
@@ -584,13 +584,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
     if (!queuedFinal) {
-      if (isGroup && historyKey && historyLimit > 0) {
-        clearHistoryEntries({ historyMap: groupHistories, historyKey });
+      if (isGroup && historyKey) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: groupHistories,
+          historyKey,
+          limit: historyLimit,
+        });
       }
       return;
     }
-    if (isGroup && historyKey && historyLimit > 0) {
-      clearHistoryEntries({ historyMap: groupHistories, historyKey });
+    if (isGroup && historyKey) {
+      clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
     }
   }
 

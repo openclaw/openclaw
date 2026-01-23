@@ -20,7 +20,7 @@ import {
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -383,10 +383,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   markDispatchIdle();
   if (!queuedFinal) {
-    if (isGuildMessage && historyLimit > 0) {
-      clearHistoryEntries({
+    if (isGuildMessage) {
+      clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,
         historyKey: message.channelId,
+        limit: historyLimit,
       });
     }
     return;
@@ -409,10 +410,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       );
     },
   });
-  if (isGuildMessage && historyLimit > 0) {
-    clearHistoryEntries({
+  if (isGuildMessage) {
+    clearHistoryEntriesIfEnabled({
       historyMap: guildHistories,
       historyKey: message.channelId,
+      limit: historyLimit,
     });
   }
 }

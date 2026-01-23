@@ -5,7 +5,7 @@ import {
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
-import { clearHistoryEntries } from "../auto-reply/reply/history.js";
+import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { danger, logVerbose } from "../globals.js";
@@ -180,8 +180,8 @@ export const dispatchTelegramMessage = async ({
   });
   draftStream?.stop();
   if (!queuedFinal) {
-    if (isGroup && historyKey && historyLimit > 0) {
-      clearHistoryEntries({ historyMap: groupHistories, historyKey });
+    if (isGroup && historyKey) {
+      clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
     }
     return;
   }
@@ -197,7 +197,7 @@ export const dispatchTelegramMessage = async ({
       );
     },
   });
-  if (isGroup && historyKey && historyLimit > 0) {
-    clearHistoryEntries({ historyMap: groupHistories, historyKey });
+  if (isGroup && historyKey) {
+    clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
   }
 };

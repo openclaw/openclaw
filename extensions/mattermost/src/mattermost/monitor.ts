@@ -8,9 +8,9 @@ import type {
 } from "clawdbot/plugin-sdk";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
   resolveChannelMediaMaxBytes,
   type HistoryEntry,
 } from "clawdbot/plugin-sdk";
@@ -534,19 +534,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         : "");
     const pendingSender = senderName;
     const recordPendingHistory = () => {
-      if (!historyKey || historyLimit <= 0) return;
       const trimmed = pendingBody.trim();
-      if (!trimmed) return;
-      recordPendingHistoryEntry({
+      recordPendingHistoryEntryIfEnabled({
         historyMap: channelHistories,
-        historyKey,
         limit: historyLimit,
-        entry: {
-          sender: pendingSender,
-          body: trimmed,
-          timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
-          messageId: post.id ?? undefined,
-        },
+        historyKey: historyKey ?? "",
+        entry: historyKey && trimmed
+          ? {
+              sender: pendingSender,
+              body: trimmed,
+              timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+              messageId: post.id ?? undefined,
+            }
+          : null,
       });
     };
 
@@ -623,7 +623,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       sender: { name: senderName, id: senderId },
     });
     let combinedBody = body;
-    if (historyKey && historyLimit > 0) {
+    if (historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: channelHistories,
         historyKey,
@@ -772,8 +772,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
     });
     markDispatchIdle();
-    if (historyKey && historyLimit > 0) {
-      clearHistoryEntries({ historyMap: channelHistories, historyKey });
+    if (historyKey) {
+      clearHistoryEntriesIfEnabled({ historyMap: channelHistories, historyKey, limit: historyLimit });
     }
   };
 
