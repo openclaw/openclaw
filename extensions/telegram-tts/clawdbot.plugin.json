@@ -1,0 +1,81 @@
+{
+  "id": "telegram-tts",
+  "uiHints": {
+    "enabled": {
+      "label": "Enable TTS",
+      "help": "Automatically convert text responses to voice messages"
+    },
+    "provider": {
+      "label": "TTS Provider"
+    },
+    "elevenlabs.apiKey": {
+      "label": "ElevenLabs API Key",
+      "sensitive": true
+    },
+    "elevenlabs.voiceId": {
+      "label": "ElevenLabs Voice ID",
+      "help": "Default: pMsXgVXv3BLzUgSXRplE (Borislav)"
+    },
+    "elevenlabs.modelId": {
+      "label": "ElevenLabs Model ID",
+      "help": "Default: eleven_multilingual_v2"
+    },
+    "prefsPath": {
+      "label": "User Preferences File",
+      "help": "Path to JSON file storing TTS state",
+      "advanced": true
+    },
+    "maxTextLength": {
+      "label": "Max Text Length",
+      "help": "Maximum characters to convert to speech",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["elevenlabs", "openai"],
+        "default": "elevenlabs"
+      },
+      "elevenlabs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "voiceId": {
+            "type": "string",
+            "default": "pMsXgVXv3BLzUgSXRplE"
+          },
+          "modelId": {
+            "type": "string",
+            "default": "eleven_multilingual_v2"
+          }
+        }
+      },
+      "prefsPath": {
+        "type": "string"
+      },
+      "maxTextLength": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 4000
+      },
+      "channels": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": ["telegram"]
+      }
+    }
+  }
+}
