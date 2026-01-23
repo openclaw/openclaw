@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
@@ -184,10 +186,28 @@ export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: 
   }
 }
 
+// Event emitter for unhandled compaction failures that escape try-catch blocks.
+// Listeners can use this to trigger session recovery with retry.
+const compactionFailureEmitter = new EventEmitter();
+
+export type CompactionFailureListener = (reason: string) => void;
+
+/**
+ * Register a listener for unhandled compaction failures.
+ * Called when auto-compaction fails in a way that escapes the normal try-catch,
+ * e.g., when the summarization request itself exceeds the model's token limit.
+ * Returns an unsubscribe function.
+ */
+export function onUnhandledCompactionFailure(cb: CompactionFailureListener): () => void {
+  compactionFailureEmitter.on("failure", cb);
+  return () => compactionFailureEmitter.off("failure", cb);
+}
+
 registerUnhandledRejectionHandler((reason) => {
   const message = describeUnknownError(reason);
   if (!isCompactionFailureError(message)) return false;
   log.error(`Auto-compaction failed (unhandled): ${message}`);
+  compactionFailureEmitter.emit("failure", message);
   return true;
 });
 

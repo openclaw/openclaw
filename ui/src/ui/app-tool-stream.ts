@@ -138,8 +138,59 @@ export function resetToolStream(host: ToolStreamHost) {
   flushToolStreamSync(host);
 }
 
+export type CompactionStatus = {
+  active: boolean;
+  startedAt: number | null;
+  completedAt: number | null;
+};
+
+type CompactionHost = ToolStreamHost & {
+  compactionStatus?: CompactionStatus | null;
+  compactionClearTimer?: number | null;
+};
+
+const COMPACTION_TOAST_DURATION_MS = 5000;
+
+export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = typeof data.phase === "string" ? data.phase : "";
+  
+  // Clear any existing timer
+  if (host.compactionClearTimer != null) {
+    window.clearTimeout(host.compactionClearTimer);
+    host.compactionClearTimer = null;
+  }
+  
+  if (phase === "start") {
+    host.compactionStatus = {
+      active: true,
+      startedAt: Date.now(),
+      completedAt: null,
+    };
+  } else if (phase === "end") {
+    host.compactionStatus = {
+      active: false,
+      startedAt: host.compactionStatus?.startedAt ?? null,
+      completedAt: Date.now(),
+    };
+    // Auto-clear the toast after duration
+    host.compactionClearTimer = window.setTimeout(() => {
+      host.compactionStatus = null;
+      host.compactionClearTimer = null;
+    }, COMPACTION_TOAST_DURATION_MS);
+  }
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
-  if (!payload || payload.stream !== "tool") return;
+  if (!payload) return;
+  
+  // Handle compaction events
+  if (payload.stream === "compaction") {
+    handleCompactionEvent(host as CompactionHost, payload);
+    return;
+  }
+  
+  if (payload.stream !== "tool") return;
   const sessionKey =
     typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && sessionKey !== host.sessionKey) return;
