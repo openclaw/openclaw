@@ -33,6 +33,7 @@ Docs: https://docs.clawd.bot
 - Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.
 - Doctor: honor CLAWDBOT_GATEWAY_TOKEN for auth checks and security audit token reuse. (#1448) Thanks @azade-c.
 - Agents: make tool summaries more readable and only show optional params when set.
+- Agents: honor SOUL.md guidance even when the file is nested or path-qualified. (#1434) Thanks @neooriginal.
 - CLI: prefer `~` for home paths in output.
 - Mattermost (plugin): enforce pairing/allowlist gating, keep @username targets, and clarify plugin-only docs. (#1428) Thanks @damoahdominic.
 - Agents: centralize transcript sanitization in the runner; keep <final> tags and error turns intact.
