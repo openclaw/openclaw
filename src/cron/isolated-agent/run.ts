@@ -299,6 +299,7 @@ export async function runCronIsolatedAgentTurn(params: {
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: agentSessionKey,
           messageChannel,
+          agentAccountId: resolvedDelivery.accountId,
           sessionFile,
           workspaceDir,
           config: cfgWithAgentDefaults,
