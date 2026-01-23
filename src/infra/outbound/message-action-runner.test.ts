@@ -410,3 +410,65 @@ describe("runMessageAction sendAttachment hydration", () => {
     );
   });
 });
+
+describe("runMessageAction accountId defaults", () => {
+  const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+  const accountPlugin: ChannelPlugin = {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    actions: {
+      listActions: () => ["send"],
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: accountPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("propagates defaultAccountId into params", async () => {
+    await runMessageAction({
+      cfg: {} as ClawdbotConfig,
+      action: "send",
+      params: {
+        channel: "discord",
+        target: "channel:123",
+        message: "hi",
+      },
+      defaultAccountId: "ops",
+    });
+
+    expect(handleAction).toHaveBeenCalled();
+    const ctx = handleAction.mock.calls[0]?.[0] as {
+      accountId?: string | null;
+      params: Record<string, unknown>;
+    };
+    expect(ctx.accountId).toBe("ops");
+    expect(ctx.params.accountId).toBe("ops");
+  });
+});

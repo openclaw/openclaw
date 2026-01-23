@@ -188,4 +188,26 @@ describe("cron tool", () => {
     const text = cronCall.params?.payload?.text ?? "";
     expect(text).not.toContain("Recent context:");
   });
+
+  it("preserves explicit agentId null on add", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "main" });
+    await tool.execute("call6", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { atMs: 123 },
+        agentId: null,
+        payload: { kind: "systemEvent", text: "Reminder: the thing." },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { agentId?: string | null };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.agentId).toBeNull();
+  });
 });

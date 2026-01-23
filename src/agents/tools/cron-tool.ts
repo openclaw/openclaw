@@ -3,6 +3,7 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normal
 import { loadConfig } from "../../config/config.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -158,6 +159,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
             throw new Error("job required");
           }
           const job = normalizeCronJobCreate(params.job) ?? params.job;
+          if (job && typeof job === "object" && !("agentId" in job)) {
+            const cfg = loadConfig();
+            const agentId = opts?.agentSessionKey
+              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+              : undefined;
+            if (agentId) {
+              (job as { agentId?: string }).agentId = agentId;
+            }
+          }
           const contextMessages =
             typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
               ? params.contextMessages

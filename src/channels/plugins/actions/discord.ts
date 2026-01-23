@@ -80,7 +80,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     }
     return null;
   },
-  handleAction: async ({ action, params, cfg }) => {
-    return await handleDiscordMessageAction({ action, params, cfg });
+  handleAction: async ({ action, params, cfg, accountId }) => {
+    return await handleDiscordMessageAction({ action, params, cfg, accountId });
   },
 };
