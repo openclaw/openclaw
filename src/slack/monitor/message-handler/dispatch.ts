@@ -68,6 +68,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     stop: async () => {
       if (!didSetStatus) return;
+      didSetStatus = false;
       await ctx.setSlackThreadStatus({
         channelId: message.channel,
         threadTs: statusThreadTs,

@@ -391,8 +391,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     removeAfterReply: removeAckAfterReply,
     ackReactionPromise,
     ackReactionValue: ackReaction,
-    remove: () =>
-      removeReactionDiscord(message.channelId, message.id, ackReaction, { rest: client.rest }),
+    remove: async () => {
+      await removeReactionDiscord(message.channelId, message.id, ackReaction, {
+        rest: client.rest,
+      });
+    },
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
