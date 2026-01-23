@@ -52,11 +52,7 @@ async function dockerImageExists(image: string) {
   });
   if (result.code === 0) return true;
   const stderr = result.stderr.trim();
-  if (
-    stderr.includes("No such image") ||
-    stderr.includes("No such object") ||
-    stderr.includes("not found")
-  ) {
+  if (stderr.includes("No such image")) {
     return false;
   }
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
