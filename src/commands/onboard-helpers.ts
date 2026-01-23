@@ -192,6 +192,7 @@ function resolveSshTargetHint(): string {
 }
 
 export async function openUrl(url: string): Promise<boolean> {
+  if (shouldSkipBrowserOpenInTests()) return false;
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) return false;
   const quoteUrl = resolved.quoteUrl === true;
@@ -218,6 +219,7 @@ export async function openUrl(url: string): Promise<boolean> {
 }
 
 export async function openUrlInBackground(url: string): Promise<boolean> {
+  if (shouldSkipBrowserOpenInTests()) return false;
   if (process.platform !== "darwin") return false;
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv || resolved.command !== "open") return false;
@@ -306,6 +308,12 @@ export async function detectBinary(name: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function shouldSkipBrowserOpenInTests(): boolean {
+  if (process.env.CLAWDBOT_ALLOW_TEST_BROWSER_OPEN) return false;
+  if (process.env.VITEST) return true;
+  return process.env.NODE_ENV === "test";
 }
 
 export async function probeGatewayReachable(params: {
