@@ -398,6 +398,8 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/open-prose: {}
+
   extensions/signal: {}
 
   extensions/slack: {}
