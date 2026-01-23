@@ -16,6 +16,7 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { clearPluginCommands } from "./commands.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -177,6 +178,9 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
       return cached;
     }
   }
+
+  // Clear previously registered plugin commands before reloading
+  clearPluginCommands();
 
   const runtime = createPluginRuntime();
   const { registry, createApi } = createPluginRegistry({
