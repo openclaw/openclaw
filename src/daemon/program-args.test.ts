@@ -45,6 +45,26 @@ describe("resolveGatewayProgramArguments", () => {
     ]);
   });
 
+  it("prefers symlinked path over realpath for stable service config", async () => {
+    // Simulates pnpm global install where node_modules/clawdbot is a symlink
+    // to .pnpm/clawdbot@X.Y.Z/node_modules/clawdbot
+    const symlinkPath = path.resolve(
+      "/Users/test/Library/pnpm/global/5/node_modules/clawdbot/dist/entry.js",
+    );
+    const realpathResolved = path.resolve(
+      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/clawdbot@2026.1.21-2/node_modules/clawdbot/dist/entry.js",
+    );
+    process.argv = ["node", symlinkPath];
+    fsMocks.realpath.mockResolvedValue(realpathResolved);
+    fsMocks.access.mockResolvedValue(undefined); // Both paths exist
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    // Should use the symlinked path, not the realpath-resolved versioned path
+    expect(result.programArguments[1]).toBe(symlinkPath);
+    expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
+  });
+
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
     const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot");
     const indexPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/index.js");
