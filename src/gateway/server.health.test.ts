@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
@@ -21,12 +21,35 @@ import {
 } from "./test-helpers.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let port = 0;
+let previousToken: string | undefined;
+
+beforeAll(async () => {
+  previousToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+  delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  port = await getFreePort();
+  server = await startGatewayServer(port);
+});
+
+afterAll(async () => {
+  await server.close();
+  if (previousToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  else process.env.CLAWDBOT_GATEWAY_TOKEN = previousToken;
+});
+
+const openClient = async (opts?: Parameters<typeof connectOk>[1]) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await connectOk(ws, opts);
+  return ws;
+};
 
 describe("gateway server health/presence", () => {
   test("connect + health + presence + status succeed", { timeout: 60_000 }, async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const ws = await openClient();
 
     const healthP = onceMessage(ws, (o) => o.type === "res" && o.id === "health1");
     const statusP = onceMessage(ws, (o) => o.type === "res" && o.id === "status1");
@@ -51,7 +74,6 @@ describe("gateway server health/presence", () => {
     expect(Array.isArray(presence.payload)).toBe(true);
 
     ws.close();
-    await server.close();
   });
 
   test("broadcasts heartbeat events and serves last-heartbeat", async () => {
@@ -76,8 +98,7 @@ describe("gateway server health/presence", () => {
       payload?: unknown;
     };
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const ws = await openClient();
 
     const waitHeartbeat = onceMessage<EventFrame>(
       ws,
@@ -117,12 +138,10 @@ describe("gateway server health/presence", () => {
     expect((toggle.payload as { enabled?: boolean } | undefined)?.enabled).toBe(false);
 
     ws.close();
-    await server.close();
   });
 
   test("presence events carry seq + stateVersion", { timeout: 8000 }, async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const ws = await openClient();
 
     const presenceEventP = onceMessage(ws, (o) => o.type === "event" && o.event === "presence");
     ws.send(
@@ -140,12 +159,10 @@ describe("gateway server health/presence", () => {
     expect(Array.isArray(evt.payload?.presence)).toBe(true);
 
     ws.close();
-    await server.close();
   });
 
   test("agent events stream with seq", { timeout: 8000 }, async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const ws = await openClient();
 
     const runId = randomUUID();
     const evtPromise = onceMessage(
@@ -163,7 +180,6 @@ describe("gateway server health/presence", () => {
     expect(evt.payload.data.msg).toBe("hi");
 
     ws.close();
-    await server.close();
   });
 
   test("shutdown event is broadcast on close", { timeout: 8000 }, async () => {
@@ -177,16 +193,7 @@ describe("gateway server health/presence", () => {
   });
 
   test("presence broadcast reaches multiple clients", { timeout: 8000 }, async () => {
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    const mkClient = async () => {
-      const c = new WebSocket(`ws://127.0.0.1:${port}`);
-      await new Promise<void>((resolve) => c.once("open", resolve));
-      await connectOk(c);
-      return c;
-    };
-
-    const clients = await Promise.all([mkClient(), mkClient(), mkClient()]);
+    const clients = await Promise.all([openClient(), openClient(), openClient()]);
     const waits = clients.map((c) =>
       onceMessage(c, (o) => o.type === "event" && o.event === "presence"),
     );
@@ -204,7 +211,6 @@ describe("gateway server health/presence", () => {
       expect(typeof evt.seq).toBe("number");
     }
     for (const c of clients) c.close();
-    await server.close();
   });
 
   test("presence includes client fingerprint", async () => {
@@ -222,8 +228,7 @@ describe("gateway server health/presence", () => {
       signedAtMs,
       token: null,
     });
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws, {
+    const ws = await openClient({
       role,
       scopes,
       client: {
@@ -264,13 +269,11 @@ describe("gateway server health/presence", () => {
     expect(clientEntry?.modelIdentifier).toBe("iPad16,6");
 
     ws.close();
-    await server.close();
   });
 
   test("cli connections are not tracked as instances", async () => {
-    const { server, ws } = await startServerWithClient();
     const cliId = `cli-${randomUUID()}`;
-    await connectOk(ws, {
+    const ws = await openClient({
       client: {
         id: GATEWAY_CLIENT_NAMES.CLI,
         version: "dev",
@@ -294,6 +297,5 @@ describe("gateway server health/presence", () => {
     expect(entries.some((e) => e.instanceId === cliId)).toBe(false);
 
     ws.close();
-    await server.close();
   });
 });

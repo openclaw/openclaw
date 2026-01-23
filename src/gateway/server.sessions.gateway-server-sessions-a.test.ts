@@ -1,14 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 import {
   connectOk,
   embeddedRunMock,
+  getFreePort,
   installGatewayTestHooks,
   piSdkMock,
   rpcReq,
-  startServerWithClient,
+  startGatewayServer,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
@@ -39,7 +41,31 @@ vi.mock("../auto-reply/reply/abort.js", async () => {
   };
 });
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let port = 0;
+let previousToken: string | undefined;
+
+beforeAll(async () => {
+  previousToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+  delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  port = await getFreePort();
+  server = await startGatewayServer(port);
+});
+
+afterAll(async () => {
+  await server.close();
+  if (previousToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  else process.env.CLAWDBOT_GATEWAY_TOKEN = previousToken;
+});
+
+const openClient = async (opts?: Parameters<typeof connectOk>[1]) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  await new Promise<void>((resolve) => ws.once("open", resolve));
+  const hello = await connectOk(ws, opts);
+  return { ws, hello };
+};
 
 describe("gateway server sessions", () => {
   beforeEach(() => {
@@ -98,8 +124,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { server, ws } = await startServerWithClient();
-    const hello = await connectOk(ws);
+    const { ws, hello } = await openClient();
     expect((hello as unknown as { features?: { methods?: string[] } }).features?.methods).toEqual(
       expect.arrayContaining([
         "sessions.list",
@@ -336,7 +361,6 @@ describe("gateway server sessions", () => {
     );
 
     ws.close();
-    await server.close();
   });
 
   test("sessions.preview returns transcript previews", async () => {
@@ -365,8 +389,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const { ws } = await openClient();
     const preview = await rpcReq<{
       previews: Array<{
         key: string;
@@ -383,7 +406,6 @@ describe("gateway server sessions", () => {
     expect(entry?.items[1]?.text).toContain("call weather");
 
     ws.close();
-    await server.close();
   });
 
   test("sessions.delete rejects main and aborts active runs", async () => {
@@ -415,8 +437,7 @@ describe("gateway server sessions", () => {
     embeddedRunMock.activeIds.add("sess-active");
     embeddedRunMock.waitResults.set("sess-active", true);
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const { ws } = await openClient();
 
     const mainDelete = await rpcReq(ws, "sessions.delete", { key: "main" });
     expect(mainDelete.ok).toBe(false);
@@ -439,6 +460,5 @@ describe("gateway server sessions", () => {
     expect(embeddedRunMock.waitCalls).toEqual(["sess-active"]);
 
     ws.close();
-    await server.close();
   });
 });

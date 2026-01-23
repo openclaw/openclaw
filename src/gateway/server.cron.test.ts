@@ -12,7 +12,7 @@ import {
   waitForSystemEvent,
 } from "./test-helpers.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
 
 async function yieldToEventLoop() {
   // Avoid relying on timers (fake timers can leak between tests).

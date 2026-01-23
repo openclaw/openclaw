@@ -1,8 +1,20 @@
-import { test } from "vitest";
+import { afterAll, beforeAll, test } from "vitest";
 import WebSocket from "ws";
 
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { getFreePort, onceMessage, startGatewayServer } from "./test-helpers.server.js";
+
+let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let port = 0;
+
+beforeAll(async () => {
+  port = await getFreePort();
+  server = await startGatewayServer(port);
+});
+
+afterAll(async () => {
+  await server.close();
+});
 
 function connectReq(
   ws: WebSocket,
@@ -43,8 +55,6 @@ function connectReq(
 }
 
 test("accepts clawdbot-ios as a valid gateway client id", async () => {
-  const port = await getFreePort();
-  const server = await startGatewayServer(port);
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise<void>((resolve) => ws.once("open", resolve));
 
@@ -61,12 +71,9 @@ test("accepts clawdbot-ios as a valid gateway client id", async () => {
   }
 
   ws.close();
-  await server.close();
 });
 
 test("accepts clawdbot-android as a valid gateway client id", async () => {
-  const port = await getFreePort();
-  const server = await startGatewayServer(port);
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise<void>((resolve) => ws.once("open", resolve));
 
@@ -83,5 +90,4 @@ test("accepts clawdbot-android as a valid gateway client id", async () => {
   }
 
   ws.close();
-  await server.close();
 });
