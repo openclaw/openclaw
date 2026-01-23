@@ -25,9 +25,12 @@
   },
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-    "clawdbot": "workspace:*",
     "markdown-it": "14.1.0",
     "matrix-bot-sdk": "0.8.0",
-    "music-metadata": "^11.10.6"
+    "music-metadata": "^11.10.6",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "clawdbot": "workspace:*"
   }
 }
