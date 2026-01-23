@@ -34,7 +34,7 @@ File-based state persists all execution artifacts to disk. This enables:
 ```
 # Project-level state (in working directory)
 .prose/
-├── .env                              # Config/telemetry (simple key=value format)
+├── .env                              # Config (simple key=value format)
 ├── runs/
 │   └── {YYYYMMDD}-{HHMMSS}-{random}/
 │       ├── program.prose             # Copy of running program
