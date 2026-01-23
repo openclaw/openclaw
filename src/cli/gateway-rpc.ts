@@ -23,13 +23,14 @@ export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
-  extra?: { expectFinal?: boolean },
+  extra?: { expectFinal?: boolean; progress?: boolean },
 ) {
+  const showProgress = extra?.progress ?? opts.json !== true;
   return await withProgress(
     {
       label: `Gateway ${method}`,
       indeterminate: true,
-      enabled: opts.json !== true,
+      enabled: showProgress,
     },
     async () =>
       await callGateway({
