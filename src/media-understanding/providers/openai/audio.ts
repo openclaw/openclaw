@@ -4,7 +4,7 @@ import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../
 import { fetchWithTimeout, normalizeBaseUrl, readErrorResponse } from "../shared.js";
 
 export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_AUDIO_MODEL = "whisper-1";
+const DEFAULT_OPENAI_AUDIO_MODEL = "gpt-4o-mini-transcribe";
 
 function resolveModel(model?: string): string {
   const trimmed = model?.trim();
