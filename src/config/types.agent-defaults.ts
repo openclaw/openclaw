@@ -177,13 +177,14 @@ export type AgentDefaultsConfig = {
     model?: string;
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
-    /** Delivery target (last|whatsapp|telegram|discord|slack|msteams|signal|imessage|none). */
+    /** Delivery target (last|whatsapp|telegram|discord|slack|mattermost|msteams|signal|imessage|none). */
     target?:
       | "last"
       | "whatsapp"
       | "telegram"
       | "discord"
       | "slack"
+      | "mattermost"
       | "msteams"
       | "signal"
       | "imessage"
