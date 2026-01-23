@@ -30,6 +30,10 @@ type DiscordThreadParentInfo = {
 
 const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarter>();
 
+export function __resetDiscordThreadStarterCacheForTest() {
+  DISCORD_THREAD_STARTER_CACHE.clear();
+}
+
 function isDiscordThreadType(type: ChannelType | undefined): boolean {
   return (
     type === ChannelType.PublicThread ||

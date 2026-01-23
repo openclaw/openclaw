@@ -554,3 +554,4 @@ vi.mock("../cli/deps.js", async () => {
 });
 
 process.env.CLAWDBOT_SKIP_CHANNELS = "1";
+process.env.CLAWDBOT_SKIP_CRON = "1";

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -16,11 +16,13 @@ vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner.js").runEmbeddedPiAgent;
 
-beforeEach(async () => {
-  vi.useRealTimers();
-  vi.resetModules();
-  runEmbeddedAttemptMock.mockReset();
+beforeAll(async () => {
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
+});
+
+beforeEach(() => {
+  vi.useRealTimers();
+  runEmbeddedAttemptMock.mockReset();
 });
 
 const baseUsage = {

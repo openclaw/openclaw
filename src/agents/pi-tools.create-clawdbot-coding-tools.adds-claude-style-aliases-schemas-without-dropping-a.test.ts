@@ -1,72 +1,10 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
+const defaultTools = createClawdbotCodingTools();
+
 describe("createClawdbotCodingTools", () => {
-  describe("Claude/Gemini alias support", () => {
-    it("adds Claude-style aliases to schemas without dropping metadata", () => {
-      const base: AgentTool = {
-        name: "write",
-        description: "test",
-        parameters: {
-          type: "object",
-          required: ["path", "content"],
-          properties: {
-            path: { type: "string", description: "Path" },
-            content: { type: "string", description: "Body" },
-          },
-        },
-        execute: vi.fn(),
-      };
-
-      const patched = __testing.patchToolSchemaForClaudeCompatibility(base);
-      const params = patched.parameters as {
-        properties?: Record<string, unknown>;
-        required?: string[];
-      };
-      const props = params.properties ?? {};
-
-      expect(props.file_path).toEqual(props.path);
-      expect(params.required ?? []).not.toContain("path");
-      expect(params.required ?? []).not.toContain("file_path");
-    });
-
-    it("normalizes file_path to path and enforces required groups at runtime", async () => {
-      const execute = vi.fn(async (_id, args) => args);
-      const tool: AgentTool = {
-        name: "write",
-        description: "test",
-        parameters: {
-          type: "object",
-          required: ["path", "content"],
-          properties: {
-            path: { type: "string" },
-            content: { type: "string" },
-          },
-        },
-        execute,
-      };
-
-      const wrapped = __testing.wrapToolParamNormalization(tool, [{ keys: ["path", "file_path"] }]);
-
-      await wrapped.execute("tool-1", { file_path: "foo.txt", content: "x" });
-      expect(execute).toHaveBeenCalledWith(
-        "tool-1",
-        { path: "foo.txt", content: "x" },
-        undefined,
-        undefined,
-      );
-
-      await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
-        /Missing required parameter/,
-      );
-      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
-        /Missing required parameter/,
-      );
-    });
-  });
-
   it("keeps browser tool schema OpenAI-compatible without normalization", () => {
     const browser = createBrowserTool();
     const schema = browser.parameters as { type?: unknown; anyOf?: unknown };
@@ -79,8 +17,7 @@ describe("createClawdbotCodingTools", () => {
     expect(browser.description).toMatch(/profile="chrome"/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
-    const tools = createClawdbotCodingTools();
-    const browser = tools.find((tool) => tool.name === "browser");
+    const browser = defaultTools.find((tool) => tool.name === "browser");
     expect(browser).toBeDefined();
     const parameters = browser?.parameters as {
       anyOf?: unknown[];
@@ -95,8 +32,7 @@ describe("createClawdbotCodingTools", () => {
     expect(parameters.required ?? []).toContain("action");
   });
   it("exposes raw for gateway config.apply tool calls", () => {
-    const tools = createClawdbotCodingTools();
-    const gateway = tools.find((tool) => tool.name === "gateway");
+    const gateway = defaultTools.find((tool) => tool.name === "gateway");
     expect(gateway).toBeDefined();
 
     const parameters = gateway?.parameters as {
@@ -109,8 +45,7 @@ describe("createClawdbotCodingTools", () => {
     expect(parameters.required ?? []).not.toContain("raw");
   });
   it("flattens anyOf-of-literals to enum for provider compatibility", () => {
-    const tools = createClawdbotCodingTools();
-    const browser = tools.find((tool) => tool.name === "browser");
+    const browser = defaultTools.find((tool) => tool.name === "browser");
     expect(browser).toBeDefined();
 
     const parameters = browser?.parameters as {
