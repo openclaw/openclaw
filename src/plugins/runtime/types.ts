@@ -20,6 +20,8 @@ type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").b
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
 type ShouldAckReaction = typeof import("../../channels/ack-reactions.js").shouldAckReaction;
+type RemoveAckReactionAfterReply =
+  typeof import("../../channels/ack-reactions.js").removeAckReactionAfterReply;
 type ResolveChannelGroupPolicy =
   typeof import("../../config/group-policy.js").resolveChannelGroupPolicy;
 type ResolveChannelGroupRequireMention =
@@ -214,6 +216,7 @@ export type PluginRuntime = {
     };
     reactions: {
       shouldAckReaction: ShouldAckReaction;
+      removeAckReactionAfterReply: RemoveAckReactionAfterReply;
     };
     groups: {
       resolveGroupPolicy: ResolveChannelGroupPolicy;

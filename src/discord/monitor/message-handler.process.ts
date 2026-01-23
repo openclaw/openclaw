@@ -8,7 +8,10 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
-import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-reactions.js";
+import {
+  removeAckReactionAfterReply,
+  shouldAckReaction as shouldAckReactionGate,
+} from "../../channels/ack-reactions.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
@@ -394,19 +397,18 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );
   }
-  if (removeAckAfterReply && ackReactionPromise && ackReaction) {
-    const ackReactionValue = ackReaction;
-    void ackReactionPromise.then((didAck) => {
-      if (!didAck) return;
-      removeReactionDiscord(message.channelId, message.id, ackReactionValue, {
-        rest: client.rest,
-      }).catch((err) => {
-        logVerbose(
-          `discord: failed to remove ack reaction from ${message.channelId}/${message.id}: ${String(err)}`,
-        );
-      });
-    });
-  }
+  removeAckReactionAfterReply({
+    removeAfterReply: removeAckAfterReply,
+    ackReactionPromise,
+    ackReactionValue: ackReaction,
+    remove: () =>
+      removeReactionDiscord(message.channelId, message.id, ackReaction, { rest: client.rest }),
+    onError: (err) => {
+      logVerbose(
+        `discord: failed to remove ack reaction from ${message.channelId}/${message.id}: ${String(err)}`,
+      );
+    },
+  });
   if (isGuildMessage && historyLimit > 0) {
     clearHistoryEntries({
       historyMap: guildHistories,

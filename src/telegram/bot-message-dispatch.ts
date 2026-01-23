@@ -7,6 +7,7 @@ import {
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { clearHistoryEntries } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -184,16 +185,18 @@ export const dispatchTelegramMessage = async ({
     }
     return;
   }
-  if (removeAckAfterReply && ackReactionPromise && msg.message_id && reactionApi) {
-    void ackReactionPromise.then((didAck) => {
-      if (!didAck) return;
-      reactionApi(chatId, msg.message_id, []).catch((err) => {
-        logVerbose(
-          `telegram: failed to remove ack reaction from ${chatId}/${msg.message_id}: ${String(err)}`,
-        );
-      });
-    });
-  }
+  removeAckReactionAfterReply({
+    removeAfterReply: removeAckAfterReply,
+    ackReactionPromise,
+    ackReactionValue: ackReactionPromise ? "ack" : null,
+    remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+    onError: (err) => {
+      if (!msg.message_id) return;
+      logVerbose(
+        `telegram: failed to remove ack reaction from ${chatId}/${msg.message_id}: ${String(err)}`,
+      );
+    },
+  });
   if (isGroup && historyKey && historyLimit > 0) {
     clearHistoryEntries({ historyMap: groupHistories, historyKey });
   }

@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { shouldAckReaction, shouldAckReactionForWhatsApp } from "./ack-reactions.js";
+import {
+  removeAckReactionAfterReply,
+  shouldAckReaction,
+  shouldAckReactionForWhatsApp,
+} from "./ack-reactions.js";
 
 describe("shouldAckReaction", () => {
   it("honors direct and group-all scopes", () => {
@@ -220,5 +224,46 @@ describe("shouldAckReactionForWhatsApp", () => {
         groupActivated: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("removeAckReactionAfterReply", () => {
+  it("removes only when ack succeeded", async () => {
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const onError = vi.fn();
+    removeAckReactionAfterReply({
+      removeAfterReply: true,
+      ackReactionPromise: Promise.resolve(true),
+      ackReactionValue: "👀",
+      remove,
+      onError,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("skips removal when ack did not happen", async () => {
+    const remove = vi.fn().mockResolvedValue(undefined);
+    removeAckReactionAfterReply({
+      removeAfterReply: true,
+      ackReactionPromise: Promise.resolve(false),
+      ackReactionValue: "👀",
+      remove,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("skips when not configured", async () => {
+    const remove = vi.fn().mockResolvedValue(undefined);
+    removeAckReactionAfterReply({
+      removeAfterReply: false,
+      ackReactionPromise: Promise.resolve(true),
+      ackReactionValue: "👀",
+      remove,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(remove).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@ import {
 } from "../../../auto-reply/reply/response-prefix-template.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntries } from "../../../auto-reply/reply/history.js";
+import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
@@ -152,21 +153,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     );
   }
 
-  if (ctx.removeAckAfterReply && prepared.ackReactionPromise && prepared.ackReactionMessageTs) {
-    const messageTs = prepared.ackReactionMessageTs;
-    const ackValue = prepared.ackReactionValue;
-    void prepared.ackReactionPromise.then((didAck) => {
-      if (!didAck) return;
-      removeSlackReaction(message.channel, messageTs, ackValue, {
-        token: ctx.botToken,
-        client: ctx.app.client,
-      }).catch((err) => {
-        logVerbose(
-          `slack: failed to remove ack reaction from ${message.channel}/${message.ts}: ${String(err)}`,
-        );
-      });
-    });
-  }
+  removeAckReactionAfterReply({
+    removeAfterReply: ctx.removeAckAfterReply,
+    ackReactionPromise: prepared.ackReactionPromise,
+    ackReactionValue: prepared.ackReactionValue,
+    remove: () =>
+      removeSlackReaction(
+        message.channel,
+        prepared.ackReactionMessageTs ?? "",
+        prepared.ackReactionValue,
+        {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        },
+      ),
+    onError: (err) => {
+      logVerbose(
+        `slack: failed to remove ack reaction from ${message.channel}/${message.ts}: ${String(err)}`,
+      );
+    },
+  });
 
   if (prepared.isRoomish && ctx.historyLimit > 0) {
     clearHistoryEntries({
