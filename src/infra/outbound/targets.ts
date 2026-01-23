@@ -29,6 +29,12 @@ export type OutboundTarget = {
   lastAccountId?: string;
 };
 
+export type HeartbeatSenderContext = {
+  sender: string;
+  provider?: DeliverableMessageChannel;
+  allowFrom: string[];
+};
+
 export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
 export type SessionDeliveryTarget = {
@@ -249,4 +255,60 @@ export function resolveHeartbeatDeliveryTarget(params: {
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };
+}
+
+function resolveHeartbeatSenderId(params: {
+  allowFrom: Array<string | number>;
+  deliveryTo?: string;
+  lastTo?: string;
+  provider?: string | null;
+}) {
+  const { allowFrom, deliveryTo, lastTo, provider } = params;
+  const candidates = [
+    deliveryTo?.trim(),
+    provider && deliveryTo ? `${provider}:${deliveryTo}` : undefined,
+    lastTo?.trim(),
+    provider && lastTo ? `${provider}:${lastTo}` : undefined,
+  ].filter((val): val is string => Boolean(val?.trim()));
+
+  const allowList = allowFrom
+    .map((entry) => String(entry))
+    .filter((entry) => entry && entry !== "*");
+  if (allowFrom.includes("*")) {
+    return candidates[0] ?? "heartbeat";
+  }
+  if (candidates.length > 0 && allowList.length > 0) {
+    const matched = candidates.find((candidate) => allowList.includes(candidate));
+    if (matched) return matched;
+  }
+  if (candidates.length > 0 && allowList.length === 0) {
+    return candidates[0];
+  }
+  if (allowList.length > 0) return allowList[0];
+  return candidates[0] ?? "heartbeat";
+}
+
+export function resolveHeartbeatSenderContext(params: {
+  cfg: ClawdbotConfig;
+  entry?: SessionEntry;
+  delivery: OutboundTarget;
+}): HeartbeatSenderContext {
+  const provider =
+    params.delivery.channel !== "none" ? params.delivery.channel : params.delivery.lastChannel;
+  const allowFrom = provider
+    ? (getChannelPlugin(provider)?.config.resolveAllowFrom?.({
+        cfg: params.cfg,
+        accountId:
+          provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined,
+      }) ?? [])
+    : [];
+
+  const sender = resolveHeartbeatSenderId({
+    allowFrom,
+    deliveryTo: params.delivery.to,
+    lastTo: params.entry?.lastTo,
+    provider,
+  });
+
+  return { sender, provider, allowFrom };
 }
