@@ -11,9 +11,15 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
-import { parseModelRef, resolveConfiguredModelRef } from "../../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  parseModelRef,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import { withProgressTotals } from "../../cli/progress.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -26,13 +32,34 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
+import {
+  describeProbeSummary,
+  formatProbeLatency,
+  groupProbeResults,
+  runAuthProbes,
+  sortProbeResults,
+  type AuthProbeSummary,
+} from "./list.probe.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 export async function modelsStatusCommand(
-  opts: { json?: boolean; plain?: boolean; check?: boolean },
+  opts: {
+    json?: boolean;
+    plain?: boolean;
+    check?: boolean;
+    probe?: boolean;
+    probeProvider?: string;
+    probeProfile?: string | string[];
+    probeTimeout?: string;
+    probeConcurrency?: string;
+    probeMaxTokens?: string;
+  },
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
+  if (opts.plain && opts.probe) {
+    throw new Error("--probe cannot be used with --plain output.");
+  }
   const cfg = loadConfig();
   const resolved = resolveConfiguredModelRef({
     cfg,
@@ -139,6 +166,69 @@ export async function modelsStatusCommand(
     .filter((provider) => !providerAuthMap.has(provider))
     .sort((a, b) => a.localeCompare(b));
 
+  const probeProfileIds = (() => {
+    if (!opts.probeProfile) return [];
+    const raw = Array.isArray(opts.probeProfile) ? opts.probeProfile : [opts.probeProfile];
+    return raw
+      .flatMap((value) => String(value ?? "").split(","))
+      .map((value) => value.trim())
+      .filter(Boolean);
+  })();
+  const probeTimeoutMs = opts.probeTimeout ? Number(opts.probeTimeout) : 8000;
+  if (!Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
+    throw new Error("--probe-timeout must be a positive number (ms).");
+  }
+  const probeConcurrency = opts.probeConcurrency ? Number(opts.probeConcurrency) : 2;
+  if (!Number.isFinite(probeConcurrency) || probeConcurrency <= 0) {
+    throw new Error("--probe-concurrency must be > 0.");
+  }
+  const probeMaxTokens = opts.probeMaxTokens ? Number(opts.probeMaxTokens) : 8;
+  if (!Number.isFinite(probeMaxTokens) || probeMaxTokens <= 0) {
+    throw new Error("--probe-max-tokens must be > 0.");
+  }
+
+  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const rawCandidates = [
+    rawModel || resolvedLabel,
+    ...fallbacks,
+    imageModel,
+    ...imageFallbacks,
+    ...allowed,
+  ].filter(Boolean);
+  const resolvedCandidates = rawCandidates
+    .map(
+      (raw) =>
+        resolveModelRefFromString({
+          raw: String(raw ?? ""),
+          defaultProvider: DEFAULT_PROVIDER,
+          aliasIndex,
+        })?.ref,
+    )
+    .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
+  const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
+
+  let probeSummary: AuthProbeSummary | undefined;
+  if (opts.probe) {
+    probeSummary = await withProgressTotals(
+      { label: "Probing auth profiles…", total: 1 },
+      async (update) => {
+        return await runAuthProbes({
+          cfg,
+          providers,
+          modelCandidates,
+          options: {
+            provider: opts.probeProvider,
+            profileIds: probeProfileIds,
+            timeoutMs: probeTimeoutMs,
+            concurrency: probeConcurrency,
+            maxTokens: probeMaxTokens,
+          },
+          onProgress: update,
+        });
+      },
+    );
+  }
+
   const providersWithOauth = providerAuth
     .filter(
       (entry) =>
@@ -228,6 +318,7 @@ export async function modelsStatusCommand(
               profiles: authHealth.profiles,
               providers: authHealth.providers,
             },
+            probes: probeSummary,
           },
         },
         null,
@@ -406,72 +497,113 @@ export async function modelsStatusCommand(
   runtime.log(colorize(rich, theme.heading, "OAuth/token status"));
   if (oauthProfiles.length === 0) {
     runtime.log(colorize(rich, theme.muted, "- none"));
-    return;
-  }
-
-  const usageByProvider = new Map<string, string>();
-  const usageProviders = Array.from(
-    new Set(
-      oauthProfiles
-        .map((profile) => resolveUsageProviderId(profile.provider))
-        .filter((provider): provider is UsageProviderId => Boolean(provider)),
-    ),
-  );
-  if (usageProviders.length > 0) {
-    try {
-      const usageSummary = await loadProviderUsageSummary({
-        providers: usageProviders,
-        agentDir,
-        timeoutMs: 3500,
-      });
-      for (const snapshot of usageSummary.providers) {
-        const formatted = formatUsageWindowSummary(snapshot, {
-          now: Date.now(),
-          maxWindows: 2,
-          includeResets: true,
+  } else {
+    const usageByProvider = new Map<string, string>();
+    const usageProviders = Array.from(
+      new Set(
+        oauthProfiles
+          .map((profile) => resolveUsageProviderId(profile.provider))
+          .filter((provider): provider is UsageProviderId => Boolean(provider)),
+      ),
+    );
+    if (usageProviders.length > 0) {
+      try {
+        const usageSummary = await loadProviderUsageSummary({
+          providers: usageProviders,
+          agentDir,
+          timeoutMs: 3500,
         });
-        if (formatted) {
-          usageByProvider.set(snapshot.provider, formatted);
+        for (const snapshot of usageSummary.providers) {
+          const formatted = formatUsageWindowSummary(snapshot, {
+            now: Date.now(),
+            maxWindows: 2,
+            includeResets: true,
+          });
+          if (formatted) {
+            usageByProvider.set(snapshot.provider, formatted);
+          }
         }
+      } catch {
+        // ignore usage failures
       }
-    } catch {
-      // ignore usage failures
+    }
+
+    const formatStatus = (status: string) => {
+      if (status === "ok") return colorize(rich, theme.success, "ok");
+      if (status === "static") return colorize(rich, theme.muted, "static");
+      if (status === "expiring") return colorize(rich, theme.warn, "expiring");
+      if (status === "missing") return colorize(rich, theme.warn, "unknown");
+      return colorize(rich, theme.error, "expired");
+    };
+
+    const profilesByProvider = new Map<string, typeof oauthProfiles>();
+    for (const profile of oauthProfiles) {
+      const current = profilesByProvider.get(profile.provider);
+      if (current) current.push(profile);
+      else profilesByProvider.set(profile.provider, [profile]);
+    }
+
+    for (const [provider, profiles] of profilesByProvider) {
+      const usageKey = resolveUsageProviderId(provider);
+      const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
+      const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
+      runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
+      for (const profile of profiles) {
+        const labelText = profile.label || profile.profileId;
+        const label = colorize(rich, theme.accent, labelText);
+        const status = formatStatus(profile.status);
+        const expiry =
+          profile.status === "static"
+            ? ""
+            : profile.expiresAt
+              ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
+              : " expires unknown";
+        const source =
+          profile.source !== "store" ? colorize(rich, theme.muted, ` (${profile.source})`) : "";
+        runtime.log(`  - ${label} ${status}${expiry}${source}`);
+      }
     }
   }
 
-  const formatStatus = (status: string) => {
-    if (status === "ok") return colorize(rich, theme.success, "ok");
-    if (status === "static") return colorize(rich, theme.muted, "static");
-    if (status === "expiring") return colorize(rich, theme.warn, "expiring");
-    if (status === "missing") return colorize(rich, theme.warn, "unknown");
-    return colorize(rich, theme.error, "expired");
-  };
-
-  const profilesByProvider = new Map<string, typeof oauthProfiles>();
-  for (const profile of oauthProfiles) {
-    const current = profilesByProvider.get(profile.provider);
-    if (current) current.push(profile);
-    else profilesByProvider.set(profile.provider, [profile]);
-  }
-
-  for (const [provider, profiles] of profilesByProvider) {
-    const usageKey = resolveUsageProviderId(provider);
-    const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-    const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
-    runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
-    for (const profile of profiles) {
-      const labelText = profile.label || profile.profileId;
-      const label = colorize(rich, theme.accent, labelText);
-      const status = formatStatus(profile.status);
-      const expiry =
-        profile.status === "static"
-          ? ""
-          : profile.expiresAt
-            ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
-            : " expires unknown";
-      const source =
-        profile.source !== "store" ? colorize(rich, theme.muted, ` (${profile.source})`) : "";
-      runtime.log(`  - ${label} ${status}${expiry}${source}`);
+  if (probeSummary) {
+    runtime.log("");
+    runtime.log(colorize(rich, theme.heading, "Auth probes"));
+    if (probeSummary.results.length === 0) {
+      runtime.log(colorize(rich, theme.muted, "- none"));
+    } else {
+      const grouped = groupProbeResults(sortProbeResults(probeSummary.results));
+      const statusColor = (status: string) => {
+        if (status === "ok") return theme.success;
+        if (status === "rate_limit") return theme.warn;
+        if (status === "timeout" || status === "billing") return theme.warn;
+        if (status === "auth" || status === "format") return theme.error;
+        if (status === "no_model") return theme.muted;
+        return theme.muted;
+      };
+      for (const [provider, results] of grouped) {
+        const modelLabel = results.find((r) => r.model)?.model ?? "-";
+        runtime.log(
+          `- ${theme.heading(provider)}${colorize(
+            rich,
+            theme.muted,
+            modelLabel ? ` (model: ${modelLabel})` : "",
+          )}`,
+        );
+        for (const result of results) {
+          const status = colorize(rich, statusColor(result.status), result.status);
+          const latency = formatProbeLatency(result.latencyMs);
+          const mode = result.mode ? ` (${result.mode})` : "";
+          const detail = result.error ? colorize(rich, theme.muted, ` - ${result.error}`) : "";
+          runtime.log(
+            `  - ${colorize(rich, theme.accent, result.label)}${mode} ${status} ${colorize(
+              rich,
+              theme.muted,
+              latency,
+            )}${detail}`,
+          );
+        }
+      }
+      runtime.log(colorize(rich, theme.muted, describeProbeSummary(probeSummary)));
     }
   }
 

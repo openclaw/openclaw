@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
+- CLI: add live auth probes to `clawdbot models status` for per-profile verification.
 - Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
 
 ### Fixes
