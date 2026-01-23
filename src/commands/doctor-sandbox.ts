@@ -78,8 +78,12 @@ async function dockerImageExists(image: string): Promise<boolean> {
   try {
     await runExec("docker", ["image", "inspect", image], { timeoutMs: 5_000 });
     return true;
-  } catch {
-    return false;
+  } catch (error: any) {
+    const stderr = error?.stderr || error?.message || "";
+    if (String(stderr).includes("No such image")) {
+      return false;
+    }
+    throw error;
   }
 }
 
