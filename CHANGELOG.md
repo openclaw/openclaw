@@ -10,7 +10,7 @@ Docs: https://docs.clawd.bot
 - Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
 
 ### Fixes
-- Gateway/WebChat: route inbound messages through the unified dispatch pipeline so /new works consistently across WebChat/TUI and channels.
+- Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS.
 - Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.
 - Gateway: accept null optional fields in exec approval requests. (#1511) Thanks @pvoo.
 - TUI: forward unknown slash commands (for example, `/context`) to the Gateway.

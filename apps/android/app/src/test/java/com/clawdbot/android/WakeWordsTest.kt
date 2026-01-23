@@ -1,6 +1,7 @@
 package com.clawdbot.android
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class WakeWordsTest {
@@ -32,5 +33,18 @@ class WakeWordsTest {
     assertEquals("w1", sanitized.first())
     assertEquals("w${WakeWords.maxWords}", sanitized.last())
   }
-}
 
+  @Test
+  fun parseIfChangedSkipsWhenUnchanged() {
+    val current = listOf("clawd", "claude")
+    val parsed = WakeWords.parseIfChanged(" clawd , claude ", current)
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseIfChangedReturnsUpdatedList() {
+    val current = listOf("clawd")
+    val parsed = WakeWords.parseIfChanged(" clawd , jarvis ", current)
+    assertEquals(listOf("clawd", "jarvis"), parsed)
+  }
+}
