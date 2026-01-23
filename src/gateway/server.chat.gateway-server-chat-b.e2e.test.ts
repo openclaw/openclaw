@@ -4,8 +4,8 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
-  agentCommand,
   connectOk,
+  getReplyFromConfig,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
@@ -47,7 +47,7 @@ describe("gateway server chat", () => {
     async () => {
       const tempDirs: string[] = [];
       const { server, ws } = await startServerWithClient();
-      const spy = vi.mocked(agentCommand);
+      const spy = vi.mocked(getReplyFromConfig);
       const resetSpy = () => {
         spy.mockReset();
         spy.mockResolvedValue(undefined);
@@ -122,8 +122,9 @@ describe("gateway server chat", () => {
         let abortInFlight: Promise<unknown> | undefined;
         try {
           const callsBefore = spy.mock.calls.length;
-          spy.mockImplementationOnce(async (opts) => {
-            const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+          spy.mockImplementationOnce(async (_ctx, opts) => {
+            opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-1");
+            const signal = opts?.abortSignal;
             await new Promise<void>((resolve) => {
               if (!signal) return resolve();
               if (signal.aborted) return resolve();
@@ -155,7 +156,7 @@ describe("gateway server chat", () => {
             const tick = () => {
               if (spy.mock.calls.length > callsBefore) return resolve();
               if (Date.now() > deadline)
-                return reject(new Error("timeout waiting for agentCommand"));
+                return reject(new Error("timeout waiting for getReplyFromConfig"));
               setTimeout(tick, 5);
             };
             tick();
@@ -177,8 +178,9 @@ describe("gateway server chat", () => {
         sessionStoreSaveDelayMs.value = 120;
         resetSpy();
         try {
-          spy.mockImplementationOnce(async (opts) => {
-            const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+          spy.mockImplementationOnce(async (_ctx, opts) => {
+            opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-save-1");
+            const signal = opts?.abortSignal;
             await new Promise<void>((resolve) => {
               if (!signal) return resolve();
               if (signal.aborted) return resolve();
@@ -215,8 +217,9 @@ describe("gateway server chat", () => {
         await writeStore({ main: { sessionId: "sess-main", updatedAt: Date.now() } });
         resetSpy();
         const callsBeforeStop = spy.mock.calls.length;
-        spy.mockImplementationOnce(async (opts) => {
-          const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+        spy.mockImplementationOnce(async (_ctx, opts) => {
+          opts?.onAgentRunStart?.(opts.runId ?? "idem-stop-1");
+          const signal = opts?.abortSignal;
           await new Promise<void>((resolve) => {
             if (!signal) return resolve();
             if (signal.aborted) return resolve();
@@ -261,7 +264,8 @@ describe("gateway server chat", () => {
         const runDone = new Promise<void>((resolve) => {
           resolveRun = resolve;
         });
-        spy.mockImplementationOnce(async () => {
+        spy.mockImplementationOnce(async (_ctx, opts) => {
+          opts?.onAgentRunStart?.(opts.runId ?? "idem-status-1");
           await runDone;
         });
         const started = await rpcReq<{ runId?: string; status?: string }>(ws, "chat.send", {
@@ -294,8 +298,9 @@ describe("gateway server chat", () => {
         }
         expect(completed).toBe(true);
         resetSpy();
-        spy.mockImplementationOnce(async (opts) => {
-          const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+        spy.mockImplementationOnce(async (_ctx, opts) => {
+          opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-all-1");
+          const signal = opts?.abortSignal;
           await new Promise<void>((resolve) => {
             if (!signal) return resolve();
             if (signal.aborted) return resolve();
@@ -359,9 +364,9 @@ describe("gateway server chat", () => {
         const agentStartedP = new Promise<void>((resolve) => {
           agentStartedResolve = resolve;
         });
-        spy.mockImplementationOnce(async (opts) => {
+        spy.mockImplementationOnce(async (_ctx, opts) => {
           agentStartedResolve?.();
-          const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+          const signal = opts?.abortSignal;
           await new Promise<void>((resolve) => {
             if (!signal) return resolve();
             if (signal.aborted) return resolve();

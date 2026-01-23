@@ -18,9 +18,15 @@ vi.mock("./send.js", () => ({
     reactMock(...args);
   },
 }));
-vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
-  dispatchReplyFromConfig: (...args: unknown[]) => dispatchMock(...args),
-}));
+vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/dispatch.js")>();
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: unknown[]) => dispatchMock(...args),
+    dispatchInboundMessageWithDispatcher: (...args: unknown[]) => dispatchMock(...args),
+    dispatchInboundMessageWithBufferedDispatcher: (...args: unknown[]) => dispatchMock(...args),
+  };
+});
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
   upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
@@ -41,7 +47,7 @@ beforeEach(() => {
   updateLastRouteMock.mockReset();
   dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {
     dispatcher.sendFinalReply({ text: "hi" });
-    return { queuedFinal: true, counts: { final: 1 } };
+    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });

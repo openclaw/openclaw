@@ -21,6 +21,10 @@ vi.mock("../auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents,
 }));
 
+const { sessionStorePath } = vi.hoisted(() => ({
+  sessionStorePath: `/tmp/clawdbot-telegram-bot-${Math.random().toString(16).slice(2)}.json`,
+}));
+
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
   return listSkillCommandsForAgents({ cfg: config });
 }
@@ -41,6 +45,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig,
+  };
+});
+
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveStorePath: vi.fn((storePath) => storePath ?? sessionStorePath),
   };
 });
 

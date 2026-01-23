@@ -6,6 +6,9 @@ let createTelegramBot: typeof import("./bot.js").createTelegramBot;
 let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
 let resetInboundDedupe: typeof import("../auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
 
+const { sessionStorePath } = vi.hoisted(() => ({
+  sessionStorePath: `/tmp/clawdbot-telegram-throttler-${Math.random().toString(16).slice(2)}.json`,
+}));
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -22,6 +25,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig,
+  };
+});
+
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveStorePath: vi.fn((storePath) => storePath ?? sessionStorePath),
   };
 });
 

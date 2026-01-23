@@ -14,7 +14,7 @@ import {
   formatThreadStarterEnvelope,
   resolveEnvelopeFormatOptions,
 } from "../../auto-reply/envelope.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
+import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
@@ -358,7 +358,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     onReplyStart: () => sendTyping({ client, channelId: typingChannelId }),
   });
 
-  const { queuedFinal, counts } = await dispatchReplyFromConfig({
+  const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: ctxPayload,
     cfg,
     dispatcher,

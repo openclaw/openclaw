@@ -166,6 +166,7 @@ const hoisted = vi.hoisted(() => ({
     waitCalls: [] as string[],
     waitResults: new Map<string, boolean>(),
   },
+  getReplyFromConfig: vi.fn().mockResolvedValue(undefined),
   sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 
@@ -197,6 +198,7 @@ export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand = hoisted.agentCommand;
+export const getReplyFromConfig = hoisted.getReplyFromConfig;
 
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,
@@ -539,6 +541,9 @@ vi.mock("../channels/web/index.js", async () => {
 });
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+}));
+vi.mock("../auto-reply/reply.js", () => ({
+  getReplyFromConfig,
 }));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");

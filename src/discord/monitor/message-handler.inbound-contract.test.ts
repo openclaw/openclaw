@@ -9,17 +9,24 @@ import { expectInboundContextContract } from "../../../test/helpers/inbound-cont
 
 let capturedCtx: MsgContext | undefined;
 
-vi.mock("../../auto-reply/reply/dispatch-from-config.js", () => ({
-  dispatchReplyFromConfig: vi.fn(async (params: { ctx: MsgContext }) => {
+vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
+  const dispatchInboundMessage = vi.fn(async (params: { ctx: MsgContext }) => {
     capturedCtx = params.ctx;
-    return { queuedFinal: false, counts: { tool: 0, block: 0 } };
-  }),
-}));
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  });
+  return {
+    ...actual,
+    dispatchInboundMessage,
+    dispatchInboundMessageWithDispatcher: dispatchInboundMessage,
+    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessage,
+  };
+});
 
 import { processDiscordMessage } from "./message-handler.process.js";
 
 describe("discord processDiscordMessage inbound contract", () => {
-  it("passes a finalized MsgContext to dispatchReplyFromConfig", async () => {
+  it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     capturedCtx = undefined;
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-discord-"));
