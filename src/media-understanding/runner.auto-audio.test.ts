@@ -15,6 +15,8 @@ import {
 
 describe("runCapability auto audio entries", () => {
   it("uses provider keys to auto-enable audio transcription", async () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin";
     const tmpPath = path.join(os.tmpdir(), `clawdbot-auto-audio-${Date.now()}.wav`);
     await fs.writeFile(tmpPath, Buffer.from("RIFF"));
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
@@ -54,15 +56,18 @@ describe("runCapability auto audio entries", () => {
         providerRegistry,
       });
       expect(result.outputs[0]?.text).toBe("ok");
-      expect(seenModel).toBe("whisper-1");
+      expect(seenModel).toBe("gpt-4o-mini-transcribe");
       expect(result.decision.outcome).toBe("success");
     } finally {
+      process.env.PATH = originalPath;
       await cache.cleanup();
       await fs.unlink(tmpPath).catch(() => {});
     }
   });
 
   it("skips auto audio when disabled", async () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin";
     const tmpPath = path.join(os.tmpdir(), `clawdbot-auto-audio-${Date.now()}.wav`);
     await fs.writeFile(tmpPath, Buffer.from("RIFF"));
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
@@ -107,6 +112,7 @@ describe("runCapability auto audio entries", () => {
       expect(result.outputs).toHaveLength(0);
       expect(result.decision.outcome).toBe("disabled");
     } finally {
+      process.env.PATH = originalPath;
       await cache.cleanup();
       await fs.unlink(tmpPath).catch(() => {});
     }
