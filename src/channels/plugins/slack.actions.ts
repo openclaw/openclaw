@@ -133,6 +133,7 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
             limit,
             before: readStringParam(params, "before"),
             after: readStringParam(params, "after"),
+            threadId: readStringParam(params, "threadId"),
             accountId: accountId ?? undefined,
           },
           cfg,

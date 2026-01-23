@@ -37,6 +37,7 @@ Docs: https://docs.clawd.bot
 - Auth: skip auth profiles in cooldown during initial selection and rotation. (#1316) Thanks @odrobnik.
 - Agents/TUI: honor user-pinned auth profiles during cooldown and preserve search picker ranking. (#1432) Thanks @tobiasbischoff.
 - Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
+- Slack: read thread replies for message reads when threadId is provided (replies-only). (#1450) Thanks @rodrigouroz.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
 - Providers: improve GitHub Copilot integration (enterprise support, base URL, and auth flow alignment).
 

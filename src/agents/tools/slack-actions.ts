@@ -214,11 +214,13 @@ export async function handleSlackAction(
           typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
+        const threadId = readStringParam(params, "threadId");
         const result = await readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
+          threadId: threadId ?? undefined,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(
