@@ -1,4 +1,4 @@
-import { WebClient } from "@slack/web-api";
+import { createSlackWebClient } from "./client.js";
 
 import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
@@ -61,7 +61,7 @@ export async function listSlackDirectoryPeersLive(
 ): Promise<ChannelDirectoryEntry[]> {
   const token = resolveReadToken(params);
   if (!token) return [];
-  const client = new WebClient(token);
+  const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const members: SlackUser[] = [];
   let cursor: string | undefined;
@@ -119,7 +119,7 @@ export async function listSlackDirectoryGroupsLive(
 ): Promise<ChannelDirectoryEntry[]> {
   const token = resolveReadToken(params);
   if (!token) return [];
-  const client = new WebClient(token);
+  const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const channels: SlackChannel[] = [];
   let cursor: string | undefined;

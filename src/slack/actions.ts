@@ -1,8 +1,9 @@
-import { WebClient } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
 
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { createSlackWebClient } from "./client.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -56,7 +57,7 @@ function normalizeEmoji(raw: string) {
 
 async function getClient(opts: SlackActionClientOpts = {}) {
   const token = resolveToken(opts.token, opts.accountId);
-  return opts.client ?? new WebClient(token);
+  return opts.client ?? createSlackWebClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {

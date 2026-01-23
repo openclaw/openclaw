@@ -1,4 +1,6 @@
-import { WebClient } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
+
+import { createSlackWebClient } from "./client.js";
 
 export type SlackScopesResult = {
   ok: boolean;
@@ -81,7 +83,7 @@ export async function fetchSlackScopes(
   token: string,
   timeoutMs: number,
 ): Promise<SlackScopesResult> {
-  const client = new WebClient(token, { timeout: timeoutMs });
+  const client = createSlackWebClient(token, { timeout: timeoutMs });
   const attempts: SlackScopesSource[] = ["auth.scopes", "apps.permissions.info"];
   const errors: string[] = [];
 

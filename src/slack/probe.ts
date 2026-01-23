@@ -1,4 +1,4 @@
-import { WebClient } from "@slack/web-api";
+import { createSlackWebClient } from "./client.js";
 
 export type SlackProbe = {
   ok: boolean;
@@ -21,7 +21,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 export async function probeSlack(token: string, timeoutMs = 2500): Promise<SlackProbe> {
-  const client = new WebClient(token);
+  const client = createSlackWebClient(token);
   const start = Date.now();
   try {
     const result = await withTimeout(client.auth.test(), timeoutMs);
