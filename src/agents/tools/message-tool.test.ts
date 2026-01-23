@@ -86,6 +86,64 @@ describe("message tool mirroring", () => {
   });
 });
 
+describe("message tool path passthrough", () => {
+  it("does not convert path to media for send", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:123",
+      path: "~/Downloads/voice.ogg",
+      message: "",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params?.path).toBe("~/Downloads/voice.ogg");
+    expect(call?.params?.media).toBeUndefined();
+  });
+
+  it("does not convert filePath to media for send", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:123",
+      filePath: "./tmp/note.m4a",
+      message: "",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params?.filePath).toBe("./tmp/note.m4a");
+    expect(call?.params?.media).toBeUndefined();
+  });
+});
+
 describe("message tool description", () => {
   const bluebubblesPlugin: ChannelPlugin = {
     id: "bluebubbles",

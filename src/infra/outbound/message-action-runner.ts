@@ -343,7 +343,7 @@ async function hydrateSendAttachmentParams(params: {
   action: ChannelMessageActionName;
   dryRun?: boolean;
 }): Promise<void> {
-  if (params.action !== "sendAttachment" && params.action !== "send") return;
+  if (params.action !== "sendAttachment") return;
 
   const mediaHint = readStringParam(params.args, "media", { trim: false });
   const fileHint =
