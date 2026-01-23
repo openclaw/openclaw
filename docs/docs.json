@@ -142,14 +142,6 @@
       "destination": "/cli/message"
     },
     {
-      "source": "/mattermost",
-      "destination": "/channels/mattermost"
-    },
-    {
-      "source": "/mattermost/",
-      "destination": "/channels/mattermost"
-    },
-    {
       "source": "/providers/discord",
       "destination": "/channels/discord"
     },
