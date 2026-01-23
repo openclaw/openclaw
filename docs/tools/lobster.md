@@ -151,6 +151,10 @@ If `requiresApproval` is present, inspect the prompt and decide:
 - `approve: true` → resume and continue side effects
 - `approve: false` → cancel and finalize the workflow
 
+## OpenProse
+
+OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent prep, then run a Lobster pipeline for deterministic approvals. If a Prose program needs Lobster, allow the `lobster` tool for sub-agents via `tools.subagents.tools`. See [OpenProse](/prose).
+
 ## Safety
 
 - **Local subprocess only** — no network calls from the plugin itself.
