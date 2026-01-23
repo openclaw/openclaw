@@ -11,7 +11,6 @@ export default defineConfig({
     maxWorkers: e2eWorkers,
     include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts"],
     setupFiles: ["test/setup.ts"],
-    globalSetup: ["test/global-setup.ts"],
     exclude: [
       "dist/**",
       "apps/macos/**",

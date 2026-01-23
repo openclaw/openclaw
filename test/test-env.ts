@@ -130,3 +130,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
 
   return { cleanup, tempHome };
 }
+
+export function withIsolatedTestHome(): { cleanup: () => void; tempHome: string } {
+  return installTestEnv();
+}

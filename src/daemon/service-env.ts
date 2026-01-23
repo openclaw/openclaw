@@ -18,6 +18,7 @@ export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
   home?: string;
+  env?: Record<string, string | undefined>;
 };
 
 type BuildServicePathOptions = MinimalServicePathOptions & {
@@ -38,10 +39,30 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
  * Resolve common user bin directories for Linux.
  * These are paths where npm global installs and node version managers typically place binaries.
  */
-export function resolveLinuxUserBinDirs(home: string | undefined): string[] {
+export function resolveLinuxUserBinDirs(
+  home: string | undefined,
+  env?: Record<string, string | undefined>,
+): string[] {
   if (!home) return [];
 
   const dirs: string[] = [];
+
+  const add = (dir: string | undefined) => {
+    if (dir) dirs.push(dir);
+  };
+  const appendSubdir = (base: string | undefined, subdir: string) => {
+    if (!base) return undefined;
+    return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
+  };
+
+  // Env-configured bin roots (override defaults when present).
+  add(env?.PNPM_HOME);
+  add(appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
+  add(appendSubdir(env?.BUN_INSTALL, "bin"));
+  add(appendSubdir(env?.VOLTA_HOME, "bin"));
+  add(appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+  add(appendSubdir(env?.NVM_DIR, "current/bin"));
+  add(appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
   dirs.push(`${home}/.local/bin`); // XDG standard, pip, etc.
@@ -68,7 +89,8 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const systemDirs = resolveSystemPathDirs(platform);
 
   // Add Linux user bin directories (npm global, nvm, fnm, volta, etc.)
-  const linuxUserDirs = platform === "linux" ? resolveLinuxUserBinDirs(options.home) : [];
+  const linuxUserDirs =
+    platform === "linux" ? resolveLinuxUserBinDirs(options.home, options.env) : [];
 
   const add = (dir: string) => {
     if (!dir) return;
@@ -83,6 +105,15 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   return parts;
 }
 
+export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptions = {}): string[] {
+  const env = options.env ?? process.env;
+  return getMinimalServicePathParts({
+    ...options,
+    home: options.home ?? env.HOME,
+    env,
+  });
+}
+
 export function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -90,10 +121,7 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
     return env.PATH ?? "";
   }
 
-  return getMinimalServicePathParts({
-    ...options,
-    home: options.home ?? env.HOME,
-  }).join(path.delimiter);
+  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.delimiter);
 }
 
 export function buildServiceEnvironment(params: {

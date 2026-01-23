@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
+import { buildMinimalServicePath } from "./service-env.js";
 
 describe("auditGatewayServiceConfig", () => {
   it("flags bun runtime", async () => {
@@ -38,5 +39,25 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
     ).toBe(true);
+  });
+
+  it("accepts Linux minimal PATH with user directories", async () => {
+    const env = { HOME: "/home/testuser", PNPM_HOME: "/opt/pnpm" };
+    const minimalPath = buildMinimalServicePath({ platform: "linux", env });
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: minimalPath },
+      },
+    });
+
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal),
+    ).toBe(false);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
+    ).toBe(false);
   });
 });
