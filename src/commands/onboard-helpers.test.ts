@@ -27,7 +27,6 @@ afterEach(() => {
 
 describe("openUrl", () => {
   it("quotes URLs on win32 so '&' is not treated as cmd separator", async () => {
-    vi.stubEnv("CLAWDBOT_ALLOW_TEST_BROWSER_OPEN", "1");
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     const url =
