@@ -9,6 +9,7 @@ export function createTypingCallbacks(params: {
   onStartError: (err: unknown) => void;
   onStopError?: (err: unknown) => void;
 }): TypingCallbacks {
+  const stop = params.stop;
   const onReplyStart = async () => {
     try {
       await params.start();
@@ -17,9 +18,9 @@ export function createTypingCallbacks(params: {
     }
   };
 
-  const onIdle = params.stop
+  const onIdle = stop
     ? () => {
-        void params.stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
+        void stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
       }
     : undefined;
 
