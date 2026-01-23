@@ -39,7 +39,7 @@ They run immediately, are stripped before the model sees the message, and the re
 ```
 
 - `commands.text` (default `true`) enables parsing `/...` in chat messages.
-  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/MS Teams), text commands still work even if you set this to `false`.
+  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/Google Chat/MS Teams), text commands still work even if you set this to `false`.
 - `commands.native` (default `"auto"`) registers native commands.
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
   - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).

@@ -76,6 +76,11 @@ export type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
+  GoogleChatDmConfig,
+  GoogleChatGroupConfig,
+  GoogleChatActionConfig,
   MSTeamsChannelConfig,
   MSTeamsConfig,
   MSTeamsReplyStyle,
@@ -83,6 +88,7 @@ export type {
 } from "../config/types.js";
 export {
   DiscordConfigSchema,
+  GoogleChatConfigSchema,
   IMessageConfigSchema,
   MSTeamsConfigSchema,
   SignalConfigSchema,
@@ -141,6 +147,7 @@ export { resolveControlCommandGate } from "../channels/command-gating.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveDiscordGroupRequireMention,
+  resolveGoogleChatGroupRequireMention,
   resolveIMessageGroupRequireMention,
   resolveSlackGroupRequireMention,
   resolveTelegramGroupRequireMention,

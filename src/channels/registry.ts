@@ -8,6 +8,7 @@ export const CHAT_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
   "discord",
+  "googlechat",
   "slack",
   "signal",
   "imessage",
@@ -57,6 +58,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     blurb: "very well supported right now.",
     systemImage: "bubble.left.and.bubble.right",
   },
+  googlechat: {
+    id: "googlechat",
+    label: "Google Chat",
+    selectionLabel: "Google Chat (Chat API)",
+    detailLabel: "Google Chat",
+    docsPath: "/channels/googlechat",
+    docsLabel: "googlechat",
+    blurb: "Google Workspace Chat app with HTTP webhook.",
+    systemImage: "message.badge",
+  },
   slack: {
     id: "slack",
     label: "Slack",
@@ -91,6 +102,8 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
+  "google-chat": "googlechat",
+  gchat: "googlechat",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {

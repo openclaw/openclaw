@@ -150,6 +150,14 @@
       "destination": "/channels/discord"
     },
     {
+      "source": "/providers/googlechat",
+      "destination": "/channels/googlechat"
+    },
+    {
+      "source": "/providers/googlechat/",
+      "destination": "/channels/googlechat"
+    },
+    {
       "source": "/providers/grammy",
       "destination": "/channels/grammy"
     },
@@ -943,6 +951,7 @@
           "channels/grammy",
           "channels/discord",
           "channels/slack",
+          "channels/googlechat",
           "channels/mattermost",
           "channels/signal",
           "channels/imessage",

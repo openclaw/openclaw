@@ -325,7 +325,7 @@ Notes:
 - Uses the image model directly (independent of the main chat model).
 
 ### `message`
-Send messages and channel actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
+Send messages and channel actions across Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
 
 Core actions:
 - `send` (text + optional media; MS Teams also supports `card` for Adaptive Cards)
