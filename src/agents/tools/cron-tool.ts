@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 // NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
@@ -158,6 +159,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
             throw new Error("job required");
           }
           const job = normalizeCronJobCreate(params.job) ?? params.job;
+          if (job && typeof job === "object") {
+            const cfg = loadConfig();
+            const agentId = opts?.agentSessionKey
+              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+              : undefined;
+            if (agentId && !(job as { agentId?: unknown }).agentId) {
+              (job as { agentId?: string }).agentId = agentId;
+            }
+          }
           const contextMessages =
             typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
               ? params.contextMessages

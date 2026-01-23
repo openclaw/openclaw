@@ -18,9 +18,10 @@ function readParentIdParam(params: Record<string, unknown>): string | null | und
 }
 
 export async function handleDiscordMessageAction(
-  ctx: Pick<ChannelMessageActionContext, "action" | "params" | "cfg">,
+  ctx: Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
+  const accountId = ctx.accountId ?? readStringParam(params, "accountId");
 
   const resolveChannelId = () =>
     resolveDiscordChannelId(
@@ -39,6 +40,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "sendMessage",
+        accountId: accountId ?? undefined,
         to,
         content,
         mediaUrl: mediaUrl ?? undefined,
@@ -62,6 +64,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "poll",
+        accountId: accountId ?? undefined,
         to,
         question,
         answers,

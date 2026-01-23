@@ -114,7 +114,8 @@ export async function handleDiscordMessagingAction(
         required: true,
         label: "stickerIds",
       });
-      await sendStickerDiscord(to, stickerIds, { content });
+      const accountId = readStringParam(params, "accountId");
+      await sendStickerDiscord(to, stickerIds, { content, accountId: accountId ?? undefined });
       return jsonResult({ ok: true });
     }
     case "poll": {
@@ -137,10 +138,11 @@ export async function handleDiscordMessagingAction(
       const durationHours =
         typeof durationRaw === "number" && Number.isFinite(durationRaw) ? durationRaw : undefined;
       const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
+      const accountId = readStringParam(params, "accountId");
       await sendPollDiscord(
         to,
         { question, options: answers, maxSelections, durationHours },
-        { content },
+        { content, accountId: accountId ?? undefined },
       );
       return jsonResult({ ok: true });
     }
@@ -211,7 +213,10 @@ export async function handleDiscordMessagingAction(
       const replyTo = readStringParam(params, "replyTo");
       const embeds =
         Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
+      const accountId = readStringParam(params, "accountId");
+
       const result = await sendMessageDiscord(to, content, {
+        accountId: accountId ?? undefined,
         mediaUrl,
         replyTo,
         embeds,
@@ -298,7 +303,9 @@ export async function handleDiscordMessagingAction(
       });
       const mediaUrl = readStringParam(params, "mediaUrl");
       const replyTo = readStringParam(params, "replyTo");
+      const accountId = readStringParam(params, "accountId");
       const result = await sendMessageDiscord(`channel:${channelId}`, content, {
+        accountId: accountId ?? undefined,
         mediaUrl,
         replyTo,
       });
