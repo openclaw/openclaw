@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
 
-import { shouldAckReaction } from "clawdbot/plugin-sdk";
+import { removeAckReactionAfterReply, shouldAckReaction } from "clawdbot/plugin-sdk";
 import type { ClawdbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
 import {
   handleBlueBubblesWebhookRequest,
@@ -138,6 +138,7 @@ function createMockRuntime(): PluginRuntime {
       },
       reactions: {
         shouldAckReaction,
+        removeAckReactionAfterReply,
       },
       groups: {
         resolveGroupPolicy: mockResolveGroupPolicy as unknown as PluginRuntime["channel"]["groups"]["resolveGroupPolicy"],

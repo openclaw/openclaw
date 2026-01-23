@@ -1750,29 +1750,26 @@ async function processMessage(
       },
     });
   } finally {
-    if (
-      removeAckAfterReply &&
-      sentMessage &&
-      ackReactionPromise &&
-      ackReactionValue &&
-      chatGuidForActions &&
-      ackMessageId
-    ) {
-      void ackReactionPromise.then((didAck) => {
-        if (!didAck) return;
-        sendBlueBubblesReaction({
-          chatGuid: chatGuidForActions,
-          messageGuid: ackMessageId,
-          emoji: ackReactionValue,
-          remove: true,
-          opts: { cfg: config, accountId: account.accountId },
-        }).catch((err) => {
+    if (sentMessage && chatGuidForActions && ackMessageId) {
+      core.channel.reactions.removeAckReactionAfterReply({
+        removeAfterReply: removeAckAfterReply,
+        ackReactionPromise,
+        ackReactionValue: ackReactionValue ?? null,
+        remove: () =>
+          sendBlueBubblesReaction({
+            chatGuid: chatGuidForActions,
+            messageGuid: ackMessageId,
+            emoji: ackReactionValue ?? "",
+            remove: true,
+            opts: { cfg: config, accountId: account.accountId },
+          }),
+        onError: (err) => {
           logVerbose(
             core,
             runtime,
             `ack reaction removal failed chatGuid=${chatGuidForActions} msg=${ackMessageId}: ${String(err)}`,
           );
-        });
+        },
       });
     }
     if (chatGuidForActions && baseUrl && password && !sentMessage) {

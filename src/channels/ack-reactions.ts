@@ -53,3 +53,19 @@ export function shouldAckReactionForWhatsApp(params: {
     shouldBypassMention: params.groupActivated,
   });
 }
+
+export function removeAckReactionAfterReply(params: {
+  removeAfterReply: boolean;
+  ackReactionPromise: Promise<boolean> | null;
+  ackReactionValue: string | null;
+  remove: () => Promise<void>;
+  onError?: (err: unknown) => void;
+}) {
+  if (!params.removeAfterReply) return;
+  if (!params.ackReactionPromise) return;
+  if (!params.ackReactionValue) return;
+  void params.ackReactionPromise.then((didAck) => {
+    if (!didAck) return;
+    params.remove().catch((err) => params.onError?.(err));
+  });
+}
