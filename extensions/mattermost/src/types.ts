@@ -1,4 +1,4 @@
-import type { BlockStreamingCoalesceConfig } from "clawdbot/plugin-sdk";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "clawdbot/plugin-sdk";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
@@ -26,6 +26,14 @@ export type MattermostAccountConfig = {
   oncharPrefixes?: string[];
   /** Require @mention to respond in channels. Default: true. */
   requireMention?: boolean;
+  /** Direct message policy (pairing/allowlist/open/disabled). */
+  dmPolicy?: DmPolicy;
+  /** Allowlist for direct messages (user ids or @usernames). */
+  allowFrom?: Array<string | number>;
+  /** Allowlist for group messages (user ids or @usernames). */
+  groupAllowFrom?: Array<string | number>;
+  /** Group message policy (allowlist/open/disabled). */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Disable block streaming for this account. */

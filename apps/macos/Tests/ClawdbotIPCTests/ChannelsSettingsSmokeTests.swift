@@ -12,11 +12,10 @@ struct ChannelsSettingsSmokeTests {
         let store = ChannelsStore(isPreview: true)
         store.snapshot = ChannelsStatusSnapshot(
             ts: 1_700_000_000_000,
-            channelOrder: ["whatsapp", "telegram", "mattermost", "signal", "imessage"],
+            channelOrder: ["whatsapp", "telegram", "signal", "imessage"],
             channelLabels: [
                 "whatsapp": "WhatsApp",
                 "telegram": "Telegram",
-                "mattermost": "Mattermost",
                 "signal": "Signal",
                 "imessage": "iMessage",
             ],
@@ -58,21 +57,6 @@ struct ChannelsSettingsSmokeTests {
                     ],
                     "lastProbeAt": 1_700_000_050_000,
                 ]),
-                "mattermost": SnapshotAnyCodable([
-                    "configured": true,
-                    "botTokenSource": "env",
-                    "running": true,
-                    "connected": true,
-                    "baseUrl": "https://chat.example.com",
-                    "lastStartAt": 1_700_000_000_000,
-                    "probe": [
-                        "ok": true,
-                        "status": 200,
-                        "elapsedMs": 95,
-                        "bot": ["id": "bot-123", "username": "clawdbot"],
-                    ],
-                    "lastProbeAt": 1_700_000_050_000,
-                ]),
                 "signal": SnapshotAnyCodable([
                     "configured": true,
                     "baseUrl": "http://127.0.0.1:8080",
@@ -98,7 +82,6 @@ struct ChannelsSettingsSmokeTests {
             channelDefaultAccountId: [
                 "whatsapp": "default",
                 "telegram": "default",
-                "mattermost": "default",
                 "signal": "default",
                 "imessage": "default",
             ])
@@ -115,11 +98,10 @@ struct ChannelsSettingsSmokeTests {
         let store = ChannelsStore(isPreview: true)
         store.snapshot = ChannelsStatusSnapshot(
             ts: 1_700_000_000_000,
-            channelOrder: ["whatsapp", "telegram", "mattermost", "signal", "imessage"],
+            channelOrder: ["whatsapp", "telegram", "signal", "imessage"],
             channelLabels: [
                 "whatsapp": "WhatsApp",
                 "telegram": "Telegram",
-                "mattermost": "Mattermost",
                 "signal": "Signal",
                 "imessage": "iMessage",
             ],
@@ -145,19 +127,6 @@ struct ChannelsSettingsSmokeTests {
                         "elapsedMs": 120,
                     ],
                     "lastProbeAt": 1_700_000_100_000,
-                ]),
-                "mattermost": SnapshotAnyCodable([
-                    "configured": false,
-                    "running": false,
-                    "lastError": "bot token missing",
-                    "baseUrl": "https://chat.example.com",
-                    "probe": [
-                        "ok": false,
-                        "status": 401,
-                        "error": "unauthorized",
-                        "elapsedMs": 110,
-                    ],
-                    "lastProbeAt": 1_700_000_150_000,
                 ]),
                 "signal": SnapshotAnyCodable([
                     "configured": false,
@@ -185,7 +154,6 @@ struct ChannelsSettingsSmokeTests {
             channelDefaultAccountId: [
                 "whatsapp": "default",
                 "telegram": "default",
-                "mattermost": "default",
                 "signal": "default",
                 "imessage": "default",
             ])

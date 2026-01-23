@@ -3,6 +3,7 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
+  formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   setAccountEnabledInConfigSection,
@@ -38,7 +39,26 @@ const meta = {
   blurb: "self-hosted Slack-style chat; install the plugin to enable.",
   systemImage: "bubble.left.and.bubble.right",
   order: 65,
+  quickstartAllowFrom: true,
 } as const;
+
+function normalizeAllowEntry(entry: string): string {
+  return entry
+    .trim()
+    .replace(/^(mattermost|user):/i, "")
+    .replace(/^@/, "")
+    .toLowerCase();
+}
+
+function formatAllowEntry(entry: string): string {
+  const trimmed = entry.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("@")) {
+    const username = trimmed.slice(1).trim();
+    return username ? `@${username.toLowerCase()}` : "";
+  }
+  return trimmed.replace(/^(mattermost|user):/i, "").toLowerCase();
+}
 
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
@@ -46,6 +66,13 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     ...meta,
   },
   onboarding: mattermostOnboardingAdapter,
+  pairing: {
+    idLabel: "mattermostUserId",
+    normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
+    notifyApproval: async ({ id }) => {
+      console.log(`[mattermost] User ${id} approved for pairing`);
+    },
+  },
   capabilities: {
     chatTypes: ["direct", "channel", "group", "thread"],
     threads: true,
@@ -84,6 +111,39 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       botTokenSource: account.botTokenSource,
       baseUrl: account.baseUrl,
     }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      (resolveMattermostAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+        String(entry),
+      ),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => formatAllowEntry(String(entry)))
+        .filter(Boolean),
+  },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(cfg.channels?.mattermost?.accounts?.[resolvedAccountId]);
+      const basePath = useAccountPath
+        ? `channels.mattermost.accounts.${resolvedAccountId}.`
+        : "channels.mattermost.";
+      return {
+        policy: account.config.dmPolicy ?? "pairing",
+        allowFrom: account.config.allowFrom ?? [],
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: basePath,
+        approveHint: formatPairingApproveHint("mattermost"),
+        normalizeEntry: (raw) => normalizeAllowEntry(raw),
+      };
+    },
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      return [
+        `- Mattermost channels: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.mattermost.groupPolicy="allowlist" + channels.mattermost.groupAllowFrom to restrict senders.`,
+      ];
+    },
   },
   groups: {
     resolveRequireMention: resolveMattermostGroupRequireMention,
@@ -105,23 +165,21 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         return {
           ok: false,
           error: new Error(
-            "Delivering to Mattermost requires --to <channelId|user:ID|channel:ID>",
+            "Delivering to Mattermost requires --to <channelId|@username|user:ID|channel:ID>",
           ),
         };
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, deps, replyToId }) => {
-      const send = deps?.sendMattermost ?? sendMessageMattermost;
-      const result = await send(to, text, {
+    sendText: async ({ to, text, accountId, replyToId }) => {
+      const result = await sendMessageMattermost(to, text, {
         accountId: accountId ?? undefined,
         replyToId: replyToId ?? undefined,
       });
       return { channel: "mattermost", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
-      const send = deps?.sendMattermost ?? sendMessageMattermost;
-      const result = await send(to, text, {
+    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+      const result = await sendMessageMattermost(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
         replyToId: replyToId ?? undefined,

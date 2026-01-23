@@ -28,18 +28,11 @@ type SendMatrixMessage = (
   opts?: { mediaUrl?: string; replyToId?: string; threadId?: string; timeoutMs?: number },
 ) => Promise<{ messageId: string; roomId: string }>;
 
-type SendMattermostMessage = (
-  to: string,
-  text: string,
-  opts?: { accountId?: string; mediaUrl?: string; replyToId?: string },
-) => Promise<{ messageId: string; channelId: string }>;
-
 export type OutboundSendDeps = {
   sendWhatsApp?: typeof sendMessageWhatsApp;
   sendTelegram?: typeof sendMessageTelegram;
   sendDiscord?: typeof sendMessageDiscord;
   sendSlack?: typeof sendMessageSlack;
-  sendMattermost?: SendMattermostMessage;
   sendSignal?: typeof sendMessageSignal;
   sendIMessage?: typeof sendMessageIMessage;
   sendMatrix?: SendMatrixMessage;

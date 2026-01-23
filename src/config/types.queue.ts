@@ -13,7 +13,6 @@ export type QueueModeByProvider = {
   telegram?: QueueMode;
   discord?: QueueMode;
   slack?: QueueMode;
-  mattermost?: QueueMode;
   signal?: QueueMode;
   imessage?: QueueMode;
   msteams?: QueueMode;

@@ -352,7 +352,7 @@ Options:
 ## Channel helpers
 
 ### `channels`
-Manage chat channel accounts (WhatsApp/Telegram/Discord/Slack/Mattermost/Signal/iMessage/MS Teams).
+Manage chat channel accounts (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
 
 Subcommands:
 - `channels list`: show configured channels and auth profiles (Claude Code + Codex CLI OAuth sync included).
