@@ -53,14 +53,15 @@ async function waitForCronFinished(
 }
 
 async function waitForNonEmptyFile(pathname: string, timeoutMs = 2000) {
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = process.hrtime.bigint();
   for (;;) {
     const raw = await fs.readFile(pathname, "utf-8").catch(() => "");
     if (raw.trim().length > 0) return raw;
-    if (Date.now() >= deadline) {
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    if (elapsedMs >= timeoutMs) {
       throw new Error(`timeout waiting for file ${pathname}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await yieldToEventLoop();
   }
 }
 
