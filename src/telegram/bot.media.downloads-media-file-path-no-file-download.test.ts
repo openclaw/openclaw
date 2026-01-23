@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import { MEDIA_GROUP_TIMEOUT_MS } from "./bot-updates.js";
 
 const useSpy = vi.fn();
 const middlewareUseSpy = vi.fn();
@@ -253,23 +254,15 @@ describe("telegram inbound media", () => {
 
 describe("telegram media groups", () => {
   beforeEach(() => {
-    // These tests rely on real setTimeout aggregation; guard against leaked fake timers.
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
     vi.useRealTimers();
   });
 
-  const MEDIA_GROUP_POLL_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 15_000;
   const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-
-  const waitForMediaGroupProcessing = async (
-    replySpy: ReturnType<typeof vi.fn>,
-    expectedCalls: number,
-  ) => {
-    await expect
-      .poll(() => replySpy.mock.calls.length, {
-        timeout: MEDIA_GROUP_POLL_TIMEOUT_MS,
-      })
-      .toBe(expectedCalls);
-  };
+  const MEDIA_GROUP_FLUSH_MS = MEDIA_GROUP_TIMEOUT_MS + 25;
 
   it(
     "buffers messages with same media_group_id and processes them together",
@@ -334,7 +327,7 @@ describe("telegram media groups", () => {
       await second;
 
       expect(replySpy).not.toHaveBeenCalled();
-      await waitForMediaGroupProcessing(replySpy, 1);
+      await vi.advanceTimersByTimeAsync(MEDIA_GROUP_FLUSH_MS);
 
       expect(runtimeError).not.toHaveBeenCalled();
       expect(replySpy).toHaveBeenCalledTimes(1);
@@ -400,7 +393,7 @@ describe("telegram media groups", () => {
       await Promise.all([first, second]);
 
       expect(replySpy).not.toHaveBeenCalled();
-      await waitForMediaGroupProcessing(replySpy, 2);
+      await vi.advanceTimersByTimeAsync(MEDIA_GROUP_FLUSH_MS);
 
       expect(replySpy).toHaveBeenCalledTimes(2);
 
@@ -412,21 +405,15 @@ describe("telegram media groups", () => {
 
 describe("telegram text fragments", () => {
   beforeEach(() => {
-    // These tests rely on real setTimeout aggregation; guard against leaked fake timers.
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
     vi.useRealTimers();
   });
 
-  const TEXT_FRAGMENT_POLL_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 15_000;
   const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-
-  const waitForFragmentProcessing = async (
-    replySpy: ReturnType<typeof vi.fn>,
-    expectedCalls: number,
-  ) => {
-    await expect
-      .poll(() => replySpy.mock.calls.length, { timeout: TEXT_FRAGMENT_POLL_TIMEOUT_MS })
-      .toBe(expectedCalls);
-  };
+  const TEXT_FRAGMENT_FLUSH_MS = 1600;
 
   it(
     "buffers near-limit text and processes sequential parts as one message",
@@ -470,7 +457,7 @@ describe("telegram text fragments", () => {
       });
 
       expect(replySpy).not.toHaveBeenCalled();
-      await waitForFragmentProcessing(replySpy, 1);
+      await vi.advanceTimersByTimeAsync(TEXT_FRAGMENT_FLUSH_MS);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0] as { RawBody?: string; Body?: string };

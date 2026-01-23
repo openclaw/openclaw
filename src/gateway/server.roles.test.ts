@@ -12,8 +12,8 @@ import {
 installGatewayTestHooks();
 
 describe("gateway role enforcement", () => {
-  test("operator cannot send node events or invoke results", async () => {
-    const { server, ws } = await startServerWithClient();
+  test("enforces operator and node permissions", async () => {
+    const { server, ws, port } = await startServerWithClient();
     await connectOk(ws);
 
     const eventRes = await rpcReq(ws, "node.event", { event: "test", payload: { ok: true } });
@@ -28,12 +28,6 @@ describe("gateway role enforcement", () => {
     expect(invokeRes.ok).toBe(false);
     expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-    ws.close();
-    await server.close();
-  });
-
-  test("node can fetch skills bins but not control plane methods", async () => {
-    const { server, port } = await startServerWithClient();
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((resolve) => nodeWs.once("open", resolve));
     await connectOk(nodeWs, {
@@ -56,6 +50,7 @@ describe("gateway role enforcement", () => {
     expect(statusRes.error?.message ?? "").toContain("unauthorized role");
 
     nodeWs.close();
+    ws.close();
     await server.close();
   });
 });
