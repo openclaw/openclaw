@@ -34,6 +34,7 @@ Optional keys:
 - `kind` (string): plugin kind (example: `"memory"`).
 - `channels` (array): channel ids registered by this plugin (example: `["matrix"]`).
 - `providers` (array): provider ids registered by this plugin.
+- `skills` (array): skill directories to load (relative to the plugin root).
 - `name` (string): display name for the plugin.
 - `description` (string): short plugin summary.
 - `uiHints` (object): config field labels/placeholders/sensitive flags for UI rendering.
