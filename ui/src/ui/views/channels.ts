@@ -7,7 +7,6 @@ import type {
   ChannelsStatusSnapshot,
   DiscordStatus,
   IMessageStatus,
-  MattermostStatus,
   NostrProfile,
   NostrStatus,
   SignalStatus,
@@ -24,7 +23,6 @@ import { channelEnabled, renderChannelAccountCount } from "./channels.shared";
 import { renderChannelConfigSection } from "./channels.config";
 import { renderDiscordCard } from "./channels.discord";
 import { renderIMessageCard } from "./channels.imessage";
-import { renderMattermostCard } from "./channels.mattermost";
 import { renderNostrCard } from "./channels.nostr";
 import { renderSignalCard } from "./channels.signal";
 import { renderSlackCard } from "./channels.slack";
@@ -41,7 +39,6 @@ export function renderChannels(props: ChannelsProps) {
     | undefined;
   const discord = (channels?.discord ?? null) as DiscordStatus | null;
   const slack = (channels?.slack ?? null) as SlackStatus | null;
-  const mattermost = (channels?.mattermost ?? null) as MattermostStatus | null;
   const signal = (channels?.signal ?? null) as SignalStatus | null;
   const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
   const nostr = (channels?.nostr ?? null) as NostrStatus | null;
@@ -65,7 +62,6 @@ export function renderChannels(props: ChannelsProps) {
           telegram,
           discord,
           slack,
-          mattermost,
           signal,
           imessage,
           nostr,
@@ -137,12 +133,6 @@ function renderChannel(
       return renderSlackCard({
         props,
         slack: data.slack,
-        accountCountLabel,
-      });
-    case "mattermost":
-      return renderMattermostCard({
-        props,
-        mattermost: data.mattermost,
         accountCountLabel,
       });
     case "signal":

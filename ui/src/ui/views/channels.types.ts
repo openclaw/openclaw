@@ -4,7 +4,6 @@ import type {
   ConfigUiHints,
   DiscordStatus,
   IMessageStatus,
-  MattermostStatus,
   NostrProfile,
   NostrStatus,
   SignalStatus,
@@ -54,7 +53,6 @@ export type ChannelsChannelData = {
   telegram?: TelegramStatus;
   discord?: DiscordStatus | null;
   slack?: SlackStatus | null;
-  mattermost?: MattermostStatus | null;
   signal?: SignalStatus | null;
   imessage?: IMessageStatus | null;
   nostr?: NostrStatus | null;

@@ -141,6 +141,39 @@ function channelChatType(kind: "dm" | "group" | "channel"): "direct" | "group" |
   return "channel";
 }
 
+function normalizeAllowEntry(entry: string): string {
+  const trimmed = entry.trim();
+  if (!trimmed) return "";
+  if (trimmed === "*") return "*";
+  return trimmed
+    .replace(/^(mattermost|user):/i, "")
+    .replace(/^@/, "")
+    .toLowerCase();
+}
+
+function normalizeAllowList(entries: Array<string | number>): string[] {
+  const normalized = entries
+    .map((entry) => normalizeAllowEntry(String(entry)))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function isSenderAllowed(params: {
+  senderId: string;
+  senderName?: string;
+  allowFrom: string[];
+}): boolean {
+  const allowFrom = params.allowFrom;
+  if (allowFrom.length === 0) return false;
+  if (allowFrom.includes("*")) return true;
+  const normalizedSenderId = normalizeAllowEntry(params.senderId);
+  const normalizedSenderName = params.senderName ? normalizeAllowEntry(params.senderName) : "";
+  return allowFrom.some(
+    (entry) =>
+      entry === normalizedSenderId || (normalizedSenderName && entry === normalizedSenderName),
+  );
+}
+
 type MattermostMediaInfo = {
   path: string;
   contentType?: string;
@@ -346,6 +379,122 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const kind = channelKind(channelType);
     const chatType = channelChatType(kind);
 
+    const senderName =
+      payload.data?.sender_name?.trim() ||
+      (await resolveUserInfo(senderId))?.username?.trim() ||
+      senderId;
+    const rawText = post.message?.trim() || "";
+    const dmPolicy = account.config.dmPolicy ?? "pairing";
+    const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+    const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+    const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
+    const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
+    const storeAllowFrom = normalizeAllowList(
+      await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+    );
+    const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
+    const effectiveGroupAllowFrom = Array.from(
+      new Set([
+        ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
+        ...storeAllowFrom,
+      ]),
+    );
+    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+      cfg,
+      surface: "mattermost",
+    });
+    const isControlCommand = allowTextCommands && core.channel.text.hasControlCommand(rawText, cfg);
+    const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+    const senderAllowedForCommands = isSenderAllowed({
+      senderId,
+      senderName,
+      allowFrom: effectiveAllowFrom,
+    });
+    const groupAllowedForCommands = isSenderAllowed({
+      senderId,
+      senderName,
+      allowFrom: effectiveGroupAllowFrom,
+    });
+    const commandAuthorized =
+      kind === "dm"
+        ? dmPolicy === "open" || senderAllowedForCommands
+        : core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+            useAccessGroups,
+            authorizers: [
+              { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+              {
+                configured: effectiveGroupAllowFrom.length > 0,
+                allowed: groupAllowedForCommands,
+              },
+            ],
+          });
+
+    if (kind === "dm") {
+      if (dmPolicy === "disabled") {
+        logVerboseMessage(`mattermost: drop dm (dmPolicy=disabled sender=${senderId})`);
+        return;
+      }
+      if (dmPolicy !== "open" && !senderAllowedForCommands) {
+        if (dmPolicy === "pairing") {
+          const { code, created } = await core.channel.pairing.upsertPairingRequest({
+            channel: "mattermost",
+            id: senderId,
+            meta: { name: senderName },
+          });
+          logVerboseMessage(
+            `mattermost: pairing request sender=${senderId} created=${created}`,
+          );
+          if (created) {
+            try {
+              await sendMessageMattermost(
+                `user:${senderId}`,
+                core.channel.pairing.buildPairingReply({
+                  channel: "mattermost",
+                  idLine: `Your Mattermost user id: ${senderId}`,
+                  code,
+                }),
+                { accountId: account.accountId },
+              );
+              opts.statusSink?.({ lastOutboundAt: Date.now() });
+            } catch (err) {
+              logVerboseMessage(
+                `mattermost: pairing reply failed for ${senderId}: ${String(err)}`,
+              );
+            }
+          }
+        } else {
+          logVerboseMessage(
+            `mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`,
+          );
+        }
+        return;
+      }
+    } else {
+      if (groupPolicy === "disabled") {
+        logVerboseMessage("mattermost: drop group message (groupPolicy=disabled)");
+        return;
+      }
+      if (groupPolicy === "allowlist") {
+        if (effectiveGroupAllowFrom.length === 0) {
+          logVerboseMessage("mattermost: drop group message (no group allowlist)");
+          return;
+        }
+        if (!groupAllowedForCommands) {
+          logVerboseMessage(
+            `mattermost: drop group sender=${senderId} (not in groupAllowFrom)`,
+          );
+          return;
+        }
+      }
+    }
+
+    if (kind !== "dm" && isControlCommand && !commandAuthorized) {
+      logVerboseMessage(
+        `mattermost: drop control command from unauthorized sender ${senderId}`,
+      );
+      return;
+    }
+
     const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
     const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
     const channelDisplay =
@@ -374,7 +523,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const historyKey = kind === "dm" ? null : sessionKey;
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
-    const rawText = post.message?.trim() || "";
     const wasMentioned =
       kind !== "dm" &&
       ((botUsername ? rawText.toLowerCase().includes(`@${botUsername.toLowerCase()}`) : false) ||
@@ -384,7 +532,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       (post.file_ids?.length
         ? `[Mattermost ${post.file_ids.length === 1 ? "file" : "files"}]`
         : "");
-    const pendingSender = payload.data?.sender_name?.trim() || senderId;
+    const pendingSender = senderName;
     const recordPendingHistory = () => {
       if (!historyKey || historyLimit <= 0) return;
       const trimmed = pendingBody.trim();
@@ -402,11 +550,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
     };
 
-    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-      cfg,
-      surface: "mattermost",
-    });
-    const isControlCommand = allowTextCommands && core.channel.text.hasControlCommand(rawText, cfg);
     const oncharEnabled = account.chatmode === "onchar" && kind !== "dm";
     const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];
     const oncharResult = oncharEnabled
@@ -414,8 +557,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
 
-    const shouldRequireMention = kind === "channel" && (account.requireMention ?? true);
-    const shouldBypassMention = isControlCommand && shouldRequireMention && !wasMentioned;
+    const shouldRequireMention =
+      kind !== "dm" &&
+      core.channel.groups.resolveRequireMention({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+        groupId: channelId,
+      }) !== false;
+    const shouldBypassMention =
+      isControlCommand && shouldRequireMention && !wasMentioned && commandAuthorized;
     const effectiveWasMentioned = wasMentioned || shouldBypassMention || oncharTriggered;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
 
@@ -424,17 +575,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return;
     }
 
-    if (kind === "channel" && shouldRequireMention && canDetectMention) {
+    if (kind !== "dm" && shouldRequireMention && canDetectMention) {
       if (!effectiveWasMentioned) {
         recordPendingHistory();
         return;
       }
     }
-
-    const senderName =
-      payload.data?.sender_name?.trim() ||
-      (await resolveUserInfo(senderId))?.username?.trim() ||
-      senderId;
     const mediaList = await resolveMattermostMedia(post.file_ids);
     const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
@@ -499,10 +645,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const to = kind === "dm" ? `user:${senderId}` : `channel:${channelId}`;
     const mediaPayload = buildMattermostMediaPayload(mediaList);
-    const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-      useAccessGroups: cfg.commands?.useAccessGroups ?? false,
-      authorizers: [],
-    });
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       RawBody: bodyText,

@@ -124,7 +124,6 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         "telegram",
         "discord",
         "slack",
-        "mattermost",
         "signal",
         "imessage",
         "msteams",

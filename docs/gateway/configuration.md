@@ -1206,6 +1206,9 @@ Slack action groups (gate `slack` tool actions):
 
 ### `channels.mattermost` (bot token)
 
+Mattermost ships as a plugin and is not bundled with the core install.
+Install it first: `clawdbot plugins install @clawdbot/mattermost` (or `./extensions/mattermost` from a git checkout).
+
 Mattermost requires a bot token plus the base URL for your server:
 
 ```json5
@@ -1215,6 +1218,7 @@ Mattermost requires a bot token plus the base URL for your server:
       enabled: true,
       botToken: "mm-token",
       baseUrl: "https://chat.example.com",
+      dmPolicy: "pairing",
       chatmode: "oncall", // oncall | onmessage | onchar
       oncharPrefixes: [">", "!"],
       textChunkLimit: 4000
@@ -1229,6 +1233,11 @@ Chat modes:
 - `oncall` (default): respond to channel messages only when @mentioned.
 - `onmessage`: respond to every channel message.
 - `onchar`: respond when a message starts with a trigger prefix (`channels.mattermost.oncharPrefixes`, default `[">", "!"]`).
+
+Access control:
+- Default DMs: `channels.mattermost.dmPolicy="pairing"` (unknown senders get a pairing code).
+- Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]`.
+- Groups: `channels.mattermost.groupPolicy="allowlist"` by default (mention-gated). Use `channels.mattermost.groupAllowFrom` to restrict senders.
 
 Multi-account support lives under `channels.mattermost.accounts` (see the multi-account section above). Env vars only apply to the default account.
 Use `channel:<id>` or `user:<id>` (or `@username`) when specifying delivery targets; bare ids are treated as channel ids.

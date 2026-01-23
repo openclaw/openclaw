@@ -1,8 +1,13 @@
 import { z } from "zod";
 
-import { BlockStreamingCoalesceSchema } from "clawdbot/plugin-sdk";
+import {
+  BlockStreamingCoalesceSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
+  requireOpenAllowFrom,
+} from "clawdbot/plugin-sdk";
 
-const MattermostAccountSchema = z
+const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
@@ -13,12 +18,36 @@ const MattermostAccountSchema = z
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   })
   .strict();
 
-export const MattermostConfigSchema = MattermostAccountSchema.extend({
+const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+  });
+});
+
+export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
+}).superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+  });
 });

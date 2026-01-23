@@ -20,7 +20,7 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
   }
   if (trimmed.startsWith("@")) {
     const id = trimmed.slice(1).trim();
-    return id ? `user:${id}` : undefined;
+    return id ? `@${id}` : undefined;
   }
   if (trimmed.startsWith("#")) {
     const id = trimmed.slice(1).trim();
