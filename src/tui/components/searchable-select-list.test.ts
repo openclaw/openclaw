@@ -76,6 +76,22 @@ describe("SearchableSelectList", () => {
     expect(selected?.value).toBe("opus-direct");
   });
 
+  it("keeps exact label matches ahead of description matches", () => {
+    const longPrefix = "x".repeat(250);
+    const items = [
+      { value: "late-label", label: `${longPrefix}opus`, description: "late exact match" },
+      { value: "desc-first", label: "provider/other", description: "opus in description" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    for (const ch of "opus") {
+      list.handleInput(ch);
+    }
+
+    const selected = list.getSelectedItem();
+    expect(selected?.value).toBe("late-label");
+  });
+
   it("exact label match beats description match", () => {
     const items = [
       {
