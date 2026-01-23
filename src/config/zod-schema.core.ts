@@ -133,6 +133,15 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
+export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+
+export const MarkdownConfigSchema = z
+  .object({
+    tables: MarkdownTableModeSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const HumanDelaySchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),

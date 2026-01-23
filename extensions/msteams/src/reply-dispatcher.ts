@@ -53,10 +53,15 @@ export function createMSTeamsReplyDispatcher(params: {
     ).responsePrefix,
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     deliver: async (payload) => {
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg: params.cfg,
+        channel: "msteams",
+      });
       const messages = renderReplyPayloadsToMessages([payload], {
         textChunkLimit: params.textLimit,
         chunkText: true,
         mediaMode: "split",
+        tableMode,
       });
       const mediaMaxBytes = resolveChannelMediaMaxBytes({
         cfg: params.cfg,

@@ -2,6 +2,7 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
@@ -70,6 +71,8 @@ export type DiscordAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Markdown formatting overrides (tables). */
+  markdown?: MarkdownConfig;
   /** Override native command registration for Discord (bool or "auto"). */
   commands?: ProviderCommandsConfig;
   /** Allow channel-initiated config writes (default: true). */

@@ -1,6 +1,7 @@
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
@@ -116,6 +117,7 @@ export async function deliverSlackSlashReplies(params: {
   respond: SlackRespondFn;
   ephemeral: boolean;
   textLimit: number;
+  tableMode?: MarkdownTableMode;
 }) {
   const messages: string[] = [];
   const chunkLimit = Math.min(params.textLimit, 4000);
@@ -127,7 +129,9 @@ export async function deliverSlackSlashReplies(params: {
       .filter(Boolean)
       .join("\n");
     if (!combined) continue;
-    for (const chunk of markdownToSlackMrkdwnChunks(combined, chunkLimit)) {
+    for (const chunk of markdownToSlackMrkdwnChunks(combined, chunkLimit, {
+      tableMode: params.tableMode,
+    })) {
       messages.push(chunk);
     }
   }

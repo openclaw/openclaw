@@ -12,6 +12,7 @@ import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
+import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { danger, logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -424,6 +425,11 @@ export function registerSlackMonitorSlashCommands(params: {
               respond,
               ephemeral: slashCommand.ephemeral,
               textLimit: ctx.textLimit,
+              tableMode: resolveMarkdownTableMode({
+                cfg,
+                channel: "slack",
+                accountId: route.accountId,
+              }),
             });
           },
           onError: (err, info) => {
@@ -438,6 +444,11 @@ export function registerSlackMonitorSlashCommands(params: {
           respond,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
+          tableMode: resolveMarkdownTableMode({
+            cfg,
+            channel: "slack",
+            accountId: route.accountId,
+          }),
         });
       }
     } catch (err) {

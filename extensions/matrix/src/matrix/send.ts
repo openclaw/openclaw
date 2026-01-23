@@ -50,9 +50,18 @@ export async function sendMessageMatrix(
   try {
     const roomId = await resolveMatrixRoomId(client, to);
     const cfg = getCore().config.loadConfig();
+    const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+      cfg,
+      channel: "matrix",
+      accountId: opts.accountId,
+    });
+    const convertedMessage = getCore().channel.text.convertMarkdownTables(
+      trimmedMessage,
+      tableMode,
+    );
     const textLimit = getCore().channel.text.resolveTextChunkLimit(cfg, "matrix");
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
-    const chunks = getCore().channel.text.chunkMarkdownText(trimmedMessage, chunkLimit);
+    const chunks = getCore().channel.text.chunkMarkdownText(convertedMessage, chunkLimit);
     const threadId = normalizeThreadId(opts.threadId);
     const relation = threadId
       ? buildThreadRelation(threadId, opts.replyToId)

@@ -2,6 +2,7 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  MarkdownConfig,
   ReplyToMode,
 } from "./types.base.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
@@ -80,6 +81,8 @@ export type SlackAccountConfig = {
   webhookPath?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Markdown formatting overrides (tables). */
+  markdown?: MarkdownConfig;
   /** Override native command registration for Slack (bool or "auto"). */
   commands?: ProviderCommandsConfig;
   /** Allow channel-initiated config writes (default: true). */

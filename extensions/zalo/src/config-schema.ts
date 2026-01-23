@@ -1,3 +1,4 @@
+import { MarkdownConfigSchema } from "clawdbot/plugin-sdk";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
@@ -5,6 +6,7 @@ const allowFromEntry = z.union([z.string(), z.number()]);
 const zaloAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  markdown: MarkdownConfigSchema,
   botToken: z.string().optional(),
   tokenFile: z.string().optional(),
   webhookUrl: z.string().optional(),

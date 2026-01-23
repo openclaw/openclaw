@@ -4,6 +4,7 @@ import {
   type MarkdownIR,
   type MarkdownStyle,
 } from "../markdown/ir.js";
+import type { MarkdownTableMode } from "../config/types.base.js";
 
 type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
 
@@ -16,6 +17,10 @@ export type SignalTextStyleRange = {
 export type SignalFormattedText = {
   text: string;
   styles: SignalTextStyleRange[];
+};
+
+type SignalMarkdownOptions = {
+  tableMode?: MarkdownTableMode;
 };
 
 type SignalStyleSpan = {
@@ -188,22 +193,31 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   };
 }
 
-export function markdownToSignalText(markdown: string): SignalFormattedText {
+export function markdownToSignalText(
+  markdown: string,
+  options: SignalMarkdownOptions = {},
+): SignalFormattedText {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
+    tableMode: options.tableMode,
   });
   return renderSignalText(ir);
 }
 
-export function markdownToSignalTextChunks(markdown: string, limit: number): SignalFormattedText[] {
+export function markdownToSignalTextChunks(
+  markdown: string,
+  limit: number,
+  options: SignalMarkdownOptions = {},
+): SignalFormattedText[] {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
+    tableMode: options.tableMode,
   });
   const chunks = chunkMarkdownIR(ir, limit);
   return chunks.map((chunk) => renderSignalText(chunk));

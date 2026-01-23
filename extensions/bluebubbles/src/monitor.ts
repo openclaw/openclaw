@@ -1662,9 +1662,15 @@ async function processMessage(
               ? [payload.mediaUrl]
               : [];
           if (mediaList.length > 0) {
+            const tableMode = core.channel.text.resolveMarkdownTableMode({
+              cfg: config,
+              channel: "bluebubbles",
+              accountId: account.accountId,
+            });
+            const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
             let first = true;
             for (const mediaUrl of mediaList) {
-              const caption = first ? payload.text : undefined;
+              const caption = first ? text : undefined;
               first = false;
               const result = await sendBlueBubblesMedia({
                 cfg: config,
@@ -1686,8 +1692,14 @@ async function processMessage(
             account.config.textChunkLimit && account.config.textChunkLimit > 0
               ? account.config.textChunkLimit
               : DEFAULT_TEXT_LIMIT;
-          const chunks = core.channel.text.chunkMarkdownText(payload.text ?? "", textLimit);
-          if (!chunks.length && payload.text) chunks.push(payload.text);
+          const tableMode = core.channel.text.resolveMarkdownTableMode({
+            cfg: config,
+            channel: "bluebubbles",
+            accountId: account.accountId,
+          });
+          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const chunks = core.channel.text.chunkMarkdownText(text, textLimit);
+          if (!chunks.length && text) chunks.push(text);
           if (!chunks.length) return;
           for (const chunk of chunks) {
             const result = await sendMessageBlueBubbles(outboundTarget, chunk, {

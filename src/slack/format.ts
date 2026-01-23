@@ -1,4 +1,5 @@
 import { chunkMarkdownIR, markdownToIR, type MarkdownLinkSpan } from "../markdown/ir.js";
+import type { MarkdownTableMode } from "../config/types.base.js";
 import { renderMarkdownWithMarkers } from "../markdown/render.js";
 
 // Escape special characters for Slack mrkdwn format.
@@ -83,12 +84,20 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
   };
 }
 
-export function markdownToSlackMrkdwn(markdown: string): string {
+type SlackMarkdownOptions = {
+  tableMode?: MarkdownTableMode;
+};
+
+export function markdownToSlackMrkdwn(
+  markdown: string,
+  options: SlackMarkdownOptions = {},
+): string {
   const ir = markdownToIR(markdown ?? "", {
     linkify: false,
     autolink: false,
     headingStyle: "bold",
     blockquotePrefix: "> ",
+    tableMode: options.tableMode,
   });
   return renderMarkdownWithMarkers(ir, {
     styleMarkers: {
@@ -103,12 +112,17 @@ export function markdownToSlackMrkdwn(markdown: string): string {
   });
 }
 
-export function markdownToSlackMrkdwnChunks(markdown: string, limit: number): string[] {
+export function markdownToSlackMrkdwnChunks(
+  markdown: string,
+  limit: number,
+  options: SlackMarkdownOptions = {},
+): string[] {
   const ir = markdownToIR(markdown ?? "", {
     linkify: false,
     autolink: false,
     headingStyle: "bold",
     blockquotePrefix: "> ",
+    tableMode: options.tableMode,
   });
   const chunks = chunkMarkdownIR(ir, limit);
   return chunks.map((chunk) =>

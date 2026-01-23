@@ -43,6 +43,8 @@ const runtimeStub = {
     text: {
       resolveTextChunkLimit: () => 4000,
       chunkMarkdownText: (text: string) => (text ? [text] : []),
+      resolveMarkdownTableMode: () => "code",
+      convertMarkdownTables: (text: string) => text,
     },
   },
 } as unknown as PluginRuntime;

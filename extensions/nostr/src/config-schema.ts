@@ -1,5 +1,5 @@
+import { MarkdownConfigSchema, buildChannelConfigSchema } from "clawdbot/plugin-sdk";
 import { z } from "zod";
-import { buildChannelConfigSchema } from "clawdbot/plugin-sdk";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
 
@@ -62,6 +62,9 @@ export const NostrConfigSchema = z.object({
 
   /** Whether this channel is enabled */
   enabled: z.boolean().optional(),
+
+  /** Markdown formatting overrides (tables). */
+  markdown: MarkdownConfigSchema,
 
   /** Private key in hex or nsec bech32 format */
   privateKey: z.string().optional(),

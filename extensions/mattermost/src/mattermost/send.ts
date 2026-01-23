@@ -181,6 +181,15 @@ export async function sendMessageMattermost(
     }
   }
 
+  if (message) {
+    const tableMode = core.channel.text.resolveMarkdownTableMode({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+    });
+    message = core.channel.text.convertMarkdownTables(message, tableMode);
+  }
+
   if (!message && (!fileIds || fileIds.length === 0)) {
     if (uploadError) {
       throw new Error(`Mattermost media upload failed: ${uploadError.message}`);

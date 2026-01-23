@@ -1,6 +1,7 @@
 import {
   isSilentReplyText,
   loadWebMedia,
+  type MarkdownTableMode,
   type MSTeamsReplyStyle,
   type ReplyPayload,
   SILENT_REPLY_TOKEN,
@@ -61,6 +62,7 @@ export type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
+  tableMode?: MarkdownTableMode;
 };
 
 /**
@@ -196,10 +198,19 @@ export function renderReplyPayloadsToMessages(
   const chunkLimit = Math.min(options.textChunkLimit, 4000);
   const chunkText = options.chunkText !== false;
   const mediaMode = options.mediaMode ?? "split";
+  const tableMode =
+    options.tableMode ??
+    getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
+      cfg: getMSTeamsRuntime().config.loadConfig(),
+      channel: "msteams",
+    });
 
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
+    const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
+      payload.text ?? "",
+      tableMode,
+    );
 
     if (!text && mediaList.length === 0) continue;
 

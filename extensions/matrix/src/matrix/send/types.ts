@@ -87,6 +87,7 @@ export type MatrixSendResult = {
 export type MatrixSendOpts = {
   client?: import("matrix-bot-sdk").MatrixClient;
   mediaUrl?: string;
+  accountId?: string;
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;

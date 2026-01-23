@@ -73,6 +73,8 @@ export type {
   DmPolicy,
   DmConfig,
   GroupPolicy,
+  MarkdownConfig,
+  MarkdownTableMode,
   MSTeamsChannelConfig,
   MSTeamsConfig,
   MSTeamsReplyStyle,
@@ -92,6 +94,8 @@ export {
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
+  MarkdownTableModeSchema,
   normalizeAllowFrom,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
