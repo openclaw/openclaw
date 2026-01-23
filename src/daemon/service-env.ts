@@ -17,6 +17,7 @@ import {
 export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
+  home?: string;
 };
 
 type BuildServicePathOptions = MinimalServicePathOptions & {
@@ -33,6 +34,31 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   return [];
 }
 
+/**
+ * Resolve common user bin directories for Linux.
+ * These are paths where npm global installs and node version managers typically place binaries.
+ */
+export function resolveLinuxUserBinDirs(home: string | undefined): string[] {
+  if (!home) return [];
+
+  const dirs: string[] = [];
+
+  // Common user bin directories
+  dirs.push(`${home}/.local/bin`); // XDG standard, pip, etc.
+  dirs.push(`${home}/.npm-global/bin`); // npm custom prefix (recommended for non-root)
+  dirs.push(`${home}/bin`); // User's personal bin
+
+  // Node version managers
+  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
+  dirs.push(`${home}/.fnm/current/bin`); // fnm
+  dirs.push(`${home}/.volta/bin`); // Volta
+  dirs.push(`${home}/.asdf/shims`); // asdf
+  dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
+  dirs.push(`${home}/.bun/bin`); // Bun
+
+  return dirs;
+}
+
 export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") return [];
@@ -41,12 +67,17 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
 
+  // Add Linux user bin directories (npm global, nvm, fnm, volta, etc.)
+  const linuxUserDirs = platform === "linux" ? resolveLinuxUserBinDirs(options.home) : [];
+
   const add = (dir: string) => {
     if (!dir) return;
     if (!parts.includes(dir)) parts.push(dir);
   };
 
   for (const dir of extraDirs) add(dir);
+  // User dirs first so user-installed binaries take precedence
+  for (const dir of linuxUserDirs) add(dir);
   for (const dir of systemDirs) add(dir);
 
   return parts;
@@ -59,7 +90,10 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
     return env.PATH ?? "";
   }
 
-  return getMinimalServicePathParts(options).join(path.delimiter);
+  return getMinimalServicePathParts({
+    ...options,
+    home: options.home ?? env.HOME,
+  }).join(path.delimiter);
 }
 
 export function buildServiceEnvironment(params: {
