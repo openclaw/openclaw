@@ -54,6 +54,7 @@ type FormatInboundEnvelope = typeof import("../../auto-reply/envelope.js").forma
 type ResolveEnvelopeFormatOptions =
   typeof import("../../auto-reply/envelope.js").resolveEnvelopeFormatOptions;
 type ResolveStateDir = typeof import("../../config/paths.js").resolveStateDir;
+type RecordInboundSession = typeof import("../../channels/session.js").recordInboundSession;
 type RecordSessionMetaFromInbound =
   typeof import("../../config/sessions.js").recordSessionMetaFromInbound;
 type ResolveStorePath = typeof import("../../config/sessions.js").resolveStorePath;
@@ -208,6 +209,7 @@ export type PluginRuntime = {
       resolveStorePath: ResolveStorePath;
       readSessionUpdatedAt: ReadSessionUpdatedAt;
       recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
+      recordInboundSession: RecordInboundSession;
       updateLastRoute: UpdateLastRoute;
     };
     mentions: {

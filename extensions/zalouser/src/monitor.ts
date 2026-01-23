@@ -311,12 +311,13 @@ async function processMessage(
     OriginatingTo: `zalouser:${chatId}`,
   });
 
-  void core.channel.session.recordSessionMetaFromInbound({
+  await core.channel.session.recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+    onRecordError: (err) => {
+      runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+    },
   });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({

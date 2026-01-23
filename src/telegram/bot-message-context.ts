@@ -12,13 +12,9 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import { recordInboundSession } from "../channels/session.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../config/sessions.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
@@ -519,12 +515,21 @@ export const buildTelegramMessageContext = async ({
     OriginatingTo: `telegram:${chatId}`,
   });
 
-  void recordSessionMetaFromInbound({
+  await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    logVerbose(`telegram: failed updating session meta: ${String(err)}`);
+    updateLastRoute: !isGroup
+      ? {
+          sessionKey: route.mainSessionKey,
+          channel: "telegram",
+          to: String(chatId),
+          accountId: route.accountId,
+        }
+      : undefined,
+    onRecordError: (err) => {
+      logVerbose(`telegram: failed updating session meta: ${String(err)}`);
+    },
   });
 
   if (replyTarget && shouldLogVerbose()) {
@@ -538,19 +543,6 @@ export const buildTelegramMessageContext = async ({
     logVerbose(
       `telegram forward-context: forwardedFrom="${forwardOrigin.from}" type=${forwardOrigin.fromType}`,
     );
-  }
-
-  if (!isGroup) {
-    await updateLastRoute({
-      storePath,
-      sessionKey: route.mainSessionKey,
-      deliveryContext: {
-        channel: "telegram",
-        to: String(chatId),
-        accountId: route.accountId,
-      },
-      ctx: ctxPayload,
-    });
   }
 
   if (shouldLogVerbose()) {

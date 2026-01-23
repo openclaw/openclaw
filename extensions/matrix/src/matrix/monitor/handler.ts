@@ -487,29 +487,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         OriginatingTo: `room:${roomId}`,
       });
 
-      void core.channel.session
-        .recordSessionMetaFromInbound({
-          storePath,
-          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-          ctx: ctxPayload,
-        })
-        .catch((err) => {
+      await core.channel.session.recordInboundSession({
+        storePath,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        ctx: ctxPayload,
+        updateLastRoute: isDirectMessage
+          ? {
+              sessionKey: route.mainSessionKey,
+              channel: "matrix",
+              to: `room:${roomId}`,
+              accountId: route.accountId,
+            }
+          : undefined,
+        onRecordError: (err) => {
           logger.warn(
             { error: String(err), storePath, sessionKey: ctxPayload.SessionKey ?? route.sessionKey },
             "failed updating session meta",
           );
-        });
-
-      if (isDirectMessage) {
-        await core.channel.session.updateLastRoute({
-          storePath,
-          sessionKey: route.mainSessionKey,
-          channel: "matrix",
-          to: `room:${roomId}`,
-          accountId: route.accountId,
-          ctx: ctxPayload,
-        });
-      }
+        },
+      });
 
       const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);

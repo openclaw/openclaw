@@ -465,12 +465,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 	      ...mediaPayload,
 	    });
 
-	    void core.channel.session.recordSessionMetaFromInbound({
-	      storePath,
+    await core.channel.session.recordInboundSession({
+      storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
-    }).catch((err) => {
-      logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
+      onRecordError: (err) => {
+        logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
+      },
     });
 
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
