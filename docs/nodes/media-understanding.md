@@ -6,7 +6,7 @@ read_when:
 ---
 # Media Understanding (Inbound) — 2026-01-17
 
-Clawdbot can optionally **summarize inbound media** (image/audio/video) before the reply pipeline runs. This is **opt-in** and separate from the base attachment flow—if understanding is off, models still receive the original files/URLs as usual.
+Clawdbot can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
 
 ## Goals
 - Optional: pre‑digest inbound media into short text for faster routing + better command parsing.
@@ -88,6 +88,11 @@ Each `models[]` entry can be **provider** or **CLI**:
 }
 ```
 
+CLI templates can also use:
+- `{{MediaDir}}` (directory containing the media file)
+- `{{OutputDir}}` (scratch dir created for this run)
+- `{{OutputBase}}` (scratch file base path, no extension)
+
 ## Defaults and limits
 Recommended defaults:
 - `maxChars`: **500** for image/video (short, command‑friendly)
@@ -104,17 +109,22 @@ Rules:
 - If `<capability>.enabled: true` but no models are configured, Clawdbot tries the
   **active reply model** when its provider supports the capability.
 
-### Auto-enable audio (when keys exist)
-If `tools.media.audio.enabled` is **not** set to `false` and you have any supported
-audio provider keys configured, Clawdbot will **auto-enable audio transcription**
-even when you haven’t listed models explicitly.
+### Auto-detect media understanding (default)
+If `tools.media.<capability>.enabled` is **not** set to `false` and you haven’t
+configured models, Clawdbot auto-detects in this order and **stops at the first
+working option**:
 
-Providers checked (in order):
-1) OpenAI
-2) Groq
-3) Deepgram
+1) **Local CLIs** (audio only; if installed)
+   - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
+   - `whisper-cli` (`whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
+   - `whisper` (Python CLI; downloads models automatically)
+2) **Gemini CLI** (`gemini`) using `read_many_files`
+3) **Provider keys**
+   - Audio: OpenAI → Groq → Deepgram → Google
+   - Image: OpenAI → Anthropic → Google → MiniMax
+   - Video: Google
 
-To disable this behavior, set:
+To disable auto-detection, set:
 ```json5
 {
   tools: {
@@ -126,6 +136,7 @@ To disable this behavior, set:
   }
 }
 ```
+Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (we expand `~`), or set an explicit CLI model with a full command path.
 
 ## Capabilities (optional)
 If you set `capabilities`, the entry only runs for those media types. For shared
@@ -142,7 +153,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 | Capability | Provider integration | Notes |
 |------------|----------------------|-------|
 | Image | OpenAI / Anthropic / Google / others via `pi-ai` | Any image-capable model in the registry works. |
-| Audio | OpenAI, Groq, Deepgram | Provider transcription (Whisper/Deepgram). |
+| Audio | OpenAI, Groq, Deepgram, Google | Provider transcription (Whisper/Deepgram/Gemini). |
 | Video | Google (Gemini API) | Provider video understanding. |
 
 ## Recommended providers
@@ -151,8 +162,8 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 - Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-5`, `google/gemini-3-pro-preview`.
 
 **Audio**
-- `openai/whisper-1`, `groq/whisper-large-v3-turbo`, or `deepgram/nova-3`.
-- CLI fallback: `whisper` binary.
+- `openai/gpt-4o-mini-transcribe`, `groq/whisper-large-v3-turbo`, or `deepgram/nova-3`.
+- CLI fallback: `whisper-cli` (whisper-cpp) or `whisper`.
 - Deepgram setup: [Deepgram (audio transcription)](/providers/deepgram).
 
 **Video**
@@ -209,7 +220,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       audio: {
         enabled: true,
         models: [
-          { provider: "openai", model: "whisper-1" },
+          { provider: "openai", model: "gpt-4o-mini-transcribe" },
           {
             type: "cli",
             command: "whisper",
