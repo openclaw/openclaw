@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 
+const defaultTools = createClawdbotCodingTools();
+
 describe("createClawdbotCodingTools", () => {
   it("preserves action enums in normalized schemas", () => {
-    const tools = createClawdbotCodingTools();
     const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
 
     const collectActionValues = (schema: unknown, values: Set<string>): void => {
@@ -24,7 +25,7 @@ describe("createClawdbotCodingTools", () => {
     };
 
     for (const name of toolNames) {
-      const tool = tools.find((candidate) => candidate.name === name);
+      const tool = defaultTools.find((candidate) => candidate.name === name);
       expect(tool).toBeDefined();
       const parameters = tool?.parameters as {
         properties?: Record<string, unknown>;
@@ -44,10 +45,9 @@ describe("createClawdbotCodingTools", () => {
     }
   });
   it("includes exec and process tools by default", () => {
-    const tools = createClawdbotCodingTools();
-    expect(tools.some((tool) => tool.name === "exec")).toBe(true);
-    expect(tools.some((tool) => tool.name === "process")).toBe(true);
-    expect(tools.some((tool) => tool.name === "apply_patch")).toBe(false);
+    expect(defaultTools.some((tool) => tool.name === "exec")).toBe(true);
+    expect(defaultTools.some((tool) => tool.name === "process")).toBe(true);
+    expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("gates apply_patch behind tools.exec.applyPatch for OpenAI models", () => {
     const config: ClawdbotConfig = {
