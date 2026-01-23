@@ -14,11 +14,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
-// Skip if no OpenAI API key
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const describeWithKey = OPENAI_API_KEY ? describe : describe.skip;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
+const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
+const liveEnabled = HAS_OPENAI_KEY && process.env.CLAWDBOT_LIVE_TEST === "1";
+const describeLive = liveEnabled ? describe : describe.skip;
 
-describeWithKey("memory plugin e2e", () => {
+describe("memory plugin e2e", () => {
   let tmpDir: string;
   let dbPath: string;
 
@@ -159,7 +160,7 @@ describeWithKey("memory plugin e2e", () => {
 });
 
 // Live tests that require OpenAI API key and actually use LanceDB
-describeWithKey("memory plugin live tests", () => {
+describeLive("memory plugin live tests", () => {
   let tmpDir: string;
   let dbPath: string;
 
@@ -176,6 +177,7 @@ describeWithKey("memory plugin live tests", () => {
 
   test("memory tools work end-to-end", async () => {
     const { default: memoryPlugin } = await import("./index.js");
+    const liveApiKey = process.env.OPENAI_API_KEY ?? "";
 
     // Mock plugin API
     const registeredTools: any[] = [];
@@ -191,7 +193,7 @@ describeWithKey("memory plugin live tests", () => {
       config: {},
       pluginConfig: {
         embedding: {
-          apiKey: OPENAI_API_KEY,
+          apiKey: liveApiKey,
           model: "text-embedding-3-small",
         },
         dbPath,

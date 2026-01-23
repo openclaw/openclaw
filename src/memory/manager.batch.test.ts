@@ -30,6 +30,7 @@ describe("memory indexing with OpenAI batches", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
+  let setTimeoutSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     embedBatch.mockClear();
@@ -37,6 +38,18 @@ describe("memory indexing with OpenAI batches", () => {
     embedBatch.mockImplementation(async (texts: string[]) =>
       texts.map((_text, index) => [index + 1, 0, 0]),
     );
+    const realSetTimeout = setTimeout;
+    setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      const delay = typeof timeout === "number" ? timeout : 0;
+      if (delay > 0 && delay <= 2000) {
+        return realSetTimeout(handler, 0, ...args);
+      }
+      return realSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout);
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-mem-batch-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
@@ -44,6 +57,7 @@ describe("memory indexing with OpenAI batches", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    setTimeoutSpy.mockRestore();
     if (manager) {
       await manager.close();
       manager = null;
