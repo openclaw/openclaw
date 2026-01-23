@@ -9,6 +9,14 @@ read_when:
 
 OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In Clawdbot it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
 
+Official site: https://www.prose.md
+
+## What it can do
+
+- Multi-agent research + synthesis with explicit parallelism.
+- Repeatable approval-safe workflows (code review, incident triage, content pipelines).
+- Reusable `.prose` programs you can run across supported agent runtimes.
+
 ## Install + enable
 
 Bundled plugins are disabled by default. Enable OpenProse:
@@ -41,6 +49,31 @@ Common commands:
 /prose compile <file.prose>
 /prose examples
 /prose update
+```
+
+## Example: a simple `.prose` file
+
+```prose
+# Research + synthesis with two agents running in parallel.
+
+input topic: "What should we research?"
+
+agent researcher:
+  model: sonnet
+  prompt: "You research thoroughly and cite sources."
+
+agent writer:
+  model: opus
+  prompt: "You write a concise summary."
+
+parallel:
+  findings = session: researcher
+    prompt: "Research {topic}."
+  draft = session: writer
+    prompt: "Summarize {topic}."
+
+session "Merge the findings + draft into a final answer."
+context: { findings, draft }
 ```
 
 ## File locations
