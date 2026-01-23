@@ -1,6 +1,6 @@
 import type { TUI } from "@mariozechner/pi-tui";
 import type { ChatLog } from "./components/chat-log.js";
-import { asString } from "./tui-formatters.js";
+import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -49,6 +49,17 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus("streaming");
     }
     if (evt.state === "final") {
+      if (isCommandMessage(evt.message)) {
+        const text = extractTextFromMessage(evt.message);
+        if (text) chatLog.addSystem(text);
+        streamAssembler.drop(evt.runId);
+        noteFinalizedRun(evt.runId);
+        state.activeChatRunId = null;
+        setActivityStatus("idle");
+        void refreshSessionInfo?.();
+        tui.requestRender();
+        return;
+      }
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
           ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
