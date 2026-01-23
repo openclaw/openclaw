@@ -5,10 +5,11 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 
+const defaultTools = createClawdbotCodingTools();
+
 describe("createClawdbotCodingTools", () => {
   it("keeps read tool image metadata intact", async () => {
-    const tools = createClawdbotCodingTools();
-    const readTool = tools.find((tool) => tool.name === "read");
+    const readTool = defaultTools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-read-"));
