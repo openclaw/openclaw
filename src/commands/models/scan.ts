@@ -4,6 +4,7 @@ import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-s
 import { withProgressTotals } from "../../cli/progress.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { shortenHomePath } from "../../utils.js";
 import {
   stylePromptHint,
   stylePromptMessage,
@@ -343,7 +344,7 @@ export async function modelsScanCommand(
     return;
   }
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   runtime.log(`Fallbacks: ${selected.join(", ")}`);
   if (selectedImages.length > 0) {
     runtime.log(`Image fallbacks: ${selectedImages.join(", ")}`);

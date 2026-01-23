@@ -12,7 +12,7 @@ import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import {
@@ -126,7 +126,7 @@ export async function agentsAddCommand(
         : { config: nextConfig, added: [], skipped: [], conflicts: [] };
 
     await writeConfigFile(bindingResult.config);
-    if (!opts.json) runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+    if (!opts.json) runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
       skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
@@ -151,8 +151,8 @@ export async function agentsAddCommand(
       runtime.log(JSON.stringify(payload, null, 2));
     } else {
       runtime.log(`Agent: ${agentId}`);
-      runtime.log(`Workspace: ${workspaceDir}`);
-      runtime.log(`Agent dir: ${agentDir}`);
+      runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
+      runtime.log(`Agent dir: ${shortenHomePath(agentDir)}`);
       if (model) runtime.log(`Model: ${model}`);
       if (bindingResult.conflicts.length > 0) {
         runtime.error(
@@ -334,7 +334,7 @@ export async function agentsAddCommand(
     }
 
     await writeConfigFile(nextConfig);
-    runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+    runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
     await ensureWorkspaceAndSessions(workspaceDir, runtime, {
       skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
       agentId,

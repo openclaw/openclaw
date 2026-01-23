@@ -4,6 +4,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 
 import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
@@ -69,7 +70,7 @@ export async function agentsDeleteCommand(
 
   const result = pruneAgentConfig(cfg, agentId);
   await writeConfigFile(result.config);
-  if (!opts.json) runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  if (!opts.json) runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   await moveToTrash(workspaceDir, quietRuntime);

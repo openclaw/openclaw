@@ -5,6 +5,7 @@ import { browserScreenshotAction } from "../browser/client-actions.js";
 import { loadConfig } from "../config/config.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 
 export function registerBrowserInspectCommands(
@@ -36,7 +37,7 @@ export function registerBrowserInspectCommands(
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`MEDIA:${result.path}`);
+        defaultRuntime.log(`MEDIA:${shortenHomePath(result.path)}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -106,9 +107,9 @@ export function registerBrowserInspectCommands(
               ),
             );
           } else {
-            defaultRuntime.log(opts.out);
+            defaultRuntime.log(shortenHomePath(opts.out));
             if (result.format === "ai" && result.imagePath) {
-              defaultRuntime.log(`MEDIA:${result.imagePath}`);
+              defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
             }
           }
           return;
@@ -122,7 +123,7 @@ export function registerBrowserInspectCommands(
         if (result.format === "ai") {
           defaultRuntime.log(result.snapshot);
           if (result.imagePath) {
-            defaultRuntime.log(`MEDIA:${result.imagePath}`);
+            defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
           }
           return;
         }

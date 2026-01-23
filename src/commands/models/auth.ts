@@ -23,6 +23,7 @@ import {
 } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
+import { shortenHomePath } from "../../utils.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { openUrl } from "../onboard-helpers.js";
@@ -117,7 +118,7 @@ export async function modelsAuthSetupTokenCommand(
     }),
   );
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   runtime.log(`Auth profile: ${CLAUDE_CLI_PROFILE_ID} (anthropic/oauth)`);
 }
 
@@ -159,7 +160,7 @@ export async function modelsAuthPasteTokenCommand(
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
@@ -425,7 +426,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     return next;
   });
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
   for (const profile of result.profiles) {
     runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,

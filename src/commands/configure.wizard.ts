@@ -10,7 +10,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
@@ -253,7 +253,7 @@ export async function runConfigureWizard(
         mode,
       });
       await writeConfigFile(remoteConfig);
-      runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+      runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
       outro("Remote gateway configured.");
       return;
     }
@@ -286,7 +286,7 @@ export async function runConfigureWizard(
         mode,
       });
       await writeConfigFile(nextConfig);
-      runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+      runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
     };
 
     if (opts.sections) {
