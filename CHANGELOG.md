@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.23
+
+### Fixes
+- Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
+
 ## 2026.1.22
 
 ### Changes
