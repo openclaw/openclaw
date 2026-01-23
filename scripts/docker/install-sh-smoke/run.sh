@@ -11,7 +11,7 @@ if [[ -n "$SMOKE_PREVIOUS_VERSION" ]]; then
   PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
 else
   VERSIONS_JSON="$(npm view clawdbot versions --json)"
-  read -r LATEST_VERSION PREVIOUS_VERSION < <(node - <<'NODE'
+  versions_line="$(node - <<'NODE'
 const raw = process.env.VERSIONS_JSON || "[]";
 let versions;
 try {
@@ -30,6 +30,8 @@ const previous = versions.length >= 2 ? versions[versions.length - 2] : latest;
 process.stdout.write(`${latest} ${previous}`);
 NODE
 )"
+  LATEST_VERSION="${versions_line%% *}"
+  PREVIOUS_VERSION="${versions_line#* }"
 fi
 
 if [[ -n "${CLAWDBOT_INSTALL_LATEST_OUT:-}" ]]; then

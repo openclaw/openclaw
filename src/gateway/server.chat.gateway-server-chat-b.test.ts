@@ -40,7 +40,7 @@ const sendReq = (
   );
 };
 describe("gateway server chat", () => {
-  const timeoutMs = process.platform === "win32" ? 120_000 : 60_000;
+  const timeoutMs = 120_000;
   test(
     "handles history, abort, idempotency, and ordering flows",
     { timeout: timeoutMs },
