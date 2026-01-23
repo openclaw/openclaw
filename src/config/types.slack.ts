@@ -17,7 +17,7 @@ export type SlackDmConfig = {
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
   groupChannels?: Array<string | number>;
-  /** Control reply threading for DMs (off|first|all). Overrides top-level replyToMode for DMs. */
+  /** @deprecated Prefer channels.slack.replyToModeByChatType.direct. */
   replyToMode?: ReplyToMode;
 };
 
@@ -119,6 +119,11 @@ export type SlackAccountConfig = {
   reactionAllowlist?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /**
+   * Optional per-chat-type reply threading overrides.
+   * Example: { direct: "all", group: "first", channel: "off" }.
+   */
+  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;

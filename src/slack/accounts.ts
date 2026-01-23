@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { SlackAccountConfig } from "../config/types.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
 
@@ -20,6 +21,7 @@ export type ResolvedSlackAccount = {
   reactionNotifications?: SlackAccountConfig["reactionNotifications"];
   reactionAllowlist?: SlackAccountConfig["reactionAllowlist"];
   replyToMode?: SlackAccountConfig["replyToMode"];
+  replyToModeByChatType?: SlackAccountConfig["replyToModeByChatType"];
   actions?: SlackAccountConfig["actions"];
   slashCommand?: SlackAccountConfig["slashCommand"];
   dm?: SlackAccountConfig["dm"];
@@ -95,6 +97,7 @@ export function resolveSlackAccount(params: {
     reactionNotifications: merged.reactionNotifications,
     reactionAllowlist: merged.reactionAllowlist,
     replyToMode: merged.replyToMode,
+    replyToModeByChatType: merged.replyToModeByChatType,
     actions: merged.actions,
     slashCommand: merged.slashCommand,
     dm: merged.dm,
@@ -112,7 +115,11 @@ export function resolveSlackReplyToMode(
   account: ResolvedSlackAccount,
   chatType?: string | null,
 ): "off" | "first" | "all" {
-  if (chatType === "direct" && account.dm?.replyToMode !== undefined) {
+  const normalized = normalizeChatType(chatType ?? undefined);
+  if (normalized && account.replyToModeByChatType?.[normalized] !== undefined) {
+    return account.replyToModeByChatType[normalized] ?? "off";
+  }
+  if (normalized === "direct" && account.dm?.replyToMode !== undefined) {
     return account.dm.replyToMode;
   }
   return account.replyToMode ?? "off";
