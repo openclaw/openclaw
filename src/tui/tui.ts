@@ -245,6 +245,7 @@ export async function runTui(opts: TuiOptions) {
     editor.setAutocompleteProvider(
       new CombinedAutocompleteProvider(
         getSlashCommands({
+          cfg: config,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
         }),

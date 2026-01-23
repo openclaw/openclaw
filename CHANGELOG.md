@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - TUI: forward unknown slash commands (for example, `/context`) to the Gateway.
+- TUI: include Gateway slash commands in autocomplete and `/help`.
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
 - Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)
 

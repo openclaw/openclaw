@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCommand } from "./commands.js";
+import { getSlashCommands, parseCommand } from "./commands.js";
 
 describe("tui slash commands", () => {
   it("treats /elev as an alias for /elevated", () => {
@@ -12,5 +12,11 @@ describe("tui slash commands", () => {
       name: "elevated",
       args: "off",
     });
+  });
+
+  it("includes gateway text commands", () => {
+    const commands = getSlashCommands({});
+    expect(commands.some((command) => command.name === "context")).toBe(true);
+    expect(commands.some((command) => command.name === "commands")).toBe(true);
   });
 });
