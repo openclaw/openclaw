@@ -155,6 +155,15 @@ export function resolveDiscordGroupRequireMention(params: GroupMentionParams): b
   return true;
 }
 
+export function resolveGoogleChatGroupRequireMention(params: GroupMentionParams): boolean {
+  return resolveChannelGroupRequireMention({
+    cfg: params.cfg,
+    channel: "googlechat",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
 export function resolveSlackGroupRequireMention(params: GroupMentionParams): boolean {
   const account = resolveSlackAccount({
     cfg: params.cfg,

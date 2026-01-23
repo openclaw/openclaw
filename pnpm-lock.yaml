@@ -300,6 +300,15 @@ importers:
 
   extensions/google-antigravity-auth: {}
 
+  extensions/google-chat:
+    dependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
+      google-auth-library:
+        specifier: ^10.5.0
+        version: 10.5.0
+
   extensions/google-gemini-cli-auth: {}
 
   extensions/imessage: {}
@@ -384,6 +393,8 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/open-prose: {}
 
   extensions/open-prose: {}
 

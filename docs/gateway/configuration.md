@@ -399,7 +399,7 @@ Optional per-agent identity used for defaults and UX. This is written by the mac
 
 If set, Clawdbot derives defaults (only when you haven’t set them explicitly):
 - `messages.ackReaction` from the **active agent**’s `identity.emoji` (falls back to 👀)
-- `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/iMessage/WhatsApp)
+- `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/Google Chat/iMessage/WhatsApp)
 - `identity.avatar` accepts a workspace-relative image path or a remote URL/data URL. Local files must live inside the agent workspace.
 
 `identity.avatar` accepts:
@@ -543,7 +543,7 @@ Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
 
-### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
+### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.googlechat.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
 Run multiple accounts per channel (each account has its own `accountId` and optional `name`):
 
@@ -574,7 +574,7 @@ Notes:
 
 ### Group chat mention gating (`agents.list[].groupChat` + `messages.groupChat`)
 
-Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
+Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
 **Mention types:**
 - **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `channels.whatsapp.allowFrom`).
@@ -1120,6 +1120,43 @@ Reaction notification modes:
 Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
+### `channels.googlechat` (Chat API webhook)
+
+Google Chat runs over HTTP webhooks with app-level auth (service account).
+Multi-account support lives under `channels.googlechat.accounts` (see the multi-account section above). Env vars only apply to the default account.
+
+```json5
+{
+  channels: {
+    "googlechat": {
+      enabled: true,
+      serviceAccountFile: "/path/to/service-account.json",
+      audienceType: "app-url",             // app-url | project-number
+      audience: "https://gateway.example.com/googlechat",
+      webhookPath: "/googlechat",
+      botUser: "users/1234567890",        // optional; improves mention detection
+      dm: {
+        enabled: true,
+        policy: "pairing",                // pairing | allowlist | open | disabled
+        allowFrom: ["users/1234567890"]   // optional; "open" requires ["*"]
+      },
+      groupPolicy: "allowlist",
+      groups: {
+        "spaces/AAAA": { allow: true, requireMention: true }
+      },
+      actions: { reactions: true },
+      mediaMaxMb: 20
+    }
+  }
+}
+```
+
+Notes:
+- Service account JSON can be inline (`serviceAccount`) or file-based (`serviceAccountFile`).
+- Env fallbacks for the default account: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
+- `audienceType` + `audience` must match the Chat app’s webhook auth config.
+- Use `spaces/<spaceId>` or `users/<userId>` when setting delivery targets.
+
 ### `channels.slack` (socket mode)
 
 Slack runs in Socket Mode and requires both a bot token and app token:
@@ -1434,7 +1471,7 @@ WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (dep
 agent has `identity.name` set.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
-on channels that support reactions (Slack/Discord/Telegram). Defaults to the
+on channels that support reactions (Slack/Discord/Telegram/Google Chat). Defaults to the
 active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
 
 `ackReactionScope` controls when reactions fire:
@@ -1444,7 +1481,7 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 - `all`: all messages
 
 `removeAckAfterReply` removes the bot’s ack reaction after a reply is sent
-(Slack/Discord/Telegram only). Default: `false`.
+(Slack/Discord/Telegram/Google Chat only). Default: `false`.
 
 #### `messages.tts`
 
@@ -1829,11 +1866,12 @@ Block streaming:
   ```
 - `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
   Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
-  with `maxChars` capped to the channel text limit. Signal/Slack/Discord default
+  with `maxChars` capped to the channel text limit. Signal/Slack/Discord/Google Chat default
   to `minChars: 1500` unless overridden.
   Channel overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
   `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.mattermost.blockStreamingCoalesce`,
-  `channels.signal.blockStreamingCoalesce`, `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce`
+  `channels.signal.blockStreamingCoalesce`, `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce`,
+  `channels.googlechat.blockStreamingCoalesce`
   (and per-account variants).
 - `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
   Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
@@ -2980,7 +3018,7 @@ Mapping notes:
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
 - `deliver: true` sends the final reply to a channel; `channel` defaults to `last` (falls back to WhatsApp).
-- If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage/MS Teams).
+- If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
 
 Gmail helper config (used by `clawdbot webhooks gmail setup` / `run`):
@@ -3156,7 +3194,7 @@ Template placeholders are expanded in `tools.media.*.models[].args` and `tools.m
 | `{{GroupMembers}}` | Group members preview (best effort) |
 | `{{SenderName}}` | Sender display name (best effort) |
 | `{{SenderE164}}` | Sender phone number (best effort) |
-| `{{Provider}}` | Provider hint (whatsapp|telegram|discord|slack|signal|imessage|msteams|webchat|…) |
+| `{{Provider}}` | Provider hint (whatsapp|telegram|discord|googlechat|slack|signal|imessage|msteams|webchat|…) |
 
 ## Cron (Gateway scheduler)
 

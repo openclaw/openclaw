@@ -32,6 +32,9 @@ export type ChannelSetupInput = {
   httpHost?: string;
   httpPort?: string;
   webhookPath?: string;
+  webhookUrl?: string;
+  audienceType?: string;
+  audience?: string;
   useEnv?: boolean;
   homeserver?: string;
   userId?: string;
@@ -121,6 +124,11 @@ export type ChannelAccountSnapshot = {
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  credentialSource?: string;
+  audienceType?: string;
+  audience?: string;
+  webhookPath?: string;
+  webhookUrl?: string;
   baseUrl?: string;
   allowUnmentionedGroups?: boolean;
   cliPath?: string | null;
