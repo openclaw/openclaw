@@ -67,17 +67,12 @@ async function loadWebMediaInternal(
   ) => {
     const originalSize = buffer.length;
 
-    // Check if this is a PNG with alpha channel - preserve transparency
-    const isPng =
-      meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
-    const hasAlpha = isPng && (await hasAlphaChannel(buffer));
-
-    if (hasAlpha) {
-      // Use PNG optimization to preserve transparency
-      const optimized = await optimizeImageToPng(buffer, cap);
+    const optimizeToJpeg = async () => {
+      const optimized = await optimizeImageToJpeg(buffer, cap, meta);
+      const fileName = meta && isHeicSource(meta) ? toJpegFileName(meta.fileName) : meta?.fileName;
       if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
         logVerbose(
-          `Optimized PNG (preserving alpha) from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px)`,
+          `Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
         );
       }
       if (optimized.buffer.length > cap) {
@@ -90,34 +85,40 @@ async function loadWebMediaInternal(
       }
       return {
         buffer: optimized.buffer,
-        contentType: "image/png",
+        contentType: "image/jpeg",
         kind: "image" as const,
-        fileName: meta?.fileName,
+        fileName,
       };
+    };
+
+    // Check if this is a PNG with alpha channel - preserve transparency when possible
+    const isPng =
+      meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
+    const hasAlpha = isPng && (await hasAlphaChannel(buffer));
+
+    if (hasAlpha) {
+      const optimized = await optimizeImageToPng(buffer, cap);
+      if (optimized.buffer.length <= cap) {
+        if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
+          logVerbose(
+            `Optimized PNG (preserving alpha) from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px)`,
+          );
+        }
+        return {
+          buffer: optimized.buffer,
+          contentType: "image/png",
+          kind: "image" as const,
+          fileName: meta?.fileName,
+        };
+      }
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `PNG with alpha still exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB after optimization; falling back to JPEG`,
+        );
+      }
     }
 
-    // Default: optimize to JPEG (no alpha channel)
-    const optimized = await optimizeImageToJpeg(buffer, cap, meta);
-    const fileName = meta && isHeicSource(meta) ? toJpegFileName(meta.fileName) : meta?.fileName;
-    if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
-      logVerbose(
-        `Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
-      );
-    }
-    if (optimized.buffer.length > cap) {
-      throw new Error(
-        `Media could not be reduced below ${(cap / (1024 * 1024)).toFixed(0)}MB (got ${(
-          optimized.buffer.length /
-          (1024 * 1024)
-        ).toFixed(2)}MB)`,
-      );
-    }
-    return {
-      buffer: optimized.buffer,
-      contentType: "image/jpeg",
-      kind: "image" as const,
-      fileName,
-    };
+    return await optimizeToJpeg();
   };
 
   const clampAndFinalize = async (params: {
