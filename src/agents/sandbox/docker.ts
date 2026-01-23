@@ -50,7 +50,16 @@ async function dockerImageExists(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
-  return result.code === 0;
+  if (result.code === 0) return true;
+  const stderr = result.stderr.trim();
+  if (
+    stderr.includes("No such image") ||
+    stderr.includes("No such object") ||
+    stderr.includes("not found")
+  ) {
+    return false;
+  }
+  throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
 export async function ensureDockerImage(image: string) {
