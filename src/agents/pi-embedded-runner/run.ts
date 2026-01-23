@@ -184,7 +184,6 @@ export async function runEmbeddedPiAgent(
           lastProfileId = resolvedProfileId;
           return;
         }
-<<<<<<< HEAD
         authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         lastProfileId = resolvedProfileId;
       };
