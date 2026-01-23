@@ -13,7 +13,9 @@ type InlineModelEntry = ModelDefinitionConfig & { provider: string };
 
 function applyProviderModelOverrides(model: Model<Api>): Model<Api> {
   if (model.provider === "github-copilot") {
-    const headers = { ...(model.headers ?? {}), "User-Agent": resolveGithubCopilotUserAgent() };
+    const headers = model.headers
+      ? { ...model.headers, "User-Agent": resolveGithubCopilotUserAgent() }
+      : { "User-Agent": resolveGithubCopilotUserAgent() };
     return { ...model, headers };
   }
   return model;
