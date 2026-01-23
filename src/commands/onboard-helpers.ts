@@ -311,7 +311,6 @@ export async function detectBinary(name: string): Promise<boolean> {
 }
 
 function shouldSkipBrowserOpenInTests(): boolean {
-  if (process.env.CLAWDBOT_ALLOW_TEST_BROWSER_OPEN) return false;
   if (process.env.VITEST) return true;
   return process.env.NODE_ENV === "test";
 }

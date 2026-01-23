@@ -44,7 +44,7 @@ Docs: https://docs.clawd.bot
 - Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
 - Slack: read thread replies for message reads when threadId is provided (replies-only). (#1450) Thanks @rodrigouroz.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
-- macOS/tests: fix gateway summary lookup after guard unwrap; prevent browser opens during tests unless explicitly enabled. (ECID-1483)
+- macOS/tests: fix gateway summary lookup after guard unwrap; prevent browser opens during tests. (ECID-1483)
 - Providers: improve GitHub Copilot integration (enterprise support, base URL, and auth flow alignment).
 
 ## 2026.1.21-2
