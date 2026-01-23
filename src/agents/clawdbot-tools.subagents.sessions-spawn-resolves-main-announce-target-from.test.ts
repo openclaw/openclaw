@@ -22,6 +22,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import { emitAgentEvent } from "../infra/agent-events.js";
+import "./test-helpers/fast-core-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 

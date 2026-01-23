@@ -10,6 +10,7 @@ vi.mock("../media/image-ops.js", () => ({
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
 
+import "./test-helpers/fast-core-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
 
 describe("nodes camera_snap", () => {

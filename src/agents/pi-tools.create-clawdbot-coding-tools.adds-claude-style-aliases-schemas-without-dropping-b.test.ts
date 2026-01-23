@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
+import "./test-helpers/fast-coding-tools.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 
 const defaultTools = createClawdbotCodingTools();
