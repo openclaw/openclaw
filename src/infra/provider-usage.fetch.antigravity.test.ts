@@ -142,6 +142,64 @@ describe("fetchAntigravityUsage", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("uses cloudaicompanionProject string as project id", async () => {
+    let capturedBody: string | undefined;
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
+      async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url.includes("loadCodeAssist")) {
+          return makeResponse(200, {
+            availablePromptCredits: 900,
+            planInfo: { monthlyPromptCredits: 1000 },
+            cloudaicompanionProject: "projects/alpha",
+          });
+        }
+
+        if (url.includes("fetchAvailableModels")) {
+          capturedBody = init?.body?.toString();
+          return makeResponse(200, { models: {} });
+        }
+
+        return makeResponse(404, "not found");
+      },
+    );
+
+    await fetchAntigravityUsage("token-123", 5000, mockFetch);
+
+    expect(capturedBody).toBe(JSON.stringify({ project: "projects/alpha" }));
+  });
+
+  it("uses cloudaicompanionProject object id when present", async () => {
+    let capturedBody: string | undefined;
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
+      async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url.includes("loadCodeAssist")) {
+          return makeResponse(200, {
+            availablePromptCredits: 900,
+            planInfo: { monthlyPromptCredits: 1000 },
+            cloudaicompanionProject: { id: "projects/beta" },
+          });
+        }
+
+        if (url.includes("fetchAvailableModels")) {
+          capturedBody = init?.body?.toString();
+          return makeResponse(200, { models: {} });
+        }
+
+        return makeResponse(404, "not found");
+      },
+    );
+
+    await fetchAntigravityUsage("token-123", 5000, mockFetch);
+
+    expect(capturedBody).toBe(JSON.stringify({ project: "projects/beta" }));
+  });
+
   it("returns error snapshot when both endpoints fail", async () => {
     const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
       const url =
@@ -165,6 +223,28 @@ describe("fetchAntigravityUsage", () => {
     expect(snapshot.error).toBe("Access denied");
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns Token expired when fetchAvailableModels returns 401 and no windows", async () => {
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (url.includes("loadCodeAssist")) {
+        return makeResponse(500, "Boom");
+      }
+
+      if (url.includes("fetchAvailableModels")) {
+        return makeResponse(401, { error: { message: "Unauthorized" } });
+      }
+
+      return makeResponse(404, "not found");
+    });
+
+    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
+
+    expect(snapshot.error).toBe("Token expired");
+    expect(snapshot.windows).toHaveLength(0);
   });
 
   it("extracts plan info from currentTier.name", async () => {
@@ -281,6 +361,37 @@ describe("fetchAntigravityUsage", () => {
 
     const flashWindow = snapshot.windows.find((w) => w.label === "gemini-flash-lite");
     expect(flashWindow?.usedPercent).toBeCloseTo(10, 1); // (1 - 0.9) * 100
+  });
+
+  it("skips internal models", async () => {
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (url.includes("loadCodeAssist")) {
+        return makeResponse(200, {
+          availablePromptCredits: 500,
+          planInfo: { monthlyPromptCredits: 1000 },
+          cloudaicompanionProject: "projects/internal",
+        });
+      }
+
+      if (url.includes("fetchAvailableModels")) {
+        return makeResponse(200, {
+          models: {
+            chat_hidden: { quotaInfo: { remainingFraction: 0.1 } },
+            tab_hidden: { quotaInfo: { remainingFraction: 0.2 } },
+            "gemini-pro-1.5": { quotaInfo: { remainingFraction: 0.7 } },
+          },
+        });
+      }
+
+      return makeResponse(404, "not found");
+    });
+
+    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
+
+    expect(snapshot.windows.map((w) => w.label)).toEqual(["Credits", "gemini-pro-1.5"]);
   });
 
   it("sorts models by usage and shows individual model IDs", async () => {

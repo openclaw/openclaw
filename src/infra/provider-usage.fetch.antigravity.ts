@@ -91,6 +91,14 @@ function extractPlanInfo(data: LoadCodeAssistResponse): string | undefined {
   return undefined;
 }
 
+function extractProjectId(data: LoadCodeAssistResponse): string | undefined {
+  const project = data.cloudaicompanionProject;
+  if (!project) return undefined;
+  if (typeof project === "string") return project.trim() ? project : undefined;
+  const projectId = typeof project.id === "string" ? project.id.trim() : undefined;
+  return projectId || undefined;
+}
+
 function extractModelQuotas(data: FetchAvailableModelsResponse): Map<string, ModelQuota> {
   const result = new Map<string, ModelQuota>();
   if (!data.models || typeof data.models !== "object") return result;
@@ -189,10 +197,7 @@ export async function fetchAntigravityUsage(
       const data = (await res.json()) as LoadCodeAssistResponse;
 
       // Extract project ID for subsequent calls
-      const cloudProject = data.cloudaicompanionProject;
-      if (cloudProject) {
-        projectId = typeof cloudProject === "string" ? cloudProject : (cloudProject as any).id;
-      }
+      projectId = extractProjectId(data);
 
       credits = extractCredits(data);
       planInfo = extractPlanInfo(data);
@@ -216,8 +221,11 @@ export async function fetchAntigravityUsage(
   }
 
   // Fetch fetchAvailableModels (model quotas)
+  if (!projectId) {
+    logDebug("[antigravity] Missing project id; requesting available models without project");
+  }
   try {
-    const body = projectId ? JSON.stringify({ project: projectId }) : "{}";
+    const body = JSON.stringify(projectId ? { project: projectId } : {});
     const res = await fetchJson(
       `${BASE_URL}${FETCH_AVAILABLE_MODELS_PATH}`,
       { method: "POST", headers, body },
@@ -236,7 +244,11 @@ export async function fetchAntigravityUsage(
       }
     } else {
       const err = await parseErrorMessage(res);
-      if (!lastError) lastError = err;
+      if (res.status === 401) {
+        lastError = "Token expired";
+      } else if (!lastError) {
+        lastError = err;
+      }
     }
   } catch {
     if (!lastError) lastError = "Network error";
