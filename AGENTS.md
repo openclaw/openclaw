@@ -23,13 +23,14 @@
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
 ## exe.dev VM ops (general)
-- Access: SSH to the VM directly: `ssh vm-name.exe.xyz` (or use exe.dev web terminal).
-- Updates: `sudo npm i -g clawdbot@latest` (global install needs root on `/usr/lib/node_modules`).
-- Config: use `clawdbot config set ...`; set `gateway.mode=local` if unset.
-- Restart: exe.dev often lacks systemd user bus; stop old gateway and run:
+- Access: stable path is `ssh exe.dev` then `ssh vm-name` (assume SSH key already set).
+- SSH flaky: use exe.dev web terminal or Shelley (web agent); keep a tmux session for long ops.
+- Update: `sudo npm i -g clawdbot@latest` (global install needs root on `/usr/lib/node_modules`).
+- Config: use `clawdbot config set ...`; ensure `gateway.mode=local` is set.
+- Discord: store raw token only (no `DISCORD_BOT_TOKEN=` prefix).
+- Restart: stop old gateway and run:
   `pkill -9 -f clawdbot-gateway || true; nohup clawdbot gateway run --bind loopback --port 18789 --force > /tmp/clawdbot-gateway.log 2>&1 &`
-- Verify: `clawdbot --version`, `clawdbot health`, `ss -ltnp | rg 18789`.
-- SSH flaky: use exe.dev web terminal or Shelley (web agent) instead of CLI SSH.
+- Verify: `clawdbot channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/clawdbot-gateway.log`.
 
 ## Build, Test, and Development Commands
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
