@@ -30,6 +30,7 @@ Docs: https://docs.clawd.bot
 - Agents: surface concrete API error details instead of generic AI service errors.
 - Exec approvals: allow per-segment allowlists for chained shell commands on gateway + node hosts. (#1458) Thanks @czekaj.
 - Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.
+- Agents: make tool summaries more readable and only show optional params when set.
 - Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
 
