@@ -41,14 +41,16 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 async function fetchLogs(
   opts: LogsCliOptions,
   cursor: number | undefined,
+  showProgress: boolean,
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  const payload = await callGatewayFromCli("logs.tail", opts, {
-    cursor,
-    limit,
-    maxBytes,
-  });
+  const payload = await callGatewayFromCli(
+    "logs.tail",
+    opts,
+    { cursor, limit, maxBytes },
+    { progress: showProgress },
+  );
   if (!payload || typeof payload !== "object") {
     throw new Error("Unexpected logs.tail response");
   }
@@ -194,8 +196,10 @@ export function registerLogsCli(program: Command) {
 
     while (true) {
       let payload: LogsTailPayload;
+      // Show progress spinner only on first fetch, not during follow polling
+      const showProgress = first && !opts.follow;
       try {
-        payload = await fetchLogs(opts, cursor);
+        payload = await fetchLogs(opts, cursor, showProgress);
       } catch (err) {
         emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
         process.exit(1);
