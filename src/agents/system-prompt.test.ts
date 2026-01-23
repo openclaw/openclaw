@@ -237,6 +237,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Bravo");
   });
 
+  it("adds SOUL guidance when a soul file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      contextFiles: [
+        { path: "./SOUL.md", content: "Persona" },
+        { path: "dir\\SOUL.md", content: "Persona Windows" },
+      ],
+    });
+
+    expect(prompt).toContain(
+      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+    );
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
