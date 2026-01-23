@@ -5,9 +5,19 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadWebMedia } from "./media.js";
+import { loadWebMedia, optimizeImageToJpeg, optimizeImageToPng } from "./media.js";
 
 const tmpFiles: string[] = [];
+
+function buildDeterministicBytes(length: number): Buffer {
+  const buffer = Buffer.allocUnsafe(length);
+  let seed = 0x12345678;
+  for (let i = 0; i < length; i++) {
+    seed = (1103515245 * seed + 12345) & 0x7fffffff;
+    buffer[i] = seed & 0xff;
+  }
+  return buffer;
+}
 
 afterEach(async () => {
   await Promise.all(tmpFiles.map((file) => fs.rm(file, { force: true })));
@@ -184,5 +194,70 @@ describe("web media loading", () => {
     expect(result.buffer.slice(0, 3).toString()).toBe("GIF");
 
     fetchMock.mockRestore();
+  });
+
+  it("preserves PNG alpha when under the cap", async () => {
+    const buffer = await sharp({
+      create: {
+        width: 64,
+        height: 64,
+        channels: 4,
+        background: { r: 255, g: 0, b: 0, alpha: 0.5 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    const file = path.join(os.tmpdir(), `clawdbot-media-${Date.now()}.png`);
+    tmpFiles.push(file);
+    await fs.writeFile(file, buffer);
+
+    const result = await loadWebMedia(file, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/png");
+    const meta = await sharp(result.buffer).metadata();
+    expect(meta.hasAlpha).toBe(true);
+  });
+
+  it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
+    const sizes = [512, 768, 1024];
+    let pngBuffer: Buffer | null = null;
+    let smallestPng: Awaited<ReturnType<typeof optimizeImageToPng>> | null = null;
+    let jpegOptimized: Awaited<ReturnType<typeof optimizeImageToJpeg>> | null = null;
+    let cap = 0;
+
+    for (const size of sizes) {
+      const raw = buildDeterministicBytes(size * size * 4);
+      pngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
+        .png()
+        .toBuffer();
+      smallestPng = await optimizeImageToPng(pngBuffer, 1);
+      cap = Math.max(1, smallestPng.optimizedSize - 1);
+      jpegOptimized = await optimizeImageToJpeg(pngBuffer, cap);
+      if (jpegOptimized.buffer.length < smallestPng.optimizedSize) {
+        break;
+      }
+    }
+
+    if (!pngBuffer || !smallestPng || !jpegOptimized) {
+      throw new Error("PNG fallback setup failed");
+    }
+
+    if (jpegOptimized.buffer.length >= smallestPng.optimizedSize) {
+      throw new Error(
+        `JPEG fallback did not shrink below PNG (jpeg=${jpegOptimized.buffer.length}, png=${smallestPng.optimizedSize})`,
+      );
+    }
+
+    const file = path.join(os.tmpdir(), `clawdbot-media-${Date.now()}-alpha.png`);
+    tmpFiles.push(file);
+    await fs.writeFile(file, pngBuffer);
+
+    const result = await loadWebMedia(file, cap);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.buffer.length).toBeLessThanOrEqual(cap);
   });
 });
