@@ -21,6 +21,7 @@ const editMessageDiscord = vi.fn(async () => ({}));
 const fetchMessageDiscord = vi.fn(async () => ({}));
 const fetchChannelPermissionsDiscord = vi.fn(async () => ({}));
 const fetchReactionsDiscord = vi.fn(async () => ({}));
+const listGuildChannelsDiscord = vi.fn(async () => []);
 const listPinsDiscord = vi.fn(async () => ({}));
 const listThreadsDiscord = vi.fn(async () => ({}));
 const moveChannelDiscord = vi.fn(async () => ({ ok: true }));
@@ -52,6 +53,7 @@ vi.mock("../../discord/send.js", () => ({
   fetchChannelPermissionsDiscord: (...args: unknown[]) => fetchChannelPermissionsDiscord(...args),
   fetchReactionsDiscord: (...args: unknown[]) => fetchReactionsDiscord(...args),
   kickMemberDiscord: (...args: unknown[]) => kickMemberDiscord(...args),
+  listGuildChannelsDiscord: (...args: unknown[]) => listGuildChannelsDiscord(...args),
   listPinsDiscord: (...args: unknown[]) => listPinsDiscord(...args),
   listThreadsDiscord: (...args: unknown[]) => listThreadsDiscord(...args),
   moveChannelDiscord: (...args: unknown[]) => moveChannelDiscord(...args),
