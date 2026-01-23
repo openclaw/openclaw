@@ -282,12 +282,31 @@ export function resolveDiscordChannelConfigWithFallback(params: {
 export function resolveDiscordShouldRequireMention(params: {
   isGuildMessage: boolean;
   isThread: boolean;
+  botId?: string | null;
+  threadOwnerId?: string | null;
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
+  /** Pass pre-computed value to avoid redundant checks. */
+  isAutoThreadOwnedByBot?: boolean;
 }): boolean {
   if (!params.isGuildMessage) return false;
-  if (params.isThread && params.channelConfig?.autoThread) return false;
+  // Only skip mention requirement in threads created by the bot (when autoThread is enabled).
+  const isBotThread = params.isAutoThreadOwnedByBot ?? isDiscordAutoThreadOwnedByBot(params);
+  if (isBotThread) return false;
   return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
+}
+
+export function isDiscordAutoThreadOwnedByBot(params: {
+  isThread: boolean;
+  channelConfig?: DiscordChannelConfigResolved | null;
+  botId?: string | null;
+  threadOwnerId?: string | null;
+}): boolean {
+  if (!params.isThread) return false;
+  if (!params.channelConfig?.autoThread) return false;
+  const botId = params.botId?.trim();
+  const threadOwnerId = params.threadOwnerId?.trim();
+  return Boolean(botId && threadOwnerId && botId === threadOwnerId);
 }
 
 export function isDiscordGroupAllowedByPolicy(params: {

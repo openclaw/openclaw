@@ -36,16 +36,16 @@ describe("exec approval handlers", () => {
       expect(validateExecApprovalRequestParams(params)).toBe(true);
     });
 
-    // This documents the TypeBox/AJV behavior that caused the Discord exec bug:
-    // Type.Optional(Type.String()) does NOT accept null, only string or undefined.
-    it("rejects request with resolvedPath as null", () => {
+    // Fixed: null is now accepted (Type.Union([Type.String(), Type.Null()]))
+    // This matches the calling code in bash-tools.exec.ts which passes null.
+    it("accepts request with resolvedPath as null", () => {
       const params = {
         command: "echo hi",
         cwd: "/tmp",
         host: "node",
         resolvedPath: null,
       };
-      expect(validateExecApprovalRequestParams(params)).toBe(false);
+      expect(validateExecApprovalRequestParams(params)).toBe(true);
     });
   });
 
