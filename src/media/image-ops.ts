@@ -340,6 +340,49 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
 }
 
 /**
+ * Checks if an image has an alpha channel (transparency).
+ * Returns true if the image has alpha, false otherwise.
+ */
+export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
+  try {
+    const sharp = await loadSharp();
+    const meta = await sharp(buffer).metadata();
+    // Check if the image has an alpha channel
+    // PNG color types with alpha: 4 (grayscale+alpha), 6 (RGBA)
+    // Sharp reports this via 'channels' (4 = RGBA) or 'hasAlpha'
+    return meta.hasAlpha === true || meta.channels === 4;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resizes an image to PNG format, preserving alpha channel (transparency).
+ * Falls back to sharp only (no sips fallback for PNG with alpha).
+ */
+export async function resizeToPng(params: {
+  buffer: Buffer;
+  maxSide: number;
+  compressionLevel?: number;
+  withoutEnlargement?: boolean;
+}): Promise<Buffer> {
+  const sharp = await loadSharp();
+  // Compression level 6 is a good balance (0=fastest, 9=smallest)
+  const compressionLevel = params.compressionLevel ?? 6;
+
+  return await sharp(params.buffer)
+    .rotate() // Auto-rotate based on EXIF if present
+    .resize({
+      width: params.maxSide,
+      height: params.maxSide,
+      fit: "inside",
+      withoutEnlargement: params.withoutEnlargement !== false,
+    })
+    .png({ compressionLevel })
+    .toBuffer();
+}
+
+/**
  * Internal sips-only EXIF normalization (no sharp fallback).
  * Used by resizeToJpeg to normalize before sips resize.
  */
