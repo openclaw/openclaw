@@ -178,6 +178,22 @@ export function expandPolicyWithPluginGroups(
   };
 }
 
+export function stripPluginOnlyAllowlist(
+  policy: ToolPolicyLike | undefined,
+  groups: PluginToolGroups,
+): ToolPolicyLike | undefined {
+  if (!policy?.allow || policy.allow.length === 0) return policy;
+  const normalized = normalizeToolList(policy.allow);
+  if (normalized.length === 0) return policy;
+  const pluginIds = new Set(groups.byPlugin.keys());
+  const pluginTools = new Set(groups.all);
+  const isPluginEntry = (entry: string) =>
+    entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
+  const isPluginOnly = normalized.every((entry) => isPluginEntry(entry));
+  if (!isPluginOnly) return policy;
+  return { ...policy, allow: undefined };
+}
+
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) return undefined;
   const resolved = TOOL_PROFILES[profile as ToolProfileId];

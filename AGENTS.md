@@ -22,6 +22,15 @@
 - README (GitHub): keep absolute docs URLs (`https://docs.clawd.bot/...`) so links work on GitHub.
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
+## exe.dev VM ops (general)
+- Access: SSH to the VM directly: `ssh vm-name.exe.xyz` (or use exe.dev web terminal).
+- Updates: `sudo npm i -g clawdbot@latest` (global install needs root on `/usr/lib/node_modules`).
+- Config: use `clawdbot config set ...`; set `gateway.mode=local` if unset.
+- Restart: exe.dev often lacks systemd user bus; stop old gateway and run:
+  `pkill -9 -f clawdbot-gateway || true; nohup clawdbot gateway run --bind loopback --port 18789 --force > /tmp/clawdbot-gateway.log 2>&1 &`
+- Verify: `clawdbot --version`, `clawdbot health`, `ss -ltnp | rg 18789`.
+- SSH flaky: use exe.dev web terminal or Shelley (web agent) instead of CLI SSH.
+
 ## Build, Test, and Development Commands
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
 - Install deps: `pnpm install`
@@ -51,6 +60,7 @@
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
+- Do not set test workers above 16; tried already.
 - Live tests (real keys): `CLAWDBOT_LIVE_TEST=1 pnpm test:live` (Clawdbot-only) or `LIVE=1 pnpm test:live` (includes provider live tests). Docker: `pnpm test:docker:live-models`, `pnpm test:docker:live-gateway`. Onboarding Docker E2E: `pnpm test:docker:onboard`.
 - Full kit + what’s covered: `docs/testing.md`.
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.

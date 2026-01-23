@@ -11,7 +11,7 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 
 ## Prereqs
 - Developer ID Application cert installed (example: `Developer ID Application: <Developer Name> (<TEAMID>)`).
-- Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE` (path to your Sparkle ed25519 private key; public key baked into Info.plist).
+- Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE` (path to your Sparkle ed25519 private key; public key baked into Info.plist). If it is missing, check `~/.profile`.
 - Notary credentials (keychain profile or API key) for `xcrun notarytool` if you want Gatekeeper-safe DMG/zip distribution.
   - We use a Keychain profile named `clawdbot-notary`, created from App Store Connect API key env vars in your shell profile:
     - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`

@@ -6,21 +6,34 @@ SMOKE_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_SMOKE_PREVIOUS:-}"
 SKIP_PREVIOUS="${CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
 
 echo "==> Resolve npm versions"
-LATEST_VERSION="$(npm view clawdbot version)"
 if [[ -n "$SMOKE_PREVIOUS_VERSION" ]]; then
+  LATEST_VERSION="$(npm view clawdbot version)"
   PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
 else
-  PREVIOUS_VERSION="$(node - <<'NODE'
-const { execSync } = require("node:child_process");
-
-const versions = JSON.parse(execSync("npm view clawdbot versions --json", { encoding: "utf8" }));
-if (!Array.isArray(versions) || versions.length === 0) {
+  VERSIONS_JSON="$(npm view clawdbot versions --json)"
+  read -r LATEST_VERSION PREVIOUS_VERSION < <(node - <<'NODE'
+const raw = process.env.VERSIONS_JSON || "[]";
+let versions;
+try {
+  versions = JSON.parse(raw);
+} catch {
+  versions = raw ? [raw] : [];
+}
+if (!Array.isArray(versions)) {
+  versions = [versions];
+}
+if (versions.length === 0) {
   process.exit(1);
 }
-const previous = versions.length >= 2 ? versions[versions.length - 2] : versions[0];
-process.stdout.write(previous);
+const latest = versions[versions.length - 1];
+const previous = versions.length >= 2 ? versions[versions.length - 2] : latest;
+process.stdout.write(`${latest} ${previous}`);
 NODE
 )"
+fi
+
+if [[ -n "${CLAWDBOT_INSTALL_LATEST_OUT:-}" ]]; then
+  printf "%s" "$LATEST_VERSION" > "$CLAWDBOT_INSTALL_LATEST_OUT"
 fi
 
 echo "latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"

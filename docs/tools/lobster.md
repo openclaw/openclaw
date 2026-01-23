@@ -121,6 +121,10 @@ Lobster is an **optional** plugin tool (not enabled by default). Allow it per ag
 
 You can also allow it globally with `tools.allow` if every agent should see it.
 
+Note: allowlists are opt-in for optional plugins. If your allowlist only names
+plugin tools (like `lobster`), Clawdbot keeps core tools enabled. To restrict core
+tools, include the core tools or groups you want in the allowlist too.
+
 ## Example: Email triage
 
 Without Lobster:

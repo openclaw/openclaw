@@ -38,6 +38,19 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   }
 
   const service = resolveGatewayService();
+  let loaded = false;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
+  if (loaded) {
+    try {
+      await service.stop({ env: process.env, stdout });
+    } catch {
+      // Best-effort stop; final loaded check gates success.
+    }
+  }
   try {
     await service.uninstall({ env: process.env, stdout });
   } catch (err) {
@@ -45,11 +58,15 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
     return;
   }
 
-  let loaded = false;
+  loaded = false;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {
     loaded = false;
+  }
+  if (loaded) {
+    fail("Gateway service still loaded after uninstall.");
+    return;
   }
   emit({
     ok: true,
