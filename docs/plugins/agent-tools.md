@@ -82,6 +82,8 @@ Enable optional tools in `agents.list[].tools.allow` (or global `tools.allow`):
 ```
 
 Other config knobs that affect tool availability:
+- Allowlists that only name plugin tools are treated as plugin opt-ins; core tools remain
+  enabled unless you also include core tools or groups in the allowlist.
 - `tools.profile` / `agents.list[].tools.profile` (base allowlist)
 - `tools.byProvider` / `agents.list[].tools.byProvider` (provider‑specific allow/deny)
 - `tools.sandbox.tools.*` (sandbox tool policy when sandboxed)
