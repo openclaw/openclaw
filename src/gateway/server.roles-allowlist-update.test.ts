@@ -1,15 +1,48 @@
-import { describe, expect, test } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { GatewayClient } from "./client.js";
+
+vi.mock("../infra/update-runner.js", () => ({
+  runGatewayUpdate: vi.fn(async () => ({
+    status: "ok",
+    mode: "git",
+    root: "/repo",
+    steps: [],
+    durationMs: 12,
+  })),
+}));
+
 import {
   connectOk,
   installGatewayTestHooks,
+  onceMessage,
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
-import { GatewayClient } from "./client.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
+let ws: WebSocket;
+let port: number;
+
+beforeAll(async () => {
+  const started = await startServerWithClient();
+  server = started.server;
+  ws = started.ws;
+  port = started.port;
+  await connectOk(ws);
+});
+
+afterAll(async () => {
+  ws.close();
+  await server.close();
+});
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -65,11 +98,99 @@ const connectNodeClient = async (params: {
   return client;
 };
 
+async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("timeout");
+}
+
+describe("gateway role enforcement", () => {
+  test("enforces operator and node permissions", async () => {
+    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+
+    try {
+      const eventRes = await rpcReq(ws, "node.event", { event: "test", payload: { ok: true } });
+      expect(eventRes.ok).toBe(false);
+      expect(eventRes.error?.message ?? "").toContain("unauthorized role");
+
+      const invokeRes = await rpcReq(ws, "node.invoke.result", {
+        id: "invoke-1",
+        nodeId: "node-1",
+        ok: true,
+      });
+      expect(invokeRes.ok).toBe(false);
+      expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
+
+      await connectOk(nodeWs, {
+        role: "node",
+        client: {
+          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          version: "1.0.0",
+          platform: "ios",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        commands: [],
+      });
+
+      const binsRes = await rpcReq<{ bins?: unknown[] }>(nodeWs, "skills.bins", {});
+      expect(binsRes.ok).toBe(true);
+      expect(Array.isArray(binsRes.payload?.bins)).toBe(true);
+
+      const statusRes = await rpcReq(nodeWs, "status", {});
+      expect(statusRes.ok).toBe(false);
+      expect(statusRes.error?.message ?? "").toContain("unauthorized role");
+    } finally {
+      nodeWs.close();
+    }
+  });
+});
+
+describe("gateway update.run", () => {
+  test("writes sentinel and schedules restart", async () => {
+    const sigusr1 = vi.fn();
+    process.on("SIGUSR1", sigusr1);
+
+    try {
+      const id = "req-update";
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "update.run",
+          params: {
+            sessionKey: "agent:main:whatsapp:dm:+15555550123",
+            restartDelayMs: 0,
+          },
+        }),
+      );
+      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
+        ws,
+        (o) => o.type === "res" && o.id === id,
+      );
+      expect(res.ok).toBe(true);
+
+      await waitForSignal(() => sigusr1.mock.calls.length > 0);
+      expect(sigusr1).toHaveBeenCalled();
+
+      const sentinelPath = path.join(os.homedir(), ".clawdbot", "restart-sentinel.json");
+      const raw = await fs.readFile(sentinelPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        payload?: { kind?: string; stats?: { mode?: string } };
+      };
+      expect(parsed.payload?.kind).toBe("update");
+      expect(parsed.payload?.stats?.mode).toBe("git");
+    } finally {
+      process.off("SIGUSR1", sigusr1);
+    }
+  });
+});
+
 describe("gateway node command allowlist", () => {
   test("enforces command allowlists across node clients", async () => {
-    const { server, ws, port } = await startServerWithClient();
-    await connectOk(ws);
-
     const waitForConnectedCount = async (count: number) => {
       await expect
         .poll(
@@ -96,8 +217,12 @@ describe("gateway node command allowlist", () => {
       return nodeId;
     };
 
+    let systemClient: GatewayClient | undefined;
+    let emptyClient: GatewayClient | undefined;
+    let allowedClient: GatewayClient | undefined;
+
     try {
-      const systemClient = await connectNodeClient({
+      systemClient = await connectNodeClient({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
@@ -115,7 +240,7 @@ describe("gateway node command allowlist", () => {
       systemClient.stop();
       await waitForConnectedCount(0);
 
-      const emptyClient = await connectNodeClient({
+      emptyClient = await connectNodeClient({
         port,
         commands: [],
         instanceId: "node-empty",
@@ -138,7 +263,7 @@ describe("gateway node command allowlist", () => {
         new Promise<{ id?: string; nodeId?: string }>((resolve) => {
           resolveInvoke = resolve;
         });
-      const allowedClient = await connectNodeClient({
+      allowedClient = await connectNodeClient({
         port,
         commands: ["canvas.snapshot"],
         instanceId: "node-allowed",
@@ -187,11 +312,10 @@ describe("gateway node command allowlist", () => {
       });
       const invokeNullRes = await invokeNullResP;
       expect(invokeNullRes.ok).toBe(true);
-
-      allowedClient.stop();
     } finally {
-      ws.close();
-      await server.close();
+      systemClient?.stop();
+      emptyClient?.stop();
+      allowedClient?.stop();
     }
   });
 });

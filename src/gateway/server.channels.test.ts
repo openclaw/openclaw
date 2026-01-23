@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -10,7 +11,7 @@ import {
 
 const loadConfigHelpers = async () => await import("../config/config.js");
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
 
 const registryState = vi.hoisted(() => ({
   registry: {
@@ -131,30 +132,31 @@ const defaultRegistry = createRegistry([
   },
 ]);
 
-const servers: Array<Awaited<ReturnType<typeof startServerWithClient>>> = [];
+let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
+let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
 
-afterEach(async () => {
-  for (const { server, ws } of servers) {
-    try {
-      ws.close();
-      await server.close();
-    } catch {
-      /* ignore */
-    }
-  }
-  servers.length = 0;
-  await new Promise((resolve) => setTimeout(resolve, 50));
+beforeAll(async () => {
+  setRegistry(defaultRegistry);
+  const started = await startServerWithClient();
+  server = started.server;
+  ws = started.ws;
+  await connectOk(ws);
 });
+
+afterAll(async () => {
+  ws.close();
+  await server.close();
+});
+
+function setRegistry(registry: PluginRegistry) {
+  registryState.registry = registry;
+  setActivePluginRegistry(registry);
+}
 
 describe("gateway server channels", () => {
   test("channels.status returns snapshot without probe", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
-    registryState.registry = defaultRegistry;
-    const result = await startServerWithClient();
-    servers.push(result);
-    const { ws } = result;
-    await connectOk(ws);
-
+    setRegistry(defaultRegistry);
     const res = await rpcReq<{
       channels?: Record<
         string,
@@ -181,12 +183,7 @@ describe("gateway server channels", () => {
   });
 
   test("channels.logout reports no session when missing", async () => {
-    registryState.registry = defaultRegistry;
-    const result = await startServerWithClient();
-    servers.push(result);
-    const { ws } = result;
-    await connectOk(ws);
-
+    setRegistry(defaultRegistry);
     const res = await rpcReq<{ cleared?: boolean; channel?: string }>(ws, "channels.logout", {
       channel: "whatsapp",
     });
@@ -197,7 +194,7 @@ describe("gateway server channels", () => {
 
   test("channels.logout clears telegram bot token from config", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
-    registryState.registry = defaultRegistry;
+    setRegistry(defaultRegistry);
     const { readConfigFileSnapshot, writeConfigFile } = await loadConfigHelpers();
     await writeConfigFile({
       channels: {
@@ -207,12 +204,6 @@ describe("gateway server channels", () => {
         },
       },
     });
-
-    const result = await startServerWithClient();
-    servers.push(result);
-    const { ws } = result;
-    await connectOk(ws);
-
     const res = await rpcReq<{
       cleared?: boolean;
       envToken?: boolean;

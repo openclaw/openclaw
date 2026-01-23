@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
@@ -22,7 +22,24 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
+let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+let port: number;
+
+beforeAll(async () => {
+  const started = await startServerWithClient();
+  server = started.server;
+  ws = started.ws;
+  port = started.port;
+  await connectOk(ws);
+});
+
+afterAll(async () => {
+  ws.close();
+  await server.close();
+});
 
 const registryState = vi.hoisted(() => ({
   registry: {
@@ -130,10 +147,6 @@ describe("gateway server agent", () => {
         },
       },
     });
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
@@ -150,9 +163,6 @@ describe("gateway server agent", () => {
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
     expect(call.sessionId).toBe("sess-teams");
-
-    ws.close();
-    await server.close();
   });
 
   test("agent accepts channel aliases (imsg/teams)", async () => {
@@ -177,10 +187,6 @@ describe("gateway server agent", () => {
         },
       },
     });
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const resIMessage = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
@@ -208,15 +214,9 @@ describe("gateway server agent", () => {
     const lastTeamsCall = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expectChannels(lastTeamsCall, "msteams");
     expect(lastTeamsCall.to).toBe("conversation:teams-abc");
-
-    ws.close();
-    await server.close();
   });
 
   test("agent rejects unknown channel", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
@@ -225,9 +225,6 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("INVALID_REQUEST");
-
-    ws.close();
-    await server.close();
   });
 
   test("agent ignores webchat last-channel for routing", async () => {
@@ -244,10 +241,6 @@ describe("gateway server agent", () => {
         },
       },
     });
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
@@ -264,9 +257,6 @@ describe("gateway server agent", () => {
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
     expect(call.sessionId).toBe("sess-main-webchat");
-
-    ws.close();
-    await server.close();
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {
@@ -282,10 +272,6 @@ describe("gateway server agent", () => {
         },
       },
     });
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
@@ -302,15 +288,9 @@ describe("gateway server agent", () => {
     expect(call.deliver).toBe(false);
     expect(call.bestEffortDeliver).toBe(true);
     expect(call.sessionId).toBe("sess-main-webchat-internal");
-
-    ws.close();
-    await server.close();
   });
 
   test("agent ack response then final response", { timeout: 8000 }, async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const ackP = onceMessage(
       ws,
       (o) => o.type === "res" && o.id === "ag1" && o.payload?.status === "accepted",
@@ -333,15 +313,9 @@ describe("gateway server agent", () => {
     expect(ack.payload.runId).toBeDefined();
     expect(final.payload.runId).toBe(ack.payload.runId);
     expect(final.payload.status).toBe("ok");
-
-    ws.close();
-    await server.close();
   });
 
   test("agent dedupes by idempotencyKey after completion", async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const firstFinalP = onceMessage(
       ws,
       (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
@@ -367,9 +341,6 @@ describe("gateway server agent", () => {
     );
     const second = await secondP;
     expect(second.payload).toEqual(firstFinal.payload);
-
-    ws.close();
-    await server.close();
   });
 
   test("agent dedupe survives reconnect", { timeout: 60_000 }, async () => {
@@ -433,8 +404,9 @@ describe("gateway server agent", () => {
       },
     });
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws, {
+    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+    await connectOk(webchatWs, {
       client: {
         id: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
@@ -446,7 +418,7 @@ describe("gateway server agent", () => {
     registerAgentRunContext("run-auto-1", { sessionKey: "main" });
 
     const finalChatP = onceMessage(
-      ws,
+      webchatWs,
       (o) => {
         if (o.type !== "event" || o.event !== "chat") return false;
         const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
@@ -474,7 +446,6 @@ describe("gateway server agent", () => {
     expect(payload.sessionKey).toBe("main");
     expect(payload.runId).toBe("run-auto-1");
 
-    ws.close();
-    await server.close();
+    webchatWs.close();
   });
 });

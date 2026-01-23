@@ -13,7 +13,7 @@ import {
 } from "./test-helpers.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
 
 async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {
   if (ws.readyState === WebSocket.CLOSED) return true;

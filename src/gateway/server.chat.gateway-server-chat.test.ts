@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import {
   agentCommand,
   connectOk,
@@ -15,7 +16,24 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
+let ws: WebSocket;
+let port: number;
+
+beforeAll(async () => {
+  const started = await startServerWithClient();
+  server = started.server;
+  ws = started.ws;
+  port = started.port;
+  await connectOk(ws);
+});
+
+afterAll(async () => {
+  ws.close();
+  await server.close();
+});
 
 async function waitFor(condition: () => boolean, timeoutMs = 1500) {
   const deadline = Date.now() + timeoutMs;
@@ -29,12 +47,9 @@ async function waitFor(condition: () => boolean, timeoutMs = 1500) {
 describe("gateway server chat", () => {
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
-    const { server, ws, port } = await startServerWithClient();
     let webchatWs: WebSocket | undefined;
 
     try {
-      await connectOk(ws);
-
       webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
       await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
       await connectOk(webchatWs, {
@@ -240,9 +255,182 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
       if (webchatWs) webchatWs.close();
-      ws.close();
-      await server.close();
       await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
+  test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          verboseLevel: "off",
+        },
+      },
+    });
+
+    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+    await connectOk(webchatWs, {
+      client: {
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+
+    try {
+      registerAgentRunContext("run-tool-1", {
+        sessionKey: "main",
+        verboseLevel: "on",
+      });
+
+      {
+        const agentEvtP = onceMessage(
+          webchatWs,
+          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
+          8000,
+        );
+
+        emitAgentEvent({
+          runId: "run-tool-1",
+          stream: "tool",
+          data: { phase: "start", name: "read", toolCallId: "tool-1" },
+        });
+
+        const evt = await agentEvtP;
+        const payload =
+          evt.payload && typeof evt.payload === "object"
+            ? (evt.payload as Record<string, unknown>)
+            : {};
+        expect(payload.sessionKey).toBe("main");
+      }
+
+      {
+        registerAgentRunContext("run-tool-off", { sessionKey: "agent:main:main" });
+
+        emitAgentEvent({
+          runId: "run-tool-off",
+          stream: "tool",
+          data: { phase: "start", name: "read", toolCallId: "tool-1" },
+        });
+        emitAgentEvent({
+          runId: "run-tool-off",
+          stream: "assistant",
+          data: { text: "hello" },
+        });
+
+        const evt = await onceMessage(
+          webchatWs,
+          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-off",
+          8000,
+        );
+        const payload =
+          evt.payload && typeof evt.payload === "object"
+            ? (evt.payload as Record<string, unknown>)
+            : {};
+        expect(payload.stream).toBe("assistant");
+      }
+
+      {
+        const waitP = rpcReq(webchatWs, "agent.wait", {
+          runId: "run-wait-1",
+          timeoutMs: 1000,
+        });
+
+        setTimeout(() => {
+          emitAgentEvent({
+            runId: "run-wait-1",
+            stream: "lifecycle",
+            data: { phase: "end", startedAt: 200, endedAt: 210 },
+          });
+        }, 5);
+
+        const res = await waitP;
+        expect(res.ok).toBe(true);
+        expect(res.payload.status).toBe("ok");
+        expect(res.payload.startedAt).toBe(200);
+      }
+
+      {
+        emitAgentEvent({
+          runId: "run-wait-early",
+          stream: "lifecycle",
+          data: { phase: "end", startedAt: 50, endedAt: 55 },
+        });
+
+        const res = await rpcReq(webchatWs, "agent.wait", {
+          runId: "run-wait-early",
+          timeoutMs: 1000,
+        });
+        expect(res.ok).toBe(true);
+        expect(res.payload.status).toBe("ok");
+        expect(res.payload.startedAt).toBe(50);
+      }
+
+      {
+        const res = await rpcReq(webchatWs, "agent.wait", {
+          runId: "run-wait-3",
+          timeoutMs: 30,
+        });
+        expect(res.ok).toBe(true);
+        expect(res.payload.status).toBe("timeout");
+      }
+
+      {
+        const waitP = rpcReq(webchatWs, "agent.wait", {
+          runId: "run-wait-err",
+          timeoutMs: 1000,
+        });
+
+        setTimeout(() => {
+          emitAgentEvent({
+            runId: "run-wait-err",
+            stream: "lifecycle",
+            data: { phase: "error", error: "boom" },
+          });
+        }, 5);
+
+        const res = await waitP;
+        expect(res.ok).toBe(true);
+        expect(res.payload.status).toBe("error");
+        expect(res.payload.error).toBe("boom");
+      }
+
+      {
+        const waitP = rpcReq(webchatWs, "agent.wait", {
+          runId: "run-wait-start",
+          timeoutMs: 1000,
+        });
+
+        emitAgentEvent({
+          runId: "run-wait-start",
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 123 },
+        });
+
+        setTimeout(() => {
+          emitAgentEvent({
+            runId: "run-wait-start",
+            stream: "lifecycle",
+            data: { phase: "end", endedAt: 456 },
+          });
+        }, 5);
+
+        const res = await waitP;
+        expect(res.ok).toBe(true);
+        expect(res.payload.status).toBe("ok");
+        expect(res.payload.startedAt).toBe(123);
+        expect(res.payload.endedAt).toBe(456);
+      }
+    } finally {
+      webchatWs.close();
+      await fs.rm(dir, { recursive: true, force: true });
+      testState.sessionStorePath = undefined;
     }
   });
 });
