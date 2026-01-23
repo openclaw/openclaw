@@ -26,6 +26,7 @@ import {
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
+import { logInboundDrop } from "../../../channels/logging.js";
 import { formatAllowlistMatchMeta } from "../../../channels/allowlist-match.js";
 import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
@@ -265,7 +266,12 @@ export async function prepareSlackMessage(params: {
   const commandAuthorized = commandGate.commandAuthorized;
 
   if (isRoomish && commandGate.shouldBlock) {
-    logVerbose(`Blocked slack control command from unauthorized sender ${senderId}`);
+    logInboundDrop({
+      log: logVerbose,
+      channel: "slack",
+      reason: "control command (unauthorized)",
+      target: senderId,
+    });
     return null;
   }
 

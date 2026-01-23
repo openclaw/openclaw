@@ -1,7 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
-import { resolveAckReaction, resolveControlCommandGate } from "clawdbot/plugin-sdk";
+import {
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  resolveAckReaction,
+  resolveControlCommandGate,
+} from "clawdbot/plugin-sdk";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
@@ -1359,11 +1365,12 @@ async function processMessage(
 
   // Block control commands from unauthorized senders in groups
   if (isGroup && commandGate.shouldBlock) {
-    logVerbose(
-      core,
-      runtime,
-      `bluebubbles: drop control command from unauthorized sender ${message.senderId}`,
-    );
+    logInboundDrop({
+      log: (msg) => logVerbose(core, runtime, msg),
+      channel: "bluebubbles",
+      reason: "control command (unauthorized)",
+      target: message.senderId,
+    });
     return;
   }
 
@@ -1765,11 +1772,12 @@ async function processMessage(
             opts: { cfg: config, accountId: account.accountId },
           }),
         onError: (err) => {
-          logVerbose(
-            core,
-            runtime,
-            `ack reaction removal failed chatGuid=${chatGuidForActions} msg=${ackMessageId}: ${String(err)}`,
-          );
+          logAckFailure({
+            log: (msg) => logVerbose(core, runtime, msg),
+            channel: "bluebubbles",
+            target: `${chatGuidForActions}/${ackMessageId}`,
+            error: err,
+          });
         },
       });
     }
@@ -1779,7 +1787,13 @@ async function processMessage(
         cfg: config,
         accountId: account.accountId,
       }).catch((err) => {
-        logVerbose(core, runtime, `typing stop (no reply) failed: ${String(err)}`);
+        logTypingFailure({
+          log: (msg) => logVerbose(core, runtime, msg),
+          channel: "bluebubbles",
+          action: "stop",
+          target: chatGuidForActions,
+          error: err,
+        });
       });
     }
   }

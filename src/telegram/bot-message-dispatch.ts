@@ -3,6 +3,7 @@ import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
+import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { danger, logVerbose } from "../globals.js";
@@ -155,7 +156,12 @@ export const dispatchTelegramMessage = async ({
       onReplyStart: createTypingCallbacks({
         start: sendTyping,
         onStartError: (err) => {
-          logVerbose(`telegram typing cue failed for chat ${chatId}: ${String(err)}`);
+          logTypingFailure({
+            log: logVerbose,
+            channel: "telegram",
+            target: String(chatId),
+            error: err,
+          });
         },
       }).onReplyStart,
     },
@@ -187,9 +193,12 @@ export const dispatchTelegramMessage = async ({
     remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
     onError: (err) => {
       if (!msg.message_id) return;
-      logVerbose(
-        `telegram: failed to remove ack reaction from ${chatId}/${msg.message_id}: ${String(err)}`,
-      );
+      logAckFailure({
+        log: logVerbose,
+        channel: "telegram",
+        target: `${chatId}/${msg.message_id}`,
+        error: err,
+      });
     },
   });
   if (isGroup && historyKey) {

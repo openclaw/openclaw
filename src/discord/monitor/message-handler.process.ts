@@ -3,6 +3,7 @@ import {
   removeAckReactionAfterReply,
   shouldAckReaction as shouldAckReactionGate,
 } from "../../channels/ack-reactions.js";
+import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import {
@@ -343,7 +344,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     onReplyStart: createTypingCallbacks({
       start: () => sendTyping({ client, channelId: typingChannelId }),
       onStartError: (err) => {
-        logVerbose(`discord typing cue failed for channel ${typingChannelId}: ${String(err)}`);
+        logTypingFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: typingChannelId,
+          error: err,
+        });
       },
     }).onReplyStart,
   });
@@ -388,9 +394,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     remove: () =>
       removeReactionDiscord(message.channelId, message.id, ackReaction, { rest: client.rest }),
     onError: (err) => {
-      logVerbose(
-        `discord: failed to remove ack reaction from ${message.channelId}/${message.id}: ${String(err)}`,
-      );
+      logAckFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: `${message.channelId}/${message.id}`,
+        error: err,
+      });
     },
   });
   if (isGuildMessage) {

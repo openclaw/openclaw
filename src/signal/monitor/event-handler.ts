@@ -16,6 +16,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
@@ -183,7 +184,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         });
       },
       onStartError: (err) => {
-        logVerbose(`signal typing cue failed for ${ctxPayload.To}: ${String(err)}`);
+        logTypingFailure({
+          log: logVerbose,
+          channel: "signal",
+          target: ctxPayload.To ?? undefined,
+          error: err,
+        });
       },
     });
 
@@ -451,7 +457,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
     const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAllowed;
     if (isGroup && commandGate.shouldBlock) {
-      logVerbose(`signal: drop control command from unauthorized sender ${senderDisplay}`);
+      logInboundDrop({
+        log: logVerbose,
+        channel: "signal",
+        reason: "control command (unauthorized)",
+        target: senderDisplay,
+      });
       return;
     }
 
