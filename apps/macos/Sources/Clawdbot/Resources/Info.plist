@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.1.21</string>
+    <string>2026.1.23</string>
     <key>CFBundleVersion</key>
-    <string>202601210</string>
+    <string>202601230</string>
     <key>CFBundleIconFile</key>
     <string>Clawdbot</string>
     <key>CFBundleURLTypes</key>
