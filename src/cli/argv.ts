@@ -94,9 +94,13 @@ export function buildParseArgv(params: {
       : baseArgv[0]?.endsWith("clawdbot")
         ? baseArgv.slice(1)
         : baseArgv;
-  const executable = normalizedArgv[0]?.split(/[/\\]/).pop() ?? "";
+  const executable = (normalizedArgv[0]?.split(/[/\\]/).pop() ?? "").toLowerCase();
   const looksLikeNode =
-    normalizedArgv.length >= 2 && (executable === "node" || executable === "bun");
+    normalizedArgv.length >= 2 &&
+    (executable === "node" ||
+      executable === "node.exe" ||
+      executable === "bun" ||
+      executable === "bun.exe");
   if (looksLikeNode) return normalizedArgv;
   return ["node", programName || "clawdbot", ...normalizedArgv];
 }
