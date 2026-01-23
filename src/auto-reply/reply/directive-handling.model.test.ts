@@ -5,8 +5,12 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
+import {
+  maybeHandleModelDirectiveInfo,
+  resolveModelSelectionFromDirective,
+} from "./directive-handling.model.js";
 
-// Mock dependencies
+// Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -35,6 +39,55 @@ function baseConfig(): ClawdbotConfig {
     agents: { defaults: {} },
   } as unknown as ClawdbotConfig;
 }
+
+describe("/model chat UX", () => {
+  it("shows summary for /model with no args", async () => {
+    const directives = parseInlineDirectives("/model");
+    const cfg = { commands: { text: true } } as unknown as ClawdbotConfig;
+
+    const reply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+    });
+
+    expect(reply?.text).toContain("Current:");
+    expect(reply?.text).toContain("Browse: /models");
+    expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("auto-applies closest match for typos", () => {
+    const directives = parseInlineDirectives("/model anthropic/claud-opus-4-5");
+    const cfg = { commands: { text: true } } as unknown as ClawdbotConfig;
+
+    const resolved = resolveModelSelectionFromDirective({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5"]),
+      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-5" }],
+      provider: "anthropic",
+    });
+
+    expect(resolved.modelSelection).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      isDefault: true,
+    });
+    expect(resolved.errorText).toBeUndefined();
+  });
+});
 
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
@@ -106,7 +159,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
     });
 
-    // No model directive = no model message
     expect(result?.text ?? "").not.toContain("Model set to");
     expect(result?.text ?? "").not.toContain("failed");
   });

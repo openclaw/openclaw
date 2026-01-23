@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+
+import type { ClawdbotConfig } from "../../config/config.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
+
+const emptyCfg = {} as ClawdbotConfig;
 
 describe("createReplyDispatcher", () => {
   it("drops empty payloads and silent tokens without media", async () => {
@@ -148,5 +153,96 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+});
+
+describe("resolveReplyToMode", () => {
+  it("defaults to first for Telegram", () => {
+    expect(resolveReplyToMode(emptyCfg, "telegram")).toBe("first");
+  });
+
+  it("defaults to off for Discord and Slack", () => {
+    expect(resolveReplyToMode(emptyCfg, "discord")).toBe("off");
+    expect(resolveReplyToMode(emptyCfg, "slack")).toBe("off");
+  });
+
+  it("defaults to all when channel is unknown", () => {
+    expect(resolveReplyToMode(emptyCfg, undefined)).toBe("all");
+  });
+
+  it("uses configured value when present", () => {
+    const cfg = {
+      channels: {
+        telegram: { replyToMode: "all" },
+        discord: { replyToMode: "first" },
+        slack: { replyToMode: "all" },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "telegram")).toBe("all");
+    expect(resolveReplyToMode(cfg, "discord")).toBe("first");
+    expect(resolveReplyToMode(cfg, "slack")).toBe("all");
+  });
+
+  it("uses chat-type replyToMode overrides for Slack when configured", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "all", group: "first" },
+        },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "slack", null, "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("off");
+    expect(resolveReplyToMode(cfg, "slack", null, undefined)).toBe("off");
+  });
+
+  it("falls back to top-level replyToMode when no chat-type override is set", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "first",
+        },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("first");
+    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("first");
+  });
+
+  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "off",
+          dm: { replyToMode: "all" },
+        },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("off");
+  });
+});
+
+describe("createReplyToModeFilter", () => {
+  it("drops replyToId when mode is off", () => {
+    const filter = createReplyToModeFilter("off");
+    expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBeUndefined();
+  });
+
+  it("keeps replyToId when mode is off and reply tags are allowed", () => {
+    const filter = createReplyToModeFilter("off", { allowTagsWhenOff: true });
+    expect(filter({ text: "hi", replyToId: "1", replyToTag: true }).replyToId).toBe("1");
+  });
+
+  it("keeps replyToId when mode is all", () => {
+    const filter = createReplyToModeFilter("all");
+    expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");
+  });
+
+  it("keeps only the first replyToId when mode is first", () => {
+    const filter = createReplyToModeFilter("first");
+    expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");
+    expect(filter({ text: "next", replyToId: "1" }).replyToId).toBeUndefined();
   });
 });

@@ -46,6 +46,16 @@ vi.mock("../../channels/plugins/pairing.js", async () => {
   };
 });
 
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: vi.fn(async () => [
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+  ]),
+}));
+
 function buildParams(commandBody: string, cfg: ClawdbotConfig, ctxOverrides?: Partial<MsgContext>) {
   const ctx = {
     Body: commandBody,
@@ -135,5 +145,83 @@ describe("handleCommands /allowlist", () => {
       entry: "789",
     });
     expect(result.reply?.text).toContain("DM allowlist added");
+  });
+});
+
+describe("/models command", () => {
+  const cfg = {
+    commands: { text: true },
+    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+  } as unknown as ClawdbotConfig;
+
+  it.each(["telegram", "discord", "whatsapp"])("lists providers on %s", async (surface) => {
+    const params = buildParams("/models", cfg, { Provider: surface, Surface: surface });
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Providers:");
+    expect(result.reply?.text).toContain("anthropic");
+    expect(result.reply?.text).toContain("Use: /models <provider>");
+  });
+
+  it("lists provider models with pagination hints", async () => {
+    const params = buildParams("/models anthropic", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Models (anthropic)");
+    expect(result.reply?.text).toContain("page 1/");
+    expect(result.reply?.text).toContain("anthropic/claude-opus-4-5");
+    expect(result.reply?.text).toContain("Switch: /model <provider/model>");
+    expect(result.reply?.text).toContain("All: /models anthropic all");
+  });
+
+  it("ignores page argument when all flag is present", async () => {
+    const params = buildParams("/models anthropic 3 all", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Models (anthropic)");
+    expect(result.reply?.text).toContain("page 1/1");
+    expect(result.reply?.text).toContain("anthropic/claude-opus-4-5");
+    expect(result.reply?.text).not.toContain("Page out of range");
+  });
+
+  it("errors on out-of-range pages", async () => {
+    const params = buildParams("/models anthropic 4", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Page out of range");
+    expect(result.reply?.text).toContain("valid: 1-");
+  });
+
+  it("handles unknown providers", async () => {
+    const params = buildParams("/models not-a-provider", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Unknown provider");
+    expect(result.reply?.text).toContain("Available providers");
+  });
+
+  it("lists configured models outside the curated catalog", async () => {
+    const customCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: {
+            primary: "localai/ultra-chat",
+            fallbacks: ["anthropic/claude-opus-4-5"],
+          },
+          imageModel: "visionpro/studio-v1",
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    const providerList = await handleCommands(buildParams("/models", customCfg));
+    expect(providerList.reply?.text).toContain("localai");
+    expect(providerList.reply?.text).toContain("visionpro");
+
+    const result = await handleCommands(buildParams("/models localai", customCfg));
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Models (localai)");
+    expect(result.reply?.text).toContain("localai/ultra-chat");
+    expect(result.reply?.text).not.toContain("Unknown provider");
   });
 });
