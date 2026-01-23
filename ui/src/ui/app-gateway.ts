@@ -145,6 +145,14 @@ export function connectGateway(host: GatewayHost) {
 }
 
 export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
+  try {
+    handleGatewayEventUnsafe(host, evt);
+  } catch (err) {
+    console.error("[gateway] handleGatewayEvent error:", evt.event, err);
+  }
+}
+
+function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   host.eventLogBuffer = [
     { ts: Date.now(), event: evt.event, payload: evt.payload },
     ...host.eventLogBuffer,

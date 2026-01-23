@@ -1,4 +1,4 @@
-import { type FilesUploadV2Arguments, WebClient } from "@slack/web-api";
+import { type FilesUploadV2Arguments, type WebClient } from "@slack/web-api";
 
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
@@ -6,6 +6,7 @@ import { logVerbose } from "../globals.js";
 import { loadWebMedia } from "../web/media.js";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
@@ -137,7 +138,7 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? new WebClient(token);
+  const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);

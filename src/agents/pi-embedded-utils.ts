@@ -9,7 +9,7 @@ import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
  * - <invoke name="...">...</invoke> blocks
  * - </minimax:tool_call> closing tags
  */
-function stripMinimaxToolCallXml(text: string): string {
+export function stripMinimaxToolCallXml(text: string): string {
   if (!text) return text;
   if (!/minimax:tool_call/i.test(text)) return text;
 
@@ -28,7 +28,7 @@ function stripMinimaxToolCallXml(text: string): string {
  * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
  * not be shown to users.
  */
-function stripDowngradedToolCallText(text: string): string {
+export function stripDowngradedToolCallText(text: string): string {
   if (!text) return text;
   if (!/\[Tool (?:Call|Result)/i.test(text)) return text;
 
@@ -165,7 +165,7 @@ function stripDowngradedToolCallText(text: string): string {
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
  */
-function stripThinkingTagsFromText(text: string): string {
+export function stripThinkingTagsFromText(text: string): string {
   if (!text) return text;
   // Quick check to avoid regex overhead when no tags present.
   if (!/(?:think(?:ing)?|thought|antthinking)/i.test(text)) return text;

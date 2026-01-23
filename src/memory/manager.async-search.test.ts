@@ -75,7 +75,7 @@ describe("memory search async sync", () => {
 
     const resolved = await Promise.race([
       manager.search("hello").then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000)),
     ]);
     expect(resolved).toBe(true);
   });

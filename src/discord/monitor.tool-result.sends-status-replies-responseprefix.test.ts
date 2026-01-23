@@ -1,6 +1,9 @@
 import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDiscordMessageHandler } from "./monitor.js";
+import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
+import { __resetDiscordThreadStarterCacheForTest } from "./monitor/threading.js";
 
 const sendMock = vi.fn();
 const reactMock = vi.fn();
@@ -41,12 +44,12 @@ beforeEach(() => {
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  vi.resetModules();
+  __resetDiscordChannelInfoCacheForTest();
+  __resetDiscordThreadStarterCacheForTest();
 });
 
 describe("discord tool result dispatch", () => {
   it("sends status replies with responsePrefix", async () => {
-    const { createDiscordMessageHandler } = await import("./monitor.js");
     const cfg = {
       agents: {
         defaults: {
@@ -116,7 +119,6 @@ describe("discord tool result dispatch", () => {
   }, 30_000);
 
   it("caches channel info lookups between messages", async () => {
-    const { createDiscordMessageHandler } = await import("./monitor.js");
     const cfg = {
       agents: {
         defaults: {
@@ -189,7 +191,6 @@ describe("discord tool result dispatch", () => {
   });
 
   it("includes forwarded message snapshots in body", async () => {
-    const { createDiscordMessageHandler } = await import("./monitor.js");
     let capturedBody = "";
     dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
       capturedBody = ctx.Body ?? "";

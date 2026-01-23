@@ -1,19 +1,93 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
+import { GatewayLockError } from "../infra/gateway-lock.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
+  getFreePort,
   installGatewayTestHooks,
+  occupyPort,
   onceMessage,
   piSdkMock,
   rpcReq,
+  startGatewayServer,
   startServerWithClient,
+  testState,
+  testTailnetIPv4,
 } from "./test-helpers.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
+let ws: WebSocket;
+let port: number;
+
+beforeAll(async () => {
+  const started = await startServerWithClient();
+  server = started.server;
+  ws = started.ws;
+  port = started.port;
+  await connectOk(ws);
+});
+
+afterAll(async () => {
+  ws.close();
+  await server.close();
+});
+
+const whatsappOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async ({ deps, to, text }) => {
+    if (!deps?.sendWhatsApp) {
+      throw new Error("Missing sendWhatsApp dep");
+    }
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, {})) };
+  },
+  sendMedia: async ({ deps, to, text, mediaUrl }) => {
+    if (!deps?.sendWhatsApp) {
+      throw new Error("Missing sendWhatsApp dep");
+    }
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { mediaUrl })) };
+  },
+};
+
+const whatsappPlugin = createOutboundTestPlugin({
+  id: "whatsapp",
+  outbound: whatsappOutbound,
+  label: "WhatsApp",
+});
+
+const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
+  plugins: [],
+  tools: [],
+  channels,
+  providers: [],
+  gatewayHandlers: {},
+  httpHandlers: [],
+  cliRegistrars: [],
+  services: [],
+  diagnostics: [],
+});
+
+const whatsappRegistry = createRegistry([
+  {
+    pluginId: "whatsapp",
+    source: "test",
+    plugin: whatsappPlugin,
+  },
+]);
+const emptyRegistry = createRegistry([]);
 
 describe("gateway server models + voicewake", () => {
   const setTempHome = (homeDir: string) => {
@@ -68,9 +142,6 @@ describe("gateway server models + voicewake", () => {
       const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
       const restoreHome = setTempHome(homeDir);
 
-      const { server, ws } = await startServerWithClient();
-      await connectOk(ws);
-
       const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
       expect(initial.ok).toBe(true);
       expect(initial.payload?.triggers).toEqual(["clawd", "claude", "computer"]);
@@ -104,9 +175,6 @@ describe("gateway server models + voicewake", () => {
       expect(onDisk.triggers).toEqual(["hi", "there"]);
       expect(typeof onDisk.updatedAtMs).toBe("number");
 
-      ws.close();
-      await server.close();
-
       restoreHome();
     },
   );
@@ -114,9 +182,6 @@ describe("gateway server models + voicewake", () => {
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const restoreHome = setTempHome(homeDir);
-
-    const { server, ws, port } = await startServerWithClient();
-    await connectOk(ws);
 
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((resolve) => nodeWs.once("open", resolve));
@@ -159,9 +224,6 @@ describe("gateway server models + voicewake", () => {
     ]);
 
     nodeWs.close();
-    ws.close();
-    await server.close();
-
     restoreHome();
   });
 
@@ -188,9 +250,6 @@ describe("gateway server models + voicewake", () => {
         contextWindow: 200_000,
       },
     ];
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
 
     const res1 = await rpcReq<{
       models: Array<{
@@ -241,23 +300,132 @@ describe("gateway server models + voicewake", () => {
     ]);
 
     expect(piSdkMock.discoverCalls).toBe(1);
-
-    ws.close();
-    await server.close();
   });
 
   test("models.list rejects unknown params", async () => {
     piSdkMock.enabled = true;
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
     const res = await rpcReq(ws, "models.list", { extra: true });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toMatch(/invalid models\.list params/i);
+  });
+});
 
-    ws.close();
-    await server.close();
+describe("gateway server misc", () => {
+  test("hello-ok advertises the gateway port for canvas host", async () => {
+    const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const prevCanvasPort = process.env.CLAWDBOT_CANVAS_HOST_PORT;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "secret";
+    testTailnetIPv4.value = "100.64.0.1";
+    testState.gatewayBind = "lan";
+    const canvasPort = await getFreePort();
+    testState.canvasHostPort = canvasPort;
+    process.env.CLAWDBOT_CANVAS_HOST_PORT = String(canvasPort);
+
+    const testPort = await getFreePort();
+    const canvasHostUrl = resolveCanvasHostUrl({
+      canvasPort,
+      requestHost: `100.64.0.1:${testPort}`,
+      localAddress: "127.0.0.1",
+    });
+    expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+    if (prevCanvasPort === undefined) {
+      delete process.env.CLAWDBOT_CANVAS_HOST_PORT;
+    } else {
+      process.env.CLAWDBOT_CANVAS_HOST_PORT = prevCanvasPort;
+    }
+  });
+
+  test("send dedupes by idempotencyKey", { timeout: 60_000 }, async () => {
+    const prevRegistry = getActivePluginRegistry() ?? emptyRegistry;
+    try {
+      setActivePluginRegistry(whatsappRegistry);
+      expect(getChannelPlugin("whatsapp")).toBeDefined();
+
+      const idem = "same-key";
+      const res1P = onceMessage(ws, (o) => o.type === "res" && o.id === "a1");
+      const res2P = onceMessage(ws, (o) => o.type === "res" && o.id === "a2");
+      const sendReq = (id: string) =>
+        ws.send(
+          JSON.stringify({
+            type: "req",
+            id,
+            method: "send",
+            params: { to: "+15550000000", message: "hi", idempotencyKey: idem },
+          }),
+        );
+      sendReq("a1");
+      sendReq("a2");
+
+      const res1 = await res1P;
+      const res2 = await res2P;
+      expect(res1.ok).toBe(true);
+      expect(res2.ok).toBe(true);
+      expect(res1.payload).toEqual(res2.payload);
+    } finally {
+      setActivePluginRegistry(prevRegistry);
+    }
+  });
+
+  test("auto-enables configured channel plugins on startup", async () => {
+    const configPath = process.env.CLAWDBOT_CONFIG_PATH;
+    if (!configPath) throw new Error("Missing CLAWDBOT_CONFIG_PATH");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          channels: {
+            discord: {
+              token: "token-123",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const autoPort = await getFreePort();
+    const autoServer = await startGatewayServer(autoPort);
+    await autoServer.close();
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+    const plugins = updated.plugins as Record<string, unknown> | undefined;
+    const entries = plugins?.entries as Record<string, unknown> | undefined;
+    const discord = entries?.discord as Record<string, unknown> | undefined;
+    expect(discord?.enabled).toBe(true);
+    expect((updated.channels as Record<string, unknown> | undefined)?.discord).toMatchObject({
+      token: "token-123",
+    });
+  });
+
+  test("refuses to start when port already bound", async () => {
+    const { server: blocker, port: blockedPort } = await occupyPort();
+    await expect(startGatewayServer(blockedPort)).rejects.toBeInstanceOf(GatewayLockError);
+    await expect(startGatewayServer(blockedPort)).rejects.toThrow(/already listening/i);
+    blocker.close();
+  });
+
+  test("releases port after close", async () => {
+    const releasePort = await getFreePort();
+    const releaseServer = await startGatewayServer(releasePort);
+    await releaseServer.close();
+
+    const probe = createServer();
+    await new Promise<void>((resolve, reject) => {
+      probe.once("error", reject);
+      probe.listen(releasePort, "127.0.0.1", () => resolve());
+    });
+    await new Promise<void>((resolve, reject) =>
+      probe.close((err) => (err ? reject(err) : resolve())),
+    );
   });
 });

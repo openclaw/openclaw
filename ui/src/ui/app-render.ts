@@ -444,6 +444,7 @@ export function renderApp(state: AppViewState) {
               showThinking,
               loading: state.chatLoading,
               sending: state.chatSending,
+              compactionStatus: state.compactionStatus,
               assistantAvatarUrl: chatAvatarUrl,
               messages: state.chatMessages,
               toolMessages: state.chatToolMessages,

@@ -1,11 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
+
+let enabledServer: Awaited<ReturnType<typeof startServer>>;
+let enabledPort: number;
+
+beforeAll(async () => {
+  enabledPort = await getFreePort();
+  enabledServer = await startServer(enabledPort);
+});
+
+afterAll(async () => {
+  await enabledServer.close({ reason: "openresponses enabled suite done" });
+});
 
 async function startServerWithDefaultConfig(port: number) {
   const { startGatewayServer } = await import("./server.js");
@@ -72,7 +84,7 @@ async function ensureResponseConsumed(res: Response) {
 describe("OpenResponses HTTP API (e2e)", () => {
   it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
     const port = await getFreePort();
-    const server = await startServerWithDefaultConfig(port);
+    const _server = await startServerWithDefaultConfig(port);
     try {
       const res = await postResponses(port, {
         model: "clawdbot",
@@ -81,7 +93,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(res.status).toBe(404);
       await ensureResponseConsumed(res);
     } finally {
-      await server.close({ reason: "test done" });
+      // shared server
     }
 
     const disabledPort = await getFreePort();
@@ -101,8 +113,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it("handles OpenResponses request parsing and validation", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
+    const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>, meta?: unknown) => {
       agentCommand.mockReset();
       agentCommand.mockResolvedValueOnce({ payloads, meta } as never);
@@ -406,14 +417,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resNoUser);
     } finally {
-      await server.close({ reason: "test done" });
+      // shared server
     }
   });
 
   it("streams OpenResponses SSE events", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
-
+    const port = enabledPort;
     try {
       agentCommand.mockReset();
       agentCommand.mockImplementationOnce(async (opts: unknown) => {
@@ -489,7 +498,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         expect(event.event).toBe(parsed.type);
       }
     } finally {
-      await server.close({ reason: "test done" });
+      // shared server
     }
   });
 });

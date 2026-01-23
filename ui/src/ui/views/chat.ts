@@ -16,6 +16,12 @@ import {
 import { renderMarkdownSidebar } from "./markdown-sidebar";
 import "../components/resizable-divider";
 
+export type CompactionIndicatorStatus = {
+  active: boolean;
+  startedAt: number | null;
+  completedAt: number | null;
+};
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -24,6 +30,7 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
+  compactionStatus?: CompactionIndicatorStatus | null;
   messages: unknown[];
   toolMessages: unknown[];
   stream: string | null;
@@ -59,6 +66,35 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
 };
 
+const COMPACTION_TOAST_DURATION_MS = 5000;
+
+function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
+  if (!status) return nothing;
+  
+  // Show "compacting..." while active
+  if (status.active) {
+    return html`
+      <div class="callout info compaction-indicator compaction-indicator--active">
+        🧹 Compacting context...
+      </div>
+    `;
+  }
+  
+  // Show "compaction complete" briefly after completion
+  if (status.completedAt) {
+    const elapsed = Date.now() - status.completedAt;
+    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
+      return html`
+        <div class="callout success compaction-indicator compaction-indicator--complete">
+          🧹 Context compacted
+        </div>
+      `;
+    }
+  }
+  
+  return nothing;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -88,6 +124,8 @@ export function renderChat(props: ChatProps) {
       ${props.error
         ? html`<div class="callout danger">${props.error}</div>`
         : nothing}
+
+      ${renderCompactionIndicator(props.compactionStatus)}
 
       ${props.focusMode
         ? html`

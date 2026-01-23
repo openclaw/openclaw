@@ -36,6 +36,7 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
 });
 
 beforeEach(() => {
+  vi.useRealTimers();
   sendMock.mockReset().mockResolvedValue(undefined);
   updateLastRouteMock.mockReset();
   dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {

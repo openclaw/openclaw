@@ -452,11 +452,16 @@ export async function runTui(opts: TuiOptions) {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
-    footer.setText(
-      theme.dim(
-        `agent ${agentLabel} | session ${sessionLabel} | ${modelLabel} | think ${think} | verbose ${verbose}${reasoningLabel ? ` | ${reasoningLabel}` : ""} | ${tokens}`,
-      ),
-    );
+    const footerParts = [
+      `agent ${agentLabel}`,
+      `session ${sessionLabel}`,
+      modelLabel,
+      think !== "off" ? `think ${think}` : null,
+      verbose !== "off" ? `verbose ${verbose}` : null,
+      reasoningLabel,
+      tokens,
+    ].filter(Boolean);
+    footer.setText(theme.dim(footerParts.join(" | ")));
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);

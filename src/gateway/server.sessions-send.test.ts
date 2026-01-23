@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClawdbotTools } from "../agents/clawdbot-tools.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -11,30 +11,38 @@ import {
   startGatewayServer,
 } from "./test-helpers.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
 
-const servers: Array<Awaited<ReturnType<typeof startGatewayServer>>> = [];
+let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let gatewayPort: number;
+let prevGatewayPort: string | undefined;
+let prevGatewayToken: string | undefined;
 
-afterEach(async () => {
-  for (const server of servers) {
-    try {
-      await server.close();
-    } catch {
-      /* ignore */
-    }
+beforeAll(async () => {
+  prevGatewayPort = process.env.CLAWDBOT_GATEWAY_PORT;
+  prevGatewayToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+  gatewayPort = await getFreePort();
+  process.env.CLAWDBOT_GATEWAY_PORT = String(gatewayPort);
+  process.env.CLAWDBOT_GATEWAY_TOKEN = "test-token";
+  server = await startGatewayServer(gatewayPort);
+});
+
+afterAll(async () => {
+  await server.close();
+  if (prevGatewayPort === undefined) {
+    delete process.env.CLAWDBOT_GATEWAY_PORT;
+  } else {
+    process.env.CLAWDBOT_GATEWAY_PORT = prevGatewayPort;
   }
-  servers.length = 0;
-  // Add small delay to ensure port is fully released by OS
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  if (prevGatewayToken === undefined) {
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  } else {
+    process.env.CLAWDBOT_GATEWAY_TOKEN = prevGatewayToken;
+  }
 });
 
 describe("sessions_send gateway loopback", () => {
   it("returns reply when lifecycle ends before agent.wait", async () => {
-    const port = await getFreePort();
-    vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
-
-    const server = await startGatewayServer(port);
     const spy = vi.mocked(agentCommand);
     spy.mockImplementation(async (opts) => {
       const params = opts as {
@@ -78,8 +86,6 @@ describe("sessions_send gateway loopback", () => {
       });
     });
 
-    servers.push(server);
-
     const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) throw new Error("missing sessions_send tool");
 
@@ -104,12 +110,6 @@ describe("sessions_send gateway loopback", () => {
 
 describe("sessions_send label lookup", () => {
   it("finds session by label and sends message", { timeout: 60_000 }, async () => {
-    const port = await getFreePort();
-    vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
-
-    const server = await startGatewayServer(port);
-    servers.push(server);
     const spy = vi.mocked(agentCommand);
     spy.mockImplementation(async (opts) => {
       const params = opts as {
@@ -171,13 +171,6 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when label not found", { timeout: 60_000 }, async () => {
-    const port = await getFreePort();
-    vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
-
-    const server = await startGatewayServer(port);
-    servers.push(server);
-
     const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) throw new Error("missing sessions_send tool");
 
@@ -192,13 +185,6 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when neither sessionKey nor label provided", { timeout: 60_000 }, async () => {
-    const port = await getFreePort();
-    vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
-
-    const server = await startGatewayServer(port);
-    servers.push(server);
-
     const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) throw new Error("missing sessions_send tool");
 

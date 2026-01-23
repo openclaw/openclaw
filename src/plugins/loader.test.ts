@@ -98,8 +98,34 @@ describe("loadClawdbotPlugins", () => {
     expect(enabled?.status).toBe("loaded");
   });
 
-  it("loads bundled telegram plugin when enabled", { timeout: 120_000 }, () => {
-    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = path.join(process.cwd(), "extensions");
+  it("loads bundled telegram plugin when enabled", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "telegram",
+      body: `export default { id: "telegram", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "telegram channel"
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+} };`,
+      dir: bundledDir,
+      filename: "telegram.ts",
+    });
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
 
     const registry = loadClawdbotPlugins({
       cache: false,

@@ -254,7 +254,11 @@ export class GatewayBrowserClient {
         }
         this.lastSeq = seq;
       }
-      this.opts.onEvent?.(evt);
+      try {
+        this.opts.onEvent?.(evt);
+      } catch (err) {
+        console.error("[gateway] event handler error:", err);
+      }
       return;
     }
 
