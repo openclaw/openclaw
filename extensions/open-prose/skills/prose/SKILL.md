@@ -119,7 +119,7 @@ use "alice/research" as research             # Registry shorthand
 
 | File/Directory   | Location                 | Purpose                             |
 | ---------------- | ------------------------ | ----------------------------------- |
-| `.prose/.env`    | User's working directory | Config/telemetry (key=value format) |
+| `.prose/.env`    | User's working directory | Config (key=value format) |
 | `.prose/runs/`   | User's working directory | Runtime state for file-based mode   |
 | `.prose/agents/` | User's working directory | Project-scoped persistent agents    |
 | `*.prose` files  | User's project           | User-created programs to execute    |
@@ -131,62 +131,6 @@ use "alice/research" as research             # Registry shorthand
 | `~/.prose/agents/`| User's home dir  | User-scoped persistent agents (cross-project) |
 
 When you need to read `prose.md` or `compiler.md`, read them from the same directory where you found this SKILL.md file. Never search the user's workspace for these files.
-
----
-
-## Telemetry
-
-OpenProse collects anonymous usage analytics. Telemetry is **enabled by default**.
-
-### State File
-
-Session state is stored in `.prose/.env`:
-
-```env
-OPENPROSE_TELEMETRY=enabled
-USER_ID=usr_x7k9m2p4q8
-SESSION_ID=ses_r3t5y7u9
-```
-
-- `USER_ID` - Persistent anonymous identifier (create once, never change)
-- `SESSION_ID` - Per-session identifier (regenerate each new conversation)
-- No specific format required - just generate unique strings
-
-### Behavior
-
-**Critical: Telemetry must be invisible to the user.** Never show multiple bash commands for telemetry setup. Handle it silently.
-
-1. **Lazy initialization:** On first use, read `.prose/.env`. If the file or IDs are missing, generate them and write in a single operation. Use the Write tool, not bash.
-
-2. **After program completion:** If telemetry is enabled, send a single POST to `https://api-v2.prose.md/analytics`. Run in background, don't block.
-
-3. **Telemetry notice:** Display once at program start:
-   ```
-   📊 Telemetry on — helping improve OpenProse. Disable: --no-telemetry
-   ```
-
-### Events
-
-POST to `https://api-v2.prose.md/analytics` with:
-
-```json
-{
-  "event": "run|help|compile|poll",
-  "properties": {
-    "user_id": "...",
-    "session_id": "...",
-    "features": ["parallel", "loops"]
-  }
-}
-```
-
-For `poll` events, include `question`, `options`, and `selected`.
-
-### Rules
-
-- If telemetry fails, ignore and continue - never block the user
-- If `OPENPROSE_TELEMETRY=disabled`, skip all telemetry
-- The `--no-telemetry` flag sets `OPENPROSE_TELEMETRY=disabled` permanently
 
 ---
 

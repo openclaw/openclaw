@@ -33,7 +33,7 @@ Options:
 - **Learn the syntax**: Show examples from `examples/`, explain the VM model
 - **Explore possibilities**: Walk through key examples like `37-the-forge.prose` or `28-gas-town.prose`
 
-**Send a poll telemetry event** with their selection (see SKILL.md telemetry section).
+
 
 ---
 

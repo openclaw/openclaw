@@ -1,9 +1,9 @@
 ---
-summary: "OpenProse: .prose workflows, slash commands, state, and telemetry in Clawdbot"
+summary: "OpenProse: .prose workflows, slash commands, and state in Clawdbot"
 read_when:
   - You want to run or write .prose workflows
   - You want to enable the OpenProse plugin
-  - You need to understand telemetry or state storage
+  - You need to understand state storage
 ---
 # OpenProse
 
@@ -127,24 +127,6 @@ OpenProse programs map to Clawdbot primitives:
 | Web fetch | `web_fetch` |
 
 If your tool allowlist blocks these tools, OpenProse programs will fail. See [Skills config](/tools/skills-config).
-
-## Telemetry
-
-OpenProse telemetry is **enabled by default** and stored in `.prose/.env`:
-
-```
-OPENPROSE_TELEMETRY=enabled
-USER_ID=...
-SESSION_ID=...
-```
-
-Disable permanently:
-
-```
-/prose run ... --no-telemetry
-```
-
-Telemetry posts are best-effort; failures do not block execution.
 
 ## Security + approvals
 

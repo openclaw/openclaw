@@ -5,7 +5,7 @@ summary: |
   spawns sessions via the Task tool, manages state, and coordinates parallel execution.
   Read this file to run .prose programs.
 see-also:
-  - SKILL.md: Activation triggers, onboarding, telemetry
+  - SKILL.md: Activation triggers, onboarding
   - compiler.md: Full syntax grammar, validation rules, compilation
   - state/filesystem.md: File-system state management (default)
   - state/in-context.md: In-context state management (on request)
@@ -154,7 +154,7 @@ All execution state lives in `.prose/` (project-level) or `~/.prose/` (user-leve
 ```
 # Project-level state (in working directory)
 .prose/
-├── .env                              # Config/telemetry (simple key=value format)
+├── .env                              # Config (simple key=value format)
 ├── runs/
 │   └── {YYYYMMDD}-{HHMMSS}-{random}/
 │       ├── program.prose             # Copy of running program
