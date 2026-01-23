@@ -4,6 +4,7 @@ import { NonEmptyString } from "./primitives.js";
 
 export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   {
+    id: Type.Optional(NonEmptyString),
     pattern: Type.String(),
     lastUsedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastUsedCommand: Type.Optional(Type.String()),

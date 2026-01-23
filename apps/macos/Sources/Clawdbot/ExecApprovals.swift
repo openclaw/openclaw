@@ -84,11 +84,52 @@ enum ExecApprovalDecision: String, Codable, Sendable {
     case deny
 }
 
-struct ExecAllowlistEntry: Codable, Hashable {
+struct ExecAllowlistEntry: Codable, Hashable, Identifiable {
+    var id: UUID
     var pattern: String
     var lastUsedAt: Double?
     var lastUsedCommand: String?
     var lastResolvedPath: String?
+
+    init(
+        id: UUID = UUID(),
+        pattern: String,
+        lastUsedAt: Double? = nil,
+        lastUsedCommand: String? = nil,
+        lastResolvedPath: String? = nil)
+    {
+        self.id = id
+        self.pattern = pattern
+        self.lastUsedAt = lastUsedAt
+        self.lastUsedCommand = lastUsedCommand
+        self.lastResolvedPath = lastResolvedPath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case pattern
+        case lastUsedAt
+        case lastUsedCommand
+        case lastResolvedPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.pattern = try container.decode(String.self, forKey: .pattern)
+        self.lastUsedAt = try container.decodeIfPresent(Double.self, forKey: .lastUsedAt)
+        self.lastUsedCommand = try container.decodeIfPresent(String.self, forKey: .lastUsedCommand)
+        self.lastResolvedPath = try container.decodeIfPresent(String.self, forKey: .lastResolvedPath)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.id, forKey: .id)
+        try container.encode(self.pattern, forKey: .pattern)
+        try container.encodeIfPresent(self.lastUsedAt, forKey: .lastUsedAt)
+        try container.encodeIfPresent(self.lastUsedCommand, forKey: .lastUsedCommand)
+        try container.encodeIfPresent(self.lastResolvedPath, forKey: .lastResolvedPath)
+    }
 }
 
 struct ExecApprovalsDefaults: Codable {
@@ -295,6 +336,7 @@ enum ExecApprovalsStore {
         let allowlist = ((wildcardEntry.allowlist ?? []) + (agentEntry.allowlist ?? []))
             .map { entry in
                 ExecAllowlistEntry(
+                    id: entry.id,
                     pattern: entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines),
                     lastUsedAt: entry.lastUsedAt,
                     lastUsedCommand: entry.lastUsedCommand,
@@ -379,6 +421,7 @@ enum ExecApprovalsStore {
             let allowlist = (entry.allowlist ?? []).map { item -> ExecAllowlistEntry in
                 guard item.pattern == pattern else { return item }
                 return ExecAllowlistEntry(
+                    id: item.id,
                     pattern: item.pattern,
                     lastUsedAt: Date().timeIntervalSince1970 * 1000,
                     lastUsedCommand: command,
@@ -398,6 +441,7 @@ enum ExecApprovalsStore {
             let cleaned = allowlist
                 .map { item in
                     ExecAllowlistEntry(
+                        id: item.id,
                         pattern: item.pattern.trimmingCharacters(in: .whitespacesAndNewlines),
                         lastUsedAt: item.lastUsedAt,
                         lastUsedCommand: item.lastUsedCommand,

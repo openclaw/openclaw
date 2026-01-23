@@ -54,6 +54,7 @@ Example schema:
       "autoAllowSkills": true,
       "allowlist": [
         {
+          "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
           "pattern": "~/Projects/**/bin/rg",
           "lastUsedAt": 1737150000000,
           "lastUsedCommand": "rg -n TODO",
@@ -96,6 +97,7 @@ Examples:
 - `/opt/homebrew/bin/rg`
 
 Each allowlist entry tracks:
+- **id** stable UUID used for UI identity (optional)
 - **last used** timestamp
 - **last used command**
 - **last resolved path**

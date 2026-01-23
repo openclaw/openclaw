@@ -123,12 +123,12 @@ struct SystemRunSettingsView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(self.model.entries.enumerated()), id: \.offset) { index, _ in
+                        ForEach(self.model.entries, id: \.id) { entry in
                             ExecAllowlistRow(
                                 entry: Binding(
-                                    get: { self.model.entries[index] },
-                                    set: { self.model.updateEntry($0, at: index) }),
-                                onRemove: { self.model.removeEntry(at: index) })
+                                    get: { self.model.entry(for: entry.id) ?? entry },
+                                    set: { self.model.updateEntry($0, id: entry.id) }),
+                                onRemove: { self.model.removeEntry(id: entry.id) })
                         }
                     }
                 }
@@ -373,18 +373,22 @@ final class ExecApprovalsSettingsModel {
         ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
 
-    func updateEntry(_ entry: ExecAllowlistEntry, at index: Int) {
+    func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) {
         guard !self.isDefaultsScope else { return }
-        guard self.entries.indices.contains(index) else { return }
+        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
         self.entries[index] = entry
         ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
 
-    func removeEntry(at index: Int) {
+    func removeEntry(id: UUID) {
         guard !self.isDefaultsScope else { return }
-        guard self.entries.indices.contains(index) else { return }
+        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
         self.entries.remove(at: index)
         ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+    }
+
+    func entry(for id: UUID) -> ExecAllowlistEntry? {
+        self.entries.first(where: { $0.id == id })
     }
 
     func refreshSkillBins(force: Bool = false) async {

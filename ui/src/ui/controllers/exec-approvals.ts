@@ -9,6 +9,7 @@ export type ExecApprovalsDefaults = {
 };
 
 export type ExecApprovalsAllowlistEntry = {
+  id?: string;
   pattern: string;
   lastUsedAt?: number;
   lastUsedCommand?: string;

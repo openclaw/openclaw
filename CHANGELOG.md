@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 - TUI: include Gateway slash commands in autocomplete and `/help`.
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
 - Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)
+- Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.
 
 ## 2026.1.22
 
