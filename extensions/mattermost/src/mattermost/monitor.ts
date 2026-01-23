@@ -7,6 +7,7 @@ import type {
   RuntimeEnv,
 } from "clawdbot/plugin-sdk";
 import {
+  createReplyPrefixContext,
   createTypingCallbacks,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -31,12 +32,9 @@ import {
 } from "./client.js";
 import {
   createDedupeCache,
-  extractShortModelName,
   formatInboundFromLabel,
   rawDataToString,
-  resolveIdentityName,
   resolveThreadSessionKeys,
-  type ResponsePrefixContext,
 } from "./monitor-helpers.js";
 import { sendMessageMattermost } from "./send.js";
 
@@ -710,9 +708,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
     });
 
-    let prefixContext: ResponsePrefixContext = {
-      identityName: resolveIdentityName(cfg, route.agentId),
-    };
+    const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
 
     const typingCallbacks = createTypingCallbacks({
       start: () => sendTypingIndicator(channelId, threadRootId),
@@ -722,9 +718,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
-          .responsePrefix,
-        responsePrefixContextProvider: () => prefixContext,
+        responsePrefix: prefixContext.responsePrefix,
+        responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -766,12 +761,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         ...replyOptions,
         disableBlockStreaming:
           typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-        onModelSelected: (ctx) => {
-          prefixContext.provider = ctx.provider;
-          prefixContext.model = extractShortModelName(ctx.model);
-          prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-          prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
-        },
+        onModelSelected: prefixContext.onModelSelected,
       },
     });
     markDispatchIdle();

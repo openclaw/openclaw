@@ -1,17 +1,11 @@
-import {
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-  resolveIdentityName,
-} from "../../../agents/identity.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../../../auto-reply/reply/response-prefix-template.js";
+import { resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
+import { createReplyPrefixContext } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
+import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
@@ -24,6 +18,23 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+
+  if (prepared.isDirectMessage) {
+    const sessionCfg = cfg.session;
+    const storePath = resolveStorePath(sessionCfg?.store, {
+      agentId: route.agentId,
+    });
+    await updateLastRoute({
+      storePath,
+      sessionKey: route.mainSessionKey,
+      deliveryContext: {
+        channel: "slack",
+        to: `user:${message.user}`,
+        accountId: route.accountId,
+      },
+      ctx: prepared.ctxPayload,
+    });
+  }
 
   const { statusThreadTs } = resolveSlackThreadTargets({
     message,
@@ -69,14 +80,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
 
-  // Create mutable context for response prefix template interpolation
-  let prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, route.agentId),
-  };
+  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-    responsePrefixContextProvider: () => prefixContext,
+    responsePrefix: prefixContext.responsePrefix,
+    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload) => {
       const replyThreadTs = replyPlan.nextThreadTs();
@@ -112,11 +120,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           ? !account.config.blockStreaming
           : undefined,
       onModelSelected: (ctx) => {
-        // Mutate the object directly instead of reassigning to ensure the closure sees updates
-        prefixContext.provider = ctx.provider;
-        prefixContext.model = extractShortModelName(ctx.model);
-        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        prefixContext.onModelSelected(ctx);
       },
     },
   });

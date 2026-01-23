@@ -130,6 +130,7 @@ export {
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
 export { createTypingCallbacks } from "../channels/typing.js";
+export { createReplyPrefixContext } from "../channels/reply-prefix.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";

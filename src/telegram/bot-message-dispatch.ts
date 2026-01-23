@@ -1,13 +1,9 @@
 // @ts-nocheck
-import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../auto-reply/reply/response-prefix-template.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
+import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -122,10 +118,7 @@ export const dispatchTelegramMessage = async ({
     Boolean(draftStream) ||
     (typeof telegramCfg.blockStreaming === "boolean" ? !telegramCfg.blockStreaming : undefined);
 
-  // Create mutable context for response prefix template interpolation
-  let prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, route.agentId),
-  };
+  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -136,8 +129,8 @@ export const dispatchTelegramMessage = async ({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-      responsePrefixContextProvider: () => prefixContext,
+      responsePrefix: prefixContext.responsePrefix,
+      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       deliver: async (payload, info) => {
         if (info.kind === "final") {
           await flushDraft();
@@ -176,11 +169,7 @@ export const dispatchTelegramMessage = async ({
         : undefined,
       disableBlockStreaming,
       onModelSelected: (ctx) => {
-        // Mutate the object directly instead of reassigning to ensure the closure sees updates
-        prefixContext.provider = ctx.provider;
-        prefixContext.model = extractShortModelName(ctx.model);
-        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        prefixContext.onModelSelected(ctx);
       },
     },
   });

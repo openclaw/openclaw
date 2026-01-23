@@ -1,14 +1,6 @@
 import fs from "node:fs/promises";
 
-import {
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-  resolveIdentityName,
-} from "../../agents/identity.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../../auto-reply/reply/response-prefix-template.js";
+import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
@@ -31,6 +23,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -531,14 +524,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    // Create mutable context for response prefix template interpolation
-    let prefixContext: ResponsePrefixContext = {
-      identityName: resolveIdentityName(cfg, route.agentId),
-    };
+    const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
 
     const dispatcher = createReplyDispatcher({
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-      responsePrefixContextProvider: () => prefixContext,
+      responsePrefix: prefixContext.responsePrefix,
+      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload) => {
         await deliverReplies({
@@ -565,13 +555,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           typeof accountInfo.config.blockStreaming === "boolean"
             ? !accountInfo.config.blockStreaming
             : undefined,
-        onModelSelected: (ctx) => {
-          // Mutate the object directly instead of reassigning to ensure the closure sees updates
-          prefixContext.provider = ctx.provider;
-          prefixContext.model = extractShortModelName(ctx.model);
-          prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-          prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
-        },
+        onModelSelected: prefixContext.onModelSelected,
       },
     });
     if (!queuedFinal) {

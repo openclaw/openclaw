@@ -1,17 +1,9 @@
-import {
-  resolveAckReaction,
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-  resolveIdentityName,
-} from "../../agents/identity.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../../auto-reply/reply/response-prefix-template.js";
+import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
   removeAckReactionAfterReply,
   shouldAckReaction as shouldAckReactionGate,
 } from "../../channels/ack-reactions.js";
+import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import {
   formatInboundEnvelope,
@@ -318,10 +310,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? deliverTarget.slice("channel:".length)
     : message.channelId;
 
-  // Create mutable context for response prefix template interpolation
-  let prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, route.agentId),
-  };
+  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "discord",
@@ -329,8 +318,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-    responsePrefixContextProvider: () => prefixContext,
+    responsePrefix: prefixContext.responsePrefix,
+    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
@@ -371,11 +360,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           ? !discordConfig.blockStreaming
           : undefined,
       onModelSelected: (ctx) => {
-        // Mutate the object directly instead of reassigning to ensure the closure sees updates
-        prefixContext.provider = ctx.provider;
-        prefixContext.model = extractShortModelName(ctx.model);
-        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        prefixContext.onModelSelected(ctx);
       },
     },
   });
