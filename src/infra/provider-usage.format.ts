@@ -39,7 +39,7 @@ export function formatUsageWindowSummary(
   snapshot: ProviderUsageSnapshot,
   opts?: { now?: number; maxWindows?: number; includeResets?: boolean },
 ): string | null {
-  if (snapshot.error) return `error: ${snapshot.error}`;
+  if (snapshot.error) return null;
   if (snapshot.windows.length === 0) return null;
   const now = opts?.now ?? Date.now();
   const maxWindows =
