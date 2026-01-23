@@ -2,9 +2,25 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { resolveSessionAgentId, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { ensureAgentWorkspace } from "../../agents/workspace.js";
+import { isControlCommandMessage } from "../../auto-reply/command-detection.js";
+import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import { buildCommandContext, handleCommands } from "../../auto-reply/reply/commands.js";
+import { parseInlineDirectives } from "../../auto-reply/reply/directive-handling.js";
+import { defaultGroupActivation } from "../../auto-reply/reply/groups.js";
+import { resolveContextTokens } from "../../auto-reply/reply/model-selection.js";
+import { resolveElevatedPermissions } from "../../auto-reply/reply/reply-elevated.js";
+import {
+  normalizeElevatedLevel,
+  normalizeReasoningLevel,
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+} from "../../auto-reply/thinking.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { agentCommand } from "../../commands/agent.js";
 import { mergeSessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -212,7 +228,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(p.sessionKey);
+    const { cfg, storePath, entry, canonicalKey, store } = loadSessionEntry(p.sessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -223,6 +239,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       updatedAt: now,
     });
+    store[canonicalKey] = sessionEntry;
     const clientRunId = p.idempotencyKey;
     registerAgentRunContext(clientRunId, { sessionKey: p.sessionKey });
 
@@ -302,6 +319,141 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
+
+      if (isControlCommandMessage(parsedMessage, cfg)) {
+        try {
+          const isFastTestEnv = process.env.CLAWDBOT_TEST_FAST === "1";
+          const agentId = resolveSessionAgentId({ sessionKey: p.sessionKey, config: cfg });
+          const agentCfg = cfg.agents?.defaults;
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const workspace = await ensureAgentWorkspace({
+            dir: workspaceDir,
+            ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          });
+          const ctx: MsgContext = {
+            Body: parsedMessage,
+            CommandBody: parsedMessage,
+            BodyForCommands: parsedMessage,
+            CommandSource: "text",
+            CommandAuthorized: true,
+            Provider: INTERNAL_MESSAGE_CHANNEL,
+            Surface: "tui",
+            From: p.sessionKey,
+            To: INTERNAL_MESSAGE_CHANNEL,
+            SessionKey: p.sessionKey,
+            ChatType: "direct",
+          };
+          const command = buildCommandContext({
+            ctx,
+            cfg,
+            agentId,
+            sessionKey: p.sessionKey,
+            isGroup: false,
+            triggerBodyNormalized: normalizeCommandBody(parsedMessage),
+            commandAuthorized: true,
+          });
+          const directives = parseInlineDirectives(parsedMessage);
+          const { provider, model } = resolveSessionModelRef(cfg, sessionEntry);
+          const contextTokens = resolveContextTokens({ agentCfg, model });
+          const resolveDefaultThinkingLevel = async () => {
+            const configured = agentCfg?.thinkingDefault;
+            if (configured) return configured;
+            const catalog = await context.loadGatewayModelCatalog();
+            return resolveThinkingDefault({ cfg, provider, model, catalog });
+          };
+          const resolvedThinkLevel =
+            normalizeThinkLevel(sessionEntry?.thinkingLevel ?? agentCfg?.thinkingDefault) ??
+            (await resolveDefaultThinkingLevel());
+          const resolvedVerboseLevel =
+            normalizeVerboseLevel(sessionEntry?.verboseLevel ?? agentCfg?.verboseDefault) ?? "off";
+          const resolvedReasoningLevel =
+            normalizeReasoningLevel(sessionEntry?.reasoningLevel) ?? "off";
+          const resolvedElevatedLevel = normalizeElevatedLevel(
+            sessionEntry?.elevatedLevel ?? agentCfg?.elevatedDefault,
+          );
+          const elevated = resolveElevatedPermissions({
+            cfg,
+            agentId,
+            ctx,
+            provider: INTERNAL_MESSAGE_CHANNEL,
+          });
+          const commandResult = await handleCommands({
+            ctx,
+            cfg,
+            command,
+            agentId,
+            directives,
+            elevated,
+            sessionEntry,
+            previousSessionEntry: entry,
+            sessionStore: store,
+            sessionKey: p.sessionKey,
+            storePath,
+            sessionScope: (cfg.session?.scope ?? "per-sender") as "per-sender" | "global",
+            workspaceDir: workspace.dir,
+            defaultGroupActivation: () => defaultGroupActivation(true),
+            resolvedThinkLevel,
+            resolvedVerboseLevel,
+            resolvedReasoningLevel,
+            resolvedElevatedLevel,
+            resolveDefaultThinkingLevel,
+            provider,
+            model,
+            contextTokens,
+            isGroup: false,
+          });
+          if (!commandResult.shouldContinue) {
+            const text = commandResult.reply?.text ?? "";
+            const message = {
+              role: "assistant",
+              content: text.trim() ? [{ type: "text", text }] : [],
+              timestamp: Date.now(),
+              command: true,
+            };
+            const payload = {
+              runId: clientRunId,
+              sessionKey: p.sessionKey,
+              seq: 0,
+              state: "final" as const,
+              message,
+            };
+            context.broadcast("chat", payload);
+            context.nodeSendToSession(p.sessionKey, "chat", payload);
+            context.dedupe.set(`chat:${clientRunId}`, {
+              ts: Date.now(),
+              ok: true,
+              payload: { runId: clientRunId, status: "ok" as const },
+            });
+            context.chatAbortControllers.delete(clientRunId);
+            context.removeChatRun(clientRunId, clientRunId, p.sessionKey);
+            return;
+          }
+        } catch (err) {
+          const payload = {
+            runId: clientRunId,
+            sessionKey: p.sessionKey,
+            seq: 0,
+            state: "error" as const,
+            errorMessage: formatForLog(err),
+          };
+          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          context.broadcast("chat", payload);
+          context.nodeSendToSession(p.sessionKey, "chat", payload);
+          context.dedupe.set(`chat:${clientRunId}`, {
+            ts: Date.now(),
+            ok: false,
+            payload: {
+              runId: clientRunId,
+              status: "error" as const,
+              summary: String(err),
+            },
+            error,
+          });
+          context.chatAbortControllers.delete(clientRunId);
+          context.removeChatRun(clientRunId, clientRunId, p.sessionKey);
+          return;
+        }
+      }
 
       const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
       const envelopedMessage = formatInboundEnvelope({
