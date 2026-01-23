@@ -21,6 +21,7 @@ const apiStub: ApiStub = {
 };
 
 beforeEach(() => {
+  vi.useRealTimers();
   resetInboundDedupe();
 });
 
