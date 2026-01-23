@@ -87,7 +87,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
   });
-  it("drops empty assistant error messages", async () => {
+  it("keeps empty assistant error messages", async () => {
     const input = [
       { role: "user", content: "hello" },
       { role: "assistant", stopReason: "error", content: [] },
@@ -96,8 +96,10 @@ describe("sanitizeSessionMessagesImages", () => {
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(3);
     expect(out[0]?.role).toBe("user");
+    expect(out[1]?.role).toBe("assistant");
+    expect(out[2]?.role).toBe("assistant");
   });
   it("leaves non-assistant messages unchanged", async () => {
     const input = [

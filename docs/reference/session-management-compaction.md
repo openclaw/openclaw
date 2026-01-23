@@ -12,6 +12,7 @@ This document explains how Clawdbot manages sessions end-to-end:
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
 - **Transcript persistence** (`*.jsonl`) and its structure
+- **Transcript hygiene** (provider-specific fixups before runs)
 - **Context limits** (context window vs tracked tokens)
 - **Compaction** (manual + auto-compaction) and where to hook pre-compaction work
 - **Silent housekeeping** (e.g. memory writes that shouldn’t produce user-visible output)
@@ -20,6 +21,7 @@ If you want a higher-level overview first, start with:
 - [/concepts/session](/concepts/session)
 - [/concepts/compaction](/concepts/compaction)
 - [/concepts/session-pruning](/concepts/session-pruning)
+- [/reference/transcript-hygiene](/reference/transcript-hygiene)
 
 ---
 

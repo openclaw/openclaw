@@ -21,13 +21,6 @@ export function isEmptyAssistantMessageContent(
   });
 }
 
-function isEmptyAssistantErrorMessage(
-  message: Extract<AgentMessage, { role: "assistant" }>,
-): boolean {
-  if (message.stopReason !== "error") return false;
-  return isEmptyAssistantMessageContent(message);
-}
-
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -40,7 +33,6 @@ export async function sanitizeSessionMessagesImages(
      * - "strict9" (alphanumeric only, length 9)
      */
     toolCallIdMode?: ToolCallIdMode;
-    enforceToolCallLast?: boolean;
     preserveSignatures?: boolean;
     sanitizeThoughtSignatures?: {
       allowBase64Only?: boolean;
@@ -90,7 +82,17 @@ export async function sanitizeSessionMessagesImages(
 
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (allowNonImageSanitization && isEmptyAssistantErrorMessage(assistantMsg)) {
+      if (assistantMsg.stopReason === "error") {
+        const content = assistantMsg.content;
+        if (Array.isArray(content)) {
+          const nextContent = (await sanitizeContentBlocksImages(
+            content as unknown as ContentBlock[],
+            label,
+          )) as unknown as typeof assistantMsg.content;
+          out.push({ ...assistantMsg, content: nextContent });
+        } else {
+          out.push(assistantMsg);
+        }
         continue;
       }
       const content = assistantMsg.content;
@@ -113,25 +115,8 @@ export async function sanitizeSessionMessagesImages(
           if (rec.type !== "text" || typeof rec.text !== "string") return true;
           return rec.text.trim().length > 0;
         });
-
-        const normalizedContent = options?.enforceToolCallLast
-          ? (() => {
-              let lastToolIndex = -1;
-              for (let i = filteredContent.length - 1; i >= 0; i -= 1) {
-                const block = filteredContent[i];
-                if (!block || typeof block !== "object") continue;
-                const type = (block as { type?: unknown }).type;
-                if (type === "functionCall" || type === "toolUse" || type === "toolCall") {
-                  lastToolIndex = i;
-                  break;
-                }
-              }
-              if (lastToolIndex === -1) return filteredContent;
-              return filteredContent.slice(0, lastToolIndex + 1);
-            })()
-          : filteredContent;
         const finalContent = (await sanitizeContentBlocksImages(
-          normalizedContent as unknown as ContentBlock[],
+          filteredContent as unknown as ContentBlock[],
           label,
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length === 0) {

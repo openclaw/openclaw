@@ -9,7 +9,6 @@ export type TranscriptPolicy = {
   sanitizeToolCallIds: boolean;
   toolCallIdMode?: ToolCallIdMode;
   repairToolUseResultPairing: boolean;
-  enforceToolCallLast: boolean;
   preserveSignatures: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
@@ -19,7 +18,6 @@ export type TranscriptPolicy = {
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
-  stripFinalTags: boolean;
   allowSyntheticToolResults: boolean;
 };
 
@@ -93,7 +91,6 @@ export function resolveTranscriptPolicy(params: {
       ? "strict"
       : undefined;
   const repairToolUseResultPairing = isGoogle || isAnthropic;
-  const enforceToolCallLast = isAnthropic;
   const sanitizeThoughtSignatures = isOpenRouterGemini
     ? { allowBase64Only: true, includeCamelCase: true }
     : undefined;
@@ -104,14 +101,12 @@ export function resolveTranscriptPolicy(params: {
     sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
     toolCallIdMode,
     repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
-    enforceToolCallLast: !isOpenAi && enforceToolCallLast,
     preserveSignatures: isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     normalizeAntigravityThinkingBlocks,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,
-    stripFinalTags: !isOpenAi && (isGoogle || isAnthropic),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

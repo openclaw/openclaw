@@ -261,7 +261,6 @@ export async function sanitizeSessionHistory(params: {
     sanitizeMode: policy.sanitizeMode,
     sanitizeToolCallIds: policy.sanitizeToolCallIds,
     toolCallIdMode: policy.toolCallIdMode,
-    enforceToolCallLast: policy.enforceToolCallLast,
     preserveSignatures: policy.preserveSignatures,
     sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
   });

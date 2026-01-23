@@ -325,7 +325,6 @@ export async function compactEmbeddedPiSession(params: {
             agentId: sessionAgentId,
             sessionKey: params.sessionKey,
             allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-            stripFinalTags: transcriptPolicy.stripFinalTags,
           });
           trackSessionManagerAccess(params.sessionFile);
           const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);

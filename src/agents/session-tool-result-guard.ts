@@ -6,41 +6,6 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ToolCall = { id: string; name?: string };
 
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-
-function stripFinalTagsFromText(text: string): string {
-  if (!text) return text;
-  return text.replace(FINAL_TAG_RE, "");
-}
-
-function stripFinalTagsFromAssistant(message: Extract<AgentMessage, { role: "assistant" }>) {
-  const content = message.content;
-  if (typeof content === "string") {
-    const cleaned = stripFinalTagsFromText(content);
-    return cleaned === content
-      ? message
-      : ({ ...message, content: cleaned } as unknown as AgentMessage);
-  }
-  if (!Array.isArray(content)) return message;
-
-  let changed = false;
-  const next = content.map((block) => {
-    if (!block || typeof block !== "object") return block;
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
-      const cleaned = stripFinalTagsFromText(record.text);
-      if (cleaned !== record.text) {
-        changed = true;
-        return { ...record, text: cleaned };
-      }
-    }
-    return block;
-  });
-
-  if (!changed) return message;
-  return { ...message, content: next } as AgentMessage;
-}
-
 function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
   const content = msg.content;
   if (!Array.isArray(content)) return [];
@@ -80,11 +45,6 @@ export function installSessionToolResultGuard(
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
     ) => AgentMessage;
     /**
-     * Whether to strip <final> tags from assistant text before persistence.
-     * Defaults to true.
-     */
-    stripFinalTags?: boolean;
-    /**
      * Whether to synthesize missing tool results to satisfy strict providers.
      * Defaults to true.
      */
@@ -106,7 +66,6 @@ export function installSessionToolResultGuard(
   };
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
-  const stripFinalTags = opts?.stripFinalTags ?? true;
 
   const flushPendingToolResults = () => {
     if (pending.size === 0) return;
@@ -141,13 +100,9 @@ export function installSessionToolResultGuard(
       );
     }
 
-    const sanitized =
-      role === "assistant" && stripFinalTags
-        ? stripFinalTagsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
-        : message;
     const toolCalls =
       role === "assistant"
-        ? extractAssistantToolCalls(sanitized as Extract<AgentMessage, { role: "assistant" }>)
+        ? extractAssistantToolCalls(message as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
     if (allowSyntheticToolResults) {
@@ -161,7 +116,7 @@ export function installSessionToolResultGuard(
       }
     }
 
-    const result = originalAppend(sanitized as never);
+    const result = originalAppend(message as never);
 
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }
