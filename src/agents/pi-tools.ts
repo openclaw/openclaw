@@ -44,6 +44,7 @@ import {
   collectExplicitAllowlist,
   expandPolicyWithPluginGroups,
   resolveToolProfilePolicy,
+  stripPluginOnlyAllowlist,
 } from "./tool-policy.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 
@@ -298,12 +299,30 @@ export function createClawdbotCodingTools(options?: {
     tools,
     toolMeta: (tool) => getPluginToolMeta(tool as AnyAgentTool),
   });
-  const profilePolicyExpanded = expandPolicyWithPluginGroups(profilePolicy, pluginGroups);
-  const providerProfileExpanded = expandPolicyWithPluginGroups(providerProfilePolicy, pluginGroups);
-  const globalPolicyExpanded = expandPolicyWithPluginGroups(globalPolicy, pluginGroups);
-  const globalProviderExpanded = expandPolicyWithPluginGroups(globalProviderPolicy, pluginGroups);
-  const agentPolicyExpanded = expandPolicyWithPluginGroups(agentPolicy, pluginGroups);
-  const agentProviderExpanded = expandPolicyWithPluginGroups(agentProviderPolicy, pluginGroups);
+  const profilePolicyExpanded = expandPolicyWithPluginGroups(
+    stripPluginOnlyAllowlist(profilePolicy, pluginGroups),
+    pluginGroups,
+  );
+  const providerProfileExpanded = expandPolicyWithPluginGroups(
+    stripPluginOnlyAllowlist(providerProfilePolicy, pluginGroups),
+    pluginGroups,
+  );
+  const globalPolicyExpanded = expandPolicyWithPluginGroups(
+    stripPluginOnlyAllowlist(globalPolicy, pluginGroups),
+    pluginGroups,
+  );
+  const globalProviderExpanded = expandPolicyWithPluginGroups(
+    stripPluginOnlyAllowlist(globalProviderPolicy, pluginGroups),
+    pluginGroups,
+  );
+  const agentPolicyExpanded = expandPolicyWithPluginGroups(
+    stripPluginOnlyAllowlist(agentPolicy, pluginGroups),
+    pluginGroups,
+  );
+  const agentProviderExpanded = expandPolicyWithPluginGroups(
+    stripPluginOnlyAllowlist(agentProviderPolicy, pluginGroups),
+    pluginGroups,
+  );
   const sandboxPolicyExpanded = expandPolicyWithPluginGroups(sandbox?.tools, pluginGroups);
   const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
 
