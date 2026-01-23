@@ -197,17 +197,20 @@ export function logSessionStateChange(
   },
 ) {
   const state = getSessionState(params);
+  const isProbeSession = state.sessionId?.startsWith("probe-") ?? false;
   const prevState = state.state;
   state.state = params.state;
   state.lastActivity = Date.now();
   if (params.state === "idle") state.queueDepth = Math.max(0, state.queueDepth - 1);
-  diag.info(
-    `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-      state.sessionKey ?? "unknown"
-    } prev=${prevState} new=${params.state} reason="${params.reason ?? ""}" queueDepth=${
-      state.queueDepth
-    }`,
-  );
+  if (!isProbeSession) {
+    diag.info(
+      `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+        state.sessionKey ?? "unknown"
+      } prev=${prevState} new=${params.state} reason="${params.reason ?? ""}" queueDepth=${
+        state.queueDepth
+      }`,
+    );
+  }
   emitDiagnosticEvent({
     type: "session.state",
     sessionId: state.sessionId,
