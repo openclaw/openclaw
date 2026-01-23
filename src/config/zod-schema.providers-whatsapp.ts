@@ -5,12 +5,14 @@ import {
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
 } from "./zod-schema.core.js";
 
 export const WhatsAppAccountSchema = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
+    markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
@@ -66,6 +68,7 @@ export const WhatsAppConfigSchema = z
   .object({
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
     capabilities: z.array(z.string()).optional(),
+    markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),

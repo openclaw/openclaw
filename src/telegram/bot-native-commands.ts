@@ -15,6 +15,7 @@ import { resolveTelegramCustomCommands } from "../config/telegram-custom-command
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { danger, logVerbose } from "../globals.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
@@ -269,6 +270,11 @@ export const registerTelegramNativeCommands = ({
               id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
             },
           });
+          const tableMode = resolveMarkdownTableMode({
+            cfg,
+            channel: "telegram",
+            accountId: route.accountId,
+          });
           const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
           const systemPromptParts = [
             groupConfig?.systemPrompt?.trim() || null,
@@ -327,6 +333,7 @@ export const registerTelegramNativeCommands = ({
                   replyToMode,
                   textLimit,
                   messageThreadId: resolvedThreadId,
+                  tableMode,
                 });
               },
               onError: (err, info) => {

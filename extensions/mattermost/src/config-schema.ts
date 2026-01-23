@@ -4,6 +4,7 @@ import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
   requireOpenAllowFrom,
 } from "clawdbot/plugin-sdk";
 
@@ -11,6 +12,7 @@ const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
+    markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     botToken: z.string().optional(),

@@ -548,6 +548,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       let didSendReply = false;
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg,
+        channel: "matrix",
+        accountId: route.accountId,
+      });
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
@@ -562,6 +567,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               textLimit,
               replyToMode,
               threadId: threadTarget,
+              accountId: route.accountId,
+              tableMode,
             });
             didSendReply = true;
           },

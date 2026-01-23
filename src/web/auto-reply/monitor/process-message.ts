@@ -28,6 +28,7 @@ import {
   recordSessionMetaFromInbound,
   resolveStorePath,
 } from "../../../config/sessions.js";
+import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
@@ -235,6 +236,11 @@ export async function processMessage(params: {
       : undefined;
 
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
+  const tableMode = resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "whatsapp",
+    accountId: params.route.accountId,
+  });
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
   const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
@@ -345,6 +351,7 @@ export async function processMessage(params: {
           connectionId: params.connectionId,
           // Tool + block updates are noisy; skip their log lines.
           skipLog: info.kind !== "final",
+          tableMode,
         });
         didSendReply = true;
         if (info.kind === "tool") {

@@ -71,8 +71,18 @@ export async function sendMessageNextcloudTalk(
     throw new Error("Message must be non-empty for Nextcloud Talk sends");
   }
 
+  const tableMode = getNextcloudTalkRuntime().channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "nextcloud-talk",
+    accountId: account.accountId,
+  });
+  const message = getNextcloudTalkRuntime().channel.text.convertMarkdownTables(
+    text.trim(),
+    tableMode,
+  );
+
   const body: Record<string, unknown> = {
-    message: text.trim(),
+    message,
   };
   if (opts.replyTo) {
     body.replyTo = opts.replyTo;

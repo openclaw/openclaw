@@ -3,6 +3,7 @@ import {
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
   requireOpenAllowFrom,
 } from "clawdbot/plugin-sdk";
 import { z } from "zod";
@@ -21,6 +22,7 @@ export const NextcloudTalkAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    markdown: MarkdownConfigSchema,
     baseUrl: z.string().optional(),
     botSecret: z.string().optional(),
     botSecretFile: z.string().optional(),

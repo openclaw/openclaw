@@ -27,6 +27,7 @@ import {
   resolveStorePath,
   updateLastRoute,
 } from "../../config/sessions.js";
+import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
@@ -323,6 +324,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let prefixContext: ResponsePrefixContext = {
     identityName: resolveIdentityName(cfg, route.agentId),
   };
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "discord",
+    accountId,
+  });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
@@ -340,6 +346,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         replyToId,
         textLimit,
         maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+        tableMode,
       });
       replyReference.markSent();
     },

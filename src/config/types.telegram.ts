@@ -3,6 +3,7 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
@@ -35,6 +36,8 @@ export type TelegramAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: TelegramCapabilitiesConfig;
+  /** Markdown formatting overrides (tables). */
+  markdown?: MarkdownConfig;
   /** Override native command registration for Telegram (bool or "auto"). */
   commands?: ProviderCommandsConfig;
   /** Custom commands to register in Telegram's command menu (merged with native). */

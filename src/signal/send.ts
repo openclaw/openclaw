@@ -1,4 +1,5 @@
 import { loadConfig } from "../config/config.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { loadWebMedia } from "../web/media.js";
@@ -164,7 +165,12 @@ export async function sendMessageSignal(
     if (textMode === "plain") {
       textStyles = opts.textStyles ?? [];
     } else {
-      const formatted = markdownToSignalText(message);
+      const tableMode = resolveMarkdownTableMode({
+        cfg,
+        channel: "signal",
+        accountId: accountInfo.accountId,
+      });
+      const formatted = markdownToSignalText(message, { tableMode });
       message = formatted.text;
       textStyles = formatted.styles;
     }

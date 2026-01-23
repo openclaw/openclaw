@@ -5,6 +5,7 @@ import {
   type MarkdownIR,
 } from "../markdown/ir.js";
 import { renderMarkdownWithMarkers } from "../markdown/render.js";
+import type { MarkdownTableMode } from "../config/types.base.js";
 
 export type TelegramFormattedChunk = {
   html: string;
@@ -46,12 +47,15 @@ function renderTelegramHtml(ir: MarkdownIR): string {
   });
 }
 
-export function markdownToTelegramHtml(markdown: string): string {
+export function markdownToTelegramHtml(
+  markdown: string,
+  options: { tableMode?: MarkdownTableMode } = {},
+): string {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode: "bullets",
+    tableMode: options.tableMode,
   });
   return renderTelegramHtml(ir);
 }
@@ -59,12 +63,13 @@ export function markdownToTelegramHtml(markdown: string): string {
 export function markdownToTelegramChunks(
   markdown: string,
   limit: number,
+  options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode: "bullets",
+    tableMode: options.tableMode,
   });
   const chunks = chunkMarkdownIR(ir, limit);
   return chunks.map((chunk) => ({

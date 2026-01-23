@@ -8,6 +8,7 @@ import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { clearHistoryEntries } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { danger, logVerbose } from "../globals.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -123,6 +124,11 @@ export const dispatchTelegramMessage = async ({
   let prefixContext: ResponsePrefixContext = {
     identityName: resolveIdentityName(cfg, route.agentId),
   };
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "telegram",
+    accountId: route.accountId,
+  });
 
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
@@ -144,6 +150,7 @@ export const dispatchTelegramMessage = async ({
           replyToMode,
           textLimit,
           messageThreadId: resolvedThreadId,
+          tableMode,
           onVoiceRecording: sendRecordVoice,
         });
       },

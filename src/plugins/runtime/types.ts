@@ -32,6 +32,9 @@ type ResolveCommandAuthorizedFromAuthorizers =
 type ResolveTextChunkLimit = typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
 type ChunkMarkdownText = typeof import("../../auto-reply/chunk.js").chunkMarkdownText;
 type ChunkText = typeof import("../../auto-reply/chunk.js").chunkText;
+type ResolveMarkdownTableMode =
+  typeof import("../../config/markdown-tables.js").resolveMarkdownTableMode;
+type ConvertMarkdownTables = typeof import("../../markdown/tables.js").convertMarkdownTables;
 type HasControlCommand = typeof import("../../auto-reply/command-detection.js").hasControlCommand;
 type IsControlCommandMessage =
   typeof import("../../auto-reply/command-detection.js").isControlCommandMessage;
@@ -168,6 +171,8 @@ export type PluginRuntime = {
       chunkText: ChunkText;
       resolveTextChunkLimit: ResolveTextChunkLimit;
       hasControlCommand: HasControlCommand;
+      resolveMarkdownTableMode: ResolveMarkdownTableMode;
+      convertMarkdownTables: ConvertMarkdownTables;
     };
     reply: {
       dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;

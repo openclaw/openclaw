@@ -133,13 +133,20 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
     deliveryMode: "direct",
     textChunkLimit: 4000,
     sendText: async ({ to, text, accountId }) => {
+      const core = getNostrRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
       const bus = activeBuses.get(aid);
       if (!bus) {
         throw new Error(`Nostr bus not running for account ${aid}`);
       }
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg: core.config.loadConfig(),
+        channel: "nostr",
+        accountId: aid,
+      });
+      const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
       const normalizedTo = normalizePubkey(to);
-      await bus.sendDm(normalizedTo, text);
+      await bus.sendDm(normalizedTo, message);
       return { channel: "nostr", to: normalizedTo };
     },
   },

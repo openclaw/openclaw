@@ -707,6 +707,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "mattermost", account.accountId, {
       fallbackLimit: account.textChunkLimit ?? 4000,
     });
+    const tableMode = core.channel.text.resolveMarkdownTableMode({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+    });
 
     let prefixContext: ResponsePrefixContext = {
       identityName: resolveIdentityName(cfg, route.agentId),
@@ -720,7 +725,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = payload.text ?? "";
+          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
           if (mediaUrls.length === 0) {
             const chunks = core.channel.text.chunkMarkdownText(text, textLimit);
             for (const chunk of chunks.length > 0 ? chunks : [text]) {

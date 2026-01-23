@@ -99,6 +99,8 @@ function createMockRuntime(): PluginRuntime {
         chunkText: vi.fn() as unknown as PluginRuntime["channel"]["text"]["chunkText"],
         resolveTextChunkLimit: vi.fn(() => 4000) as unknown as PluginRuntime["channel"]["text"]["resolveTextChunkLimit"],
         hasControlCommand: mockHasControlCommand as unknown as PluginRuntime["channel"]["text"]["hasControlCommand"],
+        resolveMarkdownTableMode: vi.fn(() => "code") as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
+        convertMarkdownTables: vi.fn((text: string) => text) as unknown as PluginRuntime["channel"]["text"]["convertMarkdownTables"],
       },
       reply: {
         dispatchReplyWithBufferedBlockDispatcher: mockDispatchReplyWithBufferedBlockDispatcher as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
