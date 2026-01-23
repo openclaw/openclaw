@@ -3,12 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../../../config/config.js";
 type SendMessageDiscord = typeof import("../../../discord/send.js").sendMessageDiscord;
 type SendPollDiscord = typeof import("../../../discord/send.js").sendPollDiscord;
+type ReactMessageDiscord = typeof import("../../../discord/send.js").reactMessageDiscord;
 
 const sendMessageDiscord = vi.fn<Parameters<SendMessageDiscord>, ReturnType<SendMessageDiscord>>(
   async () => ({ ok: true }) as Awaited<ReturnType<SendMessageDiscord>>,
 );
 const sendPollDiscord = vi.fn<Parameters<SendPollDiscord>, ReturnType<SendPollDiscord>>(
   async () => ({ ok: true }) as Awaited<ReturnType<SendPollDiscord>>,
+);
+const reactMessageDiscord = vi.fn<Parameters<ReactMessageDiscord>, ReturnType<ReactMessageDiscord>>(
+  async () => ({ ok: true }) as Awaited<ReturnType<ReactMessageDiscord>>,
 );
 
 vi.mock("../../../discord/send.js", async () => {
@@ -19,6 +23,7 @@ vi.mock("../../../discord/send.js", async () => {
     ...actual,
     sendMessageDiscord: (...args: Parameters<SendMessageDiscord>) => sendMessageDiscord(...args),
     sendPollDiscord: (...args: Parameters<SendPollDiscord>) => sendPollDiscord(...args),
+    reactMessageDiscord: (...args: Parameters<ReactMessageDiscord>) => reactMessageDiscord(...args),
   };
 });
 
@@ -101,6 +106,31 @@ describe("handleDiscordMessageAction", () => {
       }),
       expect.objectContaining({
         accountId: "marve",
+      }),
+    );
+  });
+
+  it("forwards accountId for reaction actions", async () => {
+    reactMessageDiscord.mockClear();
+    const handleDiscordMessageAction = await loadHandleDiscordMessageAction();
+
+    await handleDiscordMessageAction({
+      action: "react",
+      params: {
+        channelId: "123",
+        messageId: "m1",
+        emoji: "👍",
+      },
+      cfg: {} as ClawdbotConfig,
+      accountId: "ops",
+    });
+
+    expect(reactMessageDiscord).toHaveBeenCalledWith(
+      "123",
+      "m1",
+      "👍",
+      expect.objectContaining({
+        accountId: "ops",
       }),
     );
   });

@@ -7,7 +7,7 @@ import {
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 
-type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg">;
+type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">;
 
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
@@ -16,27 +16,38 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
 }): Promise<AgentToolResult<unknown> | undefined> {
   const { ctx, resolveChannelId, readParentIdParam } = params;
   const { action, params: actionParams, cfg } = ctx;
+  const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
+  const accountIdParam = accountId ?? undefined;
 
   if (action === "member-info") {
     const userId = readStringParam(actionParams, "userId", { required: true });
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "memberInfo", guildId, userId }, cfg);
+    return await handleDiscordAction(
+      { action: "memberInfo", accountId: accountIdParam, guildId, userId },
+      cfg,
+    );
   }
 
   if (action === "role-info") {
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "roleInfo", guildId }, cfg);
+    return await handleDiscordAction(
+      { action: "roleInfo", accountId: accountIdParam, guildId },
+      cfg,
+    );
   }
 
   if (action === "emoji-list") {
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "emojiList", guildId }, cfg);
+    return await handleDiscordAction(
+      { action: "emojiList", accountId: accountIdParam, guildId },
+      cfg,
+    );
   }
 
   if (action === "emoji-upload") {
@@ -50,7 +61,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     });
     const roleIds = readStringArrayParam(actionParams, "roleIds");
     return await handleDiscordAction(
-      { action: "emojiUpload", guildId, name, mediaUrl, roleIds },
+      { action: "emojiUpload", accountId: accountIdParam, guildId, name, mediaUrl, roleIds },
       cfg,
     );
   }
@@ -73,7 +84,15 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       trim: false,
     });
     return await handleDiscordAction(
-      { action: "stickerUpload", guildId, name, description, tags, mediaUrl },
+      {
+        action: "stickerUpload",
+        accountId: accountIdParam,
+        guildId,
+        name,
+        description,
+        tags,
+        mediaUrl,
+      },
       cfg,
     );
   }
@@ -87,6 +106,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: action === "role-add" ? "roleAdd" : "roleRemove",
+        accountId: accountIdParam,
         guildId,
         userId,
         roleId,
@@ -99,14 +119,20 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const channelId = readStringParam(actionParams, "channelId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "channelInfo", channelId }, cfg);
+    return await handleDiscordAction(
+      { action: "channelInfo", accountId: accountIdParam, channelId },
+      cfg,
+    );
   }
 
   if (action === "channel-list") {
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "channelList", guildId }, cfg);
+    return await handleDiscordAction(
+      { action: "channelList", accountId: accountIdParam, guildId },
+      cfg,
+    );
   }
 
   if (action === "channel-create") {
@@ -124,6 +150,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "channelCreate",
+        accountId: accountIdParam,
         guildId,
         name,
         type: type ?? undefined,
@@ -153,6 +180,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "channelEdit",
+        accountId: accountIdParam,
         channelId,
         name: name ?? undefined,
         topic: topic ?? undefined,
@@ -169,7 +197,10 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const channelId = readStringParam(actionParams, "channelId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "channelDelete", channelId }, cfg);
+    return await handleDiscordAction(
+      { action: "channelDelete", accountId: accountIdParam, channelId },
+      cfg,
+    );
   }
 
   if (action === "channel-move") {
@@ -186,6 +217,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "channelMove",
+        accountId: accountIdParam,
         guildId,
         channelId,
         parentId: parentId === undefined ? undefined : parentId,
@@ -206,6 +238,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "categoryCreate",
+        accountId: accountIdParam,
         guildId,
         name,
         position: position ?? undefined,
@@ -225,6 +258,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "categoryEdit",
+        accountId: accountIdParam,
         categoryId,
         name: name ?? undefined,
         position: position ?? undefined,
@@ -237,7 +271,10 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const categoryId = readStringParam(actionParams, "categoryId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "categoryDelete", categoryId }, cfg);
+    return await handleDiscordAction(
+      { action: "categoryDelete", accountId: accountIdParam, categoryId },
+      cfg,
+    );
   }
 
   if (action === "voice-status") {
@@ -245,14 +282,20 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     const userId = readStringParam(actionParams, "userId", { required: true });
-    return await handleDiscordAction({ action: "voiceStatus", guildId, userId }, cfg);
+    return await handleDiscordAction(
+      { action: "voiceStatus", accountId: accountIdParam, guildId, userId },
+      cfg,
+    );
   }
 
   if (action === "event-list") {
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
     });
-    return await handleDiscordAction({ action: "eventList", guildId }, cfg);
+    return await handleDiscordAction(
+      { action: "eventList", accountId: accountIdParam, guildId },
+      cfg,
+    );
   }
 
   if (action === "event-create") {
@@ -271,6 +314,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "eventCreate",
+        accountId: accountIdParam,
         guildId,
         name,
         startTime,
@@ -301,6 +345,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: discordAction,
+        accountId: accountIdParam,
         guildId,
         userId,
         durationMinutes,
@@ -325,6 +370,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "threadList",
+        accountId: accountIdParam,
         guildId,
         channelId,
         includeArchived,
@@ -344,6 +390,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "threadReply",
+        accountId: accountIdParam,
         channelId: resolveChannelId(),
         content,
         mediaUrl: mediaUrl ?? undefined,
@@ -361,6 +408,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       {
         action: "searchMessages",
+        accountId: accountIdParam,
         guildId,
         content: query,
         channelId: readStringParam(actionParams, "channelId"),

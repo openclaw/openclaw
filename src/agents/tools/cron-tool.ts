@@ -164,7 +164,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
             const agentId = opts?.agentSessionKey
               ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
               : undefined;
-            if (agentId && !(job as { agentId?: unknown }).agentId) {
+            if (agentId && !("agentId" in (job as { agentId?: unknown }))) {
               (job as { agentId?: string }).agentId = agentId;
             }
           }

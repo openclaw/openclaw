@@ -65,6 +65,8 @@ export async function handleDiscordMessagingAction(
       (message as { timestamp?: unknown }).timestamp,
     );
   };
+  const accountId = readStringParam(params, "accountId");
+  const accountOpts = accountId ? { accountId } : {};
   switch (action) {
     case "react": {
       if (!isActionEnabled("reactions")) {
@@ -78,14 +80,14 @@ export async function handleDiscordMessagingAction(
         removeErrorMessage: "Emoji is required to remove a Discord reaction.",
       });
       if (remove) {
-        await removeReactionDiscord(channelId, messageId, emoji);
+        await removeReactionDiscord(channelId, messageId, emoji, accountOpts);
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
-        const removed = await removeOwnReactionsDiscord(channelId, messageId);
+        const removed = await removeOwnReactionsDiscord(channelId, messageId, accountOpts);
         return jsonResult({ ok: true, removed: removed.removed });
       }
-      await reactMessageDiscord(channelId, messageId, emoji);
+      await reactMessageDiscord(channelId, messageId, emoji, accountOpts);
       return jsonResult({ ok: true, added: emoji });
     }
     case "reactions": {
@@ -100,6 +102,7 @@ export async function handleDiscordMessagingAction(
       const limit =
         typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
       const reactions = await fetchReactionsDiscord(channelId, messageId, {
+        ...accountOpts,
         limit,
       });
       return jsonResult({ ok: true, reactions });
@@ -114,8 +117,10 @@ export async function handleDiscordMessagingAction(
         required: true,
         label: "stickerIds",
       });
-      const accountId = readStringParam(params, "accountId");
-      await sendStickerDiscord(to, stickerIds, { content, accountId: accountId ?? undefined });
+      await sendStickerDiscord(to, stickerIds, {
+        content,
+        accountId: accountId ?? undefined,
+      });
       return jsonResult({ ok: true });
     }
     case "poll": {
@@ -138,7 +143,6 @@ export async function handleDiscordMessagingAction(
       const durationHours =
         typeof durationRaw === "number" && Number.isFinite(durationRaw) ? durationRaw : undefined;
       const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
-      const accountId = readStringParam(params, "accountId");
       await sendPollDiscord(
         to,
         { question, options: answers, maxSelections, durationHours },
@@ -151,7 +155,7 @@ export async function handleDiscordMessagingAction(
         throw new Error("Discord permissions are disabled.");
       }
       const channelId = resolveChannelId();
-      const permissions = await fetchChannelPermissionsDiscord(channelId);
+      const permissions = await fetchChannelPermissionsDiscord(channelId, accountOpts);
       return jsonResult({ ok: true, permissions });
     }
     case "fetchMessage": {
@@ -173,7 +177,7 @@ export async function handleDiscordMessagingAction(
           "Discord message fetch requires guildId, channelId, and messageId (or a valid messageLink).",
         );
       }
-      const message = await fetchMessageDiscord(channelId, messageId);
+      const message = await fetchMessageDiscord(channelId, messageId, accountOpts);
       return jsonResult({
         ok: true,
         message: normalizeMessage(message),
@@ -187,15 +191,19 @@ export async function handleDiscordMessagingAction(
         throw new Error("Discord message reads are disabled.");
       }
       const channelId = resolveChannelId();
-      const messages = await readMessagesDiscord(channelId, {
-        limit:
-          typeof params.limit === "number" && Number.isFinite(params.limit)
-            ? params.limit
-            : undefined,
-        before: readStringParam(params, "before"),
-        after: readStringParam(params, "after"),
-        around: readStringParam(params, "around"),
-      });
+      const messages = await readMessagesDiscord(
+        channelId,
+        {
+          limit:
+            typeof params.limit === "number" && Number.isFinite(params.limit)
+              ? params.limit
+              : undefined,
+          before: readStringParam(params, "before"),
+          after: readStringParam(params, "after"),
+          around: readStringParam(params, "around"),
+        },
+        accountOpts,
+      );
       return jsonResult({
         ok: true,
         messages: messages.map((message) => normalizeMessage(message)),
@@ -213,8 +221,6 @@ export async function handleDiscordMessagingAction(
       const replyTo = readStringParam(params, "replyTo");
       const embeds =
         Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
-      const accountId = readStringParam(params, "accountId");
-
       const result = await sendMessageDiscord(to, content, {
         accountId: accountId ?? undefined,
         mediaUrl,
@@ -234,9 +240,14 @@ export async function handleDiscordMessagingAction(
       const content = readStringParam(params, "content", {
         required: true,
       });
-      const message = await editMessageDiscord(channelId, messageId, {
-        content,
-      });
+      const message = await editMessageDiscord(
+        channelId,
+        messageId,
+        {
+          content,
+        },
+        accountOpts,
+      );
       return jsonResult({ ok: true, message });
     }
     case "deleteMessage": {
@@ -247,7 +258,7 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      await deleteMessageDiscord(channelId, messageId);
+      await deleteMessageDiscord(channelId, messageId, accountOpts);
       return jsonResult({ ok: true });
     }
     case "threadCreate": {
@@ -262,11 +273,15 @@ export async function handleDiscordMessagingAction(
         typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
           ? autoArchiveMinutesRaw
           : undefined;
-      const thread = await createThreadDiscord(channelId, {
-        name,
-        messageId,
-        autoArchiveMinutes,
-      });
+      const thread = await createThreadDiscord(
+        channelId,
+        {
+          name,
+          messageId,
+          autoArchiveMinutes,
+        },
+        accountOpts,
+      );
       return jsonResult({ ok: true, thread });
     }
     case "threadList": {
@@ -284,13 +299,16 @@ export async function handleDiscordMessagingAction(
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? params.limit
           : undefined;
-      const threads = await listThreadsDiscord({
-        guildId,
-        channelId,
-        includeArchived,
-        before,
-        limit,
-      });
+      const threads = await listThreadsDiscord(
+        {
+          guildId,
+          channelId,
+          includeArchived,
+          before,
+          limit,
+        },
+        accountOpts,
+      );
       return jsonResult({ ok: true, threads });
     }
     case "threadReply": {
@@ -303,7 +321,6 @@ export async function handleDiscordMessagingAction(
       });
       const mediaUrl = readStringParam(params, "mediaUrl");
       const replyTo = readStringParam(params, "replyTo");
-      const accountId = readStringParam(params, "accountId");
       const result = await sendMessageDiscord(`channel:${channelId}`, content, {
         accountId: accountId ?? undefined,
         mediaUrl,
@@ -319,7 +336,7 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      await pinMessageDiscord(channelId, messageId);
+      await pinMessageDiscord(channelId, messageId, accountOpts);
       return jsonResult({ ok: true });
     }
     case "unpinMessage": {
@@ -330,7 +347,7 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      await unpinMessageDiscord(channelId, messageId);
+      await unpinMessageDiscord(channelId, messageId, accountOpts);
       return jsonResult({ ok: true });
     }
     case "listPins": {
@@ -338,7 +355,7 @@ export async function handleDiscordMessagingAction(
         throw new Error("Discord pins are disabled.");
       }
       const channelId = resolveChannelId();
-      const pins = await listPinsDiscord(channelId);
+      const pins = await listPinsDiscord(channelId, accountOpts);
       return jsonResult({ ok: true, pins: pins.map((pin) => normalizeMessage(pin)) });
     }
     case "searchMessages": {
@@ -361,13 +378,16 @@ export async function handleDiscordMessagingAction(
           : undefined;
       const channelIdList = [...(channelIds ?? []), ...(channelId ? [channelId] : [])];
       const authorIdList = [...(authorIds ?? []), ...(authorId ? [authorId] : [])];
-      const results = await searchMessagesDiscord({
-        guildId,
-        content,
-        channelIds: channelIdList.length ? channelIdList : undefined,
-        authorIds: authorIdList.length ? authorIdList : undefined,
-        limit,
-      });
+      const results = await searchMessagesDiscord(
+        {
+          guildId,
+          content,
+          channelIds: channelIdList.length ? channelIdList : undefined,
+          authorIds: authorIdList.length ? authorIdList : undefined,
+          limit,
+        },
+        accountOpts,
+      );
       if (!results || typeof results !== "object") {
         return jsonResult({ ok: true, results });
       }

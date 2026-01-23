@@ -22,6 +22,7 @@ export async function handleDiscordMessageAction(
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
+  const accountIdParam = accountId ?? undefined;
 
   const resolveChannelId = () =>
     resolveDiscordChannelId(
@@ -40,7 +41,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "sendMessage",
-        accountId: accountId ?? undefined,
+        accountId: accountIdParam,
         to,
         content,
         mediaUrl: mediaUrl ?? undefined,
@@ -64,7 +65,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "poll",
-        accountId: accountId ?? undefined,
+        accountId: accountIdParam,
         to,
         question,
         answers,
@@ -83,6 +84,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "react",
+        accountId: accountIdParam,
         channelId: resolveChannelId(),
         messageId,
         emoji,
@@ -96,7 +98,13 @@ export async function handleDiscordMessageAction(
     const messageId = readStringParam(params, "messageId", { required: true });
     const limit = readNumberParam(params, "limit", { integer: true });
     return await handleDiscordAction(
-      { action: "reactions", channelId: resolveChannelId(), messageId, limit },
+      {
+        action: "reactions",
+        accountId: accountIdParam,
+        channelId: resolveChannelId(),
+        messageId,
+        limit,
+      },
       cfg,
     );
   }
@@ -106,6 +114,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "readMessages",
+        accountId: accountIdParam,
         channelId: resolveChannelId(),
         limit,
         before: readStringParam(params, "before"),
@@ -122,6 +131,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "editMessage",
+        accountId: accountIdParam,
         channelId: resolveChannelId(),
         messageId,
         content,
@@ -133,7 +143,12 @@ export async function handleDiscordMessageAction(
   if (action === "delete") {
     const messageId = readStringParam(params, "messageId", { required: true });
     return await handleDiscordAction(
-      { action: "deleteMessage", channelId: resolveChannelId(), messageId },
+      {
+        action: "deleteMessage",
+        accountId: accountIdParam,
+        channelId: resolveChannelId(),
+        messageId,
+      },
       cfg,
     );
   }
@@ -144,6 +159,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
+        accountId: accountIdParam,
         channelId: resolveChannelId(),
         messageId,
       },
@@ -152,7 +168,10 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "permissions") {
-    return await handleDiscordAction({ action: "permissions", channelId: resolveChannelId() }, cfg);
+    return await handleDiscordAction(
+      { action: "permissions", accountId: accountIdParam, channelId: resolveChannelId() },
+      cfg,
+    );
   }
 
   if (action === "thread-create") {
@@ -164,6 +183,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "threadCreate",
+        accountId: accountIdParam,
         channelId: resolveChannelId(),
         name,
         messageId,
@@ -182,6 +202,7 @@ export async function handleDiscordMessageAction(
     return await handleDiscordAction(
       {
         action: "sticker",
+        accountId: accountIdParam,
         to: readStringParam(params, "to", { required: true }),
         stickerIds,
         content: readStringParam(params, "message"),
