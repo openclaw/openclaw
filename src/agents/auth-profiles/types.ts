@@ -19,7 +19,6 @@ export type TokenCredential = {
   token: string;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
-  enterpriseUrl?: string;
   email?: string;
 };
 

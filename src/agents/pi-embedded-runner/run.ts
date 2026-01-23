@@ -184,8 +184,17 @@ export async function runEmbeddedPiAgent(
           lastProfileId = resolvedProfileId;
           return;
         }
-        authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
-        lastProfileId = resolvedProfileId;
+        if (model.provider === "github-copilot") {
+          const { resolveCopilotApiToken } =
+            await import("../../providers/github-copilot-token.js");
+          const copilotToken = await resolveCopilotApiToken({
+            githubToken: apiKeyInfo.apiKey,
+          });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        } else {
+          authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+        }
+        lastProfileId = apiKeyInfo.profileId;
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {

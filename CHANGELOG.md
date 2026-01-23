@@ -48,7 +48,6 @@ Docs: https://docs.clawd.bot
 - Slack: read thread replies for message reads when threadId is provided (replies-only). (#1450) Thanks @rodrigouroz.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
 - macOS/tests: fix gateway summary lookup after guard unwrap; prevent browser opens during tests. (ECID-1483)
-- Providers: improve GitHub Copilot integration (enterprise support, base URL, and auth flow alignment).
 
 ## 2026.1.21-2
 

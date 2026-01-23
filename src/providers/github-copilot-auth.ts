@@ -1,4 +1,4 @@
-import { intro, note, outro, select, spinner, text, isCancel } from "@clack/prompts";
+import { intro, note, outro, spinner } from "@clack/prompts";
 
 import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { updateConfig } from "../commands/models/shared.js";
@@ -6,22 +6,10 @@ import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-import {
-  normalizeGithubCopilotDomain,
-  resolveGithubCopilotBaseUrl,
-  resolveGithubCopilotUserAgent,
-} from "./github-copilot-utils.js";
 
-const CLIENT_ID = "Ov23li8tweQw6odWQebz";
-const DEFAULT_DOMAIN = "github.com";
-const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000;
-
-function getUrls(domain: string) {
-  return {
-    deviceCodeUrl: `https://${domain}/login/device/code`,
-    accessTokenUrl: `https://${domain}/login/oauth/access_token`,
-  };
-}
+const CLIENT_ID = "Iv1.b507a08c87ecfe98";
+const DEVICE_CODE_URL = "https://github.com/login/device/code";
+const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -50,21 +38,17 @@ function parseJsonResponse<T>(value: unknown): T {
   return value as T;
 }
 
-async function requestDeviceCode(params: {
-  scope: string;
-  domain: string;
-}): Promise<DeviceCodeResponse> {
-  const body = JSON.stringify({
+async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeResponse> {
+  const body = new URLSearchParams({
     client_id: CLIENT_ID,
     scope: params.scope,
   });
 
-  const res = await fetch(getUrls(params.domain).deviceCodeUrl, {
+  const res = await fetch(DEVICE_CODE_URL, {
     method: "POST",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": resolveGithubCopilotUserAgent(),
+      "Content-Type": "application/x-www-form-urlencoded",
     },
     body,
   });
@@ -81,27 +65,24 @@ async function requestDeviceCode(params: {
 }
 
 async function pollForAccessToken(params: {
-  domain: string;
   deviceCode: string;
   intervalMs: number;
   expiresAt: number;
 }): Promise<string> {
-  const bodyBase = {
+  const bodyBase = new URLSearchParams({
     client_id: CLIENT_ID,
     device_code: params.deviceCode,
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-  };
-  const urls = getUrls(params.domain);
+  });
 
   while (Date.now() < params.expiresAt) {
-    const res = await fetch(urls.accessTokenUrl, {
+    const res = await fetch(ACCESS_TOKEN_URL, {
       method: "POST",
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": resolveGithubCopilotUserAgent(),
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify(bodyBase),
+      body: bodyBase,
     });
 
     if (!res.ok) {
@@ -115,14 +96,11 @@ async function pollForAccessToken(params: {
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + OAUTH_POLLING_SAFETY_MARGIN_MS));
+      await new Promise((r) => setTimeout(r, params.intervalMs));
       continue;
     }
     if (err === "slow_down") {
-      const serverInterval =
-        "interval" in json && typeof json.interval === "number" ? json.interval : undefined;
-      const nextInterval = serverInterval ? serverInterval * 1000 : params.intervalMs + 5000;
-      await new Promise((r) => setTimeout(r, nextInterval + OAUTH_POLLING_SAFETY_MARGIN_MS));
+      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
       continue;
     }
     if (err === "expired_token") {
@@ -159,42 +137,9 @@ export async function githubCopilotLoginCommand(
     );
   }
 
-  const deployment = await select({
-    message: "Select GitHub deployment type",
-    options: [
-      { label: "GitHub.com", value: DEFAULT_DOMAIN, hint: "Public" },
-      { label: "GitHub Enterprise", value: "enterprise", hint: "Data residency or self-hosted" },
-    ],
-  });
-  if (isCancel(deployment)) {
-    throw new Error("GitHub login cancelled");
-  }
-
-  let domain = DEFAULT_DOMAIN;
-  let enterpriseDomain: string | null = null;
-  if (deployment === "enterprise") {
-    const enterpriseInput = await text({
-      message: "Enter your GitHub Enterprise URL or domain",
-      placeholder: "company.ghe.com or https://company.ghe.com",
-      validate: (value) => {
-        if (!value) return "URL or domain is required";
-        return normalizeGithubCopilotDomain(value) ? undefined : "Enter a valid URL or domain";
-      },
-    });
-    if (isCancel(enterpriseInput)) {
-      throw new Error("GitHub login cancelled");
-    }
-    const normalized = normalizeGithubCopilotDomain(enterpriseInput);
-    if (!normalized) {
-      throw new Error("Invalid GitHub Enterprise URL/domain");
-    }
-    enterpriseDomain = normalized;
-    domain = normalized;
-  }
-
   const spin = spinner();
   spin.start("Requesting device code from GitHub...");
-  const device = await requestDeviceCode({ scope: "read:user", domain });
+  const device = await requestDeviceCode({ scope: "read:user" });
   spin.stop("Device code ready");
 
   note(
@@ -208,7 +153,6 @@ export async function githubCopilotLoginCommand(
   const polling = spinner();
   polling.start("Waiting for GitHub authorization...");
   const accessToken = await pollForAccessToken({
-    domain,
     deviceCode: device.device_code,
     intervalMs,
     expiresAt,
@@ -218,13 +162,11 @@ export async function githubCopilotLoginCommand(
   upsertAuthProfile({
     profileId,
     credential: {
-      type: "oauth",
+      type: "token",
       provider: "github-copilot",
-      refresh: accessToken,
-      access: accessToken,
-      // Copilot access tokens are treated as non-expiring (see resolveApiKeyForProfile).
-      expires: 0,
-      enterpriseUrl: enterpriseDomain ?? undefined,
+      token: accessToken,
+      // GitHub device flow token doesn't reliably include expiry here.
+      // Leave expires unset; we'll exchange into Copilot token plus expiry later.
     },
   });
 
@@ -232,13 +174,12 @@ export async function githubCopilotLoginCommand(
     applyAuthProfileConfig(cfg, {
       provider: "github-copilot",
       profileId,
-      mode: "oauth",
+      mode: "token",
     }),
   );
 
-  logConfigUpdated(runtime);
-  runtime.log(`Auth profile: ${profileId} (github-copilot/oauth)`);
-  runtime.log(`Base URL: ${resolveGithubCopilotBaseUrl(enterpriseDomain ?? undefined)}`);
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Auth profile: ${profileId} (github-copilot/token)`);
 
   outro("Done");
 }
