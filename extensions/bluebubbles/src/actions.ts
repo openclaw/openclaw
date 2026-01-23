@@ -356,6 +356,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const caption = readStringParam(params, "caption");
       const contentType =
         readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
+      const asVoice = readBooleanParam(params, "asVoice");
 
       // Buffer can come from params.buffer (base64) or params.path (file path)
       const base64Buffer = readStringParam(params, "buffer");
@@ -380,6 +381,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         filename,
         contentType: contentType ?? undefined,
         caption: caption ?? undefined,
+        asVoice: asVoice ?? undefined,
         opts,
       });
 
