@@ -46,7 +46,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "anthropic",
     label: "Anthropic",
     hint: "Claude Code CLI + API key",
-    choices: ["claude-cli", "token", "apiKey"],
+    choices: ["token", "claude-cli", "apiKey"],
   },
   {
     value: "minimax",
