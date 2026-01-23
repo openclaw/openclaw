@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
+import { writeFile, unlink, mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { resolveChatGuidForTarget } from "./send.js";
@@ -64,6 +68,65 @@ export type SendBlueBubblesAttachmentResult = {
   messageId: string;
 };
 
+/**
+ * Convert audio to Opus CAF format for iMessage voice messages.
+ * iMessage voice memos use Opus codec at 48kHz in CAF container.
+ */
+async function convertToVoiceFormat(
+  inputBuffer: Uint8Array,
+  inputFilename: string,
+): Promise<{ buffer: Uint8Array; filename: string; contentType: string }> {
+  const tempDir = await mkdtemp(join(tmpdir(), "bb-voice-"));
+  const inputPath = join(tempDir, inputFilename);
+  const outputPath = join(tempDir, "Audio Message.caf");
+
+  try {
+    await writeFile(inputPath, inputBuffer);
+
+    // Convert to Opus CAF (iMessage voice memo format)
+    await new Promise<void>((resolve, reject) => {
+      const ffmpeg = spawn("ffmpeg", [
+        "-y",
+        "-i", inputPath,
+        "-ar", "48000",
+        "-c:a", "libopus",
+        "-b:a", "32k",
+        "-f", "caf",
+        outputPath,
+      ]);
+
+      let stderr = "";
+      ffmpeg.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      ffmpeg.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`ffmpeg conversion failed (code ${code}): ${stderr.slice(-500)}`));
+        }
+      });
+
+      ffmpeg.on("error", (err) => {
+        reject(new Error(`ffmpeg spawn error: ${err.message}`));
+      });
+    });
+
+    const outputBuffer = await readFile(outputPath);
+    return {
+      buffer: new Uint8Array(outputBuffer),
+      filename: "Audio Message.caf",
+      contentType: "audio/x-caf",
+    };
+  } finally {
+    // Cleanup temp files
+    await unlink(inputPath).catch(() => {});
+    await unlink(outputPath).catch(() => {});
+    await unlink(tempDir).catch(() => {});
+  }
+}
+
 function resolveSendTarget(raw: string): BlueBubblesSendTarget {
   const parsed = parseBlueBubblesTarget(raw);
   if (parsed.kind === "handle") {
@@ -104,6 +167,7 @@ function extractMessageId(payload: unknown): string {
 /**
  * Send an attachment via BlueBubbles API.
  * Supports sending media files (images, videos, audio, documents) to a chat.
+ * When asVoice is true, converts audio to iMessage voice memo format (Opus CAF).
  */
 export async function sendBlueBubblesAttachment(params: {
   to: string;
@@ -113,11 +177,26 @@ export async function sendBlueBubblesAttachment(params: {
   caption?: string;
   replyToMessageGuid?: string;
   replyToPartIndex?: number;
+  asVoice?: boolean;
   opts?: BlueBubblesAttachmentOpts;
 }): Promise<SendBlueBubblesAttachmentResult> {
-  const { to, buffer, filename, contentType, caption, replyToMessageGuid, replyToPartIndex, opts = {} } =
-    params;
+  const { to, caption, replyToMessageGuid, replyToPartIndex, asVoice, opts = {} } = params;
+  let { buffer, filename, contentType } = params;
   const { baseUrl, password } = resolveAccount(opts);
+
+  // Convert to voice memo format if requested
+  const isAudioMessage = asVoice === true;
+  if (isAudioMessage) {
+    try {
+      const converted = await convertToVoiceFormat(buffer, filename);
+      buffer = converted.buffer;
+      filename = converted.filename;
+      contentType = converted.contentType;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to convert audio to voice format: ${msg}`);
+    }
+  }
 
   const target = resolveSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -169,6 +248,11 @@ export async function sendBlueBubblesAttachment(params: {
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
   addField("method", "private-api");
+
+  // Add isAudioMessage flag for voice memos
+  if (isAudioMessage) {
+    addField("isAudioMessage", "true");
+  }
 
   const trimmedReplyTo = replyToMessageGuid?.trim();
   if (trimmedReplyTo) {

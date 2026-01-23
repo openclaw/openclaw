@@ -59,6 +59,7 @@ export async function sendBlueBubblesMedia(params: {
   caption?: string;
   replyToId?: string | null;
   accountId?: string;
+  asVoice?: boolean;
 }) {
   const {
     cfg,
@@ -71,6 +72,7 @@ export async function sendBlueBubblesMedia(params: {
     caption,
     replyToId,
     accountId,
+    asVoice,
   } = params;
   const core = getBlueBubblesRuntime();
   const maxBytes = resolveChannelMediaMaxBytes({
@@ -146,6 +148,7 @@ export async function sendBlueBubblesMedia(params: {
     filename: resolvedFilename ?? "attachment",
     contentType: resolvedContentType ?? undefined,
     replyToMessageGuid,
+    asVoice,
     opts: {
       cfg,
       accountId,
