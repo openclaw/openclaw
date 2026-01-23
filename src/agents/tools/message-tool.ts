@@ -342,6 +342,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }) as ChannelMessageActionName;
 
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
+      if (accountId) {
+        params.accountId = accountId;
+      }
 
       const gateway = {
         url: readStringParam(params, "gatewayUrl", { trim: false }),
