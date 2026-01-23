@@ -102,7 +102,9 @@ struct DebugSettings: View {
                         }
                     }
 
-                Text("When enabled, Clawdbot won't install or manage \(gatewayLaunchdLabel). It will only attach to an existing Gateway.")
+                Text(
+                    "When enabled, Clawdbot won't install or manage \(gatewayLaunchdLabel). " +
+                        "It will only attach to an existing Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

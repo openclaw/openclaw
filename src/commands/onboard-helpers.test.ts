@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { openUrl, resolveBrowserOpenCommand, resolveControlUiLinks } from "./onboard-helpers.js";
 
@@ -21,9 +21,14 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("openUrl", () => {
   it("quotes URLs on win32 so '&' is not treated as cmd separator", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("CLAWDBOT_ALLOW_TEST_BROWSER_OPEN", "1");
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     const url =
       "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&response_type=code&redirect_uri=http%3A%2F%2Flocalhost";
@@ -39,15 +44,18 @@ describe("openUrl", () => {
       timeoutMs: 5_000,
       windowsVerbatimArguments: true,
     });
+
+    platformSpy.mockRestore();
   });
 });
 
 describe("resolveBrowserOpenCommand", () => {
   it("marks win32 commands as quoteUrl=true", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const resolved = await resolveBrowserOpenCommand();
     expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
     expect(resolved.quoteUrl).toBe(true);
+    platformSpy.mockRestore();
   });
 });
 

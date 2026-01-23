@@ -248,12 +248,11 @@ final class GatewayProcessManager {
             guard let linkId else {
                 return "port \(port), health probe succeeded, \(instanceText)"
             }
-            let linked = linkId.flatMap { snap.channels[$0]?.linked } ?? false
-            let authAge = linkId.flatMap { snap.channels[$0]?.authAgeMs }.flatMap(msToAge) ?? "unknown age"
+            let linked = snap.channels[linkId]?.linked ?? false
+            let authAge = snap.channels[linkId]?.authAgeMs.flatMap(msToAge) ?? "unknown age"
             let label =
-                linkId.flatMap { snap.channelLabels?[$0] } ??
-                linkId?.capitalized ??
-                "channel"
+                snap.channelLabels?[linkId] ??
+                linkId.capitalized
             let linkText = linked ? "linked" : "not linked"
             return "port \(port), \(label) \(linkText), auth \(authAge), \(instanceText)"
         }
