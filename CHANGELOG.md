@@ -31,6 +31,7 @@ Docs: https://docs.clawd.bot
 - Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.
 - Discord: clarify Message Content Intent onboarding hint. (#1487) Thanks @kyleok.
 - Agents: surface concrete API error details instead of generic AI service errors.
+- Exec: fall back to non-PTY when PTY spawn fails (EBADF). (#1484)
 - Exec approvals: allow per-segment allowlists for chained shell commands on gateway + node hosts. (#1458) Thanks @czekaj.
 - Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.
 - Doctor: honor CLAWDBOT_GATEWAY_TOKEN for auth checks and security audit token reuse. (#1448) Thanks @azade-c.

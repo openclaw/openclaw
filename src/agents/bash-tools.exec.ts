@@ -26,7 +26,7 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import {
   type ProcessSession,
   type SessionStdin,
@@ -381,41 +381,56 @@ async function runExecProcess(opts: {
     ) as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
   } else if (opts.usePty) {
-    const ptyModule = (await import("@lydell/node-pty")) as unknown as {
-      spawn?: PtySpawn;
-      default?: { spawn?: PtySpawn };
-    };
-    const spawnPty = ptyModule.spawn ?? ptyModule.default?.spawn;
-    if (!spawnPty) {
-      throw new Error("PTY support is unavailable (node-pty spawn not found).");
-    }
     const { shell, args: shellArgs } = getShellConfig();
-    pty = spawnPty(shell, [...shellArgs, opts.command], {
-      cwd: opts.workdir,
-      env: opts.env,
-      name: process.env.TERM ?? "xterm-256color",
-      cols: 120,
-      rows: 30,
-    });
-    stdin = {
-      destroyed: false,
-      write: (data, cb) => {
-        try {
-          pty?.write(data);
-          cb?.(null);
-        } catch (err) {
-          cb?.(err as Error);
-        }
-      },
-      end: () => {
-        try {
-          const eof = process.platform === "win32" ? "\x1a" : "\x04";
-          pty?.write(eof);
-        } catch {
-          // ignore EOF errors
-        }
-      },
-    };
+    try {
+      const ptyModule = (await import("@lydell/node-pty")) as unknown as {
+        spawn?: PtySpawn;
+        default?: { spawn?: PtySpawn };
+      };
+      const spawnPty = ptyModule.spawn ?? ptyModule.default?.spawn;
+      if (!spawnPty) {
+        throw new Error("PTY support is unavailable (node-pty spawn not found).");
+      }
+      pty = spawnPty(shell, [...shellArgs, opts.command], {
+        cwd: opts.workdir,
+        env: opts.env,
+        name: process.env.TERM ?? "xterm-256color",
+        cols: 120,
+        rows: 30,
+      });
+      stdin = {
+        destroyed: false,
+        write: (data, cb) => {
+          try {
+            pty?.write(data);
+            cb?.(null);
+          } catch (err) {
+            cb?.(err as Error);
+          }
+        },
+        end: () => {
+          try {
+            const eof = process.platform === "win32" ? "\x1a" : "\x04";
+            pty?.write(eof);
+          } catch {
+            // ignore EOF errors
+          }
+        },
+      };
+    } catch (err) {
+      const errText = String(err);
+      const warning = `Warning: PTY spawn failed (${errText}); retrying without PTY for \`${opts.command}\`.`;
+      logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
+      opts.warnings.push(warning);
+      child = spawn(shell, [...shellArgs, opts.command], {
+        cwd: opts.workdir,
+        env: opts.env,
+        detached: process.platform !== "win32",
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      }) as ChildProcessWithoutNullStreams;
+      stdin = child.stdin;
+    }
   } else {
     const { shell, args: shellArgs } = getShellConfig();
     child = spawn(shell, [...shellArgs, opts.command], {
@@ -1320,7 +1335,7 @@ export function createExecTool(
 
       const effectiveTimeout =
         typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
-      const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
+      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
       const run = await runExecProcess({
         command: params.command,
@@ -1360,7 +1375,7 @@ export function createExecTool(
               {
                 type: "text",
                 text:
-                  `${warningText}` +
+                  `${getWarningText()}` +
                   `Command still running (session ${run.session.id}, pid ${
                     run.session.pid ?? "n/a"
                   }). ` +
@@ -1410,7 +1425,7 @@ export function createExecTool(
               content: [
                 {
                   type: "text",
-                  text: `${warningText}${outcome.aggregated || "(no output)"}`,
+                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
                 },
               ],
               details: {
