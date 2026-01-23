@@ -25,13 +25,9 @@ Bundled plugins are disabled by default. Enable OpenProse:
 clawdbot plugins enable open-prose
 ```
 
-If you're using a local checkout instead of bundled:
+Restart the Gateway after enabling the plugin.
 
-```bash
-clawdbot plugins install ./extensions/open-prose
-```
-
-Restart the Gateway after enabling or installing the plugin.
+Dev/local checkout: `clawdbot plugins install ./extensions/open-prose`
 
 Related docs: [Plugins](/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
 
