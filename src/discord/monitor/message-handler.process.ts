@@ -12,6 +12,7 @@ import {
   removeAckReactionAfterReply,
   shouldAckReaction as shouldAckReactionGate,
 } from "../../channels/ack-reactions.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
@@ -350,7 +351,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     onError: (err, info) => {
       runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
     },
-    onReplyStart: () => sendTyping({ client, channelId: typingChannelId }),
+    onReplyStart: createTypingCallbacks({
+      start: () => sendTyping({ client, channelId: typingChannelId }),
+      onStartError: (err) => {
+        logVerbose(`discord typing cue failed for channel ${typingChannelId}: ${String(err)}`);
+      },
+    }).onReplyStart,
   });
 
   const { queuedFinal, counts } = await dispatchInboundMessage({

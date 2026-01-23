@@ -1,6 +1,7 @@
 import type { LocationMessageEventContent, MatrixClient } from "matrix-bot-sdk";
 
 import {
+  createTypingCallbacks,
   formatAllowlistMatchMeta,
   type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
@@ -552,6 +553,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: route.accountId,
       });
+      const typingCallbacks = createTypingCallbacks({
+        start: () => sendTypingMatrix(roomId, true, undefined, client),
+        stop: () => sendTypingMatrix(roomId, false, undefined, client),
+        onStartError: (err) => {
+          logVerboseMessage(`matrix typing cue failed for room ${roomId}: ${String(err)}`);
+        },
+        onStopError: (err) => {
+          logVerboseMessage(`matrix typing stop failed for room ${roomId}: ${String(err)}`);
+        },
+      });
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
@@ -574,10 +585,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onError: (err, info) => {
             runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
           },
-          onReplyStart: () =>
-            sendTypingMatrix(roomId, true, undefined, client).catch(() => {}),
-          onIdle: () =>
-            sendTypingMatrix(roomId, false, undefined, client).catch(() => {}),
+          onReplyStart: typingCallbacks.onReplyStart,
+          onIdle: typingCallbacks.onIdle,
         });
 
       const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({

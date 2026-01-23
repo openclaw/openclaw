@@ -10,6 +10,7 @@ import {
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
+import { createTypingCallbacks } from "../../../channels/typing.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
@@ -43,14 +44,30 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     hasRepliedRef,
   });
 
-  const onReplyStart = async () => {
-    didSetStatus = true;
-    await ctx.setSlackThreadStatus({
-      channelId: message.channel,
-      threadTs: statusThreadTs,
-      status: "is typing...",
-    });
-  };
+  const typingCallbacks = createTypingCallbacks({
+    start: async () => {
+      didSetStatus = true;
+      await ctx.setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "is typing...",
+      });
+    },
+    stop: async () => {
+      if (!didSetStatus) return;
+      await ctx.setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "",
+      });
+    },
+    onStartError: (err) => {
+      runtime.error?.(danger(`slack typing cue failed: ${String(err)}`));
+    },
+    onStopError: (err) => {
+      runtime.error?.(danger(`slack typing stop failed: ${String(err)}`));
+    },
+  });
 
   // Create mutable context for response prefix template interpolation
   let prefixContext: ResponsePrefixContext = {
@@ -76,15 +93,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
-      if (didSetStatus) {
-        void ctx.setSlackThreadStatus({
-          channelId: message.channel,
-          threadTs: statusThreadTs,
-          status: "",
-        });
-      }
+      typingCallbacks.onIdle?.();
     },
-    onReplyStart,
+    onReplyStart: typingCallbacks.onReplyStart,
+    onIdle: typingCallbacks.onIdle,
   });
 
   const { queuedFinal, counts } = await dispatchInboundMessage({
@@ -109,14 +121,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
   markDispatchIdle();
-
-  if (didSetStatus) {
-    await ctx.setSlackThreadStatus({
-      channelId: message.channel,
-      threadTs: statusThreadTs,
-      status: "",
-    });
-  }
 
   if (!queuedFinal) {
     if (prepared.isRoomish) {

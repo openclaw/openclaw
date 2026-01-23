@@ -1,4 +1,5 @@
 import {
+  createTypingCallbacks,
   resolveChannelMediaMaxBytes,
   type ClawdbotConfig,
   type MSTeamsReplyStyle,
@@ -39,12 +40,14 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
   const sendTypingIndicator = async () => {
-    try {
-      await params.context.sendActivities([{ type: "typing" }]);
-    } catch {
-      // Typing indicator is best-effort.
-    }
+    await params.context.sendActivities([{ type: "typing" }]);
   };
+  const typingCallbacks = createTypingCallbacks({
+    start: sendTypingIndicator,
+    onStartError: () => {
+      // Typing indicator is best-effort.
+    },
+  });
 
   return core.channel.reply.createReplyDispatcherWithTyping({
     responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(
@@ -102,6 +105,6 @@ export function createMSTeamsReplyDispatcher(params: {
         hint,
       });
     },
-    onReplyStart: sendTypingIndicator,
+    onReplyStart: typingCallbacks.onReplyStart,
   });
 }

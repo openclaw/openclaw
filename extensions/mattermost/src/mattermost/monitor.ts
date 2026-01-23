@@ -7,6 +7,7 @@ import type {
   RuntimeEnv,
 } from "clawdbot/plugin-sdk";
 import {
+  createTypingCallbacks,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -307,11 +308,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   };
 
   const sendTypingIndicator = async (channelId: string, parentId?: string) => {
-    try {
-      await sendMattermostTyping(client, { channelId, parentId });
-    } catch (err) {
-      logger.debug?.(`mattermost typing cue failed for channel ${channelId}: ${String(err)}`);
-    }
+    await sendMattermostTyping(client, { channelId, parentId });
   };
 
   const resolveChannelInfo = async (channelId: string): Promise<MattermostChannel | null> => {
@@ -717,6 +714,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       identityName: resolveIdentityName(cfg, route.agentId),
     };
 
+    const typingCallbacks = createTypingCallbacks({
+      start: () => sendTypingIndicator(channelId, threadRootId),
+      onStartError: (err) => {
+        logger.debug?.(`mattermost typing cue failed for channel ${channelId}: ${String(err)}`);
+      },
+    });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
@@ -752,7 +755,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         onError: (err, info) => {
           runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
         },
-        onReplyStart: () => sendTypingIndicator(channelId, threadRootId),
+        onReplyStart: typingCallbacks.onReplyStart,
       });
 
     await core.channel.reply.dispatchReplyFromConfig({

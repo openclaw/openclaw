@@ -156,11 +156,7 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
-    try {
-      await bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId));
-    } catch (err) {
-      logVerbose(`telegram typing cue failed for chat ${chatId}: ${String(err)}`);
-    }
+    await bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId));
   };
 
   const sendRecordVoice = async () => {

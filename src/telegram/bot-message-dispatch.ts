@@ -8,6 +8,7 @@ import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
+import { createTypingCallbacks } from "../channels/typing.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -158,7 +159,12 @@ export const dispatchTelegramMessage = async ({
       onError: (err, info) => {
         runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
       },
-      onReplyStart: sendTyping,
+      onReplyStart: createTypingCallbacks({
+        start: sendTyping,
+        onStartError: (err) => {
+          logVerbose(`telegram typing cue failed for chat ${chatId}: ${String(err)}`);
+        },
+      }).onReplyStart,
     },
     replyOptions: {
       skillFilter,

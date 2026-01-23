@@ -129,6 +129,7 @@ export {
   shouldAckReaction,
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
+export { createTypingCallbacks } from "../channels/typing.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";

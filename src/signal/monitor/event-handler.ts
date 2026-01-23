@@ -25,6 +25,7 @@ import {
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -182,18 +183,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       identityName: resolveIdentityName(deps.cfg, route.agentId),
     };
 
-    const onReplyStart = async () => {
-      try {
+    const typingCallbacks = createTypingCallbacks({
+      start: async () => {
         if (!ctxPayload.To) return;
         await sendTypingSignal(ctxPayload.To, {
           baseUrl: deps.baseUrl,
           account: deps.account,
           accountId: deps.accountId,
         });
-      } catch (err) {
+      },
+      onStartError: (err) => {
         logVerbose(`signal typing cue failed for ${ctxPayload.To}: ${String(err)}`);
-      }
-    };
+      },
+    });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       responsePrefix: resolveEffectiveMessagesConfig(deps.cfg, route.agentId).responsePrefix,
@@ -214,7 +216,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
       },
-      onReplyStart,
+      onReplyStart: typingCallbacks.onReplyStart,
     });
 
     const { queuedFinal } = await dispatchInboundMessage({
