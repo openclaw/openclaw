@@ -5,6 +5,7 @@ Docs: https://docs.clawd.bot
 ## 2026.1.22 (unreleased)
 
 ### Changes
+- Highlight: Mattermost plugin channel support with pairing + allowlist gating. (#1428) Thanks @damoahdominic.
 - Highlight: OpenProse plugin skill pack with `/prose` slash command, plugin-shipped skills, and docs. https://docs.clawd.bot/prose
 - TUI: run local shell commands with `!` after per-session consent, and warn when local exec stays disabled. (#1463) Thanks @vignesh07.
 - Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
