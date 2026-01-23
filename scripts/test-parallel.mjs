@@ -20,6 +20,7 @@ const run = (entry) =>
     const child = spawn(pnpm, entry.args, {
       stdio: "inherit",
       env: { ...process.env, VITEST_GROUP: entry.name },
+      shell: process.platform === "win32",
     });
     children.add(child);
     child.on("exit", (code, signal) => {
