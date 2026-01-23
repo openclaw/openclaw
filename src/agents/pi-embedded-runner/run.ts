@@ -149,7 +149,11 @@ export async function runEmbeddedPiAgent(
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
-      const profileCandidates = profileOrder.length > 0 ? profileOrder : [undefined];
+      const profileCandidates = lockedProfileId
+        ? [lockedProfileId]
+        : profileOrder.length > 0
+          ? profileOrder
+          : [undefined];
       let profileIndex = 0;
 
       const initialThinkLevel = params.thinkLevel ?? "off";
@@ -170,13 +174,14 @@ export async function runEmbeddedPiAgent(
 
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
+        const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
           if (apiKeyInfo.mode !== "aws-sdk") {
             throw new Error(
               `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
             );
           }
-          lastProfileId = apiKeyInfo.profileId;
+          lastProfileId = resolvedProfileId;
           return;
         }
         if (model.provider === "github-copilot") {
@@ -189,7 +194,7 @@ export async function runEmbeddedPiAgent(
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
-        lastProfileId = apiKeyInfo.profileId;
+        lastProfileId = resolvedProfileId;
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
@@ -218,7 +223,11 @@ export async function runEmbeddedPiAgent(
       try {
         while (profileIndex < profileCandidates.length) {
           const candidate = profileCandidates[profileIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
+          if (
+            candidate &&
+            candidate !== lockedProfileId &&
+            isProfileInCooldown(authStore, candidate)
+          ) {
             profileIndex += 1;
             continue;
           }
@@ -226,7 +235,9 @@ export async function runEmbeddedPiAgent(
           break;
         }
         if (profileIndex >= profileCandidates.length) {
-          throw new Error(`No available auth profile for ${provider} (all in cooldown or unavailable).`);
+          throw new Error(
+            `No available auth profile for ${provider} (all in cooldown or unavailable).`,
+          );
         }
       } catch (err) {
         if (profileCandidates[profileIndex] === lockedProfileId) throw err;
@@ -518,10 +529,12 @@ export async function runEmbeddedPiAgent(
               store: authStore,
               provider,
               profileId: lastProfileId,
+              agentDir: params.agentDir,
             });
             await markAuthProfileUsed({
               store: authStore,
               profileId: lastProfileId,
+              agentDir: params.agentDir,
             });
           }
           return {
