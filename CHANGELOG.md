@@ -31,10 +31,11 @@ Docs: https://docs.clawd.bot
 - Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.
 - Doctor: honor CLAWDBOT_GATEWAY_TOKEN for auth checks and security audit token reuse. (#1448) Thanks @azade-c.
 - Agents: make tool summaries more readable and only show optional params when set.
+- CLI: prefer `~` for home paths in output.
+- Mattermost (plugin): enforce pairing/allowlist gating, keep @username targets, and clarify plugin-only docs. (#1428) Thanks @damoahdominic.
 - Agents: centralize transcript sanitization in the runner; keep <final> tags and error turns intact.
 - Auth: skip auth profiles in cooldown during initial selection and rotation. (#1316) Thanks @odrobnik.
 - Agents/TUI: honor user-pinned auth profiles during cooldown and preserve search picker ranking. (#1432) Thanks @tobiasbischoff.
-- Mattermost (plugin): enforce pairing/allowlist gating, keep @username targets, and clarify plugin-only docs. (#1428) Thanks @damoahdominic.
 - Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
 - Providers: improve GitHub Copilot integration (enterprise support, base URL, and auth flow alignment).
