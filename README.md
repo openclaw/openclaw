@@ -1,5 +1,9 @@
 # 🦞 Clawdbot + Mobile GitHub App
 
+<p align="center">
+  <img src="readme_header.png" alt="Clawdbot Mobile GitHub App" width="400">
+</p>
+
 > **This is a customized fork of Clawdbot with a mobile GitHub app for on-the-go coding sessions.**
 
 ---
