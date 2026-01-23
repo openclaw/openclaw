@@ -12,26 +12,49 @@ function normalizeTarget(raw: string): string {
 
 export function normalizeThreadId(raw?: string | number | null): string | null {
   if (raw === undefined || raw === null) return null;
-  const trimmed = String(raw).trim();
-  return trimmed ? trimmed : null;
+  return String(raw).trim();
 }
 
-async function resolveDirectRoomId(client: MatrixClient, userId: string): Promise<string> {
+async function resolveDirectRoomId(
+  client: MatrixClient,
+  userId: string,
+): Promise<string> {
   const trimmed = userId.trim();
   if (!trimmed.startsWith("@")) {
-    throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
+    throw new Error(
+      `Matrix user IDs must be fully qualified (got "${trimmed}")`,
+    );
   }
-  // matrix-bot-sdk: use getAccountData to retrieve m.direct
+
+  // 1) Fast path: use account data (m.direct) for *this* logged-in user (the bot).
   try {
-    const directContent = await client.getAccountData(EventType.Direct) as MatrixDirectAccountData | null;
-    const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
+    const directContent = (await client.getAccountData(
+      EventType.Direct,
+    )) as MatrixDirectAccountData | null;
+    const list = Array.isArray(directContent?.[trimmed])
+      ? directContent[trimmed]
+      : [];
     if (list.length > 0) return list[0];
   } catch {
-    // Ignore errors, try fetching from server
+    // Ignore and fall back.
   }
-  throw new Error(
-    `No m.direct room found for ${trimmed}. Open a DM first so Matrix can set m.direct.`,
-  );
+
+  // 2) Fallback: look for an existing joined room that looks like a 1:1 with the user.
+  // Many clients only maintain m.direct for *their own* account data, so relying on it is brittle.
+  try {
+    const rooms = await client.getJoinedRooms();
+    for (const roomId of rooms) {
+      const members = await client.getJoinedRoomMembers(roomId);
+      // Heuristic: a classic DM has exactly two joined members and includes the target.
+      if (members.length === 2 && members.includes(trimmed)) {
+        return roomId;
+      }
+    }
+  } catch {
+    // Ignore and fall back.
+  }
+
+  throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
 }
 
 export async function resolveMatrixRoomId(
