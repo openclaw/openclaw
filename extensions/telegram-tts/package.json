@@ -1,0 +1,7 @@
+{
+  "name": "@clawdbot/telegram-tts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automatic text-to-speech for chat responses using ElevenLabs",
+  "main": "index.ts"
+}
