@@ -3,6 +3,54 @@
     <channel>
         <title>Clawdbot</title>
         <item>
+            <title>2026.1.22</title>
+            <pubDate>Fri, 23 Jan 2026 08:58:14 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>7530</sparkle:version>
+            <sparkle:shortVersionString>2026.1.22</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.22</h2>
+<h3>Changes</h3>
+<ul>
+<li>Highlight: Compaction safeguard now uses adaptive chunking, progressive fallback, and UI status + retries. (#1466) Thanks @dlauer.</li>
+<li>Providers: add Antigravity usage tracking to status output. (#1490) Thanks @patelhiren.</li>
+<li>Slack: add chat-type reply threading overrides via <code>replyToModeByChatType</code>. (#1442) Thanks @stefangalescu.</li>
+<li>BlueBubbles: add <code>asVoice</code> support for MP3/CAF voice memos in sendAttachment. (#1477, #1482) Thanks @Nicell.</li>
+<li>Onboarding: add hatch choice (TUI/Web/Later), token explainer, background dashboard seed on macOS, and showcase link.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>BlueBubbles: stop typing indicator on idle/no-reply. (#1439) Thanks @Nicell.</li>
+<li>Message tool: keep path/filePath as-is for send; hydrate buffers only for sendAttachment. (#1444) Thanks @hopyky.</li>
+<li>Auto-reply: only report a model switch when session state is available. (#1465) Thanks @robbyczgw-cla.</li>
+<li>Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.</li>
+<li>Agents: sanitize assistant history text to strip tool-call markers. (#1456) Thanks @zerone0x.</li>
+<li>Discord: clarify Message Content Intent onboarding hint. (#1487) Thanks @kyleok.</li>
+<li>Gateway: stop the service before uninstalling and fail if it remains loaded.</li>
+<li>Agents: surface concrete API error details instead of generic AI service errors.</li>
+<li>Exec: fall back to non-PTY when PTY spawn fails (EBADF). (#1484)</li>
+<li>Exec approvals: allow per-segment allowlists for chained shell commands on gateway + node hosts. (#1458) Thanks @czekaj.</li>
+<li>Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.</li>
+<li>Doctor: honor CLAWDBOT_GATEWAY_TOKEN for auth checks and security audit token reuse. (#1448) Thanks @azade-c.</li>
+<li>Agents: make tool summaries more readable and only show optional params when set.</li>
+<li>Agents: honor SOUL.md guidance even when the file is nested or path-qualified. (#1434) Thanks @neooriginal.</li>
+<li>Matrix (plugin): persist m.direct for resolved DMs and harden room fallback. (#1436, #1486) Thanks @sibbl.</li>
+<li>CLI: prefer <code>~</code> for home paths in output.</li>
+<li>Mattermost (plugin): enforce pairing/allowlist gating, keep @username targets, and clarify plugin-only docs. (#1428) Thanks @damoahdominic.</li>
+<li>Agents: centralize transcript sanitization in the runner; keep <final> tags and error turns intact.</li>
+<li>Auth: skip auth profiles in cooldown during initial selection and rotation. (#1316) Thanks @odrobnik.</li>
+<li>Agents/TUI: honor user-pinned auth profiles during cooldown and preserve search picker ranking. (#1432) Thanks @tobiasbischoff.</li>
+<li>Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.</li>
+<li>Slack: reduce WebClient retries to avoid duplicate sends. (#1481)</li>
+<li>Slack: read thread replies for message reads when threadId is provided (replies-only). (#1450) Thanks @rodrigouroz.</li>
+<li>macOS: prefer linked channels in gateway summary to avoid false “not linked” status.</li>
+<li>macOS/tests: fix gateway summary lookup after guard unwrap; prevent browser opens during tests. (ECID-1483)</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.22/Clawdbot-2026.1.22.zip" length="22302446" type="application/octet-stream" sparkle:edSignature="w/EzfwGBCRRuCg5vz8enIfYujxOZJWRw9PaunQ7gIafKwnBJSTtxcnkvMVwQsnBwB6VN5Tu2MPij7PjDFFX+CA=="/>
+        </item>
+        <item>
             <title>2026.1.21</title>
             <pubDate>Thu, 22 Jan 2026 12:22:35 +0000</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
@@ -265,22 +313,6 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 <p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.21/Clawdbot-2026.1.21.zip" length="12208102" type="application/octet-stream" sparkle:edSignature="hU495Eii8O3qmmUnxYFhXyEGv+qan6KL+GpeuBhPIXf+7B5F/gBh5Oz9cHaqaAPoZ4/3Bo6xgvic0HTkbz6gDw=="/>
-        </item>
-        <item>
-            <title>2026.1.16-2</title>
-            <pubDate>Sat, 17 Jan 2026 12:46:22 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
-            <sparkle:version>6273</sparkle:version>
-            <sparkle:shortVersionString>2026.1.16-2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.16-2</h2>
-<h3>Changes</h3>
-<ul>
-<li>CLI: stamp build commit into dist metadata so banners show the commit in npm installs.</li>
-</ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.16-2/Clawdbot-2026.1.16-2.zip" length="21399591" type="application/octet-stream" sparkle:edSignature="zelT+KzN32cXsihbFniPF5Heq0hkwFfL3Agrh/AaoKUkr7kJAFarkGSOZRTWZ9y+DvOluzn2wHHjVigRjMzrBA=="/>
         </item>
     </channel>
 </rss>
