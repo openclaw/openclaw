@@ -299,99 +299,83 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         ].join("\n"),
         "Start TUI (best option!)",
       );
-      await prompter.note(
-        [
-          "Gateway token: shared auth for the Gateway + Control UI.",
-          "Stored in: ~/.clawdbot/clawdbot.json (gateway.auth.token) or CLAWDBOT_GATEWAY_TOKEN.",
-          "Web UI stores a copy in this browser's localStorage (clawdbot.control.settings.v1).",
-          `Get the tokenized link anytime: ${formatCliCommand("clawdbot dashboard --no-open")}`,
-        ].join("\n"),
-        "Token",
-      );
+    }
 
-      hatchChoice = (await prompter.select({
-        message: "How do you want to hatch your bot?",
-        options: [
-          { value: "tui", label: "Hatch in TUI (recommended)" },
-          { value: "web", label: "Open the Web UI" },
-          { value: "later", label: "Do this later" },
-        ],
-        initialValue: "tui",
-      })) as "tui" | "web" | "later";
+    await prompter.note(
+      [
+        "Gateway token: shared auth for the Gateway + Control UI.",
+        "Stored in: ~/.clawdbot/clawdbot.json (gateway.auth.token) or CLAWDBOT_GATEWAY_TOKEN.",
+        "Web UI stores a copy in this browser's localStorage (clawdbot.control.settings.v1).",
+        `Get the tokenized link anytime: ${formatCliCommand("clawdbot dashboard --no-open")}`,
+      ].join("\n"),
+      "Token",
+    );
 
-      if (hatchChoice === "tui") {
-        await runTui({
-          url: links.wsUrl,
-          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-          password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
-          // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
-          deliver: false,
-          message: "Wake up, my friend!",
-        });
-        if (settings.authMode === "token" && settings.gatewayToken) {
-          seededInBackground = await openUrlInBackground(authedUrl);
-        }
-        if (seededInBackground) {
-          await prompter.note(
-            `Web UI seeded in the background. Open later with: ${formatCliCommand(
-              "clawdbot dashboard --no-open",
-            )}`,
-            "Web UI",
-          );
-        }
-      } else if (hatchChoice === "web") {
-        const browserSupport = await detectBrowserOpenSupport();
-        if (browserSupport.ok) {
-          controlUiOpened = await openUrl(authedUrl);
-          if (!controlUiOpened) {
-            controlUiOpenHint = formatControlUiSshHint({
-              port: settings.port,
-              basePath: controlUiBasePath,
-              token: settings.gatewayToken,
-            });
-          }
-        } else {
+    hatchChoice = (await prompter.select({
+      message: "How do you want to hatch your bot?",
+      options: [
+        { value: "tui", label: "Hatch in TUI (recommended)" },
+        { value: "web", label: "Open the Web UI" },
+        { value: "later", label: "Do this later" },
+      ],
+      initialValue: "tui",
+    })) as "tui" | "web" | "later";
+
+    if (hatchChoice === "tui") {
+      await runTui({
+        url: links.wsUrl,
+        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+        password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
+        // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
+        deliver: false,
+        message: hasBootstrap ? "Wake up, my friend!" : undefined,
+      });
+      if (settings.authMode === "token" && settings.gatewayToken) {
+        seededInBackground = await openUrlInBackground(authedUrl);
+      }
+      if (seededInBackground) {
+        await prompter.note(
+          `Web UI seeded in the background. Open later with: ${formatCliCommand(
+            "clawdbot dashboard --no-open",
+          )}`,
+          "Web UI",
+        );
+      }
+    } else if (hatchChoice === "web") {
+      const browserSupport = await detectBrowserOpenSupport();
+      if (browserSupport.ok) {
+        controlUiOpened = await openUrl(authedUrl);
+        if (!controlUiOpened) {
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
             basePath: controlUiBasePath,
             token: settings.gatewayToken,
           });
         }
-        await prompter.note(
-          [
-            `Dashboard link (with token): ${authedUrl}`,
-            controlUiOpened
-              ? "Opened in your browser. Keep that tab to control Clawdbot."
-              : "Copy/paste this URL in a browser on this machine to control Clawdbot.",
-            controlUiOpenHint,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          "Dashboard ready",
-        );
       } else {
-        await prompter.note(
-          `When you're ready: ${formatCliCommand("clawdbot dashboard --no-open")}`,
-          "Later",
-        );
+        controlUiOpenHint = formatControlUiSshHint({
+          port: settings.port,
+          basePath: controlUiBasePath,
+          token: settings.gatewayToken,
+        });
       }
+      await prompter.note(
+        [
+          `Dashboard link (with token): ${authedUrl}`,
+          controlUiOpened
+            ? "Opened in your browser. Keep that tab to control Clawdbot."
+            : "Copy/paste this URL in a browser on this machine to control Clawdbot.",
+          controlUiOpenHint,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Dashboard ready",
+      );
     } else {
-      const browserSupport = await detectBrowserOpenSupport();
-      if (!browserSupport.ok) {
-        await prompter.note(
-          formatControlUiSshHint({
-            port: settings.port,
-            basePath: controlUiBasePath,
-            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-          }),
-          "Open Control UI",
-        );
-      } else {
-        await prompter.note(
-          "Opening Control UI automatically after onboarding (no extra prompts).",
-          "Open Control UI",
-        );
-      }
+      await prompter.note(
+        `When you're ready: ${formatCliCommand("clawdbot dashboard --no-open")}`,
+        "Later",
+      );
     }
   } else if (opts.skipUi) {
     await prompter.note("Skipping Control UI/TUI prompts.", "Control UI");

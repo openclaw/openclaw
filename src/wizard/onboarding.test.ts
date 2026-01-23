@@ -227,6 +227,61 @@ describe("runOnboardingWizard", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
+  it("offers TUI hatch even without BOOTSTRAP.md", async () => {
+    runTui.mockClear();
+
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-"));
+
+    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
+      if (opts.message === "How do you want to hatch your bot?") return "tui";
+      return "quickstart";
+    });
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select,
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        workspace: workspaceDir,
+        authChoice: "skip",
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliver: false,
+        message: undefined,
+      }),
+    );
+
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
   it("shows the web search hint at the end of onboarding", async () => {
     const prevBraveKey = process.env.BRAVE_API_KEY;
     delete process.env.BRAVE_API_KEY;

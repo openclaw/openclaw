@@ -111,7 +111,7 @@
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdbotKit/Sources",
     "format:all": "pnpm format && pnpm format:swift",
     "format:fix": "oxfmt --write src test",
-    "test": "vitest run",
+    "test": "node scripts/test-parallel.mjs",
     "test:watch": "vitest",
     "test:ui": "pnpm --dir ui test",
     "test:force": "node --import tsx scripts/test-force.ts",

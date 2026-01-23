@@ -6,7 +6,12 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { resolveUserPath } from "../utils.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
-import { convertHeicToJpeg, resizeToJpeg } from "../media/image-ops.js";
+import {
+  convertHeicToJpeg,
+  hasAlphaChannel,
+  resizeToJpeg,
+  resizeToPng,
+} from "../media/image-ops.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
 
 export type WebMediaResult = {
@@ -61,27 +66,59 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    const optimized = await optimizeImageToJpeg(buffer, cap, meta);
-    const fileName = meta && isHeicSource(meta) ? toJpegFileName(meta.fileName) : meta?.fileName;
-    if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
-      logVerbose(
-        `Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
-      );
-    }
-    if (optimized.buffer.length > cap) {
-      throw new Error(
-        `Media could not be reduced below ${(cap / (1024 * 1024)).toFixed(0)}MB (got ${(
-          optimized.buffer.length /
-          (1024 * 1024)
-        ).toFixed(2)}MB)`,
-      );
-    }
-    return {
-      buffer: optimized.buffer,
-      contentType: "image/jpeg",
-      kind: "image" as const,
-      fileName,
+
+    const optimizeToJpeg = async () => {
+      const optimized = await optimizeImageToJpeg(buffer, cap, meta);
+      const fileName = meta && isHeicSource(meta) ? toJpegFileName(meta.fileName) : meta?.fileName;
+      if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
+        logVerbose(
+          `Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
+        );
+      }
+      if (optimized.buffer.length > cap) {
+        throw new Error(
+          `Media could not be reduced below ${(cap / (1024 * 1024)).toFixed(0)}MB (got ${(
+            optimized.buffer.length /
+            (1024 * 1024)
+          ).toFixed(2)}MB)`,
+        );
+      }
+      return {
+        buffer: optimized.buffer,
+        contentType: "image/jpeg",
+        kind: "image" as const,
+        fileName,
+      };
     };
+
+    // Check if this is a PNG with alpha channel - preserve transparency when possible
+    const isPng =
+      meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
+    const hasAlpha = isPng && (await hasAlphaChannel(buffer));
+
+    if (hasAlpha) {
+      const optimized = await optimizeImageToPng(buffer, cap);
+      if (optimized.buffer.length <= cap) {
+        if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
+          logVerbose(
+            `Optimized PNG (preserving alpha) from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px)`,
+          );
+        }
+        return {
+          buffer: optimized.buffer,
+          contentType: "image/png",
+          kind: "image" as const,
+          fileName: meta?.fileName,
+        };
+      }
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `PNG with alpha still exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB after optimization; falling back to JPEG`,
+        );
+      }
+    }
+
+    return await optimizeToJpeg();
   };
 
   const clampAndFinalize = async (params: {
@@ -245,4 +282,63 @@ export async function optimizeImageToJpeg(
   }
 
   throw new Error("Failed to optimize image");
+}
+
+export async function optimizeImageToPng(
+  buffer: Buffer,
+  maxBytes: number,
+): Promise<{
+  buffer: Buffer;
+  optimizedSize: number;
+  resizeSide: number;
+  compressionLevel: number;
+}> {
+  // Try a grid of sizes/compression levels until under the limit.
+  // PNG uses compression levels 0-9 (higher = smaller but slower)
+  const sides = [2048, 1536, 1280, 1024, 800];
+  const compressionLevels = [6, 7, 8, 9];
+  let smallest: {
+    buffer: Buffer;
+    size: number;
+    resizeSide: number;
+    compressionLevel: number;
+  } | null = null;
+
+  for (const side of sides) {
+    for (const compressionLevel of compressionLevels) {
+      try {
+        const out = await resizeToPng({
+          buffer,
+          maxSide: side,
+          compressionLevel,
+          withoutEnlargement: true,
+        });
+        const size = out.length;
+        if (!smallest || size < smallest.size) {
+          smallest = { buffer: out, size, resizeSide: side, compressionLevel };
+        }
+        if (size <= maxBytes) {
+          return {
+            buffer: out,
+            optimizedSize: size,
+            resizeSide: side,
+            compressionLevel,
+          };
+        }
+      } catch {
+        // Continue trying other size/compression combinations
+      }
+    }
+  }
+
+  if (smallest) {
+    return {
+      buffer: smallest.buffer,
+      optimizedSize: smallest.size,
+      resizeSide: smallest.resizeSide,
+      compressionLevel: smallest.compressionLevel,
+    };
+  }
+
+  throw new Error("Failed to optimize PNG image");
 }

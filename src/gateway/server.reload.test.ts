@@ -191,7 +191,7 @@ describe("gateway hot reload", () => {
     }
   });
 
-  it("applies hot reload actions for providers + services", async () => {
+  it("applies hot reload actions and emits restart signal", async () => {
     const port = await getFreePort();
     const server = await startGatewayServer(port);
 
@@ -269,13 +269,6 @@ describe("gateway hot reload", () => {
     expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
     expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
     expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
-
-    await server.close();
-  });
-
-  it("emits SIGUSR1 on restart plan when listener exists", async () => {
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
 
     const onRestart = hoisted.getOnRestart();
     expect(onRestart).toBeTypeOf("function");
