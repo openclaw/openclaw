@@ -30,6 +30,7 @@ Docs: https://docs.clawd.bot
 - Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.
 - Agents: sanitize assistant history text to strip tool-call markers. (#1456) Thanks @zerone0x.
 - Discord: clarify Message Content Intent onboarding hint. (#1487) Thanks @kyleok.
+- Gateway: stop the service before uninstalling and fail if it remains loaded.
 - Agents: surface concrete API error details instead of generic AI service errors.
 - Exec: fall back to non-PTY when PTY spawn fails (EBADF). (#1484)
 - Exec approvals: allow per-segment allowlists for chained shell commands on gateway + node hosts. (#1458) Thanks @czekaj.
