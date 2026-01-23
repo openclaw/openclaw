@@ -247,3 +247,96 @@ export function filterBootstrapFilesForSession(
   if (!sessionKey || !isSubagentSessionKey(sessionKey)) return files;
   return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
 }
+
+export type RepoContext = {
+  owner: string;
+  name: string;
+  branch: string;
+};
+
+/**
+ * Ensures a GitHub repository is cloned and checked out to the specified branch.
+ * Uses `gh` CLI for authentication-aware cloning.
+ * Returns the working directory path.
+ */
+export async function ensureRepoWorkspace(params: {
+  repoContext: RepoContext;
+  baseDir?: string;
+}): Promise<{ dir: string; cloned: boolean; checkedOut: boolean }> {
+  const { repoContext, baseDir } = params;
+  const { owner, name, branch } = repoContext;
+
+  const workspacesBase = baseDir || path.join(resolveDefaultAgentWorkspaceDir(), ".workspaces");
+  await fs.mkdir(workspacesBase, { recursive: true });
+
+  const repoDir = path.join(workspacesBase, owner, name);
+  let cloned = false;
+  let checkedOut = false;
+
+  // Check if repo already exists
+  const repoExists = await hasGitRepo(repoDir);
+
+  if (!repoExists) {
+    // Clone the repo using gh CLI
+    await fs.mkdir(path.dirname(repoDir), { recursive: true });
+    const cloneUrl = `https://github.com/${owner}/${name}.git`;
+
+    try {
+      // Try gh clone first (has auth)
+      const ghResult = await runCommandWithTimeout(["gh", "repo", "clone", `${owner}/${name}`, repoDir], {
+        timeoutMs: 120_000,
+      });
+      if (ghResult.code !== 0) {
+        // Fallback to git clone (for public repos)
+        const gitResult = await runCommandWithTimeout(["git", "clone", cloneUrl, repoDir], {
+          timeoutMs: 120_000,
+        });
+        if (gitResult.code !== 0) {
+          throw new Error(`Failed to clone ${owner}/${name}: ${gitResult.stderr || "unknown error"}`);
+        }
+      }
+      cloned = true;
+    } catch (err) {
+      throw new Error(`Failed to clone repository ${owner}/${name}: ${String(err)}`);
+    }
+  }
+
+  // Fetch latest changes
+  try {
+    await runCommandWithTimeout(["git", "fetch", "--all"], {
+      cwd: repoDir,
+      timeoutMs: 60_000,
+    });
+  } catch {
+    // Fetch failures are non-fatal; we can work with local state
+  }
+
+  // Check current branch
+  const currentBranchResult = await runCommandWithTimeout(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
+    cwd: repoDir,
+    timeoutMs: 5_000,
+  });
+  const currentBranch = (currentBranchResult.stdout || "").trim();
+
+  if (currentBranch !== branch) {
+    // Try to checkout the branch
+    const checkoutResult = await runCommandWithTimeout(["git", "checkout", branch], {
+      cwd: repoDir,
+      timeoutMs: 30_000,
+    });
+
+    if (checkoutResult.code !== 0) {
+      // Branch might not exist locally, try to create from remote
+      const checkoutRemoteResult = await runCommandWithTimeout(
+        ["git", "checkout", "-b", branch, `origin/${branch}`],
+        { cwd: repoDir, timeoutMs: 30_000 },
+      );
+      if (checkoutRemoteResult.code !== 0) {
+        throw new Error(`Failed to checkout branch ${branch}: branch not found locally or on remote`);
+      }
+    }
+    checkedOut = true;
+  }
+
+  return { dir: repoDir, cloned, checkedOut };
+}

@@ -22,7 +22,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
-import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { ensureAgentWorkspace, ensureRepoWorkspace } from "../agents/workspace.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -94,11 +94,22 @@ export async function agentCommand(
   const sessionAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const workspace = await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
-  });
-  const workspaceDir = workspace.dir;
+
+  // If repoContext is provided, clone and checkout the repo workspace instead
+  let workspaceDir: string;
+  if (opts.repoContext) {
+    const repoWorkspace = await ensureRepoWorkspace({
+      repoContext: opts.repoContext,
+    });
+    workspaceDir = repoWorkspace.dir;
+  } else {
+    const workspace = await ensureAgentWorkspace({
+      dir: workspaceDirRaw,
+      ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+    });
+    workspaceDir = workspace.dir;
+  }
+
   const configuredModel = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
