@@ -51,6 +51,7 @@ export function markdownToTelegramHtml(markdown: string): string {
     linkify: true,
     headingStyle: "none",
     blockquotePrefix: "",
+    tableMode: "bullets",
   });
   return renderTelegramHtml(ir);
 }
@@ -63,6 +64,7 @@ export function markdownToTelegramChunks(
     linkify: true,
     headingStyle: "none",
     blockquotePrefix: "",
+    tableMode: "bullets",
   });
   const chunks = chunkMarkdownIR(ir, limit);
   return chunks.map((chunk) => ({

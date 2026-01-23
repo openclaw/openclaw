@@ -12,6 +12,21 @@ type LinkState = {
   labelStart: number;
 };
 
+type TableCell = {
+  content: string;
+  isHeader: boolean;
+};
+
+type TableRow = TableCell[];
+
+type TableState = {
+  headers: string[];
+  rows: TableRow[];
+  currentRow: TableCell[];
+  currentCell: string;
+  inHeader: boolean;
+};
+
 type RenderEnv = {
   listStack: ListState[];
   linkStack: LinkState[];
@@ -50,6 +65,8 @@ type OpenStyle = {
   start: number;
 };
 
+export type TableRenderMode = "flat" | "bullets";
+
 type RenderState = {
   text: string;
   styles: MarkdownStyleSpan[];
@@ -59,6 +76,8 @@ type RenderState = {
   headingStyle: "none" | "bold";
   blockquotePrefix: string;
   enableSpoilers: boolean;
+  tableMode: TableRenderMode;
+  table: TableState | null;
 };
 
 export type MarkdownParseOptions = {
@@ -67,6 +86,8 @@ export type MarkdownParseOptions = {
   headingStyle?: "none" | "bold";
   blockquotePrefix?: string;
   autolink?: boolean;
+  /** How to render tables: "flat" (tabs/newlines) or "bullets" (nested bullet list). Default: "flat" */
+  tableMode?: TableRenderMode;
 };
 
 function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
@@ -77,6 +98,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     typographer: false,
   });
   md.enable("strikethrough");
+  md.enable("table");
   if (options.autolink === false) {
     md.disable("autolink");
   }
@@ -146,6 +168,11 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
 
 function appendText(state: RenderState, value: string) {
   if (!value) return;
+  // If we're inside a table cell in bullets mode, collect into cell buffer
+  if (state.table && state.tableMode === "bullets") {
+    state.table.currentCell += value;
+    return;
+  }
   state.text += value;
 }
 
@@ -169,7 +196,8 @@ function closeStyle(state: RenderState, style: MarkdownStyle) {
 
 function appendParagraphSeparator(state: RenderState) {
   if (state.env.listStack.length > 0) return;
-  appendText(state, "\n\n");
+  if (state.table) return; // Don't add paragraph separators inside tables
+  state.text += "\n\n";
 }
 
 function appendListPrefix(state: RenderState) {
@@ -179,13 +207,18 @@ function appendListPrefix(state: RenderState) {
   top.index += 1;
   const indent = "  ".repeat(Math.max(0, stack.length - 1));
   const prefix = top.type === "ordered" ? `${top.index}. ` : "• ";
-  appendText(state, `${indent}${prefix}`);
+  state.text += `${indent}${prefix}`;
 }
 
 function renderInlineCode(state: RenderState, content: string) {
   if (!content) return;
+  // In bullets mode inside table, just add text without styling
+  if (state.table && state.tableMode === "bullets") {
+    state.table.currentCell += content;
+    return;
+  }
   const start = state.text.length;
-  appendText(state, content);
+  state.text += content;
   state.styles.push({ start, end: start + content.length, style: "code" });
 }
 
@@ -193,10 +226,10 @@ function renderCodeBlock(state: RenderState, content: string) {
   let code = content ?? "";
   if (!code.endsWith("\n")) code = `${code}\n`;
   const start = state.text.length;
-  appendText(state, code);
+  state.text += code;
   state.styles.push({ start, end: start + code.length, style: "code_block" });
   if (state.env.listStack.length === 0) {
-    appendText(state, "\n");
+    state.text += "\n";
   }
 }
 
@@ -212,6 +245,89 @@ function handleLinkClose(state: RenderState) {
     return;
   }
   state.links.push({ start, end, href });
+}
+
+function initTableState(): TableState {
+  return {
+    headers: [],
+    rows: [],
+    currentRow: [],
+    currentCell: "",
+    inHeader: false,
+  };
+}
+
+function renderTableAsBullets(state: RenderState) {
+  if (!state.table) return;
+  const { headers, rows } = state.table;
+
+  // If no headers or rows, skip
+  if (headers.length === 0 && rows.length === 0) return;
+
+  // Determine if first column should be used as row labels
+  // (common pattern: first column is category/feature name)
+  const useFirstColAsLabel = headers.length > 1 && rows.length > 0;
+
+  if (useFirstColAsLabel) {
+    // Format: each row becomes a section with header as row[0], then key:value pairs
+    for (const row of rows) {
+      if (row.length === 0) continue;
+
+      const rowLabel = row[0]?.content?.trim() || "";
+      if (rowLabel) {
+        // Bold the row label
+        const start = state.text.length;
+        state.text += rowLabel;
+        state.styles.push({ start, end: state.text.length, style: "bold" });
+        state.text += "\n";
+      }
+
+      // Add each column as a bullet point
+      for (let i = 1; i < row.length; i++) {
+        const header = headers[i]?.trim() || `Column ${i}`;
+        const value = row[i]?.content?.trim() || "";
+        if (value) {
+          state.text += `• ${header}: ${value}\n`;
+        }
+      }
+      state.text += "\n";
+    }
+  } else {
+    // Simple table: just list headers and values
+    for (const row of rows) {
+      for (let i = 0; i < row.length; i++) {
+        const header = headers[i]?.trim() || "";
+        const value = row[i]?.content?.trim() || "";
+        if (header && value) {
+          state.text += `• ${header}: ${value}\n`;
+        } else if (value) {
+          state.text += `• ${value}\n`;
+        }
+      }
+      state.text += "\n";
+    }
+  }
+}
+
+function renderTableAsFlat(state: RenderState) {
+  if (!state.table) return;
+  const { headers, rows } = state.table;
+
+  // Render headers
+  for (const header of headers) {
+    state.text += header.trim() + "\t";
+  }
+  if (headers.length > 0) {
+    state.text = state.text.trimEnd() + "\n";
+  }
+
+  // Render rows
+  for (const row of rows) {
+    for (const cell of row) {
+      state.text += cell.content.trim() + "\t";
+    }
+    state.text = state.text.trimEnd() + "\n";
+  }
 }
 
 function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
@@ -276,10 +392,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendParagraphSeparator(state);
         break;
       case "blockquote_open":
-        if (state.blockquotePrefix) appendText(state, state.blockquotePrefix);
+        if (state.blockquotePrefix) state.text += state.blockquotePrefix;
         break;
       case "blockquote_close":
-        appendText(state, "\n");
+        state.text += "\n";
         break;
       case "bullet_list_open":
         state.env.listStack.push({ type: "bullet", index: 0 });
@@ -299,7 +415,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendListPrefix(state);
         break;
       case "list_item_close":
-        appendText(state, "\n");
+        state.text += "\n";
         break;
       case "code_block":
       case "fence":
@@ -309,22 +425,74 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "html_inline":
         appendText(state, token.content ?? "");
         break;
+
+      // Table handling
       case "table_open":
+        if (state.tableMode === "bullets") {
+          state.table = initTableState();
+        }
+        break;
       case "table_close":
+        if (state.tableMode === "bullets" && state.table) {
+          renderTableAsBullets(state);
+        } else if (state.tableMode === "flat" && state.table) {
+          renderTableAsFlat(state);
+        }
+        state.table = null;
+        break;
       case "thead_open":
+        if (state.table) {
+          state.table.inHeader = true;
+        }
+        break;
       case "thead_close":
+        if (state.table) {
+          state.table.inHeader = false;
+        }
+        break;
       case "tbody_open":
       case "tbody_close":
         break;
+      case "tr_open":
+        if (state.table) {
+          state.table.currentRow = [];
+        }
+        break;
       case "tr_close":
-        appendText(state, "\n");
+        if (state.table) {
+          if (state.table.inHeader) {
+            state.table.headers = state.table.currentRow.map((c) => c.content);
+          } else {
+            state.table.rows.push(state.table.currentRow);
+          }
+          state.table.currentRow = [];
+        } else if (state.tableMode === "flat") {
+          // Legacy flat mode without table state
+          state.text += "\n";
+        }
+        break;
+      case "th_open":
+      case "td_open":
+        if (state.table) {
+          state.table.currentCell = "";
+        }
         break;
       case "th_close":
       case "td_close":
-        appendText(state, "\t");
+        if (state.table) {
+          state.table.currentRow.push({
+            content: state.table.currentCell,
+            isHeader: token.type === "th_close",
+          });
+          state.table.currentCell = "";
+        } else if (state.tableMode === "flat") {
+          // Legacy flat mode without table state
+          state.text += "\t";
+        }
         break;
+
       case "hr":
-        appendText(state, "\n");
+        state.text += "\n";
         break;
       default:
         if (token.children) renderTokens(token.children, state);
@@ -433,6 +601,8 @@ export function markdownToIR(markdown: string, options: MarkdownParseOptions = {
     applySpoilerTokens(tokens as MarkdownToken[]);
   }
 
+  const tableMode = options.tableMode ?? "flat";
+
   const state: RenderState = {
     text: "",
     styles: [],
@@ -442,6 +612,8 @@ export function markdownToIR(markdown: string, options: MarkdownParseOptions = {
     headingStyle: options.headingStyle ?? "none",
     blockquotePrefix: options.blockquotePrefix ?? "",
     enableSpoilers: options.enableSpoilers ?? false,
+    tableMode,
+    table: null,
   };
 
   renderTokens(tokens as MarkdownToken[], state);
