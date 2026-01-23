@@ -9,19 +9,30 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { isGoogleModelApi } from "../pi-embedded-helpers.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 
 export default function transcriptSanitizeExtension(api: ExtensionAPI): void {
   api.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
     let next = event.messages as AgentMessage[];
 
-    const repaired = repairToolUseResultPairing(next);
-    if (repaired.messages !== next) next = repaired.messages;
+    const policy = resolveTranscriptPolicy({
+      modelApi: ctx.model?.api,
+      provider: ctx.model?.provider,
+      modelId: ctx.model?.id,
+    });
 
-    if (isGoogleModelApi(ctx.model?.api)) {
-      const repairedIds = sanitizeToolCallIdsForCloudCodeAssist(next);
+    if (policy.repairToolUseResultPairing) {
+      const repaired = repairToolUseResultPairing(next);
+      if (repaired.messages !== next) next = repaired.messages;
+    }
+
+    if (policy.sanitizeToolCallIds) {
+      const repairedIds = sanitizeToolCallIdsForCloudCodeAssist(
+        next,
+        policy.toolCallIdMode ?? "strict",
+      );
       if (repairedIds !== next) next = repairedIds;
     }
 

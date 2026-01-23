@@ -2,19 +2,19 @@ import { describe, expect, it } from "vitest";
 import { sanitizeToolCallId } from "./pi-embedded-helpers.js";
 
 describe("sanitizeToolCallId", () => {
-  describe("standard mode (default)", () => {
+  describe("strict mode (default)", () => {
     it("keeps valid alphanumeric tool call IDs", () => {
       expect(sanitizeToolCallId("callabc123")).toBe("callabc123");
     });
-    it("keeps underscores and hyphens for readability", () => {
-      expect(sanitizeToolCallId("call_abc-123")).toBe("call_abc-123");
-      expect(sanitizeToolCallId("call_abc_def")).toBe("call_abc_def");
+    it("strips underscores and hyphens", () => {
+      expect(sanitizeToolCallId("call_abc-123")).toBe("callabc123");
+      expect(sanitizeToolCallId("call_abc_def")).toBe("callabcdef");
     });
-    it("replaces invalid characters with underscores", () => {
-      expect(sanitizeToolCallId("call_abc|item:456")).toBe("call_abc_item_456");
+    it("strips invalid characters", () => {
+      expect(sanitizeToolCallId("call_abc|item:456")).toBe("callabcitem456");
     });
     it("returns default for empty IDs", () => {
-      expect(sanitizeToolCallId("")).toBe("default_tool_id");
+      expect(sanitizeToolCallId("")).toBe("defaulttoolid");
     });
   });
 
