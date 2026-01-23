@@ -256,17 +256,26 @@
     "sessions_history": {
       "emoji": "🧾",
       "title": "Session History",
-      "detailKeys": ["sessionKey", "limit"]
+      "detailKeys": ["sessionKey", "limit", "includeTools"]
     },
     "sessions_send": {
       "emoji": "📨",
       "title": "Session Send",
-      "detailKeys": ["sessionKey", "timeoutSeconds"]
+      "detailKeys": ["label", "sessionKey", "agentId", "timeoutSeconds"]
     },
     "sessions_spawn": {
       "emoji": "🧑‍🔧",
       "title": "Sub-agent",
-      "detailKeys": ["label", "agentId", "thinking", "runTimeoutSeconds", "cleanup"]
+      "detailKeys": [
+        "label",
+        "task",
+        "agentId",
+        "model",
+        "thinking",
+        "runTimeoutSeconds",
+        "cleanup",
+        "timeoutSeconds"
+      ]
     },
     "session_status": {
       "emoji": "📊",
