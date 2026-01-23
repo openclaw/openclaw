@@ -14,6 +14,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 installGatewayTestHooks({ scope: "suite" });
 async function waitFor(condition: () => boolean, timeoutMs = 1500) {
   const deadline = Date.now() + timeoutMs;
@@ -52,6 +53,8 @@ describe("gateway server chat", () => {
         spy.mockResolvedValue(undefined);
       };
       try {
+        const historyMaxBytes = 192 * 1024;
+        __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
         await connectOk(ws);
         const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
         tempDirs.push(sessionDir);
@@ -66,9 +69,9 @@ describe("gateway server chat", () => {
         };
 
         await writeStore({ main: { sessionId: "sess-main", updatedAt: Date.now() } });
-        const bigText = "x".repeat(155_000);
+        const bigText = "x".repeat(4_000);
         const largeLines: string[] = [];
-        for (let i = 0; i < 40; i += 1) {
+        for (let i = 0; i < 60; i += 1) {
           largeLines.push(
             JSON.stringify({
               message: {
@@ -91,7 +94,7 @@ describe("gateway server chat", () => {
         expect(cappedRes.ok).toBe(true);
         const cappedMsgs = cappedRes.payload?.messages ?? [];
         const bytes = Buffer.byteLength(JSON.stringify(cappedMsgs), "utf8");
-        expect(bytes).toBeLessThanOrEqual(6 * 1024 * 1024);
+        expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
         expect(cappedMsgs.length).toBeLessThan(60);
 
         await writeStore({
@@ -473,6 +476,7 @@ describe("gateway server chat", () => {
             : undefined;
         expect(run2).toBe("idem-2");
       } finally {
+        __setMaxChatHistoryMessagesBytesForTest();
         testState.sessionStorePath = undefined;
         sessionStoreSaveDelayMs.value = 0;
         ws.close();

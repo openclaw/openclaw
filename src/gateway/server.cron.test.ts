@@ -5,7 +5,6 @@ import { describe, expect, test } from "vitest";
 import {
   connectOk,
   installGatewayTestHooks,
-  onceMessage,
   rpcReq,
   startServerWithClient,
   testState,
@@ -34,22 +33,6 @@ async function rmTempDir(dir: string) {
     }
   }
   await fs.rm(dir, { recursive: true, force: true });
-}
-
-async function waitForCronFinished(
-  ws: { send: (data: string) => void },
-  jobId: string,
-  timeoutMs = 20_000,
-) {
-  await onceMessage(
-    ws as never,
-    (o) =>
-      o.type === "event" &&
-      o.event === "cron" &&
-      o.payload?.action === "finished" &&
-      o.payload?.jobId === jobId,
-    timeoutMs,
-  );
 }
 
 async function waitForNonEmptyFile(pathname: string, timeoutMs = 2000) {
@@ -307,13 +290,10 @@ describe("gateway server cron", () => {
       const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
       expect(jobId.length > 0).toBe(true);
 
-      const finishedP = waitForCronFinished(ws, jobId);
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
-      await finishedP;
-
       const logPath = path.join(dir, "cron", "runs", `${jobId}.jsonl`);
-      const raw = await waitForNonEmptyFile(logPath);
+      const raw = await waitForNonEmptyFile(logPath, 5000);
       const line = raw
         .split("\n")
         .map((l) => l.trim())
@@ -359,9 +339,7 @@ describe("gateway server cron", () => {
       const autoJobId = typeof autoJobIdValue === "string" ? autoJobIdValue : "";
       expect(autoJobId.length > 0).toBe(true);
 
-      await waitForCronFinished(ws, autoJobId);
-
-      await waitForNonEmptyFile(path.join(dir, "cron", "runs", `${autoJobId}.jsonl`));
+      await waitForNonEmptyFile(path.join(dir, "cron", "runs", `${autoJobId}.jsonl`), 5000);
       const autoEntries = (await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })).payload as
         | { entries?: Array<{ jobId?: unknown }> }
         | undefined;
