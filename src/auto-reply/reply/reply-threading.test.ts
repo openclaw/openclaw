@@ -32,7 +32,34 @@ describe("resolveReplyToMode", () => {
     expect(resolveReplyToMode(cfg, "slack")).toBe("all");
   });
 
-  it("uses dm-specific replyToMode for Slack DMs when configured", () => {
+  it("uses chat-type replyToMode overrides for Slack when configured", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "all", group: "first" },
+        },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "slack", null, "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("off");
+    expect(resolveReplyToMode(cfg, "slack", null, undefined)).toBe("off");
+  });
+
+  it("falls back to top-level replyToMode when no chat-type override is set", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "first",
+        },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("first");
+    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("first");
+  });
+
+  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
     const cfg = {
       channels: {
         slack: {
@@ -43,20 +70,6 @@ describe("resolveReplyToMode", () => {
     } as ClawdbotConfig;
     expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("all");
     expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("off");
-    expect(resolveReplyToMode(cfg, "slack", null, undefined)).toBe("off");
-  });
-
-  it("falls back to top-level replyToMode when dm.replyToMode is not configured", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          replyToMode: "first",
-          dm: { enabled: true },
-        },
-      },
-    } as ClawdbotConfig;
-    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("first");
-    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("first");
   });
 });
 
