@@ -16,9 +16,9 @@ provider in two different ways.
 
 ### 1) Built-in GitHub Copilot provider (`github-copilot`)
 
-Use the native device-login flow to obtain a GitHub token, then exchange it for
-Copilot API tokens when Clawdbot runs. This is the **default** and simplest path
-because it does not require VS Code.
+Use the native device-login flow to obtain a GitHub token and use it directly
+against the Copilot API. This is the **default** and simplest path because it
+does not require VS Code. Enterprise domains are supported.
 
 ### 2) Copilot Proxy plugin (`copilot-proxy`)
 
@@ -39,6 +39,8 @@ clawdbot models auth login-github-copilot
 
 You'll be prompted to visit a URL and enter a one-time code. Keep the terminal
 open until it completes.
+If you're on GitHub Enterprise, the login will ask for your enterprise URL or
+domain (for example `company.ghe.com`).
 
 ### Optional flags
 
@@ -66,5 +68,7 @@ clawdbot models set github-copilot/gpt-4o
 - Requires an interactive TTY; run it directly in a terminal.
 - Copilot model availability depends on your plan; if a model is rejected, try
   another ID (for example `github-copilot/gpt-4.1`).
-- The login stores a GitHub token in the auth profile store and exchanges it for a
-  Copilot API token when Clawdbot runs.
+- The login stores a GitHub token in the auth profile store and uses it directly
+  for Copilot API calls.
+- Base URL: `https://api.githubcopilot.com` (public) or `https://copilot-api.<domain>`
+  for GitHub Enterprise.

@@ -41,6 +41,7 @@ Docs: https://docs.clawd.bot
 >>>>>>> Stashed changes
 - Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
+- Providers: improve GitHub Copilot integration (enterprise support, base URL, and auth flow alignment).
 
 ## 2026.1.21-2
 

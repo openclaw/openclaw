@@ -1,8 +1,8 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import {
-  DEFAULT_COPILOT_API_BASE_URL,
-  resolveCopilotApiToken,
-} from "../providers/github-copilot-token.js";
+  normalizeGithubCopilotDomain,
+  resolveGithubCopilotBaseUrl,
+} from "../providers/github-copilot-utils.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
@@ -331,29 +331,18 @@ export async function resolveImplicitCopilotProvider(params: {
 
   if (!hasProfile && !githubToken) return null;
 
-  let selectedGithubToken = githubToken;
-  if (!selectedGithubToken && hasProfile) {
+  let enterpriseDomain: string | null = null;
+  if (hasProfile) {
     // Use the first available profile as a default for discovery (it will be
     // re-resolved per-run by the embedded runner).
     const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
     const profile = profileId ? authStore.profiles[profileId] : undefined;
-    if (profile && profile.type === "token") {
-      selectedGithubToken = profile.token;
+    if (profile && "enterpriseUrl" in profile && typeof profile.enterpriseUrl === "string") {
+      enterpriseDomain = normalizeGithubCopilotDomain(profile.enterpriseUrl);
     }
   }
 
-  let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-  if (selectedGithubToken) {
-    try {
-      const token = await resolveCopilotApiToken({
-        githubToken: selectedGithubToken,
-        env,
-      });
-      baseUrl = token.baseUrl;
-    } catch {
-      baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-    }
-  }
+  const baseUrl = resolveGithubCopilotBaseUrl(enterpriseDomain);
 
   // pi-coding-agent's ModelRegistry marks a model "available" only if its
   // `AuthStorage` has auth configured for that provider (via auth.json/env/etc).
@@ -364,7 +353,7 @@ export async function resolveImplicitCopilotProvider(params: {
   // GitHub token (not the exchanged Copilot token), and (3) matches existing
   // patterns for OAuth-like providers in pi-coding-agent.
   // Note: we deliberately do not write pi-coding-agent's `auth.json` here.
-  // Clawdbot uses its own auth store and exchanges tokens at runtime.
+  // Clawdbot uses its own auth store and passes the GitHub token at runtime.
   // `models list` uses Clawdbot's auth heuristics for availability.
 
   // We intentionally do NOT define custom models for Copilot in models.json.
