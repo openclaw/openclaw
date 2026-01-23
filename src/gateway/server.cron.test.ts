@@ -350,7 +350,6 @@ describe("gateway server cron", () => {
       expect(autoJobId.length > 0).toBe(true);
 
       await waitForCronFinished(ws, autoJobId);
-      await waitForCronFinished(ws, autoJobId);
 
       await waitForNonEmptyFile(path.join(dir, "cron", "runs", `${autoJobId}.jsonl`));
       const autoEntries = (await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })).payload as
