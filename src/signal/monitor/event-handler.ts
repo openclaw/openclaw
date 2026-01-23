@@ -20,7 +20,7 @@ import {
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -111,7 +111,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
     let combinedBody = body;
     const historyKey = entry.isGroup ? String(entry.groupId ?? "unknown") : undefined;
-    if (entry.isGroup && historyKey && deps.historyLimit > 0) {
+    if (entry.isGroup && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: deps.groupHistories,
         historyKey,
@@ -244,13 +244,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
     markDispatchIdle();
     if (!queuedFinal) {
-      if (entry.isGroup && historyKey && deps.historyLimit > 0) {
-        clearHistoryEntries({ historyMap: deps.groupHistories, historyKey });
+      if (entry.isGroup && historyKey) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: deps.groupHistories,
+          historyKey,
+          limit: deps.historyLimit,
+        });
       }
       return;
     }
-    if (entry.isGroup && historyKey && deps.historyLimit > 0) {
-      clearHistoryEntries({ historyMap: deps.groupHistories, historyKey });
+    if (entry.isGroup && historyKey) {
+      clearHistoryEntriesIfEnabled({
+        historyMap: deps.groupHistories,
+        historyKey,
+        limit: deps.historyLimit,
+      });
     }
   }
 

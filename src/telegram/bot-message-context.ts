@@ -6,7 +6,7 @@ import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -350,19 +350,19 @@ export const buildTelegramMessageContext = async ({
   if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-      if (historyKey && historyLimit > 0) {
-        recordPendingHistoryEntry({
-          historyMap: groupHistories,
-          historyKey,
-          limit: historyLimit,
-          entry: {
-            sender: buildSenderLabel(msg, senderId || chatId),
-            body: rawBody,
-            timestamp: msg.date ? msg.date * 1000 : undefined,
-            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-          },
-        });
-      }
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: groupHistories,
+        historyKey: historyKey ?? "",
+        limit: historyLimit,
+        entry: historyKey
+          ? {
+              sender: buildSenderLabel(msg, senderId || chatId),
+              body: rawBody,
+              timestamp: msg.date ? msg.date * 1000 : undefined,
+              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+            }
+          : null,
+      });
       return null;
     }
   }

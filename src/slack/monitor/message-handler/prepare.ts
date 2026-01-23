@@ -9,7 +9,7 @@ import {
 } from "../../../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
 } from "../../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../../auto-reply/reply/mentions.js";
@@ -292,28 +292,26 @@ export async function prepareSlackMessage(params: {
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
-    if (ctx.historyLimit > 0) {
-      const pendingText = (message.text ?? "").trim();
-      const fallbackFile = message.files?.[0]?.name
-        ? `[Slack file: ${message.files[0].name}]`
-        : message.files?.length
-          ? "[Slack file]"
-          : "";
-      const pendingBody = pendingText || fallbackFile;
-      if (pendingBody) {
-        recordPendingHistoryEntry({
-          historyMap: ctx.channelHistories,
-          historyKey,
-          limit: ctx.historyLimit,
-          entry: {
+    const pendingText = (message.text ?? "").trim();
+    const fallbackFile = message.files?.[0]?.name
+      ? `[Slack file: ${message.files[0].name}]`
+      : message.files?.length
+        ? "[Slack file]"
+        : "";
+    const pendingBody = pendingText || fallbackFile;
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: ctx.channelHistories,
+      historyKey,
+      limit: ctx.historyLimit,
+      entry: pendingBody
+        ? {
             sender: senderName,
             body: pendingBody,
             timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
             messageId: message.ts,
-          },
-        });
-      }
-    }
+          }
+        : null,
+    });
     return null;
   }
 

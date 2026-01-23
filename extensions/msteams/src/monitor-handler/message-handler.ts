@@ -1,8 +1,8 @@
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
   resolveMentionGating,
   formatAllowlistMatchMeta,
   type HistoryEntry,
@@ -371,19 +371,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
-        if (historyLimit > 0) {
-          recordPendingHistoryEntry({
-            historyMap: conversationHistories,
-            historyKey: conversationId,
-            limit: historyLimit,
-            entry: {
-              sender: senderName,
-              body: rawBody,
-              timestamp: timestamp?.getTime(),
-              messageId: activity.id ?? undefined,
-            },
-          });
-        }
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: conversationHistories,
+          historyKey: conversationId,
+          limit: historyLimit,
+          entry: {
+            sender: senderName,
+            body: rawBody,
+            timestamp: timestamp?.getTime(),
+            messageId: activity.id ?? undefined,
+          },
+        });
         return;
       }
     }
@@ -426,7 +424,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
-    if (isRoomish && historyKey && historyLimit > 0) {
+    if (isRoomish && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: conversationHistories,
         historyKey,
@@ -512,10 +510,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
       const didSendReply = counts.final + counts.tool + counts.block > 0;
       if (!queuedFinal) {
-        if (isRoomish && historyKey && historyLimit > 0) {
-          clearHistoryEntries({
+        if (isRoomish && historyKey) {
+          clearHistoryEntriesIfEnabled({
             historyMap: conversationHistories,
             historyKey,
+            limit: historyLimit,
           });
         }
         return;
@@ -524,8 +523,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       logVerboseMessage(
         `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
       );
-      if (isRoomish && historyKey && historyLimit > 0) {
-        clearHistoryEntries({ historyMap: conversationHistories, historyKey });
+      if (isRoomish && historyKey) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: conversationHistories,
+          historyKey,
+          limit: historyLimit,
+        });
       }
     } catch (err) {
       log.error("dispatch failed", { error: String(err) });
