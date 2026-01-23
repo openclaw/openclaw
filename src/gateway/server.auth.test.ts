@@ -30,11 +30,11 @@ describe("gateway server auth/connect", () => {
   test("closes silent handshakes after timeout", { timeout: 60_000 }, async () => {
     vi.useRealTimers();
     const prevHandshakeTimeout = process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS;
-    process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS = "250";
+    process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS = "50";
     try {
       const { server, ws } = await startServerWithClient();
       const handshakeTimeoutMs = getHandshakeTimeoutMs();
-      const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2_000);
+      const closed = await waitForWsClose(ws, handshakeTimeoutMs + 250);
       expect(closed).toBe(true);
       await server.close();
     } finally {

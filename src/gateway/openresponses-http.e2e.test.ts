@@ -70,7 +70,7 @@ async function ensureResponseConsumed(res: Response) {
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("is disabled by default (requires config)", { timeout: 120_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
     const port = await getFreePort();
     const server = await startServerWithDefaultConfig(port);
     try {
@@ -83,201 +83,112 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       await server.close({ reason: "test done" });
     }
-  });
 
-  it("can be disabled via config (404)", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port, {
+    const disabledPort = await getFreePort();
+    const disabledServer = await startServer(disabledPort, {
       openResponsesEnabled: false,
     });
     try {
-      const res = await postResponses(port, {
+      const res = await postResponses(disabledPort, {
         model: "clawdbot",
         input: "hi",
       });
       expect(res.status).toBe(404);
       await ensureResponseConsumed(res);
     } finally {
-      await server.close({ reason: "test done" });
+      await disabledServer.close({ reason: "test done" });
     }
   });
 
-  it("rejects non-POST", async () => {
+  it("handles OpenResponses request parsing and validation", async () => {
     const port = await getFreePort();
     const server = await startServer(port);
+    const mockAgentOnce = (payloads: Array<{ text: string }>, meta?: unknown) => {
+      agentCommand.mockReset();
+      agentCommand.mockResolvedValueOnce({ payloads, meta } as never);
+    };
+
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      const resNonPost = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
         method: "GET",
         headers: { authorization: "Bearer secret" },
       });
-      expect(res.status).toBe(405);
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      expect(resNonPost.status).toBe(405);
+      await ensureResponseConsumed(resNonPost);
 
-  it("rejects missing auth", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      const resMissingAuth = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "clawdbot", input: "hi" }),
       });
-      expect(res.status).toBe(401);
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      expect(resMissingAuth.status).toBe(401);
+      await ensureResponseConsumed(resMissingAuth);
 
-  it("rejects invalid request body (missing model)", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, { input: "hi" });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as Record<string, unknown>;
-      expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
+      const resMissingModel = await postResponses(port, { input: "hi" });
+      expect(resMissingModel.status).toBe(400);
+      const missingModelJson = (await resMissingModel.json()) as Record<string, unknown>;
+      expect((missingModelJson.error as Record<string, unknown> | undefined)?.type).toBe(
         "invalid_request_error",
       );
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resMissingModel);
 
-  it("routes to a specific agent via header", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(
+      mockAgentOnce([{ text: "hello" }]);
+      const resHeader = await postResponses(
         port,
         { model: "clawdbot", input: "hi" },
         { "x-clawdbot-agent-id": "beta" },
       );
-      expect(res.status).toBe(200);
-
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+      expect(resHeader.status).toBe(200);
+      const [optsHeader] = agentCommand.mock.calls[0] ?? [];
+      expect((optsHeader as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resHeader);
 
-  it("routes to a specific agent via model (no custom headers)", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
-        model: "clawdbot:beta",
-        input: "hi",
-      });
-      expect(res.status).toBe(200);
-
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+      mockAgentOnce([{ text: "hello" }]);
+      const resModel = await postResponses(port, { model: "clawdbot:beta", input: "hi" });
+      expect(resModel.status).toBe(200);
+      const [optsModel] = agentCommand.mock.calls[0] ?? [];
+      expect((optsModel as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resModel);
 
-  it("uses OpenResponses user for a stable session key", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "hello" }]);
+      const resUser = await postResponses(port, {
         user: "alice",
         model: "clawdbot",
         input: "hi",
       });
-      expect(res.status).toBe(200);
-
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
+      expect(resUser.status).toBe(200);
+      const [optsUser] = agentCommand.mock.calls[0] ?? [];
+      expect((optsUser as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
         "openresponses-user:alice",
       );
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resUser);
 
-  it("accepts string input", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "hello" }]);
+      const resString = await postResponses(port, {
         model: "clawdbot",
         input: "hello world",
       });
-      expect(res.status).toBe(200);
+      expect(resString.status).toBe(200);
+      const [optsString] = agentCommand.mock.calls[0] ?? [];
+      expect((optsString as { message?: string } | undefined)?.message).toBe("hello world");
+      await ensureResponseConsumed(resString);
 
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect((opts as { message?: string } | undefined)?.message).toBe("hello world");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
-
-  it("accepts array input with message items", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "hello" }]);
+      const resArray = await postResponses(port, {
         model: "clawdbot",
         input: [{ type: "message", role: "user", content: "hello there" }],
       });
-      expect(res.status).toBe(200);
+      expect(resArray.status).toBe(200);
+      const [optsArray] = agentCommand.mock.calls[0] ?? [];
+      expect((optsArray as { message?: string } | undefined)?.message).toBe("hello there");
+      await ensureResponseConsumed(resArray);
 
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect((opts as { message?: string } | undefined)?.message).toBe("hello there");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
-
-  it("extracts system and developer messages as extraSystemPrompt", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "hello" }]);
+      const resSystemDeveloper = await postResponses(port, {
         model: "clawdbot",
         input: [
           { type: "message", role: "system", content: "You are a helpful assistant." },
@@ -285,53 +196,30 @@ describe("OpenResponses HTTP API (e2e)", () => {
           { type: "message", role: "user", content: "Hello" },
         ],
       });
-      expect(res.status).toBe(200);
-
-      const [opts] = agentCommand.mock.calls[0] ?? [];
+      expect(resSystemDeveloper.status).toBe(200);
+      const [optsSystemDeveloper] = agentCommand.mock.calls[0] ?? [];
       const extraSystemPrompt =
-        (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
+        (optsSystemDeveloper as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ??
+        "";
       expect(extraSystemPrompt).toContain("You are a helpful assistant.");
       expect(extraSystemPrompt).toContain("Be concise.");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resSystemDeveloper);
 
-  it("includes instructions in extraSystemPrompt", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "hello" }]);
+      const resInstructions = await postResponses(port, {
         model: "clawdbot",
         input: "hi",
         instructions: "Always respond in French.",
       });
-      expect(res.status).toBe(200);
+      expect(resInstructions.status).toBe(200);
+      const [optsInstructions] = agentCommand.mock.calls[0] ?? [];
+      const instructionPrompt =
+        (optsInstructions as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
+      expect(instructionPrompt).toContain("Always respond in French.");
+      await ensureResponseConsumed(resInstructions);
 
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      const extraSystemPrompt =
-        (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
-      expect(extraSystemPrompt).toContain("Always respond in French.");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
-
-  it("includes conversation history when multiple messages are provided", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "I am Claude" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "I am Claude" }]);
+      const resHistory = await postResponses(port, {
         model: "clawdbot",
         input: [
           { type: "message", role: "system", content: "You are a helpful assistant." },
@@ -340,56 +228,33 @@ describe("OpenResponses HTTP API (e2e)", () => {
           { type: "message", role: "user", content: "What did I just ask you?" },
         ],
       });
-      expect(res.status).toBe(200);
+      expect(resHistory.status).toBe(200);
+      const [optsHistory] = agentCommand.mock.calls[0] ?? [];
+      const historyMessage = (optsHistory as { message?: string } | undefined)?.message ?? "";
+      expect(historyMessage).toContain(HISTORY_CONTEXT_MARKER);
+      expect(historyMessage).toContain("User: Hello, who are you?");
+      expect(historyMessage).toContain("Assistant: I am Claude.");
+      expect(historyMessage).toContain(CURRENT_MESSAGE_MARKER);
+      expect(historyMessage).toContain("User: What did I just ask you?");
+      await ensureResponseConsumed(resHistory);
 
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      const message = (opts as { message?: string } | undefined)?.message ?? "";
-      expect(message).toContain(HISTORY_CONTEXT_MARKER);
-      expect(message).toContain("User: Hello, who are you?");
-      expect(message).toContain("Assistant: I am Claude.");
-      expect(message).toContain(CURRENT_MESSAGE_MARKER);
-      expect(message).toContain("User: What did I just ask you?");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
-
-  it("includes function_call_output when it is the latest item", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "ok" }]);
+      const resFunctionOutput = await postResponses(port, {
         model: "clawdbot",
         input: [
           { type: "message", role: "user", content: "What's the weather?" },
           { type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." },
         ],
       });
-      expect(res.status).toBe(200);
+      expect(resFunctionOutput.status).toBe(200);
+      const [optsFunctionOutput] = agentCommand.mock.calls[0] ?? [];
+      const functionOutputMessage =
+        (optsFunctionOutput as { message?: string } | undefined)?.message ?? "";
+      expect(functionOutputMessage).toContain("Sunny, 70F.");
+      await ensureResponseConsumed(resFunctionOutput);
 
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      const message = (opts as { message?: string } | undefined)?.message ?? "";
-      expect(message).toContain("Sunny, 70F.");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
-
-  it("moves input_file content into extraSystemPrompt", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "ok" }]);
+      const resInputFile = await postResponses(port, {
         model: "clawdbot",
         input: [
           {
@@ -410,29 +275,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
           },
         ],
       });
-      expect(res.status).toBe(200);
+      expect(resInputFile.status).toBe(200);
+      const [optsInputFile] = agentCommand.mock.calls[0] ?? [];
+      const inputFileMessage = (optsInputFile as { message?: string } | undefined)?.message ?? "";
+      const inputFilePrompt =
+        (optsInputFile as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
+      expect(inputFileMessage).toBe("read this");
+      expect(inputFilePrompt).toContain('<file name="hello.txt">');
+      await ensureResponseConsumed(resInputFile);
 
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      const message = (opts as { message?: string } | undefined)?.message ?? "";
-      const extraSystemPrompt =
-        (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
-      expect(message).toBe("read this");
-      expect(extraSystemPrompt).toContain('<file name="hello.txt">');
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
-
-  it("applies tool_choice=none by dropping tools", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "ok" }]);
+      const resToolNone = await postResponses(port, {
         model: "clawdbot",
         input: "hi",
         tools: [
@@ -443,25 +296,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
         tool_choice: "none",
       });
-      expect(res.status).toBe(200);
+      expect(resToolNone.status).toBe(200);
+      const [optsToolNone] = agentCommand.mock.calls[0] ?? [];
+      expect(
+        (optsToolNone as { clientTools?: unknown[] } | undefined)?.clientTools,
+      ).toBeUndefined();
+      await ensureResponseConsumed(resToolNone);
 
-      const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect((opts as { clientTools?: unknown[] } | undefined)?.clientTools).toBeUndefined();
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
-
-  it("applies tool_choice to a specific tool", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "ok" }]);
+      const resToolChoice = await postResponses(port, {
         model: "clawdbot",
         input: "hi",
         tools: [
@@ -476,24 +319,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
         tool_choice: { type: "function", function: { name: "get_time" } },
       });
-      expect(res.status).toBe(200);
-
-      const [opts] = agentCommand.mock.calls[0] ?? [];
+      expect(resToolChoice.status).toBe(200);
+      const [optsToolChoice] = agentCommand.mock.calls[0] ?? [];
       const clientTools =
-        (opts as { clientTools?: Array<{ function?: { name?: string } }> })?.clientTools ?? [];
+        (optsToolChoice as { clientTools?: Array<{ function?: { name?: string } }> })
+          ?.clientTools ?? [];
       expect(clientTools).toHaveLength(1);
       expect(clientTools[0]?.function?.name).toBe("get_time");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resToolChoice);
 
-  it("rejects tool_choice that references an unknown tool", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      const resUnknownTool = await postResponses(port, {
         model: "clawdbot",
         input: "hi",
         tools: [
@@ -504,85 +339,51 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
         tool_choice: { type: "function", function: { name: "unknown_tool" } },
       });
-      expect(res.status).toBe(400);
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      expect(resUnknownTool.status).toBe(400);
+      await ensureResponseConsumed(resUnknownTool);
 
-  it("passes max_output_tokens through to the agent stream params", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "ok" }]);
+      const resMaxTokens = await postResponses(port, {
         model: "clawdbot",
         input: "hi",
         max_output_tokens: 123,
       });
-      expect(res.status).toBe(200);
-
-      const [opts] = agentCommand.mock.calls[0] ?? [];
+      expect(resMaxTokens.status).toBe(200);
+      const [optsMaxTokens] = agentCommand.mock.calls[0] ?? [];
       expect(
-        (opts as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams?.maxTokens,
+        (optsMaxTokens as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams
+          ?.maxTokens,
       ).toBe(123);
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resMaxTokens);
 
-  it("returns usage when available", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
+      mockAgentOnce([{ text: "ok" }], {
         agentMeta: {
           usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 1 },
         },
-      },
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      });
+      const resUsage = await postResponses(port, {
         stream: false,
         model: "clawdbot",
         input: "hi",
       });
-      expect(res.status).toBe(200);
-      const json = (await res.json()) as Record<string, unknown>;
-      expect(json.usage).toEqual({ input_tokens: 3, output_tokens: 5, total_tokens: 10 });
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      expect(resUsage.status).toBe(200);
+      const usageJson = (await resUsage.json()) as Record<string, unknown>;
+      expect(usageJson.usage).toEqual({ input_tokens: 3, output_tokens: 5, total_tokens: 10 });
+      await ensureResponseConsumed(resUsage);
 
-  it("returns a non-streaming response with correct shape", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
-
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      mockAgentOnce([{ text: "hello" }]);
+      const resShape = await postResponses(port, {
         stream: false,
         model: "clawdbot",
         input: "hi",
       });
-      expect(res.status).toBe(200);
-      const json = (await res.json()) as Record<string, unknown>;
-      expect(json.object).toBe("response");
-      expect(json.status).toBe("completed");
-      expect(Array.isArray(json.output)).toBe(true);
+      expect(resShape.status).toBe(200);
+      const shapeJson = (await resShape.json()) as Record<string, unknown>;
+      expect(shapeJson.object).toBe("response");
+      expect(shapeJson.status).toBe("completed");
+      expect(Array.isArray(shapeJson.output)).toBe(true);
 
-      const output = json.output as Array<Record<string, unknown>>;
+      const output = shapeJson.output as Array<Record<string, unknown>>;
       expect(output.length).toBe(1);
       const item = output[0] ?? {};
       expect(item.type).toBe("message");
@@ -592,55 +393,48 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(content.length).toBe(1);
       expect(content[0]?.type).toBe("output_text");
       expect(content[0]?.text).toBe("hello");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      await ensureResponseConsumed(resShape);
 
-  it("requires a user message in input", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      const resNoUser = await postResponses(port, {
         model: "clawdbot",
         input: [{ type: "message", role: "system", content: "yo" }],
       });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as Record<string, unknown>;
-      expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
+      expect(resNoUser.status).toBe(400);
+      const noUserJson = (await resNoUser.json()) as Record<string, unknown>;
+      expect((noUserJson.error as Record<string, unknown> | undefined)?.type).toBe(
         "invalid_request_error",
       );
-      await ensureResponseConsumed(res);
+      await ensureResponseConsumed(resNoUser);
     } finally {
       await server.close({ reason: "test done" });
     }
   });
 
-  it("streams SSE events when stream=true (delta events)", async () => {
-    agentCommand.mockImplementationOnce(async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-      return { payloads: [{ text: "hello" }] } as never;
-    });
-
+  it("streams OpenResponses SSE events", async () => {
     const port = await getFreePort();
     const server = await startServer(port);
+
     try {
-      const res = await postResponses(port, {
+      agentCommand.mockReset();
+      agentCommand.mockImplementationOnce(async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
+        return { payloads: [{ text: "hello" }] } as never;
+      });
+
+      const resDelta = await postResponses(port, {
         stream: true,
         model: "clawdbot",
         input: "hi",
       });
-      expect(res.status).toBe(200);
-      expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
+      expect(resDelta.status).toBe(200);
+      expect(resDelta.headers.get("content-type") ?? "").toContain("text/event-stream");
 
-      const text = await res.text();
-      const events = parseSseEvents(text);
+      const deltaText = await resDelta.text();
+      const deltaEvents = parseSseEvents(deltaText);
 
-      // Check for required event types
-      const eventTypes = events.map((e) => e.event).filter(Boolean);
+      const eventTypes = deltaEvents.map((e) => e.event).filter(Boolean);
       expect(eventTypes).toContain("response.created");
       expect(eventTypes).toContain("response.output_item.added");
       expect(eventTypes).toContain("response.in_progress");
@@ -649,72 +443,51 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.output_text.done");
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
+      expect(deltaEvents.some((e) => e.data === "[DONE]")).toBe(true);
 
-      // Check for [DONE] terminal event
-      expect(events.some((e) => e.data === "[DONE]")).toBe(true);
-
-      // Verify delta content
-      const deltaEvents = events.filter((e) => e.event === "response.output_text.delta");
-      const allDeltas = deltaEvents
+      const deltas = deltaEvents
+        .filter((e) => e.event === "response.output_text.delta")
         .map((e) => {
           const parsed = JSON.parse(e.data) as { delta?: string };
           return parsed.delta ?? "";
         })
         .join("");
-      expect(allDeltas).toBe("hello");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      expect(deltas).toBe("hello");
 
-  it("streams SSE events when stream=true (fallback when no deltas)", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
+      agentCommand.mockReset();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "hello" }],
+      } as never);
 
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      const resFallback = await postResponses(port, {
         stream: true,
         model: "clawdbot",
         input: "hi",
       });
-      expect(res.status).toBe(200);
-      const text = await res.text();
-      expect(text).toContain("[DONE]");
-      expect(text).toContain("hello");
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-  });
+      expect(resFallback.status).toBe(200);
+      const fallbackText = await resFallback.text();
+      expect(fallbackText).toContain("[DONE]");
+      expect(fallbackText).toContain("hello");
 
-  it("event type matches JSON type field", async () => {
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-    } as never);
+      agentCommand.mockReset();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "hello" }],
+      } as never);
 
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
+      const resTypeMatch = await postResponses(port, {
         stream: true,
         model: "clawdbot",
         input: "hi",
       });
-      expect(res.status).toBe(200);
+      expect(resTypeMatch.status).toBe(200);
 
-      const text = await res.text();
-      const events = parseSseEvents(text);
-
-      for (const event of events) {
+      const typeText = await resTypeMatch.text();
+      const typeEvents = parseSseEvents(typeText);
+      for (const event of typeEvents) {
         if (event.data === "[DONE]") continue;
         const parsed = JSON.parse(event.data) as { type?: string };
         expect(event.event).toBe(parsed.type);
       }
-      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
