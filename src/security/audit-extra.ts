@@ -17,6 +17,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -186,9 +187,15 @@ export function collectHooksHardeningFindings(cfg: ClawdbotConfig): SecurityAudi
     });
   }
 
+  const gatewayAuth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+  });
   const gatewayToken =
-    typeof cfg.gateway?.auth?.token === "string" && cfg.gateway.auth.token.trim()
-      ? cfg.gateway.auth.token.trim()
+    gatewayAuth.mode === "token" &&
+    typeof gatewayAuth.token === "string" &&
+    gatewayAuth.token.trim()
+      ? gatewayAuth.token.trim()
       : null;
   if (token && gatewayToken && token === gatewayToken) {
     findings.push({

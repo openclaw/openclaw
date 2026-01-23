@@ -656,6 +656,31 @@ describe("security audit", () => {
     );
   });
 
+  it("warns when hooks token reuses the gateway env token", async () => {
+    const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "shared-gateway-token-1234567890";
+    const cfg: ClawdbotConfig = {
+      hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
+    };
+
+    try {
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "hooks.token_reuse_gateway_token", severity: "warn" }),
+        ]),
+      );
+    } finally {
+      if (prevToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      else process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
   it("warns when state/config look like a synced folder", async () => {
     const cfg: ClawdbotConfig = {};
 
