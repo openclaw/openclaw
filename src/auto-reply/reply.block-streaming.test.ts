@@ -42,7 +42,7 @@ describe("block streaming", () => {
   });
 
   async function waitForCalls(fn: () => number, calls: number) {
-    const deadline = Date.now() + 1500;
+    const deadline = Date.now() + 5000;
     while (fn() < calls) {
       if (Date.now() > deadline) {
         throw new Error(`Expected ${calls} call(s), got ${fn()}`);

@@ -33,6 +33,7 @@ Docs: https://docs.clawd.bot
 - Agents: surface concrete API error details instead of generic AI service errors.
 - Exec approvals: allow per-segment allowlists for chained shell commands on gateway + node hosts. (#1458) Thanks @czekaj.
 - Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.
+- Doctor: honor CLAWDBOT_GATEWAY_TOKEN for auth checks and security audit token reuse. (#1448) Thanks @azade-c.
 - Agents: make tool summaries more readable and only show optional params when set.
 - Agents: centralize transcript sanitization in the runner; keep <final> tags and error turns intact.
 - Mattermost (plugin): enforce pairing/allowlist gating, keep @username targets, and clarify plugin-only docs. (#1428) Thanks @damoahdominic.

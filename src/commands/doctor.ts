@@ -13,6 +13,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDBOT, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -111,10 +112,11 @@ export async function doctorCommand(
     note(gatewayDetails.remoteFallbackNote, "Gateway");
   }
   if (resolveMode(cfg) === "local") {
-    const authMode = cfg.gateway?.auth?.mode;
-    const token =
-      typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway?.auth?.token.trim() : "";
-    const needsToken = authMode !== "password" && (authMode !== "token" || !token);
+    const auth = resolveGatewayAuth({
+      authConfig: cfg.gateway?.auth,
+      tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+    });
+    const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
     if (needsToken) {
       note(
         "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",

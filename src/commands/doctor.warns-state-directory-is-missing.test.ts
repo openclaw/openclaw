@@ -389,4 +389,39 @@ describe("doctor command", () => {
     );
     expect(warned).toBe(true);
   });
+
+  it("skips gateway auth warning when CLAWDBOT_GATEWAY_TOKEN is set", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {
+        gateway: { mode: "local" },
+      },
+      issues: [],
+      legacyIssues: [],
+    });
+
+    const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "env-token-1234567890";
+    note.mockClear();
+
+    try {
+      const { doctorCommand } = await import("./doctor.js");
+      await doctorCommand(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        { nonInteractive: true, workspaceSuggestions: false },
+      );
+    } finally {
+      if (prevToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      else process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+
+    const warned = note.mock.calls.some(([message]) =>
+      String(message).includes("Gateway auth is off or missing a token"),
+    );
+    expect(warned).toBe(false);
+  });
 });
