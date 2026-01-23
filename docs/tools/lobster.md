@@ -11,6 +11,10 @@ read_when:
 
 Lobster is a workflow shell that lets Clawdbot run multi-step tool sequences as a single, deterministic operation with explicit approval checkpoints.
 
+## Hook
+
+Your assistant can build the tools that manage itself. Ask for a workflow, and 30 minutes later you have a CLI plus pipelines that run as one call. Lobster is the missing piece: deterministic pipelines, explicit approvals, and resumable state.
+
 ## Why
 
 Today, complex workflows require many back-and-forth tool calls. Each call costs tokens, and the LLM has to orchestrate every step. Lobster moves that orchestration into a typed runtime:
@@ -23,6 +27,73 @@ Today, complex workflows require many back-and-forth tool calls. Each call costs
 
 Clawdbot launches the local `lobster` CLI in **tool mode** and parses a JSON envelope from stdout.
 If the pipeline pauses for approval, the tool returns a `resumeToken` so you can continue later.
+
+## Pattern: small CLI + JSON pipes + approvals
+
+Build tiny commands that speak JSON, then chain them into a single Lobster call. (Example command names below — swap in your own.)
+
+```bash
+inbox list --json
+inbox categorize --json
+inbox apply --json
+```
+
+```json
+{
+  "action": "run",
+  "pipeline": "exec --json --shell 'inbox list --json' | exec --stdin json --shell 'inbox categorize --json' | exec --stdin json --shell 'inbox apply --json' | approve --preview-from-stdin --limit 5 --prompt 'Apply changes?'",
+  "timeoutMs": 30000
+}
+```
+
+If the pipeline requests approval, resume with the token:
+
+```json
+{
+  "action": "resume",
+  "token": "<resumeToken>",
+  "approve": true
+}
+```
+
+AI triggers the workflow; Lobster executes the steps. Approval gates keep side effects explicit and auditable.
+
+Example: map input items into tool calls:
+
+```bash
+gog.gmail.search --query 'newer_than:1d' \
+  | clawd.invoke --tool message --action send --each --item-key message --args-json '{"provider":"telegram","to":"..."}'
+```
+
+## Workflow files (.lobster)
+
+Lobster can run YAML/JSON workflow files with `name`, `args`, `steps`, `env`, `condition`, and `approval` fields. In Clawdbot tool calls, set `pipeline` to the file path.
+
+```yaml
+name: inbox-triage
+args:
+  tag:
+    default: "family"
+steps:
+  - id: collect
+    command: inbox list --json
+  - id: categorize
+    command: inbox categorize --json
+    stdin: $collect.stdout
+  - id: approve
+    command: inbox apply --approve
+    stdin: $categorize.stdout
+    approval: required
+  - id: execute
+    command: inbox apply --execute
+    stdin: $categorize.stdout
+    condition: $approve.approved
+```
+
+Notes:
+
+- `stdin: $step.stdout` and `stdin: $step.json` pass a prior step’s output.
+- `condition` (or `when`) can gate steps on `$step.approved`.
 
 ## Install Lobster
 
@@ -115,6 +186,16 @@ Run a pipeline in tool mode.
 }
 ```
 
+Run a workflow file with args:
+
+```json
+{
+  "action": "run",
+  "pipeline": "/path/to/inbox-triage.lobster",
+  "argsJson": "{\"tag\":\"family\"}"
+}
+```
+
 ### `resume`
 
 Continue a halted workflow after approval.
@@ -133,6 +214,7 @@ Continue a halted workflow after approval.
 - `cwd`: Working directory for the pipeline (defaults to the current process working directory).
 - `timeoutMs`: Kill the subprocess if it exceeds this duration (default: 20000).
 - `maxStdoutBytes`: Kill the subprocess if stdout exceeds this size (default: 512000).
+- `argsJson`: JSON string passed to `lobster run --args-json` (workflow files only).
 
 ## Output envelope
 
@@ -150,6 +232,8 @@ If `requiresApproval` is present, inspect the prompt and decide:
 
 - `approve: true` → resume and continue side effects
 - `approve: false` → cancel and finalize the workflow
+
+Use `approve --preview-from-stdin --limit N` to attach a JSON preview to approval requests without custom jq/heredoc glue. Resume tokens are now compact: Lobster stores workflow resume state under its state dir and hands back a small token key.
 
 ## OpenProse
 
@@ -173,3 +257,10 @@ OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent prep,
 
 - [Plugins](/plugin)
 - [Plugin tool authoring](/plugins/agent-tools)
+
+## Case study: community workflows
+
+One public example: a “second brain” CLI + Lobster pipelines that manage three Markdown vaults (personal, partner, shared). The CLI emits JSON for stats, inbox listings, and stale scans; Lobster chains those commands into workflows like `weekly-review`, `inbox-triage`, `memory-consolidation`, and `shared-task-sync`, each with approval gates. AI handles judgment (categorization) when available and falls back to deterministic rules when not.
+
+- Thread: https://x.com/plattenschieber/status/2014508656335770033
+- Repo: https://github.com/bloomedai/brain-cli

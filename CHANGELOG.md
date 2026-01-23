@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 - Highlight: OpenProse plugin skill pack with `/prose` slash command, plugin-shipped skills, and docs. https://docs.clawd.bot/prose
 - TUI: run local shell commands with `!` after per-session consent, and warn when local exec stays disabled. (#1463) Thanks @vignesh07.
 - Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
+- Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.clawd.bot/tools/lobster
 - Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
 - Memory: prevent CLI hangs by deferring vector probes, adding sqlite-vec/embedding timeouts, and showing sync progress early.
 - Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting

@@ -159,6 +159,7 @@ export function createLobsterTool(api: ClawdbotPluginApi) {
       // NOTE: Prefer string enums in tool schemas; some providers reject unions/anyOf.
       action: Type.Unsafe<"run" | "resume">({ type: "string", enum: ["run", "resume"] }),
       pipeline: Type.Optional(Type.String()),
+      argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
       lobsterPath: Type.Optional(Type.String()),
@@ -181,7 +182,12 @@ export function createLobsterTool(api: ClawdbotPluginApi) {
         if (action === "run") {
           const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
           if (!pipeline.trim()) throw new Error("pipeline required");
-          return ["run", "--mode", "tool", pipeline];
+          const argv = ["run", "--mode", "tool", pipeline];
+          const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
+          if (argsJson.trim()) {
+            argv.push("--args-json", argsJson);
+          }
+          return argv;
         }
         if (action === "resume") {
           const token = typeof params.token === "string" ? params.token : "";
