@@ -278,8 +278,8 @@ export async function summarizeInStages(params: {
   }
 
   const summaryMessages: AgentMessage[] = partialSummaries.map((summary) => ({
-    role: "assistant",
-    content: [{ type: "text", text: summary }],
+    role: "user",
+    content: summary,
     timestamp: Date.now(),
   }));
 
