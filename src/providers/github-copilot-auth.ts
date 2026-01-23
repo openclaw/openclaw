@@ -178,7 +178,7 @@ export async function githubCopilotLoginCommand(
     }),
   );
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (github-copilot/token)`);
 
   outro("Done");
