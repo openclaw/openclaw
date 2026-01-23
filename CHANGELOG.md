@@ -4,6 +4,9 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.23
 
+### Changes
+- CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
+
 ### Fixes
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
 - Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)

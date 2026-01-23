@@ -415,7 +415,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("updateCommand restarts daemon when --restart is set", async () => {
+  it("updateCommand restarts daemon by default", async () => {
     const { runGatewayUpdate } = await import("../infra/update-runner.js");
     const { runDaemonRestart } = await import("./daemon-cli.js");
     const { updateCommand } = await import("./update-cli.js");
@@ -430,9 +430,28 @@ describe("update-cli", () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
 
-    await updateCommand({ restart: true });
+    await updateCommand({});
 
     expect(runDaemonRestart).toHaveBeenCalled();
+  });
+
+  it("updateCommand skips restart when --no-restart is set", async () => {
+    const { runGatewayUpdate } = await import("../infra/update-runner.js");
+    const { runDaemonRestart } = await import("./daemon-cli.js");
+    const { updateCommand } = await import("./update-cli.js");
+
+    const mockResult: UpdateRunResult = {
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+    };
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+
+    await updateCommand({ restart: false });
+
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("updateCommand skips success message when restart does not run", async () => {
