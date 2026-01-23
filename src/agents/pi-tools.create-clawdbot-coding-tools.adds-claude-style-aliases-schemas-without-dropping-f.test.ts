@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import "./test-helpers/fast-coding-tools.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 
 describe("createClawdbotCodingTools", () => {

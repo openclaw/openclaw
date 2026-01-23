@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
+import "./test-helpers/fast-coding-tools.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 
 const defaultTools = createClawdbotCodingTools();
