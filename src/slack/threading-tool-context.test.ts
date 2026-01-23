@@ -20,7 +20,57 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
-  it("uses dm.replyToMode for direct messages when configured", () => {
+  it("uses chat-type replyToMode overrides for direct messages when configured", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "all" },
+        },
+      },
+    } as ClawdbotConfig;
+    const result = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: { ChatType: "direct" },
+    });
+    expect(result.replyToMode).toBe("all");
+  });
+
+  it("uses top-level replyToMode for channels when no channel override is set", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "all" },
+        },
+      },
+    } as ClawdbotConfig;
+    const result = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: { ChatType: "channel" },
+    });
+    expect(result.replyToMode).toBe("off");
+  });
+
+  it("falls back to top-level when no chat-type override is set", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "first",
+        },
+      },
+    } as ClawdbotConfig;
+    const result = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: { ChatType: "direct" },
+    });
+    expect(result.replyToMode).toBe("first");
+  });
+
+  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
     const cfg = {
       channels: {
         slack: {
@@ -35,40 +85,6 @@ describe("buildSlackThreadingToolContext", () => {
       context: { ChatType: "direct" },
     });
     expect(result.replyToMode).toBe("all");
-  });
-
-  it("uses top-level replyToMode for channels even when dm.replyToMode is set", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-      },
-    } as ClawdbotConfig;
-    const result = buildSlackThreadingToolContext({
-      cfg,
-      accountId: null,
-      context: { ChatType: "channel" },
-    });
-    expect(result.replyToMode).toBe("off");
-  });
-
-  it("falls back to top-level when dm.replyToMode is not set", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          replyToMode: "first",
-          dm: { enabled: true },
-        },
-      },
-    } as ClawdbotConfig;
-    const result = buildSlackThreadingToolContext({
-      cfg,
-      accountId: null,
-      context: { ChatType: "direct" },
-    });
-    expect(result.replyToMode).toBe("first");
   });
 
   it("uses all mode when ThreadLabel is present", () => {

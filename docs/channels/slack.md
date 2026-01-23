@@ -362,23 +362,24 @@ By default, Clawdbot replies in the main channel. Use `channels.slack.replyToMod
 
 The mode applies to both auto-replies and agent tool calls (`slack sendMessage`).
 
-### DM-specific threading
-You can configure different threading behavior for DMs vs channels by setting `channels.slack.dm.replyToMode`:
+### Per-chat-type threading
+You can configure different threading behavior per chat type by setting `channels.slack.replyToModeByChatType`:
 
 ```json5
 {
   channels: {
     slack: {
       replyToMode: "off",        // default for channels
-      dm: {
-        replyToMode: "all"       // DMs always thread
-      }
+      replyToModeByChatType: {
+        direct: "all",           // DMs always thread
+        group: "first"           // group DMs/MPIM thread first reply
+      },
     }
   }
 }
 ```
 
-When `dm.replyToMode` is set, DMs use that mode; channels use the top-level `replyToMode`. If `dm.replyToMode` is not set, both DMs and channels use the top-level setting.
+When a chat-type override is set, it takes precedence for that chat type. Otherwise the top-level `replyToMode` is used. Legacy `channels.slack.dm.replyToMode` is still accepted as a fallback for `direct` when no chat-type override is set.
 
 ### Manual threading tags
 For fine-grained control, use these tags in agent responses:
