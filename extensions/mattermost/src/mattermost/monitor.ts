@@ -13,6 +13,7 @@ import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
+  resolveControlCommandGate,
   resolveChannelMediaMaxBytes,
   type HistoryEntry,
 } from "clawdbot/plugin-sdk";
@@ -398,7 +399,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       cfg,
       surface: "mattermost",
     });
-    const isControlCommand = allowTextCommands && core.channel.text.hasControlCommand(rawText, cfg);
+    const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
+    const isControlCommand = allowTextCommands && hasControlCommand;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
     const senderAllowedForCommands = isSenderAllowed({
       senderId,
@@ -410,19 +412,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderName,
       allowFrom: effectiveGroupAllowFrom,
     });
+    const commandGate = resolveControlCommandGate({
+      useAccessGroups,
+      authorizers: [
+        { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        {
+          configured: effectiveGroupAllowFrom.length > 0,
+          allowed: groupAllowedForCommands,
+        },
+      ],
+      allowTextCommands,
+      hasControlCommand,
+    });
     const commandAuthorized =
-      kind === "dm"
-        ? dmPolicy === "open" || senderAllowedForCommands
-        : core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-            useAccessGroups,
-            authorizers: [
-              { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
-              {
-                configured: effectiveGroupAllowFrom.length > 0,
-                allowed: groupAllowedForCommands,
-              },
-            ],
-          });
+      kind === "dm" ? dmPolicy === "open" || senderAllowedForCommands : commandGate.commandAuthorized;
 
     if (kind === "dm") {
       if (dmPolicy === "disabled") {
@@ -483,7 +486,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       }
     }
 
-    if (kind !== "dm" && isControlCommand && !commandAuthorized) {
+    if (kind !== "dm" && commandGate.shouldBlock) {
       logVerboseMessage(
         `mattermost: drop control command from unauthorized sender ${senderId}`,
       );

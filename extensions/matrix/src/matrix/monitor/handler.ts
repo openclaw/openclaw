@@ -4,6 +4,7 @@ import {
   createReplyPrefixContext,
   createTypingCallbacks,
   formatAllowlistMatchMeta,
+  resolveControlCommandGate,
   type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
@@ -378,20 +379,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               userName: senderName,
             })
           : false;
-      const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+      const hasControlCommandInMessage = core.channel.text.hasControlCommand(bodyText, cfg);
+      const commandGate = resolveControlCommandGate({
         useAccessGroups,
         authorizers: [
           { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
           { configured: roomUsers.length > 0, allowed: senderAllowedForRoomUsers },
           { configured: groupAllowConfigured, allowed: senderAllowedForGroup },
         ],
+        allowTextCommands,
+        hasControlCommand: hasControlCommandInMessage,
       });
-      if (
-        isRoom &&
-        allowTextCommands &&
-        core.channel.text.hasControlCommand(bodyText, cfg) &&
-        !commandAuthorized
-      ) {
+      const commandAuthorized = commandGate.commandAuthorized;
+      if (isRoom && commandGate.shouldBlock) {
         logVerboseMessage(`matrix: drop control command from unauthorized sender ${senderId}`);
         return;
       }
@@ -411,7 +411,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         !wasMentioned &&
         !hasExplicitMention &&
         commandAuthorized &&
-        core.channel.text.hasControlCommand(bodyText);
+        hasControlCommandInMessage;
       const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info({ roomId, reason: "no-mention" }, "skipping room message");

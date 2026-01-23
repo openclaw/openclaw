@@ -30,7 +30,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { normalizeE164 } from "../../utils.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -439,16 +439,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, effectiveDmAllow);
     const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
-    const commandAuthorized = isGroup
-      ? resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups,
-          authorizers: [
-            { configured: effectiveDmAllow.length > 0, allowed: ownerAllowedForCommands },
-            { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
-          ],
-        })
-      : dmAllowed;
-    if (isGroup && hasControlCommand(messageText, deps.cfg) && !commandAuthorized) {
+    const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
+    const commandGate = resolveControlCommandGate({
+      useAccessGroups,
+      authorizers: [
+        { configured: effectiveDmAllow.length > 0, allowed: ownerAllowedForCommands },
+        { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
+      ],
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+    });
+    const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAllowed;
+    if (isGroup && commandGate.shouldBlock) {
       logVerbose(`signal: drop control command from unauthorized sender ${senderDisplay}`);
       return;
     }

@@ -3,6 +3,7 @@ import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
+  resolveControlCommandGate,
   resolveMentionGating,
   formatAllowlistMatchMeta,
   type HistoryEntry,
@@ -251,14 +252,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderId,
       senderName,
     });
-    const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+    const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
+    const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
         { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
       ],
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
     });
-    if (core.channel.text.hasControlCommand(text, cfg) && !commandAuthorized) {
+    const commandAuthorized = commandGate.commandAuthorized;
+    if (commandGate.shouldBlock) {
       logVerboseMessage(`msteams: drop control command from unauthorized sender ${senderId}`);
       return;
     }

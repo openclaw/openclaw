@@ -41,7 +41,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { probeIMessage } from "../probe.js";
@@ -372,25 +372,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             chatIdentifier,
           })
         : false;
-    const commandAuthorized = isGroup
-      ? resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups,
-          authorizers: [
-            { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-            { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
-          ],
-        })
-      : dmAuthorized;
-    if (isGroup && hasControlCommand(messageText, cfg) && !commandAuthorized) {
+    const hasControlCommandInMessage = hasControlCommand(messageText, cfg);
+    const commandGate = resolveControlCommandGate({
+      useAccessGroups,
+      authorizers: [
+        { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+        { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+      ],
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+    });
+    const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
+    if (isGroup && commandGate.shouldBlock) {
       logVerbose(`imessage: drop control command from unauthorized sender ${sender}`);
       return;
     }
     const shouldBypassMention =
-      isGroup &&
-      requireMention &&
-      !mentioned &&
-      commandAuthorized &&
-      hasControlCommand(messageText);
+      isGroup && requireMention && !mentioned && commandAuthorized && hasControlCommandInMessage;
     const effectiveWasMentioned = mentioned || shouldBypassMention;
     if (isGroup && requireMention && canDetectMention && !mentioned && !shouldBypassMention) {
       logVerbose(`imessage: skipping group message (no mention)`);

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
-import { resolveAckReaction } from "clawdbot/plugin-sdk";
+import { resolveAckReaction, resolveControlCommandGate } from "clawdbot/plugin-sdk";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
@@ -1346,18 +1346,19 @@ async function processMessage(
         })
       : false;
   const dmAuthorized = dmPolicy === "open" || ownerAllowedForCommands;
-  const commandAuthorized = isGroup
-    ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups,
-        authorizers: [
-          { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-          { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
-        ],
-      })
-    : dmAuthorized;
+  const commandGate = resolveControlCommandGate({
+    useAccessGroups,
+    authorizers: [
+      { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+    ],
+    allowTextCommands: true,
+    hasControlCommand: hasControlCmd,
+  });
+  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
 
   // Block control commands from unauthorized senders in groups
-  if (isGroup && hasControlCmd && !commandAuthorized) {
+  if (isGroup && commandGate.shouldBlock) {
     logVerbose(
       core,
       runtime,

@@ -1,4 +1,4 @@
-import type { ClawdbotConfig, RuntimeEnv } from "clawdbot/plugin-sdk";
+import { resolveControlCommandGate, type ClawdbotConfig, type RuntimeEnv } from "clawdbot/plugin-sdk";
 
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
@@ -118,7 +118,11 @@ export async function handleNextcloudTalkInbound(params: {
     senderId,
     senderName,
   }).allowed;
-  const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    rawBody,
+    config as ClawdbotConfig,
+  );
+  const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
       {
@@ -127,7 +131,10 @@ export async function handleNextcloudTalkInbound(params: {
         allowed: senderAllowedForCommands,
       },
     ],
+    allowTextCommands,
+    hasControlCommand,
   });
+  const commandAuthorized = commandGate.commandAuthorized;
 
   if (isGroup) {
     const groupAllow = resolveNextcloudTalkGroupAllow({
@@ -188,12 +195,7 @@ export async function handleNextcloudTalkInbound(params: {
     }
   }
 
-  if (
-    isGroup &&
-    allowTextCommands &&
-    core.channel.text.hasControlCommand(rawBody, config as ClawdbotConfig) &&
-    commandAuthorized !== true
-  ) {
+  if (isGroup && commandGate.shouldBlock) {
     runtime.log?.(
       `nextcloud-talk: drop control command from unauthorized sender ${senderId}`,
     );
@@ -212,10 +214,6 @@ export async function handleNextcloudTalkInbound(params: {
         wildcardConfig: roomMatch.wildcardConfig,
       })
     : false;
-  const hasControlCommand = core.channel.text.hasControlCommand(
-    rawBody,
-    config as ClawdbotConfig,
-  );
   const mentionGate = resolveNextcloudTalkMentionGate({
     isGroup,
     requireMention: shouldRequireMention,
