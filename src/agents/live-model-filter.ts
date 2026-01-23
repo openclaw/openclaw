@@ -66,6 +66,10 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return matchesPrefix(id, XAI_PREFIXES);
   }
 
+  if (provider === "opencode" && id.endsWith("-free")) {
+    return false;
+  }
+
   if (provider === "openrouter" || provider === "opencode") {
     return matchesAny(id, [
       ...ANTHROPIC_PREFIXES,
