@@ -73,7 +73,7 @@ export class SearchableSelectList implements Component {
    */
   private smartFilter(query: string): SelectItem[] {
     const q = query.toLowerCase();
-    type ScoredItem = { item: SelectItem; score: number };
+    type ScoredItem = { item: SelectItem; tier: number; score: number };
     const scoredItems: ScoredItem[] = [];
     const fuzzyCandidates: SelectItem[] = [];
 
@@ -81,22 +81,22 @@ export class SearchableSelectList implements Component {
       const label = item.label.toLowerCase();
       const desc = (item.description ?? "").toLowerCase();
 
-      // Tier 1: Exact substring in label (score 0-99)
+      // Tier 1: Exact substring in label
       const labelIndex = label.indexOf(q);
       if (labelIndex !== -1) {
-        scoredItems.push({ item, score: labelIndex });
+        scoredItems.push({ item, tier: 0, score: labelIndex });
         continue;
       }
-      // Tier 2: Word-boundary prefix in label (score 100-199)
+      // Tier 2: Word-boundary prefix in label
       const wordBoundaryIndex = findWordBoundaryIndex(label, q);
       if (wordBoundaryIndex !== null) {
-        scoredItems.push({ item, score: 100 + wordBoundaryIndex });
+        scoredItems.push({ item, tier: 1, score: wordBoundaryIndex });
         continue;
       }
-      // Tier 3: Exact substring in description (score 200-299)
+      // Tier 3: Exact substring in description
       const descIndex = desc.indexOf(q);
       if (descIndex !== -1) {
-        scoredItems.push({ item, score: 200 + descIndex });
+        scoredItems.push({ item, tier: 2, score: descIndex });
         continue;
       }
       // Tier 4: Fuzzy match (score 300+)
@@ -108,10 +108,7 @@ export class SearchableSelectList implements Component {
     const preparedCandidates = prepareSearchItems(fuzzyCandidates);
     const fuzzyMatches = fuzzyFilterLower(preparedCandidates, q);
 
-    return [
-      ...scoredItems.map((s) => s.item),
-      ...fuzzyMatches,
-    ];
+    return [...scoredItems.map((s) => s.item), ...fuzzyMatches];
   }
 
   private escapeRegex(str: string): string {
@@ -119,9 +116,10 @@ export class SearchableSelectList implements Component {
   }
 
   private compareByScore = (
-    a: { item: SelectItem; score: number },
-    b: { item: SelectItem; score: number },
+    a: { item: SelectItem; tier: number; score: number },
+    b: { item: SelectItem; tier: number; score: number },
   ) => {
+    if (a.tier !== b.tier) return a.tier - b.tier;
     if (a.score !== b.score) return a.score - b.score;
     return this.getItemLabel(a.item).localeCompare(this.getItemLabel(b.item));
   };
