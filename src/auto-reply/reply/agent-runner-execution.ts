@@ -82,7 +82,8 @@ export async function runAgentTurnWithFallback(params: {
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
-  const runId = crypto.randomUUID();
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  params.opts?.onAgentRunStart?.(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
@@ -174,6 +175,7 @@ export async function runAgentTurnWithFallback(params: {
               extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
               ownerNumbers: params.followupRun.run.ownerNumbers,
               cliSessionId,
+              images: params.opts?.images,
             })
               .then((result) => {
                 emitAgentEvent({
@@ -248,6 +250,8 @@ export async function runAgentTurnWithFallback(params: {
             bashElevated: params.followupRun.run.bashElevated,
             timeoutMs: params.followupRun.run.timeoutMs,
             runId,
+            images: params.opts?.images,
+            abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
             onPartialReply: allowPartialStream

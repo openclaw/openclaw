@@ -7,7 +7,7 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../../auto-reply/reply/response-prefix-template.js";
-import { dispatchReplyFromConfig } from "../../../auto-reply/reply/dispatch-from-config.js";
+import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntries } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
@@ -104,7 +104,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     onReplyStart,
   });
 
-  const { queuedFinal, counts } = await dispatchReplyFromConfig({
+  const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
     cfg,
     dispatcher,
