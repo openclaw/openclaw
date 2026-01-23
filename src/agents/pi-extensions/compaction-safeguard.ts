@@ -1,12 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
-import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
-
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-
-const BASE_CHUNK_RATIO = 0.4;
-const MIN_CHUNK_RATIO = 0.15;
-const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
+import {
+  BASE_CHUNK_RATIO,
+  MIN_CHUNK_RATIO,
+  SAFETY_MARGIN,
+  computeAdaptiveChunkRatio,
+  estimateMessagesTokens,
+  isOversizedForSummary,
+  pruneHistoryForContextShare,
+  resolveContextWindowTokens,
+  summarizeInStages,
+} from "../compaction.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
@@ -129,175 +133,6 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   return `\n\n${sections.join("\n\n")}`;
 }
 
-function chunkMessages(messages: AgentMessage[], maxTokens: number): AgentMessage[][] {
-  if (messages.length === 0) return [];
-
-  const chunks: AgentMessage[][] = [];
-  let currentChunk: AgentMessage[] = [];
-  let currentTokens = 0;
-
-  for (const message of messages) {
-    const messageTokens = estimateTokens(message);
-    if (currentChunk.length > 0 && currentTokens + messageTokens > maxTokens) {
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
-    }
-
-    currentChunk.push(message);
-    currentTokens += messageTokens;
-
-    if (messageTokens > maxTokens) {
-      // Split oversized messages to avoid unbounded chunk growth.
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
-    }
-  }
-
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  return chunks;
-}
-
-/**
- * Compute adaptive chunk ratio based on average message size.
- * When messages are large, we use smaller chunks to avoid exceeding model limits.
- */
-function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindow: number): number {
-  if (messages.length === 0) return BASE_CHUNK_RATIO;
-
-  const totalTokens = messages.reduce((sum, m) => sum + estimateTokens(m), 0);
-  const avgTokens = totalTokens / messages.length;
-
-  // Apply safety margin to account for estimation inaccuracy
-  const safeAvgTokens = avgTokens * SAFETY_MARGIN;
-  const avgRatio = safeAvgTokens / contextWindow;
-
-  // If average message is > 10% of context, reduce chunk ratio
-  if (avgRatio > 0.1) {
-    const reduction = Math.min(avgRatio * 2, BASE_CHUNK_RATIO - MIN_CHUNK_RATIO);
-    return Math.max(MIN_CHUNK_RATIO, BASE_CHUNK_RATIO - reduction);
-  }
-
-  return BASE_CHUNK_RATIO;
-}
-
-/**
- * Check if a single message is too large to summarize.
- * If single message > 50% of context, it can't be summarized safely.
- */
-function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateTokens(msg) * SAFETY_MARGIN;
-  return tokens > contextWindow * 0.5;
-}
-
-async function summarizeChunks(params: {
-  messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
-  apiKey: string;
-  signal: AbortSignal;
-  reserveTokens: number;
-  maxChunkTokens: number;
-  customInstructions?: string;
-  previousSummary?: string;
-}): Promise<string> {
-  if (params.messages.length === 0) {
-    return params.previousSummary ?? "No prior history.";
-  }
-
-  const chunks = chunkMessages(params.messages, params.maxChunkTokens);
-  let summary = params.previousSummary;
-
-  for (const chunk of chunks) {
-    summary = await generateSummary(
-      chunk,
-      params.model,
-      params.reserveTokens,
-      params.apiKey,
-      params.signal,
-      params.customInstructions,
-      summary,
-    );
-  }
-
-  return summary ?? "No prior history.";
-}
-
-/**
- * Summarize with progressive fallback for handling oversized messages.
- * If full summarization fails, tries partial summarization excluding oversized messages.
- */
-async function summarizeWithFallback(params: {
-  messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
-  apiKey: string;
-  signal: AbortSignal;
-  reserveTokens: number;
-  maxChunkTokens: number;
-  contextWindow: number;
-  customInstructions?: string;
-  previousSummary?: string;
-}): Promise<string> {
-  const { messages, contextWindow } = params;
-
-  if (messages.length === 0) {
-    return params.previousSummary ?? "No prior history.";
-  }
-
-  // Try full summarization first
-  try {
-    return await summarizeChunks(params);
-  } catch (fullError) {
-    console.warn(
-      `Full summarization failed, trying partial: ${
-        fullError instanceof Error ? fullError.message : String(fullError)
-      }`,
-    );
-  }
-
-  // Fallback 1: Summarize only small messages, note oversized ones
-  const smallMessages: AgentMessage[] = [];
-  const oversizedNotes: string[] = [];
-
-  for (const msg of messages) {
-    if (isOversizedForSummary(msg, contextWindow)) {
-      const role = (msg as { role?: string }).role ?? "message";
-      const tokens = estimateTokens(msg);
-      oversizedNotes.push(
-        `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
-      );
-    } else {
-      smallMessages.push(msg);
-    }
-  }
-
-  if (smallMessages.length > 0) {
-    try {
-      const partialSummary = await summarizeChunks({
-        ...params,
-        messages: smallMessages,
-      });
-      const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
-      return partialSummary + notes;
-    } catch (partialError) {
-      console.warn(
-        `Partial summarization also failed: ${
-          partialError instanceof Error ? partialError.message : String(partialError)
-        }`,
-      );
-    }
-  }
-
-  // Final fallback: Just note what was there
-  return (
-    `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-    `Summary unavailable due to size limits.`
-  );
-}
-
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
@@ -335,19 +170,48 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     try {
-      const contextWindowTokens = Math.max(
-        1,
-        Math.floor(model.contextWindow ?? DEFAULT_CONTEXT_TOKENS),
-      );
+      const contextWindowTokens = resolveContextWindowTokens(model);
+      const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+      let messagesToSummarize = preparation.messagesToSummarize;
+
+      const tokensBefore =
+        typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
+          ? preparation.tokensBefore
+          : undefined;
+      if (tokensBefore !== undefined) {
+        const summarizableTokens =
+          estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
+        const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
+        const maxHistoryTokens = Math.floor(contextWindowTokens * 0.5);
+
+        if (newContentTokens > maxHistoryTokens) {
+          const pruned = pruneHistoryForContextShare({
+            messages: messagesToSummarize,
+            maxContextTokens: contextWindowTokens,
+            maxHistoryShare: 0.5,
+            parts: 2,
+          });
+          if (pruned.droppedChunks > 0) {
+            const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
+            console.warn(
+              `Compaction safeguard: new content uses ${newContentRatio.toFixed(
+                1,
+              )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
+                `(${pruned.droppedMessages} messages) to fit history budget.`,
+            );
+            messagesToSummarize = pruned.messages;
+          }
+        }
+      }
 
       // Use adaptive chunk ratio based on message sizes
-      const allMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
       const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
 
-      const historySummary = await summarizeWithFallback({
-        messages: preparation.messagesToSummarize,
+      const historySummary = await summarizeInStages({
+        messages: messagesToSummarize,
         model,
         apiKey,
         signal,
@@ -359,9 +223,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
 
       let summary = historySummary;
-      if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
-        const prefixSummary = await summarizeWithFallback({
-          messages: preparation.turnPrefixMessages,
+      if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+        const prefixSummary = await summarizeInStages({
+          messages: turnPrefixMessages,
           model,
           apiKey,
           signal,
@@ -369,6 +233,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           maxChunkTokens,
           contextWindow: contextWindowTokens,
           customInstructions: TURN_PREFIX_INSTRUCTIONS,
+          previousSummary: undefined,
         });
         summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;
       }
