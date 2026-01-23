@@ -6,18 +6,20 @@ import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
+import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
+import { resolveTelegramFetch } from "./fetch.js";
+
+let createTelegramBot: typeof import("./bot.js").createTelegramBot;
+let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
+let resetInboundDedupe: typeof import("../auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
+let replyModule: typeof import("../auto-reply/reply.js");
 const { listSkillCommandsForAgents } = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));
 vi.mock("../auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents,
 }));
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import * as replyModule from "../auto-reply/reply.js";
-import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
-import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
-import { resolveTelegramFetch } from "./fetch.js";
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
   return listSkillCommandsForAgents({ cfg: config });
@@ -155,7 +157,11 @@ const getOnHandler = (event: string) => {
 
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resetInboundDedupe } = await import("../auto-reply/reply/inbound-dedupe.js"));
+    ({ createTelegramBot, getTelegramSequentialKey } = await import("./bot.js"));
+    replyModule = await import("../auto-reply/reply.js");
     process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
