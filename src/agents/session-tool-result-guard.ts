@@ -79,6 +79,16 @@ export function installSessionToolResultGuard(
       message: AgentMessage,
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
     ) => AgentMessage;
+    /**
+     * Whether to strip <final> tags from assistant text before persistence.
+     * Defaults to true.
+     */
+    stripFinalTags?: boolean;
+    /**
+     * Whether to synthesize missing tool results to satisfy strict providers.
+     * Defaults to true.
+     */
+    allowSyntheticToolResults?: boolean;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -95,17 +105,22 @@ export function installSessionToolResultGuard(
     return transformer ? transformer(message, meta) : message;
   };
 
+  const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
+  const stripFinalTags = opts?.stripFinalTags ?? true;
+
   const flushPendingToolResults = () => {
     if (pending.size === 0) return;
-    for (const [id, name] of pending.entries()) {
-      const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
-      originalAppend(
-        persistToolResult(synthetic, {
-          toolCallId: id,
-          toolName: name,
-          isSynthetic: true,
-        }) as never,
-      );
+    if (allowSyntheticToolResults) {
+      for (const [id, name] of pending.entries()) {
+        const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+        originalAppend(
+          persistToolResult(synthetic, {
+            toolCallId: id,
+            toolName: name,
+            isSynthetic: true,
+          }) as never,
+        );
+      }
     }
     pending.clear();
   };
@@ -127,7 +142,7 @@ export function installSessionToolResultGuard(
     }
 
     const sanitized =
-      role === "assistant"
+      role === "assistant" && stripFinalTags
         ? stripFinalTagsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
         : message;
     const toolCalls =
@@ -135,13 +150,15 @@ export function installSessionToolResultGuard(
         ? extractAssistantToolCalls(sanitized as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
-    // If previous tool calls are still pending, flush before non-tool results.
-    if (pending.size > 0 && (toolCalls.length === 0 || role !== "assistant")) {
-      flushPendingToolResults();
-    }
-    // If new tool calls arrive while older ones are pending, flush the old ones first.
-    if (pending.size > 0 && toolCalls.length > 0) {
-      flushPendingToolResults();
+    if (allowSyntheticToolResults) {
+      // If previous tool calls are still pending, flush before non-tool results.
+      if (pending.size > 0 && (toolCalls.length === 0 || role !== "assistant")) {
+        flushPendingToolResults();
+      }
+      // If new tool calls arrive while older ones are pending, flush the old ones first.
+      if (pending.size > 0 && toolCalls.length > 0) {
+        flushPendingToolResults();
+      }
     }
 
     const result = originalAppend(sanitized as never);

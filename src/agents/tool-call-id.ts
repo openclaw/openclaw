@@ -2,27 +2,20 @@ import { createHash } from "node:crypto";
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-export type ToolCallIdMode = "standard" | "strict" | "strict9";
+export type ToolCallIdMode = "strict" | "strict9";
 
 const STRICT9_LEN = 9;
 
 /**
  * Sanitize a tool call ID to be compatible with various providers.
  *
- * - "standard" mode: allows [a-zA-Z0-9_-], better readability (default)
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
-export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "standard"): string {
+export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
     if (mode === "strict9") return "defaultid";
-    return mode === "strict" ? "defaulttoolid" : "default_tool_id";
-  }
-
-  if (mode === "strict") {
-    // Some providers require strictly alphanumeric tool call IDs.
-    const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
-    return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
+    return "defaulttoolid";
   }
 
   if (mode === "strict9") {
@@ -32,26 +25,18 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "standard"
     return shortHash("sanitized", STRICT9_LEN);
   }
 
-  // Standard mode: allow underscores and hyphens for better readability in logs
-  const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const trimmed = sanitized.replace(/^[^a-zA-Z0-9_-]+/, "");
-  return trimmed.length > 0 ? trimmed : "sanitized_tool_id";
+  // Some providers require strictly alphanumeric tool call IDs.
+  const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
+  return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
 }
 
-export function isValidCloudCodeAssistToolId(
-  id: string,
-  mode: ToolCallIdMode = "standard",
-): boolean {
+export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
   if (!id || typeof id !== "string") return false;
-  if (mode === "strict") {
-    // Strictly alphanumeric for providers with tighter tool ID constraints
-    return /^[a-zA-Z0-9]+$/.test(id);
-  }
   if (mode === "strict9") {
     return /^[a-zA-Z0-9]{9}$/.test(id);
   }
-  // Standard mode allows underscores and hyphens
-  return /^[a-zA-Z0-9_-]+$/.test(id);
+  // Strictly alphanumeric for providers with tighter tool ID constraints
+  return /^[a-zA-Z0-9]+$/.test(id);
 }
 
 function shortHash(text: string, length = 8): string {
@@ -78,7 +63,7 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   if (!params.used.has(base)) return base;
 
   const hash = shortHash(params.id);
-  // Use separator based on mode: underscore for standard (readable), none for strict
+  // Use separator based on mode: none for strict, underscore for non-strict variants
   const separator = params.mode === "strict" ? "" : "_";
   const maxBaseLen = MAX_LEN - separator.length - hash.length;
   const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
@@ -154,16 +139,15 @@ function rewriteToolResultIds(params: {
  * Sanitize tool call IDs for provider compatibility.
  *
  * @param messages - The messages to sanitize
- * @param mode - "standard" (default, allows _-), "strict" (alphanumeric only), or "strict9" (alphanumeric length 9)
+ * @param mode - "strict" (alphanumeric only) or "strict9" (alphanumeric length 9)
  */
 export function sanitizeToolCallIdsForCloudCodeAssist(
   messages: AgentMessage[],
-  mode: ToolCallIdMode = "standard",
+  mode: ToolCallIdMode = "strict",
 ): AgentMessage[] {
-  // Standard mode: allows [a-zA-Z0-9_-] for better readability in session logs
   // Strict mode: only [a-zA-Z0-9]
   // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
-  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `a_b` or `ab`).
+  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `ab`).
   // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.
   const map = new Map<string, string>();
   const used = new Set<string>();

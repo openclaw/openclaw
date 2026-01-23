@@ -28,7 +28,7 @@ Docs: https://docs.clawd.bot
 - Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.
 - Agents: surface concrete API error details instead of generic AI service errors.
 - Exec approvals: allow per-segment allowlists for chained shell commands on gateway + node hosts. (#1458) Thanks @czekaj.
-- Agents: avoid sanitizing tool call IDs for OpenAI responses to preserve Pi pairing.
+- Agents: make OpenAI sessions image-sanitize-only; gate tool-id/repair sanitization by provider.
 - Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
 

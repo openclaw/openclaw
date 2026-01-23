@@ -7,16 +7,16 @@ import {
 } from "./tool-call-id.js";
 
 describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
-  describe("standard mode (default)", () => {
+  describe("strict mode (default)", () => {
     it("is a no-op for already-valid non-colliding IDs", () => {
       const input = [
         {
           role: "assistant",
-          content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+          content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
         },
         {
           role: "toolResult",
-          toolCallId: "call_1",
+          toolCallId: "call1",
           toolName: "read",
           content: [{ type: "text", text: "ok" }],
         },
@@ -26,7 +26,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(out).toBe(input);
     });
 
-    it("replaces invalid characters with underscores (preserves readability)", () => {
+    it("strips non-alphanumeric characters from tool call IDs", () => {
       const input = [
         {
           role: "assistant",
@@ -45,9 +45,9 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
       const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
       const toolCall = assistant.content?.[0] as { id?: string };
-      // Standard mode preserves underscores for readability
-      expect(toolCall.id).toBe("call_item_123");
-      expect(isValidCloudCodeAssistToolId(toolCall.id as string)).toBe(true);
+      // Strict mode strips all non-alphanumeric characters
+      expect(toolCall.id).toBe("callitem123");
+      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "strict")).toBe(true);
 
       const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
       expect(result.toolCallId).toBe(toolCall.id);
@@ -85,8 +85,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(typeof a.id).toBe("string");
       expect(typeof b.id).toBe("string");
       expect(a.id).not.toBe(b.id);
-      expect(isValidCloudCodeAssistToolId(a.id as string)).toBe(true);
-      expect(isValidCloudCodeAssistToolId(b.id as string)).toBe(true);
+      expect(isValidCloudCodeAssistToolId(a.id as string, "strict")).toBe(true);
+      expect(isValidCloudCodeAssistToolId(b.id as string, "strict")).toBe(true);
 
       const r1 = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
       const r2 = out[2] as Extract<AgentMessage, { role: "toolResult" }>;
@@ -129,8 +129,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(a.id).not.toBe(b.id);
       expect(a.id?.length).toBeLessThanOrEqual(40);
       expect(b.id?.length).toBeLessThanOrEqual(40);
-      expect(isValidCloudCodeAssistToolId(a.id as string)).toBe(true);
-      expect(isValidCloudCodeAssistToolId(b.id as string)).toBe(true);
+      expect(isValidCloudCodeAssistToolId(a.id as string, "strict")).toBe(true);
+      expect(isValidCloudCodeAssistToolId(b.id as string, "strict")).toBe(true);
 
       const r1 = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
       const r2 = out[2] as Extract<AgentMessage, { role: "toolResult" }>;

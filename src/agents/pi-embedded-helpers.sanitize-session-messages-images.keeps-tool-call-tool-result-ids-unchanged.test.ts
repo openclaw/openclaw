@@ -43,49 +43,6 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(toolResult.toolCallId).toBe("call_123|fc_456");
   });
 
-  it("sanitizes tool call + tool result IDs in standard mode (preserves underscores)", async () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_123|fc_456",
-            name: "read",
-            arguments: { path: "package.json" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_456",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
-    ] satisfies AgentMessage[];
-
-    const out = await sanitizeSessionMessagesImages(input, "test", {
-      sanitizeToolCallIds: true,
-    });
-
-    const assistant = out[0] as unknown as { role?: string; content?: unknown };
-    expect(assistant.role).toBe("assistant");
-    expect(Array.isArray(assistant.content)).toBe(true);
-    const toolCall = (assistant.content as Array<{ type?: string; id?: string }>).find(
-      (b) => b.type === "toolCall",
-    );
-    // Standard mode preserves underscores for readability, replaces invalid chars
-    expect(toolCall?.id).toBe("call_123_fc_456");
-
-    const toolResult = out[1] as unknown as {
-      role?: string;
-      toolCallId?: string;
-    };
-    expect(toolResult.role).toBe("toolResult");
-    expect(toolResult.toolCallId).toBe("call_123_fc_456");
-  });
-
   it("sanitizes tool call + tool result IDs in strict mode (alphanumeric only)", async () => {
     const input = [
       {
