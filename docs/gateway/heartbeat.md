@@ -92,6 +92,14 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
 }
 ```
 
+### Scope and precedence
+
+- `agents.defaults.heartbeat` sets global heartbeat behavior.
+- `agents.list[].heartbeat` merges on top; if any agent has a `heartbeat` block, **only those agents** run heartbeats.
+- `channels.defaults.heartbeat` sets visibility defaults for all channels.
+- `channels.<channel>.heartbeat` overrides channel defaults.
+- `channels.<channel>.accounts.<id>.heartbeat` (multi-account channels) overrides per-channel settings.
+
 ### Per-agent heartbeats
 
 If any `agents.list[]` entry includes a `heartbeat` block, **only those agents**
@@ -179,6 +187,44 @@ channels:
 ```
 
 Precedence: per-account → per-channel → channel defaults → built-in defaults.
+
+### What each flag does
+
+- `showOk`: sends a `HEARTBEAT_OK` acknowledgment when the model returns an OK-only reply.
+- `showAlerts`: sends the alert content when the model returns a non-OK reply.
+- `useIndicator`: emits indicator events for UI status surfaces.
+
+If **all three** are false, Clawdbot skips the heartbeat run entirely (no model call).
+
+### Per-channel vs per-account examples
+
+```yaml
+channels:
+  defaults:
+    heartbeat:
+      showOk: false
+      showAlerts: true
+      useIndicator: true
+  slack:
+    heartbeat:
+      showOk: true # all Slack accounts
+    accounts:
+      ops:
+        heartbeat:
+          showAlerts: false # suppress alerts for the ops account only
+  telegram:
+    heartbeat:
+      showOk: true
+```
+
+### Common patterns
+
+| Goal | Config |
+| --- | --- |
+| Default behavior (silent OKs, alerts on) | *(no config needed)* |
+| Fully silent (no messages, no indicator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
+| Indicator-only (no messages) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }` |
+| OKs in one channel only | `channels.telegram.heartbeat: { showOk: true }` |
 
 ## HEARTBEAT.md (optional)
 
