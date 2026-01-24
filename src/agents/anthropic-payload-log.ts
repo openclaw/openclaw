@@ -90,6 +90,18 @@ function safeJsonStringify(value: unknown): string | null {
   }
 }
 
+function formatError(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return String(error);
+  }
+  if (error && typeof error === "object") {
+    return safeJsonStringify(error) ?? "unknown error";
+  }
+  return undefined;
+}
+
 function digest(value: unknown): string | undefined {
   const serialized = safeJsonStringify(value);
   if (!serialized) return undefined;
@@ -163,7 +175,7 @@ export function createAnthropicPayloadLogger(params: {
         options?.onPayload?.(payload);
       };
       return streamFn(model, context, {
-        ...(options ?? {}),
+        ...options,
         onPayload: nextOnPayload,
       });
     };
@@ -172,13 +184,14 @@ export function createAnthropicPayloadLogger(params: {
 
   const recordUsage: AnthropicPayloadLogger["recordUsage"] = (messages, error) => {
     const usage = findLastAssistantUsage(messages);
+    const errorMessage = formatError(error);
     if (!usage) {
-      if (error) {
+      if (errorMessage) {
         record({
           ...base,
           ts: new Date().toISOString(),
           stage: "usage",
-          error: String(error),
+          error: errorMessage,
         });
       }
       return;
@@ -188,7 +201,7 @@ export function createAnthropicPayloadLogger(params: {
       ts: new Date().toISOString(),
       stage: "usage",
       usage,
-      error: error ? String(error) : undefined,
+      error: errorMessage,
     });
     log.info("anthropic usage", {
       runId: params.runId,
