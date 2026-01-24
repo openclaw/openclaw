@@ -1973,25 +1973,25 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String
-    public let cwd: String?
-    public let host: String?
-    public let security: String?
-    public let ask: String?
-    public let agentid: String?
-    public let resolvedpath: String?
-    public let sessionkey: String?
+    public let cwd: AnyCodable?
+    public let host: AnyCodable?
+    public let security: AnyCodable?
+    public let ask: AnyCodable?
+    public let agentid: AnyCodable?
+    public let resolvedpath: AnyCodable?
+    public let sessionkey: AnyCodable?
     public let timeoutms: Int?
 
     public init(
         id: String?,
         command: String,
-        cwd: String?,
-        host: String?,
-        security: String?,
-        ask: String?,
-        agentid: String?,
-        resolvedpath: String?,
-        sessionkey: String?,
+        cwd: AnyCodable?,
+        host: AnyCodable?,
+        security: AnyCodable?,
+        ask: AnyCodable?,
+        agentid: AnyCodable?,
+        resolvedpath: AnyCodable?,
+        sessionkey: AnyCodable?,
         timeoutms: Int?
     ) {
         self.id = id
