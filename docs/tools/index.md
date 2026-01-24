@@ -379,10 +379,10 @@ List sessions, inspect transcript history, or send to another session.
 
 Core parameters:
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
-- `sessions_history`: `sessionKey`, `limit?`, `includeTools?`
-- `sessions_send`: `sessionKey`, `message`, `timeoutSeconds?` (0 = fire-and-forget)
+- `sessions_history`: `sessionKey` (or `sessionId`), `limit?`, `includeTools?`
+- `sessions_send`: `sessionKey` (or `sessionId`), `message`, `timeoutSeconds?` (0 = fire-and-forget)
 - `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
-- `session_status`: `sessionKey?` (default current), `model?` (`default` clears override)
+- `session_status`: `sessionKey?` (default current; accepts `sessionId`), `model?` (`default` clears override)
 
 Notes:
 - `main` is the canonical direct-chat key; global/unknown are hidden.

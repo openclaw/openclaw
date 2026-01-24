@@ -40,7 +40,13 @@ import {
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+import {
+  shouldResolveSessionIdInput,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+  createAgentToAgentPolicy,
+} from "./sessions-helpers.js";
+import { loadCombinedSessionStoreForGateway } from "../../gateway/session-utils.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -149,6 +155,22 @@ function resolveSessionEntry(params: {
   return null;
 }
 
+function resolveSessionKeyFromSessionId(params: {
+  cfg: ClawdbotConfig;
+  sessionId: string;
+  agentId?: string;
+}): string | null {
+  const trimmed = params.sessionId.trim();
+  if (!trimmed) return null;
+  const { store } = loadCombinedSessionStoreForGateway(params.cfg);
+  const match = Object.entries(store).find(([key, entry]) => {
+    if (entry?.sessionId !== trimmed) return false;
+    if (!params.agentId) return true;
+    return resolveAgentIdFromSessionKey(key) === params.agentId;
+  });
+  return match?.[0] ?? null;
+}
+
 async function resolveModelOverride(params: {
   cfg: ClawdbotConfig;
   raw: string;
@@ -222,24 +244,74 @@ export function createSessionStatusTool(opts?: {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
 
-      const requestedKeyRaw = readStringParam(params, "sessionKey") ?? opts?.agentSessionKey;
+      const requestedKeyParam = readStringParam(params, "sessionKey");
+      let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
 
-      const agentId = resolveAgentIdFromSessionKey(opts?.agentSessionKey ?? requestedKeyRaw);
-      const storePath = resolveStorePath(cfg.session?.store, { agentId });
-      const store = loadSessionStore(storePath);
+      const requesterAgentId = resolveAgentIdFromSessionKey(
+        opts?.agentSessionKey ?? requestedKeyRaw,
+      );
+      const ensureAgentAccess = (targetAgentId: string) => {
+        if (targetAgentId === requesterAgentId) return;
+        // Gate cross-agent access behind tools.agentToAgent settings.
+        if (!a2aPolicy.enabled) {
+          throw new Error(
+            "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
+          );
+        }
+        if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
+          throw new Error("Agent-to-agent session status denied by tools.agentToAgent.allow.");
+        }
+      };
 
-      const resolved = resolveSessionEntry({
+      if (requestedKeyRaw.startsWith("agent:")) {
+        ensureAgentAccess(resolveAgentIdFromSessionKey(requestedKeyRaw));
+      }
+
+      const isExplicitAgentKey = requestedKeyRaw.startsWith("agent:");
+      let agentId = isExplicitAgentKey
+        ? resolveAgentIdFromSessionKey(requestedKeyRaw)
+        : requesterAgentId;
+      let storePath = resolveStorePath(cfg.session?.store, { agentId });
+      let store = loadSessionStore(storePath);
+
+      // Resolve against the requester-scoped store first to avoid leaking default agent data.
+      let resolved = resolveSessionEntry({
         store,
         keyRaw: requestedKeyRaw,
         alias,
         mainKey,
       });
+
+      if (!resolved && shouldResolveSessionIdInput(requestedKeyRaw)) {
+        const resolvedKey = resolveSessionKeyFromSessionId({
+          cfg,
+          sessionId: requestedKeyRaw,
+          agentId: a2aPolicy.enabled ? undefined : requesterAgentId,
+        });
+        if (resolvedKey) {
+          // If resolution points at another agent, enforce A2A policy before switching stores.
+          ensureAgentAccess(resolveAgentIdFromSessionKey(resolvedKey));
+          requestedKeyRaw = resolvedKey;
+          agentId = resolveAgentIdFromSessionKey(resolvedKey);
+          storePath = resolveStorePath(cfg.session?.store, { agentId });
+          store = loadSessionStore(storePath);
+          resolved = resolveSessionEntry({
+            store,
+            keyRaw: requestedKeyRaw,
+            alias,
+            mainKey,
+          });
+        }
+      }
+
       if (!resolved) {
-        throw new Error(`Unknown sessionKey: ${requestedKeyRaw}`);
+        const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
+        throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });

@@ -56,19 +56,20 @@ Row shape (JSON):
 Fetch transcript for one session.
 
 Parameters:
-- `sessionKey` (required)
+- `sessionKey` (required; accepts session key or `sessionId` from `sessions_list`)
 - `limit?: number` max messages (server clamps)
 - `includeTools?: boolean` (default false)
 
 Behavior:
 - `includeTools=false` filters `role: "toolResult"` messages.
 - Returns messages array in the raw transcript format.
+- When given a `sessionId`, Clawdbot resolves it to the corresponding session key (missing ids error).
 
 ## sessions_send
 Send a message into another session.
 
 Parameters:
-- `sessionKey` (required)
+- `sessionKey` (required; accepts session key or `sessionId` from `sessions_list`)
 - `message` (required)
 - `timeoutSeconds?: number` (default >0; 0 = fire-and-forget)
 

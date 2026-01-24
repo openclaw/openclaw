@@ -23,17 +23,23 @@ export function resolveSessionKeyFromResolveParams(params: {
 
   const key = typeof p.key === "string" ? p.key.trim() : "";
   const hasKey = key.length > 0;
+  const sessionId = typeof p.sessionId === "string" ? p.sessionId.trim() : "";
+  const hasSessionId = sessionId.length > 0;
   const hasLabel = typeof p.label === "string" && p.label.trim().length > 0;
-  if (hasKey && hasLabel) {
+  const selectionCount = [hasKey, hasSessionId, hasLabel].filter(Boolean).length;
+  if (selectionCount > 1) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Provide either key or label (not both)"),
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Provide either key, sessionId, or label (not multiple)",
+      ),
     };
   }
-  if (!hasKey && !hasLabel) {
+  if (selectionCount === 0) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Either key or label is required"),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "Either key, sessionId, or label is required"),
     };
   }
 
@@ -48,6 +54,43 @@ export function resolveSessionKeyFromResolveParams(params: {
       };
     }
     return { ok: true, key: target.canonicalKey };
+  }
+
+  if (hasSessionId) {
+    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const list = listSessionsFromStore({
+      cfg,
+      storePath,
+      store,
+      opts: {
+        includeGlobal: p.includeGlobal === true,
+        includeUnknown: p.includeUnknown === true,
+        spawnedBy: p.spawnedBy,
+        agentId: p.agentId,
+        search: sessionId,
+        limit: 8,
+      },
+    });
+    const matches = list.sessions.filter(
+      (session) => session.sessionId === sessionId || session.key === sessionId,
+    );
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${sessionId}`),
+      };
+    }
+    if (matches.length > 1) {
+      const keys = matches.map((session) => session.key).join(", ");
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Multiple sessions found for sessionId: ${sessionId} (${keys})`,
+        ),
+      };
+    }
+    return { ok: true, key: String(matches[0]?.key ?? "") };
   }
 
   const parsedLabel = parseSessionLabel(p.label);

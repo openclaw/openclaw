@@ -142,6 +142,12 @@ describe("gateway server sessions", () => {
     expect(resolvedByKey.ok).toBe(true);
     expect(resolvedByKey.payload?.key).toBe("agent:main:main");
 
+    const resolvedBySessionId = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      sessionId: "sess-group",
+    });
+    expect(resolvedBySessionId.ok).toBe(true);
+    expect(resolvedBySessionId.payload?.key).toBe("agent:main:discord:group:dev");
+
     const list1 = await rpcReq<{
       path: string;
       defaults?: { model?: string | null; modelProvider?: string | null };

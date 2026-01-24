@@ -38,6 +38,7 @@ export const SessionsPreviewParamsSchema = Type.Object(
 export const SessionsResolveParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
+    sessionId: Type.Optional(NonEmptyString),
     label: Type.Optional(SessionLabelString),
     agentId: Type.Optional(NonEmptyString),
     spawnedBy: Type.Optional(NonEmptyString),

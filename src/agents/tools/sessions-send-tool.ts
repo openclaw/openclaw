@@ -7,7 +7,7 @@ import { callGateway } from "../../gateway/call.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
-  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
@@ -18,10 +18,11 @@ import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
+  createAgentToAgentPolicy,
   extractAssistantText,
-  resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  resolveSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
@@ -63,24 +64,10 @@ export function createSessionsSendTool(opts?: {
       const restrictToSpawned =
         opts?.sandboxed === true &&
         visibility === "spawned" &&
-        requesterInternalKey &&
+        !!requesterInternalKey &&
         !isSubagentSessionKey(requesterInternalKey);
 
-      const routingA2A = cfg.tools?.agentToAgent;
-      const a2aEnabled = routingA2A?.enabled === true;
-      const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
-      const matchesAllow = (agentId: string) => {
-        if (allowPatterns.length === 0) return true;
-        return allowPatterns.some((pattern) => {
-          const raw = String(pattern ?? "").trim();
-          if (!raw) return false;
-          if (raw === "*") return true;
-          if (!raw.includes("*")) return raw === agentId;
-          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
-          return re.test(agentId);
-        });
-      };
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = readStringParam(params, "label")?.trim() || undefined;
@@ -105,7 +92,7 @@ export function createSessionsSendTool(opts?: {
       let sessionKey = sessionKeyParam;
       if (!sessionKey && labelParam) {
         const requesterAgentId = requesterInternalKey
-          ? normalizeAgentId(parseAgentSessionKey(requesterInternalKey)?.agentId)
+          ? resolveAgentIdFromSessionKey(requesterInternalKey)
           : undefined;
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
@@ -125,7 +112,7 @@ export function createSessionsSendTool(opts?: {
         }
 
         if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          if (!a2aEnabled) {
+          if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
@@ -133,7 +120,7 @@ export function createSessionsSendTool(opts?: {
                 "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
             });
           }
-          if (!matchesAllow(requesterAgentId) || !matchesAllow(requestedAgentId)) {
+          if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
@@ -195,14 +182,26 @@ export function createSessionsSendTool(opts?: {
           error: "Either sessionKey or label is required",
         });
       }
-
-      const resolvedKey = resolveInternalSessionKey({
-        key: sessionKey,
+      const resolvedSession = await resolveSessionReference({
+        sessionKey,
         alias,
         mainKey,
+        requesterInternalKey,
+        restrictToSpawned,
       });
+      if (!resolvedSession.ok) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: resolvedSession.status,
+          error: resolvedSession.error,
+        });
+      }
+      // Normalize sessionKey/sessionId input into a canonical session key.
+      const resolvedKey = resolvedSession.key;
+      const displayKey = resolvedSession.displayKey;
+      const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
 
-      if (restrictToSpawned) {
+      if (restrictToSpawned && !resolvedViaSessionId) {
         const sessions = await listSessions({
           includeGlobal: false,
           includeUnknown: false,
@@ -215,11 +214,7 @@ export function createSessionsSendTool(opts?: {
             runId: crypto.randomUUID(),
             status: "forbidden",
             error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
-            sessionKey: resolveDisplaySessionKey({
-              key: sessionKey,
-              alias,
-              mainKey,
-            }),
+            sessionKey: displayKey,
           });
         }
       }
@@ -231,18 +226,11 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
-      const displayKey = resolveDisplaySessionKey({
-        key: sessionKey,
-        alias,
-        mainKey,
-      });
-      const requesterAgentId = normalizeAgentId(
-        parseAgentSessionKey(requesterInternalKey)?.agentId,
-      );
-      const targetAgentId = normalizeAgentId(parseAgentSessionKey(resolvedKey)?.agentId);
+      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
       const isCrossAgent = requesterAgentId !== targetAgentId;
       if (isCrossAgent) {
-        if (!a2aEnabled) {
+        if (!a2aPolicy.enabled) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
@@ -251,7 +239,7 @@ export function createSessionsSendTool(opts?: {
             sessionKey: displayKey,
           });
         }
-        if (!matchesAllow(requesterAgentId) || !matchesAllow(targetAgentId)) {
+        if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
