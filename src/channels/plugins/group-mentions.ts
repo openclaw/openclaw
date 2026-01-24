@@ -1,6 +1,10 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
+import {
+  resolveChannelGroupRequireMention,
+  resolveChannelGroupToolsPolicy,
+} from "../../config/group-policy.js";
 import type { DiscordConfig } from "../../config/types.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 
 type GroupMentionParams = {
@@ -186,6 +190,106 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
 
 export function resolveBlueBubblesGroupRequireMention(params: GroupMentionParams): boolean {
   return resolveChannelGroupRequireMention({
+    cfg: params.cfg,
+    channel: "bluebubbles",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
+export function resolveTelegramGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  const { chatId } = parseTelegramGroupId(params.groupId);
+  return resolveChannelGroupToolsPolicy({
+    cfg: params.cfg,
+    channel: "telegram",
+    groupId: chatId ?? params.groupId,
+    accountId: params.accountId,
+  });
+}
+
+export function resolveWhatsAppGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  return resolveChannelGroupToolsPolicy({
+    cfg: params.cfg,
+    channel: "whatsapp",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
+export function resolveIMessageGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  return resolveChannelGroupToolsPolicy({
+    cfg: params.cfg,
+    channel: "imessage",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
+export function resolveDiscordGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  const guildEntry = resolveDiscordGuildEntry(
+    params.cfg.channels?.discord?.guilds,
+    params.groupSpace,
+  );
+  const channelEntries = guildEntry?.channels;
+  if (channelEntries && Object.keys(channelEntries).length > 0) {
+    const groupChannel = params.groupChannel;
+    const channelSlug = normalizeDiscordSlug(groupChannel);
+    const entry =
+      (params.groupId ? channelEntries[params.groupId] : undefined) ??
+      (channelSlug
+        ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
+        : undefined) ??
+      (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined);
+    if (entry?.tools) return entry.tools;
+  }
+  if (guildEntry?.tools) return guildEntry.tools;
+  return undefined;
+}
+
+export function resolveSlackGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  const account = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const channels = account.channels ?? {};
+  const keys = Object.keys(channels);
+  if (keys.length === 0) return undefined;
+  const channelId = params.groupId?.trim();
+  const groupChannel = params.groupChannel;
+  const channelName = groupChannel?.replace(/^#/, "");
+  const normalizedName = normalizeSlackSlug(channelName);
+  const candidates = [
+    channelId ?? "",
+    channelName ? `#${channelName}` : "",
+    channelName ?? "",
+    normalizedName,
+  ].filter(Boolean);
+  let matched: { tools?: GroupToolPolicyConfig } | undefined;
+  for (const candidate of candidates) {
+    if (candidate && channels[candidate]) {
+      matched = channels[candidate];
+      break;
+    }
+  }
+  const resolved = matched ?? channels["*"];
+  if (resolved?.tools) return resolved.tools;
+  return undefined;
+}
+
+export function resolveBlueBubblesGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  return resolveChannelGroupToolsPolicy({
     cfg: params.cfg,
     channel: "bluebubbles",
     groupId: params.groupId,

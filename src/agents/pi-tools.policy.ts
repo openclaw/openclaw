@@ -1,8 +1,12 @@
 import type { ClawdbotConfig } from "../config/config.js";
+import { getChannelDock } from "../channels/dock.js";
+import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 
 type CompiledPattern =
   | { kind: "all" }
@@ -108,6 +112,23 @@ function normalizeProviderKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
+  channel?: string;
+  groupId?: string;
+} {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) return {};
+  const base = resolveThreadParentSessionKey(raw) ?? raw;
+  const parts = base.split(":").filter(Boolean);
+  const body = parts[0] === "agent" ? parts.slice(2) : parts;
+  if (body.length < 3) return {};
+  const [channel, kind, ...rest] = body;
+  if (kind !== "group" && kind !== "channel") return {};
+  const groupId = rest.join(":").trim();
+  if (!groupId) return {};
+  return { channel: channel.trim().toLowerCase(), groupId };
+}
+
 function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
@@ -172,6 +193,45 @@ export function resolveEffectiveToolPolicy(params: {
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
   };
+}
+
+export function resolveGroupToolPolicy(params: {
+  config?: ClawdbotConfig;
+  sessionKey?: string;
+  messageProvider?: string;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+}): SandboxToolPolicy | undefined {
+  if (!params.config) return undefined;
+  const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
+  const groupId = params.groupId ?? sessionContext.groupId;
+  if (!groupId) return undefined;
+  const channelRaw = params.messageProvider ?? sessionContext.channel;
+  const channel = normalizeMessageChannel(channelRaw);
+  if (!channel) return undefined;
+  let dock;
+  try {
+    dock = getChannelDock(channel);
+  } catch {
+    dock = undefined;
+  }
+  const toolsConfig =
+    dock?.groups?.resolveToolPolicy?.({
+      cfg: params.config,
+      groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      accountId: params.accountId,
+    }) ??
+    resolveChannelGroupToolsPolicy({
+      cfg: params.config,
+      channel,
+      groupId,
+      accountId: params.accountId,
+    });
+  return pickToolPolicy(toolsConfig);
 }
 
 export function isToolAllowedByPolicies(

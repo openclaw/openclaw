@@ -5,6 +5,7 @@ import type {
   MarkdownConfig,
 } from "./types.base.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -59,6 +60,7 @@ export type IMessageAccountConfig = {
     string,
     {
       requireMention?: boolean;
+      tools?: GroupToolPolicyConfig;
     }
   >;
 };

@@ -23,6 +23,7 @@ import {
   filterToolsByPolicy,
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
 import {
@@ -128,6 +129,12 @@ export function createClawdbotCodingTools(options?: {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
+  /** Group id for channel-level tool policy resolution. */
+  groupId?: string | null;
+  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
+  groupChannel?: string | null;
+  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
+  groupSpace?: string | null;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -151,6 +158,15 @@ export function createClawdbotCodingTools(options?: {
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
   });
+  const groupPolicy = resolveGroupToolPolicy({
+    config: options?.config,
+    sessionKey: options?.sessionKey,
+    messageProvider: options?.messageProvider,
+    groupId: options?.groupId,
+    groupChannel: options?.groupChannel,
+    groupSpace: options?.groupSpace,
+    accountId: options?.agentAccountId,
+  });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
@@ -165,6 +181,7 @@ export function createClawdbotCodingTools(options?: {
     globalProviderPolicy,
     agentPolicy,
     agentProviderPolicy,
+    groupPolicy,
     sandbox?.tools,
     subagentPolicy,
   ]);
@@ -285,6 +302,7 @@ export function createClawdbotCodingTools(options?: {
         globalProviderPolicy,
         agentPolicy,
         agentProviderPolicy,
+        groupPolicy,
         sandbox?.tools,
         subagentPolicy,
       ]),
@@ -323,6 +341,10 @@ export function createClawdbotCodingTools(options?: {
     stripPluginOnlyAllowlist(agentProviderPolicy, pluginGroups),
     pluginGroups,
   );
+  const groupPolicyExpanded = expandPolicyWithPluginGroups(
+    stripPluginOnlyAllowlist(groupPolicy, pluginGroups),
+    pluginGroups,
+  );
   const sandboxPolicyExpanded = expandPolicyWithPluginGroups(sandbox?.tools, pluginGroups);
   const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
 
@@ -344,9 +366,12 @@ export function createClawdbotCodingTools(options?: {
   const agentProviderFiltered = agentProviderExpanded
     ? filterToolsByPolicy(agentFiltered, agentProviderExpanded)
     : agentFiltered;
-  const sandboxed = sandboxPolicyExpanded
-    ? filterToolsByPolicy(agentProviderFiltered, sandboxPolicyExpanded)
+  const groupFiltered = groupPolicyExpanded
+    ? filterToolsByPolicy(agentProviderFiltered, groupPolicyExpanded)
     : agentProviderFiltered;
+  const sandboxed = sandboxPolicyExpanded
+    ? filterToolsByPolicy(groupFiltered, sandboxPolicyExpanded)
+    : groupFiltered;
   const subagentFiltered = subagentPolicyExpanded
     ? filterToolsByPolicy(sandboxed, subagentPolicyExpanded)
     : sandboxed;

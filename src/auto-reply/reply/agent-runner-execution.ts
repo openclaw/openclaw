@@ -14,6 +14,7 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
@@ -214,6 +215,10 @@ export async function runAgentTurnWithFallback(params: {
             agentAccountId: params.sessionCtx.AccountId,
             messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
             messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+            groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+            groupChannel:
+              params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+            groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
             // Provider threading context for tool auto-injection
             ...buildThreadingToolContext({
               sessionCtx: params.sessionCtx,

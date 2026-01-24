@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type {
@@ -65,6 +66,7 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
   resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
+  resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
 };
 
 export type ChannelOutboundContext = {

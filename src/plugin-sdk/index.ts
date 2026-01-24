@@ -73,6 +73,7 @@ export type {
   DmPolicy,
   DmConfig,
   GroupPolicy,
+  GroupToolPolicyConfig,
   MarkdownConfig,
   MarkdownTableMode,
   MSTeamsChannelConfig,
@@ -99,6 +100,7 @@ export {
   normalizeAllowFrom,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
+export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -143,6 +145,12 @@ export {
   resolveSlackGroupRequireMention,
   resolveTelegramGroupRequireMention,
   resolveWhatsAppGroupRequireMention,
+  resolveBlueBubblesGroupToolPolicy,
+  resolveDiscordGroupToolPolicy,
+  resolveIMessageGroupToolPolicy,
+  resolveSlackGroupToolPolicy,
+  resolveTelegramGroupToolPolicy,
+  resolveWhatsAppGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
 export { recordInboundSession } from "../channels/session.js";
 export {

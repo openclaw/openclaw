@@ -17,6 +17,7 @@ import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   resolveTelegramGroupRequireMention,
+  resolveTelegramGroupToolPolicy,
   setAccountEnabledInConfigSection,
   telegramOnboardingAdapter,
   TelegramConfigSchema,
@@ -154,6 +155,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
   },
   groups: {
     resolveRequireMention: resolveTelegramGroupRequireMention,
+    resolveToolPolicy: resolveTelegramGroupToolPolicy,
   },
   threading: {
     resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "first",

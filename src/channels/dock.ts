@@ -11,10 +11,15 @@ import { normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import {
   resolveDiscordGroupRequireMention,
+  resolveDiscordGroupToolPolicy,
   resolveIMessageGroupRequireMention,
+  resolveIMessageGroupToolPolicy,
   resolveSlackGroupRequireMention,
+  resolveSlackGroupToolPolicy,
   resolveTelegramGroupRequireMention,
+  resolveTelegramGroupToolPolicy,
   resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
 import type {
   ChannelCapabilities,
@@ -103,6 +108,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     groups: {
       resolveRequireMention: resolveTelegramGroupRequireMention,
+      resolveToolPolicy: resolveTelegramGroupToolPolicy,
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "first",
@@ -141,6 +147,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     groups: {
       resolveRequireMention: resolveWhatsAppGroupRequireMention,
+      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
       resolveGroupIntroHint: () =>
         "WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant).",
     },
@@ -189,6 +196,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,
+      resolveToolPolicy: resolveDiscordGroupToolPolicy,
     },
     mentions: {
       stripPatterns: () => ["<@!?\\d+>"],
@@ -222,6 +230,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
+      resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     threading: {
       resolveReplyToMode: ({ cfg, accountId, chatType }) =>
@@ -284,6 +293,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     groups: {
       resolveRequireMention: resolveIMessageGroupRequireMention,
+      resolveToolPolicy: resolveIMessageGroupToolPolicy,
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => {

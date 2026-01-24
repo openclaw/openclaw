@@ -1,4 +1,4 @@
-import { MarkdownConfigSchema } from "clawdbot/plugin-sdk";
+import { MarkdownConfigSchema, ToolPolicySchema } from "clawdbot/plugin-sdk";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
@@ -26,6 +26,7 @@ const matrixRoomSchema = z
     enabled: z.boolean().optional(),
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     autoReply: z.boolean().optional(),
     users: z.array(allowFromEntry).optional(),
     skills: z.array(z.string()).optional(),

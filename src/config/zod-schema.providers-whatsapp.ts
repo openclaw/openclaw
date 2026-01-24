@@ -7,6 +7,7 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
+import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 
 export const WhatsAppAccountSchema = z
   .object({
@@ -37,6 +38,7 @@ export const WhatsAppAccountSchema = z
         z
           .object({
             requireMention: z.boolean().optional(),
+            tools: ToolPolicySchema,
           })
           .strict()
           .optional(),
@@ -98,6 +100,7 @@ export const WhatsAppConfigSchema = z
         z
           .object({
             requireMention: z.boolean().optional(),
+            tools: ToolPolicySchema,
           })
           .strict()
           .optional(),

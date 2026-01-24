@@ -21,6 +21,7 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
   resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppHeartbeatRecipients,
   whatsappOnboardingAdapter,
   WhatsAppConfigSchema,
@@ -198,6 +199,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   groups: {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
+    resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
     resolveGroupIntroHint: () =>
       "WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant).",
   },

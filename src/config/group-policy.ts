@@ -1,11 +1,13 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ClawdbotConfig } from "./config.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type GroupPolicyChannel = ChannelId;
 
 export type ChannelGroupConfig = {
   requireMention?: boolean;
+  tools?: GroupToolPolicyConfig;
 };
 
 export type ChannelGroupPolicy = {
@@ -90,4 +92,16 @@ export function resolveChannelGroupRequireMention(params: {
     return requireMentionOverride;
   }
   return true;
+}
+
+export function resolveChannelGroupToolsPolicy(params: {
+  cfg: ClawdbotConfig;
+  channel: GroupPolicyChannel;
+  groupId?: string | null;
+  accountId?: string | null;
+}): GroupToolPolicyConfig | undefined {
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  if (groupConfig?.tools) return groupConfig.tools;
+  if (defaultConfig?.tools) return defaultConfig.tools;
+  return undefined;
 }

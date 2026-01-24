@@ -5,6 +5,7 @@ import type {
   MarkdownConfig,
 } from "./types.base.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
   /** Port for the webhook server. Default: 3978. */
@@ -20,6 +21,8 @@ export type MSTeamsReplyStyle = "thread" | "top-level";
 export type MSTeamsChannelConfig = {
   /** Require @mention to respond. Default: true. */
   requireMention?: boolean;
+  /** Optional tool policy overrides for this channel. */
+  tools?: GroupToolPolicyConfig;
   /** Reply style: "thread" replies to the message, "top-level" posts a new message. */
   replyStyle?: MSTeamsReplyStyle;
 };
@@ -28,6 +31,8 @@ export type MSTeamsChannelConfig = {
 export type MSTeamsTeamConfig = {
   /** Default requireMention for channels in this team. */
   requireMention?: boolean;
+  /** Default tool policy for channels in this team. */
+  tools?: GroupToolPolicyConfig;
   /** Default reply style for channels in this team. */
   replyStyle?: MSTeamsReplyStyle;
   /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
