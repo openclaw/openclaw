@@ -96,6 +96,18 @@ export function detectBlocker(
 ): BlockerInfo | undefined {
   if (!text || text.length < 20) return undefined;
 
+  // Skip code blocks and tables to avoid false positives from examples/summaries
+  // Remove ``` code blocks
+  let cleanText = text.replace(/```[\s\S]*?```/g, "");
+  // Remove Markdown tables (lines with |)
+  cleanText = cleanText
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("|") && !line.includes("|---"))
+    .join("\n");
+
+  // Use cleaned text for pattern matching
+  text = cleanText;
+
   const matchedPatterns: string[] = [];
   let primaryCategory: string | undefined;
   const extractedContext: Record<string, unknown> = {};

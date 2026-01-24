@@ -599,8 +599,14 @@ export async function updateSessionBubble(params: {
       `[${sessionId}] Rate limited (${timeSinceLastEdit}ms < ${pending.minEditInterval}ms), will retry in ${delay}ms`,
     );
     setTimeout(() => {
+      // CRITICAL: Check if session has been finalized before retrying
+      const currentPending = pendingUpdates.get(sessionId);
+      if (!currentPending || currentPending.finalized) {
+        log.debug(`[${sessionId}] Skipping delayed update - session finalized`);
+        return;
+      }
       // Re-trigger update if still pending
-      if (pending.eventSeq > pending.renderedSeq) {
+      if (currentPending.eventSeq > currentPending.renderedSeq) {
         updateSessionBubble({ sessionId, state }).catch(() => {});
       }
     }, delay);
@@ -614,8 +620,16 @@ export async function updateSessionBubble(params: {
       clearTimeout(pending.coalescingTimer);
       pending.coalescingTimer = undefined;
     }
-    // Mark session as finalized to prevent race conditions
+    // Mark session as finalized BEFORE any async operations
     pending.finalized = true;
+
+    // CRITICAL: Remove from activeBubbles AFTER updating to prevent future updates
+    // We'll do this in a setTimeout to ensure the current update completes first
+    setTimeout(() => {
+      activeBubbles.delete(sessionId);
+      pendingUpdates.delete(sessionId);
+      log.info(`[${sessionId}] Removed finalized session from tracking`);
+    }, 3000); // 3 second grace period for final update to complete
   }
 
   // Generate new content using hybrid format

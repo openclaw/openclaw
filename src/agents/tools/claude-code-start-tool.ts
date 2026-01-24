@@ -26,8 +26,15 @@ import {
   recordCCQuestion,
   recordDyDoAnswer,
 } from "../claude-code/bubble-service.js";
-import { generateOrchestratorResponse } from "../claude-code/orchestrator.js";
-import type { OrchestratorContext } from "../claude-code/orchestrator.js";
+import {
+  generateOrchestratorResponse,
+  assessQuestion,
+  getAttemptHistory,
+  recordAttempt,
+  isSimilarQuestion,
+  clearAttemptHistory,
+} from "../claude-code/orchestrator.js";
+import type { OrchestratorContext, OrchestratorAttempt } from "../claude-code/orchestrator.js";
 import type { ProjectContext } from "../claude-code/project-context.js";
 import type { SessionState } from "../claude-code/types.js";
 import type { AnyAgentTool } from "./common.js";
@@ -387,7 +394,7 @@ The session will run in background. You'll receive questions via conversation.`,
             return false;
           },
 
-          // Question handler: route CC questions to DyDo
+          // Question handler: route CC questions to DyDo with AI-driven blocker detection
           onQuestion: async (question: string): Promise<string | null> => {
             if (!sessionId) return null;
 
@@ -412,10 +419,95 @@ The session will run in background. You'll receive questions via conversation.`,
             };
 
             try {
-              // Get DyDo's answer via orchestrator
+              // Step 1: AI assessment - Can DyDo handle this question?
+              const assessment = await assessQuestion(orchestratorContext, question);
+
+              // Step 1a: Check if impossible (need user immediately)
+              if (assessment.confidence === "impossible") {
+                log.warn(
+                  `[${sessionId}] DyDo cannot handle: ${question.slice(0, 100)}... (${assessment.reasoning})`,
+                );
+
+                // Notify user via Telegram
+                if (chatId) {
+                  try {
+                    const { sendMessageTelegram } = await import("../../telegram/send.js");
+                    const blockerMsg =
+                      `⚠️ **Claude Code 需要你的輸入**\n\n` +
+                      `**專案：** ${projectName}\n` +
+                      `**問題：** ${question}\n\n` +
+                      `**DyDo 判斷：** ${assessment.reasoning || "這需要你的決定"}\n\n` +
+                      `\`claude --resume ${currentResumeToken}\``;
+
+                    await sendMessageTelegram(String(chatId), blockerMsg, {
+                      accountId,
+                      messageThreadId: threadId,
+                      disableLinkPreview: true,
+                    });
+
+                    log.info(`[${sessionId}] User blocker notification sent`);
+                  } catch (err) {
+                    log.error(`[${sessionId}] Failed to send blocker notification: ${err}`);
+                  }
+                }
+
+                recordDyDoAnswer(sessionId);
+                return null; // True blocker - wait for user
+              }
+
+              // Step 2: Check retry history
+              const history = getAttemptHistory(sessionId);
+              const similarAttempts = history.filter((a) =>
+                isSimilarQuestion(a.question, question),
+              );
+
+              if (similarAttempts.length >= 3) {
+                log.warn(
+                  `[${sessionId}] DyDo failed 3 times on similar questions - escalating to user`,
+                );
+
+                // Notify user: DyDo tried but failed multiple times
+                if (chatId) {
+                  try {
+                    const { sendMessageTelegram } = await import("../../telegram/send.js");
+                    const blockerMsg =
+                      `⚠️ **Claude Code 重複卡住**\n\n` +
+                      `**專案：** ${projectName}\n` +
+                      `**問題：** ${question}\n\n` +
+                      `**DyDo 狀態：** 我已嘗試 ${similarAttempts.length} 次，仍無法解決\n\n` +
+                      `**之前的回答：**\n${similarAttempts.map((a, i) => `${i + 1}. ${a.myAnswer.slice(0, 80)}...`).join("\n")}\n\n` +
+                      `\`claude --resume ${currentResumeToken}\``;
+
+                    await sendMessageTelegram(String(chatId), blockerMsg, {
+                      accountId,
+                      messageThreadId: threadId,
+                      disableLinkPreview: true,
+                    });
+
+                    log.info(`[${sessionId}] Retry blocker notification sent`);
+                  } catch (err) {
+                    log.error(`[${sessionId}] Failed to send retry blocker: ${err}`);
+                  }
+                }
+
+                recordDyDoAnswer(sessionId);
+                return null; // Retry blocker - need user intervention
+              }
+
+              // Step 3: Generate answer
               const answer = await generateOrchestratorResponse(orchestratorContext, question);
 
-              log.info(`[${sessionId}] DyDo answer: ${answer.slice(0, 100)}...`);
+              log.info(
+                `[${sessionId}] DyDo answer (confidence: ${assessment.confidence}): ${answer.slice(0, 100)}...`,
+              );
+
+              // Step 4: Record this attempt
+              recordAttempt(sessionId, {
+                question,
+                myAnswer: answer,
+                confidence: assessment.confidence,
+                timestamp: Date.now(),
+              });
 
               // Record answer in bubble state (collapses Q&A, shows summary)
               recordDyDoAnswer(sessionId);

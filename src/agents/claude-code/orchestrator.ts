@@ -36,6 +36,49 @@ export interface OrchestratorContext {
 }
 
 /**
+ * Orchestrator attempt record.
+ */
+export interface OrchestratorAttempt {
+  question: string;
+  myAnswer: string;
+  confidence: "high" | "medium" | "low" | "impossible";
+  timestamp: number;
+}
+
+/**
+ * History of orchestrator attempts per session.
+ */
+const attemptHistory = new Map<string, OrchestratorAttempt[]>();
+
+/**
+ * Get attempt history for a session.
+ */
+export function getAttemptHistory(sessionId: string): OrchestratorAttempt[] {
+  return attemptHistory.get(sessionId) || [];
+}
+
+/**
+ * Record an orchestrator attempt.
+ */
+export function recordAttempt(sessionId: string, attempt: OrchestratorAttempt): void {
+  const history = attemptHistory.get(sessionId) || [];
+  history.push(attempt);
+  attemptHistory.set(sessionId, history);
+
+  // Cleanup old history (keep last 50)
+  if (history.length > 50) {
+    history.shift();
+  }
+}
+
+/**
+ * Clear attempt history for a session.
+ */
+export function clearAttemptHistory(sessionId: string): void {
+  attemptHistory.delete(sessionId);
+}
+
+/**
  * Log a DyDo command for bubble display.
  */
 export function logDyDoCommand(params: {
@@ -95,6 +138,111 @@ export function getLatestDyDoCommand(resumeToken: string): string | undefined {
 function getAnthropicApiKey(): string | undefined {
   // Try OAuth token first (used by Claude Code auth)
   return process.env.ANTHROPIC_OAUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY;
+}
+
+/**
+ * Assess whether DyDo can answer a question.
+ * Returns confidence level: high/medium/low/impossible.
+ */
+export async function assessQuestion(
+  context: OrchestratorContext,
+  question: string,
+): Promise<{ confidence: "high" | "medium" | "low" | "impossible"; reasoning?: string }> {
+  const apiKey = getAnthropicApiKey();
+  if (!apiKey) {
+    return { confidence: "low", reasoning: "No API key available" };
+  }
+
+  try {
+    const model = getModel("anthropic", "claude-sonnet-4-20250514") as Model<"anthropic-messages">;
+
+    const prompt = `You are DyDo, an AI orchestrator managing a Claude Code session.
+
+**Task context:**
+- Project: ${context.projectName}
+- Original task: ${context.originalTask}
+- Recent actions: ${context.recentActions.map((a) => a.description).join(", ")}
+
+**Claude Code's question:**
+"${question}"
+
+**Your job:** Assess whether you can answer this question WITHOUT user intervention.
+
+**Confidence levels:**
+- **high**: You know the answer clearly based on context/best practices
+- **medium**: You can make a reasonable technical decision
+- **low**: You're uncertain but can try a default/common approach
+- **impossible**: Requires user input (e.g., passwords, personal preferences, hardware access, external services you can't control)
+
+**Respond ONLY with JSON:**
+{ "confidence": "high|medium|low|impossible", "reasoning": "brief explanation" }`;
+
+    const stream = streamSimple(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      { apiKey, maxTokens: 200 },
+    );
+
+    let response = "";
+    for await (const event of stream) {
+      if (event.type === "text_delta") {
+        response += event.delta;
+      }
+    }
+
+    // Parse JSON response
+    const jsonMatch = response.match(/\{[^}]+\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      log.info(
+        `[orchestrator/assess] "${question.slice(0, 50)}..." → ${parsed.confidence} (${parsed.reasoning})`,
+      );
+      return parsed;
+    }
+
+    // Fallback if JSON parsing fails
+    if (response.includes("impossible")) return { confidence: "impossible" };
+    if (response.includes("high")) return { confidence: "high" };
+    if (response.includes("medium")) return { confidence: "medium" };
+    return { confidence: "low" };
+  } catch (err) {
+    log.error(`[orchestrator/assess] Failed: ${err}`);
+    return { confidence: "medium" }; // Default to medium on error
+  }
+}
+
+/**
+ * Check if two questions are similar (to detect retry loops).
+ */
+export function isSimilarQuestion(q1: string, q2: string): boolean {
+  // Normalize questions
+  const normalize = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .trim();
+
+  const n1 = normalize(q1);
+  const n2 = normalize(q2);
+
+  // Exact match
+  if (n1 === n2) return true;
+
+  // Check for significant word overlap (>60%)
+  const words1 = n1.split(/\s+/);
+  const words2 = n2.split(/\s+/);
+  const commonWords = words1.filter((w) => words2.includes(w));
+  const similarity = commonWords.length / Math.max(words1.length, words2.length);
+
+  return similarity > 0.6;
 }
 
 /**

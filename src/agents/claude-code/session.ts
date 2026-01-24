@@ -23,6 +23,7 @@ import type {
   BlockerInfo,
 } from "./types.js";
 import { checkEventsForBlocker } from "./blocker-detector.js";
+import { clearAttemptHistory } from "./orchestrator.js";
 import {
   resolveProject,
   findSessionFile,
@@ -330,6 +331,9 @@ function setupProcessHandlers(session: ClaudeCodeSessionData): void {
     } else {
       session.status = "failed";
     }
+
+    // Clear orchestrator attempt history for this session
+    clearAttemptHistory(session.id);
 
     // Stop file watcher
     session.watcherAbort?.abort();
