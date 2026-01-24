@@ -28,7 +28,7 @@
     "markdown-it": "14.1.0",
     "matrix-bot-sdk": "0.8.0",
     "music-metadata": "^11.10.6",
-    "zod": "^4.3.5"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "clawdbot": "workspace:*"

@@ -24,7 +24,7 @@
     }
   },
   "dependencies": {
-    "@urbit/aura": "^2.0.0",
+    "@urbit/aura": "^3.0.0",
     "@urbit/http-api": "^3.0.0"
   }
 }
