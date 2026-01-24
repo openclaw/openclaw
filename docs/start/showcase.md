@@ -327,14 +327,8 @@ Full setup walkthrough (28m) by VelvetShark.
 
 <Card title="OpenRouter Transcription" icon="microphone" href="https://clawdhub.com/obviyus/openrouter-transcribe">
   **@obviyus** • `transcription` `multilingual` `skill`
-  
-  Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on ClawdHub.
-</Card>
 
-<Card title="Google Docs Editor" icon="file-word">
-  **Community** • `docs` `editing` `skill`
-  
-  Rich-text Google Docs editing skill. Built rapidly with Claude Code.
+  Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on ClawdHub.
 </Card>
 
 </CardGroup>
