@@ -61,6 +61,7 @@ Docs: https://docs.clawd.bot
 - Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)
 - Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.
 - MS Teams (plugin): remove `.default` suffix from Graph scopes to avoid double-appending. (#1507) Thanks @Evizero.
+- MS Teams (plugin): remove `.default` suffix from Bot Framework probe scope to avoid double-appending. (#1574) Thanks @Evizero.
 - Browser: keep extension relay tabs controllable when the extension reuses a session id after switching tabs. (#1160)
 - Agents: warn and ignore tool allowlists that only reference unknown or unloaded plugin tools. (#1566)
 
