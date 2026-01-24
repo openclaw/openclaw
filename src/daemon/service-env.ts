@@ -121,7 +121,8 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
     return env.PATH ?? "";
   }
 
-  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.delimiter);
+  const delimiter = platform === "win32" ? path.win32.delimiter : path.posix.delimiter;
+  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(delimiter);
 }
 
 export function buildServiceEnvironment(params: {
