@@ -9,6 +9,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 - [What is Clawdbot?](#what-is-clawdbot)
   - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
+  - [What’s the value proposition?](#whats-the-value-proposition)
 - [Quick start and first-run setup](#quick-start-and-first-run-setup)
   - [What’s the recommended way to install and set up Clawdbot?](#whats-the-recommended-way-to-install-and-set-up-clawdbot)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
@@ -199,6 +200,28 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ### What is Clawdbot, in one paragraph?
 
 Clawdbot is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
+
+### What’s the value proposition?
+
+Clawdbot is not “just a Claude wrapper.” It’s a **local-first control plane** that lets you run a
+capable assistant on **your own hardware**, reachable from the chat apps you already use, with
+stateful sessions, memory, and tools — without handing control of your workflows to a hosted
+SaaS.
+
+Highlights:
+- **Your devices, your data:** run the Gateway wherever you want (Mac, Linux, VPS) and keep the
+  workspace + session history local.  
+- **Real channels, not a web sandbox:** WhatsApp/Telegram/Slack/Discord/Signal/iMessage/etc,
+  plus mobile voice and Canvas on supported platforms.  
+- **Model-agnostic:** use Anthropic, OpenAI, MiniMax, OpenRouter, etc., with per‑agent routing
+  and failover.  
+- **Local-only option:** run local models so **all data can stay on your device** if you want.
+- **Multi-agent routing:** separate agents per channel, account, or task, each with its own
+  workspace and defaults.  
+- **Open source and hackable:** inspect, extend, and self-host without vendor lock‑in.
+
+Docs: [Gateway](/gateway), [Channels](/channels), [Multi‑agent](/concepts/multi-agent),
+[Memory](/concepts/memory).
 
 ## Quick start and first-run setup
 
