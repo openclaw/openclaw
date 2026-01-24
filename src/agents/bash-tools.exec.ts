@@ -791,7 +791,7 @@ export function createExecTool(
       const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
-      if (elevatedRequested) {
+      if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
       const configuredAsk = defaults?.ask ?? "on-miss";
