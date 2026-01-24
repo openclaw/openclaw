@@ -67,9 +67,10 @@ export function normalizeAgentId(value: string | undefined | null): string {
 export function sanitizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return DEFAULT_AGENT_ID;
-  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) return trimmed;
+  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) return trimmed.toLowerCase();
   return (
     trimmed
+      .toLowerCase()
       .replace(/[^a-z0-9_-]+/gi, "-")
       .replace(/^-+/, "")
       .replace(/-+$/, "")
