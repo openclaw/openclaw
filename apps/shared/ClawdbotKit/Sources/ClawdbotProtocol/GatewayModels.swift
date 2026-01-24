@@ -964,6 +964,7 @@ public struct SessionsPreviewParams: Codable, Sendable {
 
 public struct SessionsResolveParams: Codable, Sendable {
     public let key: String?
+    public let sessionid: String?
     public let label: String?
     public let agentid: String?
     public let spawnedby: String?
@@ -972,6 +973,7 @@ public struct SessionsResolveParams: Codable, Sendable {
 
     public init(
         key: String?,
+        sessionid: String?,
         label: String?,
         agentid: String?,
         spawnedby: String?,
@@ -979,6 +981,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         includeunknown: Bool?
     ) {
         self.key = key
+        self.sessionid = sessionid
         self.label = label
         self.agentid = agentid
         self.spawnedby = spawnedby
@@ -987,6 +990,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     }
     private enum CodingKeys: String, CodingKey {
         case key
+        case sessionid = "sessionId"
         case label
         case agentid = "agentId"
         case spawnedby = "spawnedBy"

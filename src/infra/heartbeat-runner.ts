@@ -501,9 +501,7 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "alerts-disabled" };
   }
 
-  const heartbeatOkText = responsePrefix
-    ? `${responsePrefix} ${HEARTBEAT_TOKEN}`
-    : HEARTBEAT_TOKEN;
+  const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
   const canAttemptHeartbeatOk = Boolean(
     visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
@@ -559,11 +557,7 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const normalized = normalizeHeartbeatReply(
-      replyPayload,
-      responsePrefix,
-      ackMaxChars,
-    );
+    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
