@@ -5,9 +5,11 @@ import process from "node:process";
 
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isTruthyEnvValue } from "./infra/env.js";
+import { installProcessWarningFilter } from "./infra/warnings.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 process.title = "clawdbot";
+installProcessWarningFilter();
 
 if (process.argv.includes("--no-color")) {
   process.env.NO_COLOR = "1";
