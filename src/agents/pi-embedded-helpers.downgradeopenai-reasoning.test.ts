@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { downgradeOpenAIReasoningBlocks } from "./pi-embedded-helpers.js";
 
 describe("downgradeOpenAIReasoningBlocks", () => {
-  it("downgrades orphaned reasoning signatures to text", () => {
+  it("keeps reasoning signatures when followed by content", () => {
     const input = [
       {
         role: "assistant",
@@ -17,22 +17,16 @@ describe("downgradeOpenAIReasoningBlocks", () => {
       },
     ];
 
-    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "internal reasoning" }, { type: "text", text: "answer" }],
-      },
-    ]);
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
   });
 
-  it("drops empty thinking blocks with orphaned signatures", () => {
+  it("drops orphaned reasoning blocks without following content", () => {
     const input = [
       {
         role: "assistant",
         content: [
           {
             type: "thinking",
-            thinking: "   ",
             thinkingSignature: JSON.stringify({ id: "rs_abc", type: "reasoning" }),
           },
         ],
@@ -40,7 +34,25 @@ describe("downgradeOpenAIReasoningBlocks", () => {
       { role: "user", content: "next" },
     ];
 
-    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([{ role: "user", content: "next" }]);
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([
+      { role: "user", content: "next" },
+    ]);
+  });
+
+  it("drops object-form orphaned signatures", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinkingSignature: { id: "rs_obj", type: "reasoning" },
+          },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([]);
   });
 
   it("keeps non-reasoning thinking signatures", () => {
