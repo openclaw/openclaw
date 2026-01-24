@@ -304,6 +304,8 @@ importers:
 
   extensions/imessage: {}
 
+  extensions/llm-task: {}
+
   extensions/lobster: {}
 
   extensions/matrix:
