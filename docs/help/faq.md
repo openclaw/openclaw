@@ -14,6 +14,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
   - [What runtime do I need?](#what-runtime-do-i-need)
+  - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setup-token-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setup-token)
@@ -231,6 +232,15 @@ See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth
 ### What runtime do I need?
 
 Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
+
+### Where do I see what’s new in the latest version?
+
+Check the GitHub changelog:  
+https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md
+
+Newest entries are at the top. If the top section is marked **Unreleased**, the next dated
+section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
+**Fixes** (plus docs/other sections when needed).
 
 ### What does the onboarding wizard actually do?
 
