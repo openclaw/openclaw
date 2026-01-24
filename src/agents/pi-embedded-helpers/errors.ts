@@ -7,12 +7,19 @@ import type { FailoverReason } from "./types.js";
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) return false;
   const lower = errorMessage.toLowerCase();
+  const hasRequestSizeExceeds = lower.includes("request size exceeds");
+  const hasContextWindow =
+    lower.includes("context window") ||
+    lower.includes("context length") ||
+    lower.includes("maximum context length");
   return (
     lower.includes("request_too_large") ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
     lower.includes("prompt is too long") ||
+    lower.includes("exceeds model context window") ||
+    (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow") ||
     (lower.includes("413") && lower.includes("too large"))
   );
