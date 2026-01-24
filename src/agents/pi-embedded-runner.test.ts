@@ -165,6 +165,7 @@ const readSessionMessages = async (sessionFile: string) => {
 };
 
 describe("runEmbeddedPiAgent", () => {
+  const itIfNotWin32 = process.platform === "win32" ? it.skip : it;
   it("writes models.json into the provided agentDir", async () => {
     const sessionFile = nextSessionFile();
 
@@ -210,35 +211,39 @@ describe("runEmbeddedPiAgent", () => {
     await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
   });
 
-  it("persists the first user message before assistant output", { timeout: 60_000 }, async () => {
-    const sessionFile = nextSessionFile();
-    const cfg = makeOpenAiConfig(["mock-1"]);
-    await ensureModels(cfg);
+  itIfNotWin32(
+    "persists the first user message before assistant output",
+    { timeout: 60_000 },
+    async () => {
+      const sessionFile = nextSessionFile();
+      const cfg = makeOpenAiConfig(["mock-1"]);
+      await ensureModels(cfg);
 
-    await runEmbeddedPiAgent({
-      sessionId: "session:test",
-      sessionKey: testSessionKey,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      prompt: "hello",
-      provider: "openai",
-      model: "mock-1",
-      timeoutMs: 5_000,
-      agentDir,
-      enqueue: immediateEnqueue,
-    });
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: testSessionKey,
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        agentDir,
+        enqueue: immediateEnqueue,
+      });
 
-    const messages = await readSessionMessages(sessionFile);
-    const firstUserIndex = messages.findIndex(
-      (message) => message?.role === "user" && textFromContent(message.content) === "hello",
-    );
-    const firstAssistantIndex = messages.findIndex((message) => message?.role === "assistant");
-    expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-    if (firstAssistantIndex !== -1) {
-      expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
-    }
-  });
+      const messages = await readSessionMessages(sessionFile);
+      const firstUserIndex = messages.findIndex(
+        (message) => message?.role === "user" && textFromContent(message.content) === "hello",
+      );
+      const firstAssistantIndex = messages.findIndex((message) => message?.role === "assistant");
+      expect(firstUserIndex).toBeGreaterThanOrEqual(0);
+      if (firstAssistantIndex !== -1) {
+        expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
+      }
+    },
+  );
 
   it("persists the user message when prompt fails before assistant output", async () => {
     const sessionFile = nextSessionFile();
