@@ -34,6 +34,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Is a local model OK for casual chats?](#is-a-local-model-ok-for-casual-chats)
   - [How do I keep hosted model traffic in a specific region?](#how-do-i-keep-hosted-model-traffic-in-a-specific-region)
   - [Do I have to buy a Mac Mini to install this?](#do-i-have-to-buy-a-mac-mini-to-install-this)
+  - [Do I need a Mac mini for iMessage support?](#do-i-need-a-mac-mini-for-imessage-support)
   - [Can I use Bun?](#can-i-use-bun)
   - [Telegram: what goes in `allowFrom`?](#telegram-what-goes-in-allowfrom)
   - [Can multiple people use one WhatsApp number with different Clawdbots?](#can-multiple-people-use-one-whatsapp-number-with-different-clawdbots)
@@ -447,6 +448,20 @@ and run `imsg` on any Mac over SSH by pointing `channels.imessage.cliPath` at an
 If you want other macOS‑only tools, run the Gateway on a Mac or pair a macOS node.
 
 Docs: [iMessage](/channels/imessage), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
+
+### Do I need a Mac mini for iMessage support?
+
+You need **some macOS device** signed into Messages. It does **not** have to be a Mac mini —
+any Mac works. Clawdbot’s iMessage integrations run on macOS (BlueBubbles or `imsg`), while
+the Gateway can run elsewhere.
+
+Common setups:
+- Run the Gateway on Linux/VPS, and point `channels.imessage.cliPath` at an SSH wrapper that
+  runs `imsg` on the Mac.
+- Run everything on the Mac if you want the simplest single‑machine setup.
+
+Docs: [iMessage](/channels/imessage), [BlueBubbles](/channels/bluebubbles),
+[Mac remote mode](/platforms/mac/remote).
 
 ### Can I use Bun?
 
