@@ -25,6 +25,8 @@ Docs: https://docs.clawd.bot
 - CLI: render auth probe results as a table in `clawdbot models status`.
 - CLI: suppress probe-only embedded logs unless `--verbose` is set.
 - CLI: move auth probe errors below the table to reduce wrapping.
+- CLI: prevent ANSI color bleed when table cells wrap.
+- CLI: explain when auth profiles are excluded by auth.order in probe details.
 - Linux: include env-configured user bin roots in systemd PATH and align PATH audits. (#1512) Thanks @robbyczgw-cla.
 - TUI: render Gateway slash-command replies as system output (for example, `/context`).
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.

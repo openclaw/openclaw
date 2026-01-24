@@ -6,6 +6,7 @@ import {
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
+  resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
@@ -143,6 +144,25 @@ function buildProbeTargets(params: {
       });
 
       const profileIds = listProfilesForProvider(store, providerKey);
+      const explicitOrder = (() => {
+        const order = store.order;
+        if (order) {
+          for (const [key, value] of Object.entries(order)) {
+            if (normalizeProviderId(key) === providerKey) return value;
+          }
+        }
+        const cfgOrder = cfg?.auth?.order;
+        if (cfgOrder) {
+          for (const [key, value] of Object.entries(cfgOrder)) {
+            if (normalizeProviderId(key) === providerKey) return value;
+          }
+        }
+        return undefined;
+      })();
+      const allowedProfiles =
+        explicitOrder && explicitOrder.length > 0
+          ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
+          : null;
       const filteredProfiles = profileFilter.size
         ? profileIds.filter((id) => profileFilter.has(id))
         : profileIds;
@@ -152,6 +172,32 @@ function buildProbeTargets(params: {
           const profile = store.profiles[profileId];
           const mode = profile?.type;
           const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
+          if (explicitOrder && !explicitOrder.includes(profileId)) {
+            results.push({
+              provider: providerKey,
+              model: model ? `${model.provider}/${model.model}` : undefined,
+              profileId,
+              label,
+              source: "profile",
+              mode,
+              status: "unknown",
+              error: "Excluded by auth.order for this provider.",
+            });
+            continue;
+          }
+          if (allowedProfiles && !allowedProfiles.has(profileId)) {
+            results.push({
+              provider: providerKey,
+              model: model ? `${model.provider}/${model.model}` : undefined,
+              profileId,
+              label,
+              source: "profile",
+              mode,
+              status: "unknown",
+              error: "Auth profile credentials are missing or expired.",
+            });
+            continue;
+          }
           if (!model) {
             results.push({
               provider: providerKey,

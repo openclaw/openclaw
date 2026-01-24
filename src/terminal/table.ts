@@ -91,6 +91,27 @@ function wrapLine(text: string, width: number): string[] {
     i += ch.length;
   }
 
+  const firstCharIndex = tokens.findIndex((t) => t.kind === "char");
+  if (firstCharIndex < 0) return [text];
+  let lastCharIndex = -1;
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    if (tokens[i]?.kind === "char") {
+      lastCharIndex = i;
+      break;
+    }
+  }
+  const prefixAnsi = tokens
+    .slice(0, firstCharIndex)
+    .filter((t) => t.kind === "ansi")
+    .map((t) => t.value)
+    .join("");
+  const suffixAnsi = tokens
+    .slice(lastCharIndex + 1)
+    .filter((t) => t.kind === "ansi")
+    .map((t) => t.value)
+    .join("");
+  const coreTokens = tokens.slice(firstCharIndex, lastCharIndex + 1);
+
   const lines: string[] = [];
   const isBreakChar = (ch: string) =>
     ch === " " || ch === "\t" || ch === "/" || ch === "-" || ch === "_" || ch === ".";
@@ -136,7 +157,7 @@ function wrapLine(text: string, width: number): string[] {
     lastBreakIndex = null;
   };
 
-  for (const token of tokens) {
+  for (const token of coreTokens) {
     if (token.kind === "ansi") {
       buf.push(token);
       continue;
@@ -162,7 +183,12 @@ function wrapLine(text: string, width: number): string[] {
   }
 
   flushAt(buf.length);
-  return lines.length ? lines : [""];
+  if (!lines.length) return [""];
+  if (!prefixAnsi && !suffixAnsi) return lines;
+  return lines.map((line) => {
+    if (!line) return line;
+    return `${prefixAnsi}${line}${suffixAnsi}`;
+  });
 }
 
 function normalizeWidth(n: number | undefined): number | undefined {
