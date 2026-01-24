@@ -18,6 +18,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Docker: update gateway command in docker-compose and Hetzner guide. (#1514)
+- Sessions: reject array-backed session stores to prevent silent wipes. (#1469)
 - Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS.
 - UI: keep the Control UI sidebar visible while scrolling long pages. (#1515) Thanks @pookNast.
 - UI: cache Control UI markdown rendering + memoize chat text extraction to reduce Safari typing jank.

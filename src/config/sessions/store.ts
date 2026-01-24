@@ -29,6 +29,10 @@ type SessionStoreCacheEntry = {
 const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 
+function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
     envValue: process.env.CLAWDBOT_SESSION_CACHE_TTL_MS,
@@ -115,7 +119,7 @@ export function loadSessionStore(
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
     const parsed = JSON5.parse(raw);
-    if (parsed && typeof parsed === "object") {
+    if (isSessionStoreRecord(parsed)) {
       store = parsed as Record<string, SessionEntry>;
     }
     mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
