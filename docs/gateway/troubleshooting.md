@@ -7,7 +7,7 @@ read_when:
 
 When Clawdbot misbehaves, here's how to fix it.
 
-Start with the FAQ’s [First 60 seconds](/start/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
+Start with the FAQ’s [First 60 seconds](/help/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
 
 Provider-specific shortcuts: [/channels/troubleshooting](/channels/troubleshooting)
 

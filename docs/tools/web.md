@@ -84,7 +84,7 @@ current limits and pricing.
 
 **Environment alternative:** set `BRAVE_API_KEY` in the Gateway process
 environment. For a gateway install, put it in `~/.clawdbot/.env` (or your
-service environment). See [Env vars](/start/faq#how-does-clawdbot-load-environment-variables).
+service environment). See [Env vars](/help/faq#how-does-clawdbot-load-environment-variables).
 
 ## Using Perplexity (direct or via OpenRouter)
 

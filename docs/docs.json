@@ -387,7 +387,7 @@
     },
     {
       "source": "/faq",
-      "destination": "/start/faq"
+      "destination": "/help/faq"
     },
     {
       "source": "/gateway-lock",
