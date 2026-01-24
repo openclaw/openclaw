@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeshGuard — Governance Control Plane for the Agent Mesh</title>
+    <meta name="description" content="Identity, policy, and audit infrastructure for enterprise AI agent ecosystems. Govern your agent mesh with MeshGuard.">
+    <meta property="og:title" content="MeshGuard — Govern Your Agent Mesh">
+    <meta property="og:description" content="Identity, policy, and audit for enterprise AI agents">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://meshguard.app">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="/" class="nav-logo">
+                <svg class="logo-icon" viewBox="0 0 100 100" width="40" height="40">
+                    <path fill="#0A2540" d="M30,25 Q20,25 20,35 L20,40 Q20,50 30,50 L35,50 Q45,50 45,40 L45,35 Q45,25 35,25 Z M25,30 Q25,28 27,28 L38,28 Q40,28 40,30 L40,45 Q40,47 38,47 L27,47 Q25,47 25,45 Z" transform="rotate(-45 50 50)"/>
+                    <path fill="#00D4AA" d="M70,25 Q80,25 80,35 L80,40 Q80,50 70,50 L65,50 Q55,50 55,40 L55,35 Q55,25 65,25 Z M75,30 Q75,28 73,28 L62,28 Q60,28 60,30 L60,45 Q60,47 62,47 L73,47 Q75,47 75,45 Z" transform="rotate(-45 50 50)"/>
+                    <path fill="#0A2540" d="M30,75 Q20,75 20,65 L20,60 Q20,50 30,50 L35,50 Q45,50 45,60 L45,65 Q45,75 35,75 Z M25,70 Q25,72 27,72 L38,72 Q40,72 40,70 L40,55 Q40,53 38,53 L27,53 Q25,53 25,55 Z" transform="rotate(-45 50 50)"/>
+                    <path fill="#00D4AA" d="M70,75 Q80,75 80,65 L80,60 Q80,50 70,50 L65,50 Q55,50 55,60 L55,65 Q55,75 65,75 Z M75,70 Q75,72 73,72 L62,72 Q60,72 60,70 L60,55 Q60,53 62,53 L73,53 Q75,53 75,55 Z" transform="rotate(-45 50 50)"/>
+                </svg>
+                <span class="logo-text">MeshGuard</span>
+            </a>
+            <div class="nav-links">
+                <a href="#product">Product</a>
+                <a href="#pricing">Pricing</a>
+                <a href="#about">About</a>
+                <a href="#contact" class="btn btn-primary">Get Early Access</a>
+            </div>
+            <button class="nav-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h1>Govern Your Agent Mesh</h1>
+                <p class="hero-subtitle">Identity, policy, and audit infrastructure for enterprise AI agents. One control plane for every agent in your organization.</p>
+                <div class="hero-cta">
+                    <a href="#contact" class="btn btn-primary btn-lg">Request Early Access</a>
+                    <a href="#product" class="btn btn-outline btn-lg">Learn More</a>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="mesh-visual">
+                    <div class="mesh-node node-1"></div>
+                    <div class="mesh-node node-2"></div>
+                    <div class="mesh-node node-3"></div>
+                    <div class="mesh-node node-4"></div>
+                    <div class="mesh-node node-5"></div>
+                    <svg class="mesh-lines" viewBox="0 0 400 300">
+                        <line x1="100" y1="50" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
+                        <line x1="300" y1="50" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
+                        <line x1="50" y1="200" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
+                        <line x1="350" y1="200" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
+                        <line x1="200" y1="280" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Problem Section -->
+    <section class="section section-gray" id="problem">
+        <div class="container">
+            <div class="section-header">
+                <h2>The Enterprise is Becoming an Agent Mesh</h2>
+                <p>By 2026, 40% of enterprise applications will include AI agents. These agents don't just answer questions — they take actions, access systems, and delegate to other agents.</p>
+            </div>
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-year">2024</div>
+                    <div class="timeline-content">
+                        <h3>Copilots</h3>
+                        <p>Humans prompt AI assistants for help with tasks</p>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-year">2025</div>
+                    <div class="timeline-content">
+                        <h3>Agents</h3>
+                        <p>AI takes autonomous actions on behalf of users</p>
+                    </div>
+                </div>
+                <div class="timeline-item active">
+                    <div class="timeline-year">2026</div>
+                    <div class="timeline-content">
+                        <h3>Agent Mesh</h3>
+                        <p>Agents delegate to other agents across boundaries</p>
+                    </div>
+                </div>
+            </div>
+            <div class="problem-questions">
+                <h3>But who governs the mesh?</h3>
+                <div class="questions-grid">
+                    <div class="question-card">
+                        <div class="question-icon">🤖</div>
+                        <p>Who is this agent?</p>
+                    </div>
+                    <div class="question-card">
+                        <div class="question-icon">🔐</div>
+                        <p>What can it access?</p>
+                    </div>
+                    <div class="question-card">
+                        <div class="question-icon">✅</div>
+                        <p>Who approved this chain?</p>
+                    </div>
+                    <div class="question-card">
+                        <div class="question-icon">📋</div>
+                        <p>What actions were taken?</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Solution Section -->
+    <section class="section" id="product">
+        <div class="container">
+            <div class="section-header">
+                <h2>One Control Plane for Every Agent</h2>
+                <p>MeshGuard provides the governance layer your agent ecosystem needs.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                            <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                    </div>
+                    <h3>Agent Identity</h3>
+                    <p>Cryptographic credentials, enrollment workflows, and trust tiers for every agent in your organization.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                    </div>
+                    <h3>Policy Engine</h3>
+                    <p>Declarative YAML rules define what agents can do, access, and delegate. Version-controlled governance.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                            <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="8.5" cy="7" r="4"/>
+                            <path d="M20 8v6M23 11h-6"/>
+                        </svg>
+                    </div>
+                    <h3>Delegation Controls</h3>
+                    <p>Permission ceilings, depth limits, and trust inheritance ensure agents can't exceed their authority.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                        </svg>
+                    </div>
+                    <h3>Unified Audit</h3>
+                    <p>Immutable logs, trace correlation, and compliance reporting across your entire agent ecosystem.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works -->
+    <section class="section section-dark" id="how-it-works">
+        <div class="container">
+            <div class="section-header">
+                <h2>Simple to Deploy, Powerful to Scale</h2>
+                <p>Get started in minutes with our gateway-first architecture.</p>
+            </div>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <h3>Enroll</h3>
+                    <p>Register agents with MeshGuard and receive cryptographic credentials</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <h3>Define</h3>
+                    <p>Write YAML policies for permissions, rate limits, and data access</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <h3>Enforce</h3>
+                    <p>Gateway validates every agent action against your policies</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">4</div>
+                    <h3>Delegate</h3>
+                    <p>Controlled handoffs with automatic permission inheritance</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">5</div>
+                    <h3>Audit</h3>
+                    <p>Complete trace of every action, delegation, and outcome</p>
+                </div>
+            </div>
+            <div class="code-example">
+                <div class="code-header">
+                    <span class="code-dot"></span>
+                    <span class="code-dot"></span>
+                    <span class="code-dot"></span>
+                    <span class="code-title">policy.yaml</span>
+                </div>
+                <pre><code><span class="code-key">agent</span>: sales-assistant
+<span class="code-key">permissions</span>:
+  - <span class="code-value">read:contacts</span>
+  - <span class="code-value">write:calendar</span>
+  - <span class="code-value">send:email</span>
+<span class="code-key">delegation</span>:
+  <span class="code-key">allowed</span>: <span class="code-bool">true</span>
+  <span class="code-key">max_depth</span>: <span class="code-num">2</span>
+  <span class="code-key">require_approval</span>: <span class="code-bool">false</span>
+<span class="code-key">rate_limit</span>: <span class="code-value">100/hour</span></code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section class="section" id="pricing">
+        <div class="container">
+            <div class="section-header">
+                <h2>Simple, Transparent Pricing</h2>
+                <p>Start small, scale as your agent ecosystem grows.</p>
+            </div>
+            <div class="pricing-grid">
+                <div class="pricing-card">
+                    <div class="pricing-header">
+                        <h3>Starter</h3>
+                        <div class="pricing-price">
+                            <span class="price-amount">$2,000</span>
+                            <span class="price-period">/month</span>
+                        </div>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>Up to 50 agents</li>
+                        <li>Core identity & policy</li>
+                        <li>Basic audit logs</li>
+                        <li>Email support</li>
+                        <li>Community Slack</li>
+                    </ul>
+                    <a href="#contact" class="btn btn-outline btn-block">Get Started</a>
+                </div>
+                <div class="pricing-card featured">
+                    <div class="pricing-badge">Most Popular</div>
+                    <div class="pricing-header">
+                        <h3>Growth</h3>
+                        <div class="pricing-price">
+                            <span class="price-amount">$10,000</span>
+                            <span class="price-period">/month</span>
+                        </div>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>Up to 500 agents</li>
+                        <li>Advanced policies</li>
+                        <li>Full audit & compliance</li>
+                        <li>Priority support</li>
+                        <li>Dedicated CSM</li>
+                        <li>SSO integration</li>
+                    </ul>
+                    <a href="#contact" class="btn btn-primary btn-block">Get Started</a>
+                </div>
+                <div class="pricing-card">
+                    <div class="pricing-header">
+                        <h3>Enterprise</h3>
+                        <div class="pricing-price">
+                            <span class="price-amount">Custom</span>
+                        </div>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>Unlimited agents</li>
+                        <li>Custom integrations</li>
+                        <li>On-premise option</li>
+                        <li>24/7 support</li>
+                        <li>SLA guarantees</li>
+                        <li>Dedicated infrastructure</li>
+                    </ul>
+                    <a href="#contact" class="btn btn-outline btn-block">Contact Sales</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section class="section section-gray" id="about">
+        <div class="container">
+            <div class="about-grid">
+                <div class="about-content">
+                    <h2>Built by Agent Builders, for Agent Builders</h2>
+                    <p>MeshGuard emerged from <strong>Clawdbot</strong>, an open-source AI agent framework with over 5,000 deployments. After watching agent ecosystems grow increasingly complex, we built the governance layer the enterprise needs.</p>
+                    <p>We've seen firsthand how quickly a single agent becomes a mesh of interconnected agents spanning teams, tools, and organizational boundaries. Without proper governance, it's chaos.</p>
+                    <p>MeshGuard is the control plane we wished we had.</p>
+                    <div class="about-founder">
+                        <div class="founder-avatar"></div>
+                        <div class="founder-info">
+                            <strong>David Hurley</strong>
+                            <span>Founder & CEO</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="about-stats">
+                    <div class="stat">
+                        <div class="stat-number">5,000+</div>
+                        <div class="stat-label">Clawdbot Deployments</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">40%</div>
+                        <div class="stat-label">of apps will have agents by 2026</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">$8B+</div>
+                        <div class="stat-label">AI governance market by 2028</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="section section-cta" id="contact">
+        <div class="container">
+            <div class="cta-content">
+                <h2>Ready to Govern Your Agent Mesh?</h2>
+                <p>Join the waitlist for early access. We're onboarding design partners now.</p>
+                <form class="cta-form" action="https://formspree.io/f/placeholder" method="POST">
+                    <input type="email" name="email" placeholder="you@company.com" required>
+                    <button type="submit" class="btn btn-primary">Request Access</button>
+                </form>
+                <p class="cta-note">We'll be in touch within 24 hours.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <a href="/" class="nav-logo">
+                        <svg class="logo-icon" viewBox="0 0 100 100" width="32" height="32">
+                            <path fill="#fff" d="M30,25 Q20,25 20,35 L20,40 Q20,50 30,50 L35,50 Q45,50 45,40 L45,35 Q45,25 35,25 Z" transform="rotate(-45 50 50)" opacity="0.7"/>
+                            <path fill="#00D4AA" d="M70,25 Q80,25 80,35 L80,40 Q80,50 70,50 L65,50 Q55,50 55,40 L55,35 Q55,25 65,25 Z" transform="rotate(-45 50 50)"/>
+                            <path fill="#fff" d="M30,75 Q20,75 20,65 L20,60 Q20,50 30,50 L35,50 Q45,50 45,60 L45,65 Q45,75 35,75 Z" transform="rotate(-45 50 50)" opacity="0.7"/>
+                            <path fill="#00D4AA" d="M70,75 Q80,75 80,65 L80,60 Q80,50 70,50 L65,50 Q55,50 55,60 L55,65 Q55,75 65,75 Z" transform="rotate(-45 50 50)"/>
+                        </svg>
+                        <span class="logo-text">MeshGuard</span>
+                    </a>
+                    <p>The governance control plane for the agent mesh.</p>
+                </div>
+                <div class="footer-links">
+                    <h4>Product</h4>
+                    <a href="#product">Features</a>
+                    <a href="#pricing">Pricing</a>
+                    <a href="#how-it-works">How It Works</a>
+                </div>
+                <div class="footer-links">
+                    <h4>Company</h4>
+                    <a href="#about">About</a>
+                    <a href="#contact">Contact</a>
+                    <a href="#">Careers</a>
+                </div>
+                <div class="footer-links">
+                    <h4>Legal</h4>
+                    <a href="#">Privacy Policy</a>
+                    <a href="#">Terms of Service</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 MeshGuard. All rights reserved.</p>
+                <div class="footer-social">
+                    <a href="#" aria-label="Twitter">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                        </svg>
+                    </a>
+                    <a href="#" aria-label="LinkedIn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                        </svg>
+                    </a>
+                    <a href="#" aria-label="GitHub">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>

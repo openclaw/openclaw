@@ -14,14 +14,24 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
   - [What runtime do I need?](#what-runtime-do-i-need)
+  - [Does it run on Raspberry Pi?](#does-it-run-on-raspberry-pi)
+  - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
+  - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
+  - [I can't access docs.clawd.bot (SSL error). What now?](#i-cant-access-docsclawdbot-ssl-error-what-now)
+  - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
+  - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
+  - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setup-token-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setup-token)
   - [Do you support Claude subscription auth (Claude Code OAuth)?](#do-you-support-claude-subscription-auth-claude-code-oauth)
+  - [Why am I seeing `HTTP 429: rate_limit_error` from Anthropic?](#why-am-i-seeing-http-429-rate_limit_error-from-anthropic)
   - [Is AWS Bedrock supported?](#is-aws-bedrock-supported)
   - [How does Codex auth work?](#how-does-codex-auth-work)
+  - [Do you support OpenAI subscription auth (Codex OAuth)?](#do-you-support-openai-subscription-auth-codex-oauth)
   - [Is a local model OK for casual chats?](#is-a-local-model-ok-for-casual-chats)
   - [How do I keep hosted model traffic in a specific region?](#how-do-i-keep-hosted-model-traffic-in-a-specific-region)
+  - [Do I have to buy a Mac Mini to install this?](#do-i-have-to-buy-a-mac-mini-to-install-this)
   - [Can I use Bun?](#can-i-use-bun)
   - [Telegram: what goes in `allowFrom`?](#telegram-what-goes-in-allowfrom)
   - [Can multiple people use one WhatsApp number with different Clawdbots?](#can-multiple-people-use-one-whatsapp-number-with-different-clawdbots)
@@ -34,6 +44,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
+  - [Can Clawdbot run tasks on a schedule or continuously in the background?](#can-clawdbot-run-tasks-on-a-schedule-or-continuously-in-the-background)
   - [Can I run Apple/macOS-only skills from Linux?](#can-i-run-applemacos-only-skills-from-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
   - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
@@ -81,8 +92,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Why doesn’t Clawdbot reply in a group?](#why-doesnt-clawdbot-reply-in-a-group)
   - [Do groups/threads share context with DMs?](#do-groupsthreads-share-context-with-dms)
   - [How many workspaces and agents can I create?](#how-many-workspaces-and-agents-can-i-create)
+  - [Can I run multiple bots or chats at the same time (Slack), and how should I set that up?](#can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up)
 - [Models: defaults, selection, aliases, switching](#models-defaults-selection-aliases-switching)
   - [What is the “default model”?](#what-is-the-default-model)
+  - [What model do you recommend?](#what-model-do-you-recommend)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Why do I see “Model … is not allowed” and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
   - [Why do I see “Unknown model: minimax/MiniMax-M2.1”?](#why-do-i-see-unknown-model-minimaxminimax-m21)
@@ -231,6 +244,86 @@ See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth
 
 Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
 
+### Does it run on Raspberry Pi?
+
+Yes. The Gateway is lightweight — docs list **512MB–1GB RAM**, **1 core**, and about **500MB**
+disk as enough for personal use, and note that a **Raspberry Pi 4 can run it**.
+
+If you want extra headroom (logs, media, other services), **2GB is recommended**, but it’s
+not a hard minimum.
+
+### Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?
+
+Yes. Copy the **state directory** and **workspace**, then run Doctor once:
+
+1) Install Clawdbot on the new machine.
+2) Copy `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`) from the old machine.
+3) Copy your workspace (default: `~/clawd`).
+4) Run `clawdbot doctor` and restart the Gateway service.
+
+That preserves config, auth profiles, WhatsApp creds, sessions, and memory. If you’re in
+remote mode, remember the gateway host owns the session store and workspace.
+
+Related: [Where things live on disk](/help/faq#where-does-clawdbot-store-its-data),
+[Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
+[Remote mode](/gateway/remote).
+
+### Where do I see what’s new in the latest version?
+
+Check the GitHub changelog:  
+https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md
+
+Newest entries are at the top. If the top section is marked **Unreleased**, the next dated
+section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
+**Fixes** (plus docs/other sections when needed).
+
+### I can't access docs.clawd.bot (SSL error). What now?
+
+Some Comcast/Xfinity connections incorrectly block `docs.clawd.bot` via Xfinity
+Advanced Security. Disable it or allowlist `docs.clawd.bot`, then retry. More
+detail: [Troubleshooting](/help/troubleshooting#docsclawdbot-shows-an-ssl-error-comcastxfinity).
+
+If you still can't reach the site, the docs are mirrored on GitHub:
+https://github.com/clawdbot/clawdbot/tree/main/docs
+
+### How do I install the beta version, and what’s the difference between beta and dev?
+
+**Beta** is a prerelease tag (`vYYYY.M.D-beta.N`) published to the npm dist‑tag `beta`.  
+**Dev** is the moving head of `main` (git); when published, it uses the npm dist‑tag `dev`.
+
+One‑liners (macOS/Linux):
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://clawd.bot/install.sh | bash -s -- --beta
+```
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://clawd.bot/install.sh | bash -s -- --install-method git
+```
+
+Windows installer (PowerShell):
+https://clawd.bot/install.ps1
+
+More detail: [Development channels](/install/development-channels) and [Installer flags](/install/installer).
+
+### The docs didn’t answer my question — how do I get a better answer?
+
+Use the **hackable (git) install** so you have the full source and docs locally, then ask
+your bot (or Claude/Codex) *from that folder* so it can read the repo and answer precisely.
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git
+```
+
+More detail: [Install](/install) and [Installer flags](/install/installer).
+
+### How do I install Clawdbot on a VPS?
+
+Any Linux VPS works. Install on the server, then use SSH/Tailscale to reach the Gateway.
+
+Guides: [exe.dev](/platforms/exe-dev), [Hetzner](/platforms/hetzner), [Fly.io](/platforms/fly).  
+Remote access: [Gateway remote](/gateway/remote).
+
 ### What does the onboarding wizard actually do?
 
 `clawdbot onboard` is the recommended setup path. In **local mode** it walks you through:
@@ -268,6 +361,16 @@ Yes. Clawdbot can **reuse Claude Code CLI credentials** (OAuth) and also support
 
 Note: Claude subscription access is governed by Anthropic’s terms. For production or multi‑user workloads, API keys are usually the safer choice.
 
+### Why am I seeing `HTTP 429: rate_limit_error` from Anthropic?
+
+That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
+use a **Claude subscription** (setup‑token or Claude Code OAuth), wait for the window to
+reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
+for usage/billing and raise limits as needed.
+
+Tip: set a **fallback model** so Clawdbot can keep replying while a provider is rate‑limited.
+See [Models](/cli/models) and [OAuth](/concepts/oauth).
+
 ### Is AWS Bedrock supported?
 
 Yes — via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI‑compatible proxy in front of Bedrock is still a valid option.
@@ -276,6 +379,14 @@ Yes — via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual con
 
 Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI login (`~/.codex/auth.json`). The wizard can import the CLI login or run the OAuth flow and will set the default model to `openai-codex/gpt-5.2` when appropriate. See [Model providers](/concepts/model-providers) and [Wizard](/start/wizard).
 
+### Do you support OpenAI subscription auth (Codex OAuth)?
+
+Yes. Clawdbot fully supports **OpenAI Code (Codex) subscription OAuth** and can also reuse an
+existing Codex CLI login (`~/.codex/auth.json`) on the gateway host. The onboarding wizard
+can import the CLI login or run the OAuth flow for you.
+
+See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
+
 ### Is a local model OK for casual chats?
 
 Usually no. Clawdbot needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.1 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk — see [Security](/gateway/security).
@@ -283,6 +394,17 @@ Usually no. Clawdbot needs large context + strong safety; small cards truncate a
 ### How do I keep hosted model traffic in a specific region?
 
 Pick region-pinned endpoints. OpenRouter exposes US-hosted options for MiniMax, Kimi, and GLM; choose the US-hosted variant to keep data in-region. You can still list Anthropic/OpenAI alongside these by using `models.mode: "merge"` so fallbacks stay available while respecting the regioned provider you select.
+
+### Do I have to buy a Mac Mini to install this?
+
+No. Clawdbot runs on macOS or Linux (Windows via WSL2). A Mac mini is optional — some people
+buy one as an always‑on host, but a small VPS, home server, or Raspberry Pi‑class box works too.
+
+You only need a Mac **for macOS‑only tools**. For iMessage, you can keep the Gateway on Linux
+and run `imsg` on any Mac over SSH by pointing `channels.imessage.cliPath` at an SSH wrapper.
+If you want other macOS‑only tools, run the Gateway on a Mac or pair a macOS node.
+
+Docs: [iMessage](/channels/imessage), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
 
 ### Can I use Bun?
 
@@ -404,6 +526,17 @@ npm i -g clawdhub
 ```bash
 pnpm add -g clawdhub
 ```
+
+### Can Clawdbot run tasks on a schedule or continuously in the background?
+
+Yes. Use the Gateway scheduler:
+
+- **Cron jobs** for scheduled or recurring tasks (persist across restarts).
+- **Heartbeat** for “main session” periodic checks.
+- **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
+
+Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
+[Heartbeat](/gateway/heartbeat).
 
 ### Is there a way to run Apple/macOS-only skills if my Gateway runs on Linux?
 
@@ -774,7 +907,8 @@ Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Chrome extension](/tools/chrome
 ### Do nodes run a gateway service?
 
 No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect
-to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app).
+to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app). For headless node
+hosts and CLI control, see [Node host CLI](/cli/node).
 
 A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
 
@@ -1041,6 +1175,24 @@ Tips:
 - Prune old sessions (delete JSONL or store entries) if disk grows.
 - Use `clawdbot doctor` to spot stray workspaces and profile mismatches.
 
+### Can I run multiple bots or chats at the same time (Slack), and how should I set that up?
+
+Yes. Use **Multi‑Agent Routing** to run multiple isolated agents and route inbound messages by
+channel/account/peer. Slack is supported as a channel and can be bound to specific agents.
+
+Browser access is powerful but not “do anything a human can” — anti‑bot, CAPTCHAs, and MFA can
+still block automation. For the most reliable browser control, use the Chrome extension relay
+on the machine that runs the browser (and keep the Gateway anywhere).
+
+Best‑practice setup:
+- Always‑on Gateway host (VPS/Mac mini).
+- One agent per role (bindings).
+- Slack channel(s) bound to those agents.
+- Local browser via extension relay (or a node) when needed.
+
+Docs: [Multi‑Agent Routing](/concepts/multi-agent), [Slack](/channels/slack),
+[Browser](/tools/browser), [Chrome extension](/tools/chrome-extension), [Nodes](/nodes).
+
 ## Models: defaults, selection, aliases, switching
 
 ### What is the “default model”?
@@ -1052,6 +1204,21 @@ agents.defaults.model.primary
 ```
 
 Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-5`). If you omit the provider, Clawdbot currently assumes `anthropic` as a temporary deprecation fallback — but you should still **explicitly** set `provider/model`.
+
+### What model do you recommend?
+
+**Recommended default:** `anthropic/claude-opus-4-5`.  
+**Good alternative:** `anthropic/claude-sonnet-4-5`.  
+**Reliable (less character):** `openai/gpt-5.2` — nearly as good as Opus, just less personality.  
+**Budget:** `zai/glm-4.7`.
+
+MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
+[Local models](/gateway/local-models).
+
+Strong warning: weaker/over-quantized models are more vulnerable to prompt
+injection and unsafe behavior. See [Security](/gateway/security).
+
+More context: [Models](/concepts/models).
 
 ### How do I switch models on the fly (without restarting)?
 

@@ -33,6 +33,22 @@ Almost always a Node/npm PATH issue. Start here:
 
 - [Install (Node/npm PATH sanity)](/install#nodejs--npm-path-sanity)
 
+### Installer fails (or you need full logs)
+
+Re-run the installer in verbose mode to see the full trace and npm output:
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --verbose
+```
+
+For beta installs:
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --beta --verbose
+```
+
+You can also set `CLAWDBOT_VERBOSE=1` instead of the flag.
+
 ### Gateway “unauthorized”, can’t connect, or keeps reconnecting
 
 - [Gateway troubleshooting](/gateway/troubleshooting)

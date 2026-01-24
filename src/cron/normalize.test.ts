@@ -24,7 +24,7 @@ describe("normalizeCronJobCreate", () => {
     expect("provider" in payload).toBe(false);
   });
 
-  it("normalizes agentId and drops null", () => {
+  it("trims agentId and drops null", () => {
     const normalized = normalizeCronJobCreate({
       name: "agent-set",
       enabled: true,

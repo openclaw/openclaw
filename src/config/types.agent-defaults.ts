@@ -4,6 +4,7 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
@@ -177,18 +178,8 @@ export type AgentDefaultsConfig = {
     model?: string;
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
-    /** Delivery target (last|whatsapp|telegram|discord|slack|mattermost|msteams|signal|imessage|none). */
-    target?:
-      | "last"
-      | "whatsapp"
-      | "telegram"
-      | "discord"
-      | "slack"
-      | "mattermost"
-      | "msteams"
-      | "signal"
-      | "imessage"
-      | "none";
+    /** Delivery target ("last", "none", or a channel id). */
+    target?: "last" | "none" | ChannelId;
     /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
     to?: string;
     /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */

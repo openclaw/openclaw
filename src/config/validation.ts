@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { CHANNEL_IDS } from "../channels/registry.js";
+import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
   resolveEnableState,
@@ -223,6 +223,41 @@ export function validateConfigObjectWithPlugins(raw: unknown):
           message: `unknown channel id: ${trimmed}`,
         });
       }
+    }
+  }
+
+  const heartbeatChannelIds = new Set<string>();
+  for (const channelId of CHANNEL_IDS) {
+    heartbeatChannelIds.add(channelId.toLowerCase());
+  }
+  for (const record of registry.plugins) {
+    for (const channelId of record.channels) {
+      const trimmed = channelId.trim();
+      if (trimmed) heartbeatChannelIds.add(trimmed.toLowerCase());
+    }
+  }
+
+  const validateHeartbeatTarget = (target: string | undefined, path: string) => {
+    if (typeof target !== "string") return;
+    const trimmed = target.trim();
+    if (!trimmed) {
+      issues.push({ path, message: "heartbeat target must not be empty" });
+      return;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "last" || normalized === "none") return;
+    if (normalizeChatChannelId(trimmed)) return;
+    if (heartbeatChannelIds.has(normalized)) return;
+    issues.push({ path, message: `unknown heartbeat target: ${target}` });
+  };
+
+  validateHeartbeatTarget(
+    config.agents?.defaults?.heartbeat?.target,
+    "agents.defaults.heartbeat.target",
+  );
+  if (Array.isArray(config.agents?.list)) {
+    for (const [index, entry] of config.agents.list.entries()) {
+      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
     }
   }
 

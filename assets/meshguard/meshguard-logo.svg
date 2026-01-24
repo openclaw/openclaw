@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="800" height="800">
+  <title>MeshGuard Logo</title>
+  <desc>Four interlocking loops - Navy and Teal</desc>
+  
+  <!-- Navy loop - top-left to bottom-right -->
+  <path fill="#0A2540" d="
+    M 20,35 
+    C 20,20 35,20 50,35
+    C 65,50 65,65 50,65
+    C 35,65 35,50 50,35
+    C 50,35 35,35 35,50
+    C 35,65 50,80 65,65
+    C 80,50 80,35 65,35
+    C 50,35 50,50 65,65
+    L 70,60
+    C 55,75 35,75 35,50
+    C 35,25 55,25 55,50
+    L 50,55
+    C 50,40 40,40 40,50
+    C 40,60 50,60 50,50
+    Z
+  " opacity="0"/>
+  
+  <!-- Simplified geometric version -->
+  <!-- Top-left Navy arc going down-right -->
+  <path fill="#0A2540" d="
+    M 25,40 Q 25,25 40,25 L 45,30 Q 32,30 32,40 Q 32,50 50,50 L 50,56 Q 26,56 26,40 Z
+  "/>
+  
+  <!-- Bottom-right Navy arc going up-left -->
+  <path fill="#0A2540" d="
+    M 75,60 Q 75,75 60,75 L 55,70 Q 68,70 68,60 Q 68,50 50,50 L 50,44 Q 74,44 74,60 Z
+  "/>
+  
+  <!-- Top-right Teal arc going down-left -->
+  <path fill="#00D4AA" d="
+    M 60,25 Q 75,25 75,40 L 70,45 Q 70,32 60,32 Q 50,32 50,50 L 44,50 Q 44,26 60,26 Z
+  "/>
+  
+  <!-- Bottom-left Teal arc going up-right -->
+  <path fill="#00D4AA" d="
+    M 40,75 Q 25,75 25,60 L 30,55 Q 30,68 40,68 Q 50,68 50,50 L 56,50 Q 56,74 40,74 Z
+  "/>
+</svg>

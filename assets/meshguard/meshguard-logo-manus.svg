@@ -1,0 +1,19 @@
+<svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+  <!-- MeshGuard Logo: Two interlocking chain links in Navy Blue and Teal -->
+  
+  <!-- Navy Blue Chain Link (Left, tilted) -->
+  <g transform="translate(140, 200) rotate(-45)">
+    <!-- Outer rounded rectangle -->
+    <rect x="-80" y="-30" width="160" height="60" rx="30" ry="30" fill="#0A2540"/>
+    <!-- Inner rounded rectangle (cutout) -->
+    <rect x="-60" y="-10" width="120" height="20" rx="10" ry="10" fill="white"/>
+  </g>
+  
+  <!-- Teal Chain Link (Right, tilted opposite direction) -->
+  <g transform="translate(260, 200) rotate(45)">
+    <!-- Outer rounded rectangle -->
+    <rect x="-80" y="-30" width="160" height="60" rx="30" ry="30" fill="#00D4AA"/>
+    <!-- Inner rounded rectangle (cutout) -->
+    <rect x="-60" y="-10" width="120" height="20" rx="10" ry="10" fill="white"/>
+  </g>
+</svg>

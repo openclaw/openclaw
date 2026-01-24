@@ -67,10 +67,9 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   "gemini-2.5-pro": "gemini-3-pro",
   "gemini-2.5-flash": "gemini-3-flash",
 
-  // GLM (free + alpha)
+  // GLM (free)
   glm: "glm-4.7",
   "glm-free": "glm-4.7",
-  "alpha-glm": "alpha-glm-4.7",
 };
 
 /**
@@ -122,7 +121,6 @@ const MODEL_COSTS: Record<
   },
   "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
-  "alpha-glm-4.7": { input: 0.6, output: 2.2, cacheRead: 0.6, cacheWrite: 0 },
   "gpt-5.1-codex-mini": {
     input: 0.25,
     output: 2,
@@ -147,7 +145,6 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.1-codex": 400000,
   "claude-opus-4-5": 200000,
   "gemini-3-pro": 1048576,
-  "alpha-glm-4.7": 204800,
   "gpt-5.1-codex-mini": 400000,
   "gpt-5.1": 400000,
   "glm-4.7": 204800,
@@ -164,7 +161,6 @@ const MODEL_MAX_TOKENS: Record<string, number> = {
   "gpt-5.1-codex": 128000,
   "claude-opus-4-5": 64000,
   "gemini-3-pro": 65536,
-  "alpha-glm-4.7": 131072,
   "gpt-5.1-codex-mini": 128000,
   "gpt-5.1": 128000,
   "glm-4.7": 131072,
@@ -201,7 +197,6 @@ const MODEL_NAMES: Record<string, string> = {
   "gpt-5.1-codex": "GPT-5.1 Codex",
   "claude-opus-4-5": "Claude Opus 4.5",
   "gemini-3-pro": "Gemini 3 Pro",
-  "alpha-glm-4.7": "Alpha GLM-4.7",
   "gpt-5.1-codex-mini": "GPT-5.1 Codex Mini",
   "gpt-5.1": "GPT-5.1",
   "glm-4.7": "GLM-4.7",
@@ -229,7 +224,6 @@ export function getOpencodeZenStaticFallbackModels(): ModelDefinitionConfig[] {
     "gpt-5.1-codex",
     "claude-opus-4-5",
     "gemini-3-pro",
-    "alpha-glm-4.7",
     "gpt-5.1-codex-mini",
     "gpt-5.1",
     "glm-4.7",
