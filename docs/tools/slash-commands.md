@@ -67,6 +67,13 @@ Text + native (when enabled):
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
+- `/tts_on` (enable TTS replies)
+- `/tts_off` (disable TTS replies)
+- `/tts_provider [openai|elevenlabs]` (set or show TTS provider)
+- `/tts_limit <chars>` (max chars before TTS summarization)
+- `/tts_summary on|off` (toggle TTS auto-summary)
+- `/tts_status` (show TTS status)
+- `/audio <text>` (convert text to a TTS audio reply)
 - `/stop`
 - `/restart`
 - `/dock-telegram` (alias: `/dock_telegram`) (switch replies to Telegram)

@@ -14,7 +14,6 @@ import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
@@ -40,45 +39,6 @@ export async function deliverReplies(params: {
   const threadParams = buildTelegramThreadParams(messageThreadId);
   let hasReplied = false;
   for (const reply of replies) {
-    // Track if hook wants to send audio after text
-    let audioToSendAfter: string | undefined;
-
-    // Run message_sending hook (allows plugins like TTS to generate audio)
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner && reply?.text?.trim()) {
-      try {
-        const hookResult = await hookRunner.runMessageSending(
-          {
-            to: chatId,
-            content: reply.text,
-            metadata: { channel: "telegram", threadId: messageThreadId },
-          },
-          {
-            channelId: "telegram",
-            accountId: undefined,
-            conversationId: chatId,
-          },
-        );
-
-        // Check if hook wants to cancel the message
-        if (hookResult?.cancel) {
-          continue; // Skip this reply
-        }
-
-        // Check if hook returned a MEDIA directive (TTS audio)
-        if (hookResult?.content !== undefined) {
-          const mediaMatch = hookResult.content.match(/^MEDIA:(.+)$/m);
-          if (mediaMatch) {
-            // Save audio path to send AFTER the text message
-            audioToSendAfter = mediaMatch[1].trim();
-          }
-        }
-      } catch (err) {
-        // Hook errors shouldn't block message sending
-        logVerbose(`[telegram delivery] hook error: ${String(err)}`);
-      }
-    }
-
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
@@ -110,25 +70,6 @@ export async function deliverReplies(params: {
           hasReplied = true;
         }
       }
-
-      // Send TTS audio after text (if hook generated one)
-      if (audioToSendAfter) {
-        try {
-          const audioMedia = await loadWebMedia(audioToSendAfter);
-          const audioFile = new InputFile(audioMedia.buffer, "voice.mp3");
-          // Switch typing indicator to record_voice before sending
-          await params.onVoiceRecording?.();
-          const audioParams: Record<string, unknown> = {};
-          if (threadParams) {
-            audioParams.message_thread_id = threadParams.message_thread_id;
-          }
-          await bot.api.sendVoice(chatId, audioFile, audioParams);
-          logVerbose(`[telegram delivery] TTS audio sent: ${audioToSendAfter}`);
-        } catch (err) {
-          logVerbose(`[telegram delivery] TTS audio send failed: ${String(err)}`);
-        }
-      }
-
       continue;
     }
     // media with optional caption on first item

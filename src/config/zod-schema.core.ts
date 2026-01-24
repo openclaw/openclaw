@@ -155,6 +155,36 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
+export const TtsProviderSchema = z.enum(["elevenlabs", "openai"]);
+export const TtsModeSchema = z.enum(["final", "all"]);
+export const TtsConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: TtsModeSchema.optional(),
+    provider: TtsProviderSchema.optional(),
+    elevenlabs: z
+      .object({
+        apiKey: z.string().optional(),
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    openai: z
+      .object({
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
+
 export const HumanDelaySchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),

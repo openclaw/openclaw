@@ -1446,6 +1446,44 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 `removeAckAfterReply` removes the bot’s ack reaction after a reply is sent
 (Slack/Discord/Telegram only). Default: `false`.
 
+#### `messages.tts`
+
+Enable text-to-speech for outbound replies. When on, Clawdbot generates audio
+using ElevenLabs or OpenAI and attaches it to responses. Telegram uses Opus
+voice notes; other channels send MP3 audio.
+
+```json5
+{
+  messages: {
+    tts: {
+      enabled: true,
+      mode: "final", // final | all (include tool/block replies)
+      provider: "elevenlabs",
+      maxTextLength: 4000,
+      timeoutMs: 30000,
+      prefsPath: "~/.clawdbot/settings/tts.json",
+      elevenlabs: {
+        apiKey: "elevenlabs_api_key",
+        voiceId: "voice_id",
+        modelId: "eleven_multilingual_v2"
+      },
+      openai: {
+        apiKey: "openai_api_key",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy"
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `messages.tts.enabled` can be overridden by local user prefs (see `/tts_on`, `/tts_off`).
+- `prefsPath` stores local overrides (enabled/provider/limit/summarize).
+- `maxTextLength` is a hard cap for TTS input; summaries are truncated to fit.
+- `/tts_limit` and `/tts_summary` control per-user summarization settings.
+- `apiKey` values fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+
 ### `talk`
 
 Defaults for Talk mode (macOS/iOS/Android). Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID` when unset.
