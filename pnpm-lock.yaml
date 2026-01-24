@@ -311,9 +311,6 @@ importers:
       '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: ^0.4.0
         version: 0.4.0
-      clawdbot:
-        specifier: workspace:*
-        version: link:../..
       markdown-it:
         specifier: 14.1.0
         version: 14.1.0
@@ -323,6 +320,13 @@ importers:
       music-metadata:
         specifier: ^11.10.6
         version: 11.10.6
+      zod:
+        specifier: ^4.3.5
+        version: 4.3.5
+    devDependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/mattermost: {}
 

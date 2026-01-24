@@ -7,8 +7,8 @@ import {
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
-const DEFAULT_CONTEXT_WINDOW = 128000;
-const DEFAULT_MAX_TOKENS = 8192;
+const DEFAULT_CONTEXT_WINDOW = 32000;
+const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -39,6 +39,8 @@ function buildCacheKey(params: {
   region: string;
   providerFilter: string[];
   refreshIntervalSeconds: number;
+  defaultContextWindow: number;
+  defaultMaxTokens: number;
 }): string {
   return JSON.stringify(params);
 }
@@ -69,12 +71,14 @@ function inferReasoningSupport(summary: BedrockModelSummary): boolean {
   return haystack.includes("reasoning") || haystack.includes("thinking");
 }
 
-function inferContextWindow(): number {
-  return DEFAULT_CONTEXT_WINDOW;
+function resolveDefaultContextWindow(config?: BedrockDiscoveryConfig): number {
+  const value = Math.floor(config?.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW);
+  return value > 0 ? value : DEFAULT_CONTEXT_WINDOW;
 }
 
-function inferMaxTokens(): number {
-  return DEFAULT_MAX_TOKENS;
+function resolveDefaultMaxTokens(config?: BedrockDiscoveryConfig): number {
+  const value = Math.floor(config?.defaultMaxTokens ?? DEFAULT_MAX_TOKENS);
+  return value > 0 ? value : DEFAULT_MAX_TOKENS;
 }
 
 function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
@@ -96,7 +100,10 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
   return true;
 }
 
-function toModelDefinition(summary: BedrockModelSummary): ModelDefinitionConfig {
+function toModelDefinition(
+  summary: BedrockModelSummary,
+  defaults: { contextWindow: number; maxTokens: number },
+): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
   return {
     id,
@@ -104,8 +111,8 @@ function toModelDefinition(summary: BedrockModelSummary): ModelDefinitionConfig 
     reasoning: inferReasoningSupport(summary),
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
-    contextWindow: inferContextWindow(),
-    maxTokens: inferMaxTokens(),
+    contextWindow: defaults.contextWindow,
+    maxTokens: defaults.maxTokens,
   };
 }
 
@@ -125,10 +132,14 @@ export async function discoverBedrockModels(params: {
     Math.floor(params.config?.refreshInterval ?? DEFAULT_REFRESH_INTERVAL_SECONDS),
   );
   const providerFilter = normalizeProviderFilter(params.config?.providerFilter);
+  const defaultContextWindow = resolveDefaultContextWindow(params.config);
+  const defaultMaxTokens = resolveDefaultMaxTokens(params.config);
   const cacheKey = buildCacheKey({
     region: params.region,
     providerFilter,
     refreshIntervalSeconds,
+    defaultContextWindow,
+    defaultMaxTokens,
   });
   const now = params.now?.() ?? Date.now();
 
@@ -150,7 +161,12 @@ export async function discoverBedrockModels(params: {
     const discovered: ModelDefinitionConfig[] = [];
     for (const summary of response.modelSummaries ?? []) {
       if (!shouldIncludeSummary(summary, providerFilter)) continue;
-      discovered.push(toModelDefinition(summary));
+      discovered.push(
+        toModelDefinition(summary, {
+          contextWindow: defaultContextWindow,
+          maxTokens: defaultMaxTokens,
+        }),
+      );
     }
     return discovered.sort((a, b) => a.name.localeCompare(b.name));
   })();

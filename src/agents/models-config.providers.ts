@@ -385,7 +385,7 @@ export async function resolveImplicitBedrockProvider(params: {
   const env = params.env ?? process.env;
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
-  const hasAwsCreds = resolveAwsSdkEnvVarName() !== undefined;
+  const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
   if (enabled === false) return null;
   if (enabled !== true && !hasAwsCreds) return null;
 
