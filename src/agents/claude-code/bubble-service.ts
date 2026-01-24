@@ -142,11 +142,11 @@ function formatHybridBubbleMessage(state: SessionState, sessionId: string): stri
         // Use fullText if available (contains complete message), otherwise fall back to description
         let fullMsg = lastMessage.fullText || lastMessage.description;
 
-        // Clean up: remove code blocks that contain ctx:/resume lines to avoid duplication with footer
-        // This prevents Claude Code's usage examples from polluting the summary
-        fullMsg = fullMsg.replace(/```[\s\S]*?(ctx:|claude --resume)[\s\S]*?```/g, "").trim();
+        // CRITICAL: Remove ALL code blocks to prevent unclosed blocks from eating the footer
+        // Claude Code's summaries often have code examples that break Telegram Markdown rendering
+        fullMsg = fullMsg.replace(/```[\s\S]*?```/g, "").trim();
 
-        // Also remove standalone ctx:/resume lines that might appear outside code blocks
+        // Also remove inline code that might contain ctx:/resume
         fullMsg = fullMsg
           .split("\n")
           .filter(
@@ -158,18 +158,18 @@ function formatHybridBubbleMessage(state: SessionState, sessionId: string): stri
           .join("\n")
           .trim();
 
-        // Allow up to 2500 chars for the summary in done state
-        // (Telegram limit is 4096, header+footer ~200 chars)
-        const maxSummaryLength = 2500;
-        const msg =
-          fullMsg.length > maxSummaryLength
-            ? fullMsg.slice(0, maxSummaryLength - 3) + "..."
-            : fullMsg;
-
-        if (msg) {
-          bodyLines.push(`💬 ${msg}`);
-        } else {
+        // If summary is now empty after cleanup, show fallback
+        if (!fullMsg || fullMsg.length < 10) {
           bodyLines.push("_(session complete)_");
+        } else {
+          // Allow up to 2500 chars for the summary in done state
+          // (Telegram limit is 4096, header+footer ~200 chars)
+          const maxSummaryLength = 2500;
+          const msg =
+            fullMsg.length > maxSummaryLength
+              ? fullMsg.slice(0, maxSummaryLength - 3) + "..."
+              : fullMsg;
+          bodyLines.push(`💬 ${msg}`);
         }
       } else {
         bodyLines.push("_(session complete)_");
