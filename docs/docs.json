@@ -1045,6 +1045,7 @@
           "platforms/android",
           "platforms/windows",
           "platforms/linux",
+          "platforms/fly",
           "platforms/hetzner",
           "platforms/exe-dev"
         ]

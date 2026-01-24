@@ -13,6 +13,7 @@ type LockPayload = {
   pid: number;
   createdAt: string;
   configPath: string;
+  startTime?: number;
 };
 
 export type GatewayLockHandle = {
@@ -27,6 +28,7 @@ export type GatewayLockOptions = {
   pollIntervalMs?: number;
   staleMs?: number;
   allowInTests?: boolean;
+  platform?: NodeJS.Platform;
 };
 
 export class GatewayLockError extends Error {
@@ -39,6 +41,8 @@ export class GatewayLockError extends Error {
   }
 }
 
+type LockOwnerStatus = "alive" | "dead" | "unknown";
+
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) return false;
   try {
@@ -49,32 +53,78 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/**
- * Check if a PID is actually a clawdbot gateway process.
- * This handles PID recycling in containers where a different process
- * might have the same PID after a restart.
- */
-function isGatewayProcess(pid: number): boolean {
-  if (!isAlive(pid)) return false;
+function normalizeProcArg(arg: string): string {
+  return arg.replaceAll("\\", "/").toLowerCase();
+}
 
-  // On Linux, check /proc/PID/cmdline to verify it's actually clawdbot
-  if (process.platform === "linux") {
-    try {
-      const cmdline = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8");
-      // cmdline uses null bytes as separators
-      const args = cmdline.split("\0").join(" ").toLowerCase();
-      // Check if this is actually a clawdbot gateway process
-      return args.includes("clawdbot") || args.includes("gateway");
-    } catch {
-      // Can't read cmdline - process might have exited or we lack permissions
-      // Fall back to assuming it's not our process (safer in containers)
-      return false;
-    }
+function parseProcCmdline(raw: string): string[] {
+  return raw
+    .split("\0")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function isGatewayArgv(args: string[]): boolean {
+  const normalized = args.map(normalizeProcArg);
+  if (!normalized.includes("gateway")) return false;
+
+  const entryCandidates = [
+    "dist/index.js",
+    "dist/index.mjs",
+    "dist/entry.js",
+    "dist/entry.mjs",
+    "scripts/run-node.mjs",
+    "src/index.ts",
+  ];
+  if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {
+    return true;
   }
 
-  // On non-Linux (macOS, Windows), trust the PID check
-  // PID recycling is less of an issue outside containers
-  return true;
+  const exe = normalized[0] ?? "";
+  return exe.endsWith("/clawdbot") || exe === "clawdbot";
+}
+
+function readLinuxCmdline(pid: number): string[] | null {
+  try {
+    const raw = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return parseProcCmdline(raw);
+  } catch {
+    return null;
+  }
+}
+
+function readLinuxStartTime(pid: number): number | null {
+  try {
+    const raw = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8").trim();
+    const closeParen = raw.lastIndexOf(")");
+    if (closeParen < 0) return null;
+    const rest = raw.slice(closeParen + 1).trim();
+    const fields = rest.split(/\s+/);
+    const startTime = Number.parseInt(fields[19] ?? "", 10);
+    return Number.isFinite(startTime) ? startTime : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveGatewayOwnerStatus(
+  pid: number,
+  payload: LockPayload | null,
+  platform: NodeJS.Platform,
+): LockOwnerStatus {
+  if (!isAlive(pid)) return "dead";
+  if (platform !== "linux") return "alive";
+
+  const payloadStartTime = payload?.startTime;
+  if (Number.isFinite(payloadStartTime)) {
+    const currentStartTime = readLinuxStartTime(pid);
+    if (currentStartTime == null) return "unknown";
+    return currentStartTime === payloadStartTime ? "alive" : "dead";
+  }
+
+  const args = readLinuxCmdline(pid);
+  if (!args) return "unknown";
+  return isGatewayArgv(args) ? "alive" : "dead";
 }
 
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
@@ -84,10 +134,12 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
     if (typeof parsed.pid !== "number") return null;
     if (typeof parsed.createdAt !== "string") return null;
     if (typeof parsed.configPath !== "string") return null;
+    const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
     return {
       pid: parsed.pid,
       createdAt: parsed.createdAt,
       configPath: parsed.configPath,
+      startTime,
     };
   } catch {
     return null;
@@ -117,6 +169,7 @@ export async function acquireGatewayLock(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
+  const platform = opts.platform ?? process.platform;
   const { lockPath, configPath } = resolveGatewayLockPath(env);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
@@ -126,11 +179,15 @@ export async function acquireGatewayLock(
   while (Date.now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
+      const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
       const payload: LockPayload = {
         pid: process.pid,
         createdAt: new Date().toISOString(),
         configPath,
       };
+      if (typeof startTime === "number" && Number.isFinite(startTime)) {
+        payload.startTime = startTime;
+      }
       await handle.writeFile(JSON.stringify(payload), "utf8");
       return {
         lockPath,
@@ -148,13 +205,14 @@ export async function acquireGatewayLock(
 
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
-      // Use isGatewayProcess to handle PID recycling in containers
-      const ownerAlive = ownerPid ? isGatewayProcess(ownerPid) : false;
-      if (!ownerAlive && ownerPid) {
+      const ownerStatus = ownerPid
+        ? resolveGatewayOwnerStatus(ownerPid, lastPayload, platform)
+        : "unknown";
+      if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });
         continue;
       }
-      if (!ownerAlive) {
+      if (ownerStatus !== "alive") {
         let stale = false;
         if (lastPayload?.createdAt) {
           const createdAt = Date.parse(lastPayload.createdAt);
