@@ -66,6 +66,7 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
+import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
@@ -73,6 +74,14 @@ export async function compactEmbeddedPiSession(params: {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  /** Group id for channel-level tool policy resolution. */
+  groupId?: string | null;
+  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
+  groupChannel?: string | null;
+  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
+  groupSpace?: string | null;
+  /** Parent session key for subagent policy inheritance. */
+  spawnedBy?: string | null;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -128,6 +137,13 @@ export async function compactEmbeddedPiSession(params: {
               `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
             );
           }
+        } else if (model.provider === "github-copilot") {
+          const { resolveCopilotApiToken } =
+            await import("../../providers/github-copilot-token.js");
+          const copilotToken = await resolveCopilotApiToken({
+            githubToken: apiKeyInfo.apiKey,
+          });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
@@ -200,6 +216,10 @@ export async function compactEmbeddedPiSession(params: {
           messageProvider: params.messageChannel ?? params.messageProvider,
           agentAccountId: params.agentAccountId,
           sessionKey: params.sessionKey ?? params.sessionId,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          spawnedBy: params.spawnedBy,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -279,6 +299,7 @@ export async function compactEmbeddedPiSession(params: {
           cwd: process.cwd(),
           moduleUrl: import.meta.url,
         });
+        const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
         const appendPrompt = buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel: params.thinkLevel,
@@ -291,6 +312,7 @@ export async function compactEmbeddedPiSession(params: {
             : undefined,
           skillsPrompt,
           docsPath: docsPath ?? undefined,
+          ttsHint,
           promptMode,
           runtimeInfo,
           messageToolHints,

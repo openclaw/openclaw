@@ -9,7 +9,7 @@ export default defineConfig({
   test: {
     pool: "forks",
     maxWorkers: e2eWorkers,
-    include: ["test/**/*.e2e.test.ts"],
+    include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts"],
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",

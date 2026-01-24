@@ -17,6 +17,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { resolveStateDir } from "../config/paths.js";
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 type MemoryCommandOptions = {
   agent?: string;
@@ -44,11 +45,15 @@ type MemorySourceScan = {
 
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
-    return `memory (MEMORY.md + ${path.join(workspaceDir, "memory")}${path.sep}*.md)`;
+    return shortenHomeInString(
+      `memory (MEMORY.md + ${path.join(workspaceDir, "memory")}${path.sep}*.md)`,
+    );
   }
   if (source === "sessions") {
     const stateDir = resolveStateDir(process.env, os.homedir);
-    return `sessions (${path.join(stateDir, "agents", agentId, "sessions")}${path.sep}*.jsonl)`;
+    return shortenHomeInString(
+      `sessions (${path.join(stateDir, "agents", agentId, "sessions")}${path.sep}*.jsonl)`,
+    );
   }
   return source;
 }
@@ -76,7 +81,10 @@ async function checkReadableFile(pathname: string): Promise<{ exists: boolean; i
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return { exists: false };
-    return { exists: true, issue: `${pathname} not readable (${code ?? "error"})` };
+    return {
+      exists: true,
+      issue: `${shortenHomePath(pathname)} not readable (${code ?? "error"})`,
+    };
   }
 }
 
@@ -92,10 +100,12 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      issues.push(`sessions directory missing (${sessionsDir})`);
+      issues.push(`sessions directory missing (${shortenHomePath(sessionsDir)})`);
       return { source: "sessions", totalFiles: 0, issues };
     }
-    issues.push(`sessions directory not accessible (${sessionsDir}): ${code ?? "error"}`);
+    issues.push(
+      `sessions directory not accessible (${shortenHomePath(sessionsDir)}): ${code ?? "error"}`,
+    );
     return { source: "sessions", totalFiles: null, issues };
   }
 }
@@ -118,10 +128,12 @@ async function scanMemoryFiles(workspaceDir: string): Promise<SourceScan> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      issues.push(`memory directory missing (${memoryDir})`);
+      issues.push(`memory directory missing (${shortenHomePath(memoryDir)})`);
       dirReadable = false;
     } else {
-      issues.push(`memory directory not accessible (${memoryDir}): ${code ?? "error"}`);
+      issues.push(
+        `memory directory not accessible (${shortenHomePath(memoryDir)}): ${code ?? "error"}`,
+      );
       dirReadable = null;
     }
   }
@@ -134,7 +146,9 @@ async function scanMemoryFiles(workspaceDir: string): Promise<SourceScan> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (dirReadable !== null) {
-      issues.push(`memory directory scan failed (${memoryDir}): ${code ?? "error"}`);
+      issues.push(
+        `memory directory scan failed (${shortenHomePath(memoryDir)}): ${code ?? "error"}`,
+      );
       dirReadable = null;
     }
   }
@@ -152,7 +166,7 @@ async function scanMemoryFiles(workspaceDir: string): Promise<SourceScan> {
   }
 
   if ((totalFiles ?? 0) === 0 && issues.length === 0) {
-    issues.push(`no memory files found in ${workspaceDir}`);
+    issues.push(`no memory files found in ${shortenHomePath(workspaceDir)}`);
   }
 
   return { source: "memory", totalFiles, issues };
@@ -294,8 +308,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
-      `${label("Store")} ${info(status.dbPath)}`,
-      `${label("Workspace")} ${info(status.workspaceDir)}`,
+      `${label("Store")} ${info(shortenHomePath(status.dbPath))}`,
+      `${label("Workspace")} ${info(shortenHomePath(status.workspaceDir))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
@@ -340,7 +354,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
       }
       if (status.vector.extensionPath) {
-        lines.push(`${label("Vector path")} ${info(status.vector.extensionPath)}`);
+        lines.push(`${label("Vector path")} ${info(shortenHomePath(status.vector.extensionPath))}`);
       }
       if (status.vector.loadError) {
         lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
@@ -594,7 +608,7 @@ export function registerMemoryCli(program: Command) {
                 `${colorize(rich, theme.success, result.score.toFixed(3))} ${colorize(
                   rich,
                   theme.accent,
-                  `${result.path}:${result.startLine}-${result.endLine}`,
+                  `${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`,
                 )}`,
               );
               lines.push(colorize(rich, theme.muted, result.snippet));

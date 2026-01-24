@@ -1,12 +1,12 @@
 {
   "name": "@clawdbot/voice-call",
-  "version": "2026.1.22",
+  "version": "2026.1.23",
   "type": "module",
   "description": "Clawdbot voice-call plugin",
   "dependencies": {
     "@sinclair/typebox": "0.34.47",
     "ws": "^8.19.0",
-    "zod": "^4.3.5"
+    "zod": "^4.3.6"
   },
   "clawdbot": {
     "extensions": [

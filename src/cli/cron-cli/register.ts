@@ -8,11 +8,8 @@ import {
 } from "./register.cron-add.js";
 import { registerCronEditCommand } from "./register.cron-edit.js";
 import { registerCronSimpleCommands } from "./register.cron-simple.js";
-import { registerWakeCommand } from "./register.wake.js";
 
 export function registerCronCli(program: Command) {
-  registerWakeCommand(program);
-
   const cron = program
     .command("cron")
     .description("Manage cron jobs (via Gateway)")

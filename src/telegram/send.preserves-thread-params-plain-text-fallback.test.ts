@@ -94,6 +94,7 @@ describe("buildInlineKeyboard", () => {
 
     expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
       caption: "photo in topic",
+      parse_mode: "HTML",
       message_thread_id: 99,
     });
   });

@@ -72,8 +72,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   });
   if (!normalized) return { ok: true };
 
-  const text = normalized.text ?? "";
-  const mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
+  let text = normalized.text ?? "";
+  let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
     ? (normalized.mediaUrls?.filter(Boolean) as string[])
     : normalized.mediaUrl
       ? [normalized.mediaUrl]

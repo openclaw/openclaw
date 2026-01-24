@@ -6,6 +6,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -13,6 +14,7 @@ import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
@@ -79,6 +81,56 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_received")) {
+    const timestamp =
+      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+        ? ctx.Timestamp
+        : undefined;
+    const messageIdForHook =
+      ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+    const content =
+      typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+    const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+
+    void hookRunner
+      .runMessageReceived(
+        {
+          from: ctx.From ?? "",
+          content,
+          timestamp,
+          metadata: {
+            to: ctx.To,
+            provider: ctx.Provider,
+            surface: ctx.Surface,
+            threadId: ctx.MessageThreadId,
+            originatingChannel: ctx.OriginatingChannel,
+            originatingTo: ctx.OriginatingTo,
+            messageId: messageIdForHook,
+            senderId: ctx.SenderId,
+            senderName: ctx.SenderName,
+            senderUsername: ctx.SenderUsername,
+            senderE164: ctx.SenderE164,
+          },
+        },
+        {
+          channelId,
+          accountId: ctx.AccountId,
+          conversationId,
+        },
+      )
+      .catch((err) => {
+        logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
+      });
+  }
+
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
   // This handles cross-provider routing (e.g., message from Telegram being processed
@@ -91,6 +143,7 @@ export async function dispatchReplyFromConfig(params: {
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
   const shouldRouteToOriginating =
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface;
+  const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -164,22 +217,36 @@ export async function dispatchReplyFromConfig(params: {
       {
         ...params.replyOptions,
         onToolResult: (payload: ReplyPayload) => {
-          if (shouldRouteToOriginating) {
-            // Fire-and-forget for streaming tool results when routing.
-            void sendPayloadAsync(payload);
-          } else {
-            // Synchronous dispatch to preserve callback timing.
-            dispatcher.sendToolResult(payload);
-          }
+          const run = async () => {
+            const ttsPayload = await maybeApplyTtsToPayload({
+              payload,
+              cfg,
+              channel: ttsChannel,
+              kind: "tool",
+            });
+            if (shouldRouteToOriginating) {
+              await sendPayloadAsync(ttsPayload);
+            } else {
+              dispatcher.sendToolResult(ttsPayload);
+            }
+          };
+          return run();
         },
         onBlockReply: (payload: ReplyPayload, context) => {
-          if (shouldRouteToOriginating) {
-            // Await routed sends so upstream can enforce ordering/timeouts.
-            return sendPayloadAsync(payload, context?.abortSignal);
-          } else {
-            // Synchronous dispatch to preserve callback timing.
-            dispatcher.sendBlockReply(payload);
-          }
+          const run = async () => {
+            const ttsPayload = await maybeApplyTtsToPayload({
+              payload,
+              cfg,
+              channel: ttsChannel,
+              kind: "block",
+            });
+            if (shouldRouteToOriginating) {
+              await sendPayloadAsync(ttsPayload, context?.abortSignal);
+            } else {
+              dispatcher.sendBlockReply(ttsPayload);
+            }
+          };
+          return run();
         },
       },
       cfg,
@@ -190,10 +257,16 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     for (const reply of replies) {
+      const ttsReply = await maybeApplyTtsToPayload({
+        payload: reply,
+        cfg,
+        channel: ttsChannel,
+        kind: "final",
+      });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
-          payload: reply,
+          payload: ttsReply,
           channel: originatingChannel,
           to: originatingTo,
           sessionKey: ctx.SessionKey,
@@ -209,7 +282,7 @@ export async function dispatchReplyFromConfig(params: {
         queuedFinal = result.ok || queuedFinal;
         if (result.ok) routedFinalCount += 1;
       } else {
-        queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
+        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
       }
     }
     await dispatcher.waitForIdle();

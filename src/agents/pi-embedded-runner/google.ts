@@ -1,9 +1,12 @@
+import { EventEmitter } from "node:events";
+
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
@@ -184,14 +187,75 @@ export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: 
   }
 }
 
+// Event emitter for unhandled compaction failures that escape try-catch blocks.
+// Listeners can use this to trigger session recovery with retry.
+const compactionFailureEmitter = new EventEmitter();
+
+export type CompactionFailureListener = (reason: string) => void;
+
+/**
+ * Register a listener for unhandled compaction failures.
+ * Called when auto-compaction fails in a way that escapes the normal try-catch,
+ * e.g., when the summarization request itself exceeds the model's token limit.
+ * Returns an unsubscribe function.
+ */
+export function onUnhandledCompactionFailure(cb: CompactionFailureListener): () => void {
+  compactionFailureEmitter.on("failure", cb);
+  return () => compactionFailureEmitter.off("failure", cb);
+}
+
 registerUnhandledRejectionHandler((reason) => {
   const message = describeUnknownError(reason);
   if (!isCompactionFailureError(message)) return false;
   log.error(`Auto-compaction failed (unhandled): ${message}`);
+  compactionFailureEmitter.emit("failure", message);
   return true;
 });
 
-type CustomEntryLike = { type?: unknown; customType?: unknown };
+type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
+
+type ModelSnapshotEntry = {
+  timestamp: number;
+  provider?: string;
+  modelApi?: string | null;
+  modelId?: string;
+};
+
+const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
+
+function readLastModelSnapshot(sessionManager: SessionManager): ModelSnapshotEntry | null {
+  try {
+    const entries = sessionManager.getEntries();
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i] as CustomEntryLike;
+      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) continue;
+      const data = entry?.data as ModelSnapshotEntry | undefined;
+      if (data && typeof data === "object") {
+        return data;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function appendModelSnapshot(sessionManager: SessionManager, data: ModelSnapshotEntry): void {
+  try {
+    sessionManager.appendCustomEntry(MODEL_SNAPSHOT_CUSTOM_TYPE, data);
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): boolean {
+  const normalize = (value?: string | null) => value ?? "";
+  return (
+    normalize(a.provider) === normalize(b.provider) &&
+    normalize(a.modelApi) === normalize(b.modelApi) &&
+    normalize(a.modelId) === normalize(b.modelId)
+  );
+}
 
 function hasGoogleTurnOrderingMarker(sessionManager: SessionManager): boolean {
   try {
@@ -272,12 +336,38 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedThinking)
     : sanitizedThinking;
 
+  const isOpenAIResponsesApi =
+    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
+  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
+  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
+  const modelChanged = priorSnapshot
+    ? !isSameModelSnapshot(priorSnapshot, {
+        timestamp: 0,
+        provider: params.provider,
+        modelApi: params.modelApi,
+        modelId: params.modelId,
+      })
+    : false;
+  const sanitizedOpenAI =
+    isOpenAIResponsesApi && modelChanged
+      ? downgradeOpenAIReasoningBlocks(repairedTools)
+      : repairedTools;
+
+  if (hasSnapshot && (!priorSnapshot || modelChanged)) {
+    appendModelSnapshot(params.sessionManager, {
+      timestamp: Date.now(),
+      provider: params.provider,
+      modelApi: params.modelApi,
+      modelId: params.modelId,
+    });
+  }
+
   if (!policy.applyGoogleTurnOrdering) {
-    return repairedTools;
+    return sanitizedOpenAI;
   }
 
   return applyGoogleTurnOrderingFix({
-    messages: repairedTools,
+    messages: sanitizedOpenAI,
     modelApi: params.modelApi,
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,

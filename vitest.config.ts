@@ -16,7 +16,7 @@ export default defineConfig({
     },
   },
   test: {
-    testTimeout: isWindows ? 120_000 : 60_000,
+    testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
@@ -34,6 +34,7 @@ export default defineConfig({
       "**/vendor/**",
       "dist/Clawdbot.app/**",
       "**/*.live.test.ts",
+      "**/*.e2e.test.ts",
     ],
     coverage: {
       provider: "v8",

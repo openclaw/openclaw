@@ -85,40 +85,40 @@ function canonicalizeSessionKeyForAgent(params: {
   const agentId = normalizeAgentId(params.agentId);
   const raw = params.key.trim();
   if (!raw) return raw;
-  if (raw === "global" || raw === "unknown") return raw;
+  if (raw.toLowerCase() === "global" || raw.toLowerCase() === "unknown") return raw.toLowerCase();
 
   const canonicalMain = canonicalizeMainSessionAlias({
     cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
     agentId,
     sessionKey: raw,
   });
-  if (canonicalMain !== raw) return canonicalMain;
+  if (canonicalMain !== raw) return canonicalMain.toLowerCase();
 
-  if (raw.startsWith("agent:")) return raw;
+  if (raw.toLowerCase().startsWith("agent:")) return raw.toLowerCase();
   if (raw.toLowerCase().startsWith("subagent:")) {
     const rest = raw.slice("subagent:".length);
-    return `agent:${agentId}:subagent:${rest}`;
+    return `agent:${agentId}:subagent:${rest}`.toLowerCase();
   }
   if (raw.startsWith("group:")) {
     const id = raw.slice("group:".length).trim();
     if (!id) return raw;
     const channel = id.toLowerCase().includes("@g.us") ? "whatsapp" : "unknown";
-    return `agent:${agentId}:${channel}:group:${id}`;
+    return `agent:${agentId}:${channel}:group:${id}`.toLowerCase();
   }
   if (!raw.includes(":") && raw.toLowerCase().includes("@g.us")) {
-    return `agent:${agentId}:whatsapp:group:${raw}`;
+    return `agent:${agentId}:whatsapp:group:${raw}`.toLowerCase();
   }
   if (raw.toLowerCase().startsWith("whatsapp:") && raw.toLowerCase().includes("@g.us")) {
     const remainder = raw.slice("whatsapp:".length).trim();
     const cleaned = remainder.replace(/^group:/i, "").trim();
     if (cleaned && !isSurfaceGroupKey(raw)) {
-      return `agent:${agentId}:whatsapp:group:${cleaned}`;
+      return `agent:${agentId}:whatsapp:group:${cleaned}`.toLowerCase();
     }
   }
   if (isSurfaceGroupKey(raw)) {
-    return `agent:${agentId}:${raw}`;
+    return `agent:${agentId}:${raw}`.toLowerCase();
   }
-  return `agent:${agentId}:${raw}`;
+  return `agent:${agentId}:${raw}`.toLowerCase();
 }
 
 function pickLatestLegacyDirectEntry(

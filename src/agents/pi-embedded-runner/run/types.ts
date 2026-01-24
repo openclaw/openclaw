@@ -23,6 +23,14 @@ export type EmbeddedRunAttemptParams = {
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  /** Group id for channel-level tool policy resolution. */
+  groupId?: string | null;
+  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
+  groupChannel?: string | null;
+  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
+  groupSpace?: string | null;
+  /** Parent session key for subagent policy inheritance. */
+  spawnedBy?: string | null;
   currentChannelId?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";
@@ -36,6 +44,8 @@ export type EmbeddedRunAttemptParams = {
   images?: ImageContent[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
+  /** Disable built-in tools for this run (LLM-only mode). */
+  disableTools?: boolean;
   provider: string;
   modelId: string;
   model: Model<Api>;

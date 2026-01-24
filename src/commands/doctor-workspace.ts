@@ -8,6 +8,7 @@ import {
   DEFAULT_SOUL_FILENAME,
   DEFAULT_USER_FILENAME,
 } from "../agents/workspace.js";
+import { shortenHomePath } from "../utils.js";
 
 export const MEMORY_SYSTEM_PROMPT = [
   "Memory system not found in workspace.",
@@ -80,8 +81,8 @@ export function detectLegacyWorkspaceDirs(params: {
 export function formatLegacyWorkspaceWarning(detection: LegacyWorkspaceDetection): string {
   return [
     "Extra workspace directories detected (may contain old agent files):",
-    ...detection.legacyDirs.map((dir) => `- ${dir}`),
-    `Active workspace: ${detection.activeWorkspace}`,
+    ...detection.legacyDirs.map((dir) => `- ${shortenHomePath(dir)}`),
+    `Active workspace: ${shortenHomePath(detection.activeWorkspace)}`,
     "If unused, archive or move to Trash (e.g. trash ~/clawdbot).",
   ].join("\n");
 }

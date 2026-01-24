@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { resolveChatGuidForTarget } from "./send.js";
@@ -19,6 +20,30 @@ export type BlueBubblesAttachmentOpts = {
 };
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+const AUDIO_MIME_MP3 = new Set(["audio/mpeg", "audio/mp3"]);
+const AUDIO_MIME_CAF = new Set(["audio/x-caf", "audio/caf"]);
+
+function sanitizeFilename(input: string | undefined, fallback: string): string {
+  const trimmed = input?.trim() ?? "";
+  const base = trimmed ? path.basename(trimmed) : "";
+  return base || fallback;
+}
+
+function ensureExtension(filename: string, extension: string, fallbackBase: string): string {
+  const currentExt = path.extname(filename);
+  if (currentExt.toLowerCase() === extension) return filename;
+  const base = currentExt ? filename.slice(0, -currentExt.length) : filename;
+  return `${base || fallbackBase}${extension}`;
+}
+
+function resolveVoiceInfo(filename: string, contentType?: string) {
+  const normalizedType = contentType?.trim().toLowerCase();
+  const extension = path.extname(filename).toLowerCase();
+  const isMp3 = extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
+  const isCaf = extension === ".caf" || (normalizedType ? AUDIO_MIME_CAF.has(normalizedType) : false);
+  const isAudio = isMp3 || isCaf || Boolean(normalizedType?.startsWith("audio/"));
+  return { isAudio, isMp3, isCaf };
+}
 
 function resolveAccount(params: BlueBubblesAttachmentOpts) {
   const account = resolveBlueBubblesAccount({
@@ -104,6 +129,7 @@ function extractMessageId(payload: unknown): string {
 /**
  * Send an attachment via BlueBubbles API.
  * Supports sending media files (images, videos, audio, documents) to a chat.
+ * When asVoice is true, expects MP3/CAF audio and marks it as an iMessage voice memo.
  */
 export async function sendBlueBubblesAttachment(params: {
   to: string;
@@ -113,11 +139,36 @@ export async function sendBlueBubblesAttachment(params: {
   caption?: string;
   replyToMessageGuid?: string;
   replyToPartIndex?: number;
+  asVoice?: boolean;
   opts?: BlueBubblesAttachmentOpts;
 }): Promise<SendBlueBubblesAttachmentResult> {
-  const { to, buffer, filename, contentType, caption, replyToMessageGuid, replyToPartIndex, opts = {} } =
-    params;
+  const { to, caption, replyToMessageGuid, replyToPartIndex, asVoice, opts = {} } = params;
+  let { buffer, filename, contentType } = params;
+  const wantsVoice = asVoice === true;
+  const fallbackName = wantsVoice ? "Audio Message" : "attachment";
+  filename = sanitizeFilename(filename, fallbackName);
+  contentType = contentType?.trim() || undefined;
   const { baseUrl, password } = resolveAccount(opts);
+
+  // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).
+  const isAudioMessage = wantsVoice;
+  if (isAudioMessage) {
+    const voiceInfo = resolveVoiceInfo(filename, contentType);
+    if (!voiceInfo.isAudio) {
+      throw new Error("BlueBubbles voice messages require audio media (mp3 or caf).");
+    }
+    if (voiceInfo.isMp3) {
+      filename = ensureExtension(filename, ".mp3", fallbackName);
+      contentType = contentType ?? "audio/mpeg";
+    } else if (voiceInfo.isCaf) {
+      filename = ensureExtension(filename, ".caf", fallbackName);
+      contentType = contentType ?? "audio/x-caf";
+    } else {
+      throw new Error(
+        "BlueBubbles voice messages require mp3 or caf audio (convert before sending).",
+      );
+    }
+  }
 
   const target = resolveSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -169,6 +220,11 @@ export async function sendBlueBubblesAttachment(params: {
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
   addField("method", "private-api");
+
+  // Add isAudioMessage flag for voice memos
+  if (isAudioMessage) {
+    addField("isAudioMessage", "true");
+  }
 
   const trimmedReplyTo = replyToMessageGuid?.trim();
   if (trimmedReplyTo) {

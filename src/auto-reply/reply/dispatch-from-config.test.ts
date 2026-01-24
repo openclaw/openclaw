@@ -18,6 +18,12 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
 }));
+const hookMocks = vi.hoisted(() => ({
+  runner: {
+    hasHooks: vi.fn(() => false),
+    runMessageReceived: vi.fn(async () => {}),
+  },
+}));
 
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
@@ -45,6 +51,10 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
 
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookMocks.runner,
+}));
+
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
 
@@ -64,6 +74,9 @@ describe("dispatchReplyFromConfig", () => {
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
+    hookMocks.runner.hasHooks.mockReset();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageReceived.mockReset();
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
@@ -199,6 +212,57 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits message_received hook with originating channel metadata", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const cfg = {} as ClawdbotConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "Telegram",
+      OriginatingTo: "telegram:999",
+      CommandBody: "/search hello",
+      RawBody: "raw text",
+      Body: "body text",
+      Timestamp: 1710000000000,
+      MessageSidFull: "sid-full",
+      SenderId: "user-1",
+      SenderName: "Alice",
+      SenderUsername: "alice",
+      SenderE164: "+15555550123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: ctx.From,
+        content: "/search hello",
+        timestamp: 1710000000000,
+        metadata: expect.objectContaining({
+          originatingChannel: "Telegram",
+          originatingTo: "telegram:999",
+          messageId: "sid-full",
+          senderId: "user-1",
+          senderName: "Alice",
+          senderUsername: "alice",
+          senderE164: "+15555550123",
+        }),
+      }),
+      expect.objectContaining({
+        channelId: "telegram",
+        accountId: "acc-1",
+        conversationId: "telegram:999",
+      }),
+    );
   });
 
   it("emits diagnostics when enabled", async () => {

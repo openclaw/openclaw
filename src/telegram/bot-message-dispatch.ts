@@ -1,13 +1,13 @@
 // @ts-nocheck
-import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../auto-reply/reply/response-prefix-template.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
-import { clearHistoryEntries } from "../auto-reply/reply/history.js";
+import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
+import { logAckFailure, logTypingFailure } from "../channels/logging.js";
+import { createReplyPrefixContext } from "../channels/reply-prefix.js";
+import { createTypingCallbacks } from "../channels/typing.js";
 import { danger, logVerbose } from "../globals.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -119,17 +119,19 @@ export const dispatchTelegramMessage = async ({
     Boolean(draftStream) ||
     (typeof telegramCfg.blockStreaming === "boolean" ? !telegramCfg.blockStreaming : undefined);
 
-  // Create mutable context for response prefix template interpolation
-  let prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, route.agentId),
-  };
+  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "telegram",
+    accountId: route.accountId,
+  });
 
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-      responsePrefixContextProvider: () => prefixContext,
+      responsePrefix: prefixContext.responsePrefix,
+      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       deliver: async (payload, info) => {
         if (info.kind === "final") {
           await flushDraft();
@@ -144,13 +146,24 @@ export const dispatchTelegramMessage = async ({
           replyToMode,
           textLimit,
           messageThreadId: resolvedThreadId,
+          tableMode,
           onVoiceRecording: sendRecordVoice,
         });
       },
       onError: (err, info) => {
         runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
       },
-      onReplyStart: sendTyping,
+      onReplyStart: createTypingCallbacks({
+        start: sendTyping,
+        onStartError: (err) => {
+          logTypingFailure({
+            log: logVerbose,
+            channel: "telegram",
+            target: String(chatId),
+            error: err,
+          });
+        },
+      }).onReplyStart,
     },
     replyOptions: {
       skillFilter,
@@ -162,32 +175,33 @@ export const dispatchTelegramMessage = async ({
         : undefined,
       disableBlockStreaming,
       onModelSelected: (ctx) => {
-        // Mutate the object directly instead of reassigning to ensure the closure sees updates
-        prefixContext.provider = ctx.provider;
-        prefixContext.model = extractShortModelName(ctx.model);
-        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        prefixContext.onModelSelected(ctx);
       },
     },
   });
   draftStream?.stop();
   if (!queuedFinal) {
-    if (isGroup && historyKey && historyLimit > 0) {
-      clearHistoryEntries({ historyMap: groupHistories, historyKey });
+    if (isGroup && historyKey) {
+      clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
     }
     return;
   }
-  if (removeAckAfterReply && ackReactionPromise && msg.message_id && reactionApi) {
-    void ackReactionPromise.then((didAck) => {
-      if (!didAck) return;
-      reactionApi(chatId, msg.message_id, []).catch((err) => {
-        logVerbose(
-          `telegram: failed to remove ack reaction from ${chatId}/${msg.message_id}: ${String(err)}`,
-        );
+  removeAckReactionAfterReply({
+    removeAfterReply: removeAckAfterReply,
+    ackReactionPromise,
+    ackReactionValue: ackReactionPromise ? "ack" : null,
+    remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+    onError: (err) => {
+      if (!msg.message_id) return;
+      logAckFailure({
+        log: logVerbose,
+        channel: "telegram",
+        target: `${chatId}/${msg.message_id}`,
+        error: err,
       });
-    });
-  }
-  if (isGroup && historyKey && historyLimit > 0) {
-    clearHistoryEntries({ historyMap: groupHistories, historyKey });
+    },
+  });
+  if (isGroup && historyKey) {
+    clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
   }
 };

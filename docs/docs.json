@@ -358,6 +358,14 @@
       "destination": "/automation/cron-jobs"
     },
     {
+      "source": "/cron-vs-heartbeat",
+      "destination": "/automation/cron-vs-heartbeat"
+    },
+    {
+      "source": "/cron-vs-heartbeat/",
+      "destination": "/automation/cron-vs-heartbeat"
+    },
+    {
       "source": "/dashboard",
       "destination": "/web/dashboard"
     },
@@ -387,7 +395,7 @@
     },
     {
       "source": "/faq",
-      "destination": "/start/faq"
+      "destination": "/help/faq"
     },
     {
       "source": "/gateway-lock",
@@ -448,10 +456,6 @@
     {
       "source": "/location-command",
       "destination": "/nodes/location-command"
-    },
-    {
-      "source": "/logging",
-      "destination": "/gateway/logging"
     },
     {
       "source": "/lore",
@@ -762,20 +766,12 @@
       "destination": "/start/wizard"
     },
     {
-      "source": "/install/node",
-      "destination": "/install#nodejs--npm-path-sanity"
-    },
-    {
-      "source": "/install/node/",
-      "destination": "/install#nodejs--npm-path-sanity"
-    },
-    {
       "source": "/start/faq",
-      "destination": "/help"
+      "destination": "/help/faq"
     },
     {
       "source": "/start/faq/",
-      "destination": "/help"
+      "destination": "/help/faq"
     },
     {
       "source": "/oauth",
@@ -850,12 +846,12 @@
           "cli/memory",
           "cli/models",
           "cli/logs",
+          "cli/system",
           "cli/nodes",
           "cli/approvals",
           "cli/gateway",
           "cli/tui",
           "cli/voicecall",
-          "cli/wake",
           "cli/cron",
           "cli/dns",
           "cli/docs",
@@ -916,6 +912,7 @@
           "gateway/configuration-examples",
           "gateway/authentication",
           "gateway/openai-http-api",
+          "gateway/tools-invoke-http-api",
           "gateway/cli-backends",
           "gateway/local-models",
           "gateway/background-process",
@@ -993,6 +990,7 @@
           "automation/webhook",
           "automation/gmail-pubsub",
           "automation/cron-jobs",
+          "automation/cron-vs-heartbeat",
           "automation/poll"
         ]
       },
@@ -1000,6 +998,8 @@
         "group": "Tools & Skills",
         "pages": [
           "tools",
+          "tools/lobster",
+          "tools/llm-task",
           "plugin",
           "plugins/voice-call",
           "plugins/zalouser",
@@ -1043,6 +1043,7 @@
           "platforms/android",
           "platforms/windows",
           "platforms/linux",
+          "platforms/fly",
           "platforms/hetzner",
           "platforms/exe-dev"
         ]

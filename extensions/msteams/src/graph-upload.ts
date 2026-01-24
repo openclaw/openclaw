@@ -13,7 +13,7 @@ import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
-const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
+const GRAPH_SCOPE = "https://graph.microsoft.com";
 
 export interface OneDriveUploadResult {
   id: string;

@@ -1,10 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
-import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
-
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-
-const MAX_CHUNK_RATIO = 0.4;
+import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import {
+  BASE_CHUNK_RATIO,
+  MIN_CHUNK_RATIO,
+  SAFETY_MARGIN,
+  computeAdaptiveChunkRatio,
+  estimateMessagesTokens,
+  isOversizedForSummary,
+  pruneHistoryForContextShare,
+  resolveContextWindowTokens,
+  summarizeInStages,
+} from "../compaction.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
@@ -127,71 +133,6 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   return `\n\n${sections.join("\n\n")}`;
 }
 
-function chunkMessages(messages: AgentMessage[], maxTokens: number): AgentMessage[][] {
-  if (messages.length === 0) return [];
-
-  const chunks: AgentMessage[][] = [];
-  let currentChunk: AgentMessage[] = [];
-  let currentTokens = 0;
-
-  for (const message of messages) {
-    const messageTokens = estimateTokens(message);
-    if (currentChunk.length > 0 && currentTokens + messageTokens > maxTokens) {
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
-    }
-
-    currentChunk.push(message);
-    currentTokens += messageTokens;
-
-    if (messageTokens > maxTokens) {
-      // Split oversized messages to avoid unbounded chunk growth.
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
-    }
-  }
-
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  return chunks;
-}
-
-async function summarizeChunks(params: {
-  messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
-  apiKey: string;
-  signal: AbortSignal;
-  reserveTokens: number;
-  maxChunkTokens: number;
-  customInstructions?: string;
-  previousSummary?: string;
-}): Promise<string> {
-  if (params.messages.length === 0) {
-    return params.previousSummary ?? "No prior history.";
-  }
-
-  const chunks = chunkMessages(params.messages, params.maxChunkTokens);
-  let summary = params.previousSummary;
-
-  for (const chunk of chunks) {
-    summary = await generateSummary(
-      chunk,
-      params.model,
-      params.reserveTokens,
-      params.apiKey,
-      params.signal,
-      params.customInstructions,
-      summary,
-    );
-  }
-
-  return summary ?? "No prior history.";
-}
-
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
@@ -229,34 +170,70 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     try {
-      const contextWindowTokens = Math.max(
-        1,
-        Math.floor(model.contextWindow ?? DEFAULT_CONTEXT_TOKENS),
-      );
-      const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * MAX_CHUNK_RATIO));
+      const contextWindowTokens = resolveContextWindowTokens(model);
+      const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+      let messagesToSummarize = preparation.messagesToSummarize;
+
+      const tokensBefore =
+        typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
+          ? preparation.tokensBefore
+          : undefined;
+      if (tokensBefore !== undefined) {
+        const summarizableTokens =
+          estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
+        const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
+        const maxHistoryTokens = Math.floor(contextWindowTokens * 0.5);
+
+        if (newContentTokens > maxHistoryTokens) {
+          const pruned = pruneHistoryForContextShare({
+            messages: messagesToSummarize,
+            maxContextTokens: contextWindowTokens,
+            maxHistoryShare: 0.5,
+            parts: 2,
+          });
+          if (pruned.droppedChunks > 0) {
+            const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
+            console.warn(
+              `Compaction safeguard: new content uses ${newContentRatio.toFixed(
+                1,
+              )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
+                `(${pruned.droppedMessages} messages) to fit history budget.`,
+            );
+            messagesToSummarize = pruned.messages;
+          }
+        }
+      }
+
+      // Use adaptive chunk ratio based on message sizes
+      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
+      const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
 
-      const historySummary = await summarizeChunks({
-        messages: preparation.messagesToSummarize,
+      const historySummary = await summarizeInStages({
+        messages: messagesToSummarize,
         model,
         apiKey,
         signal,
         reserveTokens,
         maxChunkTokens,
+        contextWindow: contextWindowTokens,
         customInstructions,
         previousSummary: preparation.previousSummary,
       });
 
       let summary = historySummary;
-      if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
-        const prefixSummary = await summarizeChunks({
-          messages: preparation.turnPrefixMessages,
+      if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+        const prefixSummary = await summarizeInStages({
+          messages: turnPrefixMessages,
           model,
           apiKey,
           signal,
           reserveTokens,
           maxChunkTokens,
+          contextWindow: contextWindowTokens,
           customInstructions: TURN_PREFIX_INSTRUCTIONS,
+          previousSummary: undefined,
         });
         summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;
       }
@@ -293,4 +270,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 export const __testing = {
   collectToolFailures,
   formatToolFailuresSection,
+  computeAdaptiveChunkRatio,
+  isOversizedForSummary,
+  BASE_CHUNK_RATIO,
+  MIN_CHUNK_RATIO,
+  SAFETY_MARGIN,
 } as const;

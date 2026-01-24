@@ -111,7 +111,8 @@ async function collectChannelStatus(params: {
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = listChannelPlugins();
   const installedIds = new Set(installedPlugins.map((plugin) => plugin.id));
-  const catalogEntries = listChannelPluginCatalogEntries().filter(
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
+  const catalogEntries = listChannelPluginCatalogEntries({ workspaceDir }).filter(
     (entry) => !installedIds.has(entry.id),
   );
   const statusEntries = await Promise.all(
@@ -388,7 +389,8 @@ export async function setupChannels(
     const core = listChatChannels();
     const installed = listChannelPlugins();
     const installedIds = new Set(installed.map((plugin) => plugin.id));
-    const catalog = listChannelPluginCatalogEntries().filter(
+    const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
+    const catalog = listChannelPluginCatalogEntries({ workspaceDir }).filter(
       (entry) => !installedIds.has(entry.id),
     );
     const metaById = new Map<string, ChannelMeta>();

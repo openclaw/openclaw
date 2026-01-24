@@ -273,6 +273,27 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "tts",
+      nativeName: "tts",
+      description: "Control text-to-speech (TTS).",
+      textAlias: "/tts",
+      args: [
+        {
+          name: "action",
+          description: "on | off | status | provider | limit | summary | audio | help",
+          type: "string",
+          choices: ["on", "off", "status", "provider", "limit", "summary", "audio", "help"],
+        },
+        {
+          name: "value",
+          description: "Provider, limit, or text",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "stop",
       nativeName: "stop",
       description: "Stop the current run.",

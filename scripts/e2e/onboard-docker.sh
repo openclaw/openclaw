@@ -46,7 +46,7 @@ TRASH
     local needle="$1"
     local timeout_s="${2:-45}"
     local needle_compact
-    needle_compact="$(printf "%s" "$needle" | sed -E "s/[[:space:]]+//g")"
+    needle_compact="$(printf "%s" "$needle" | tr -cd "[:alnum:]")"
     local start_s
     start_s="$(date +%s)"
     while true; do
@@ -61,17 +61,12 @@ TRASH
           let text = \"\";
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
           if (text.length > 20000) text = text.slice(-20000);
-          const sanitize = (value) => value.replace(/[\\x00-\\x1f\\x7f]/g, \"\");
-          const haystack = sanitize(text);
-          const safeNeedle = sanitize(needle);
-          const needsEscape = new Set([\"\\\\\", \"^\", \"$\", \".\", \"*\", \"+\", \"?\", \"(\", \")\", \"[\", \"]\", \"{\", \"}\", \"|\"]);
-          let escaped = \"\";
-          for (const ch of safeNeedle) {
-            escaped += needsEscape.has(ch) ? \"\\\\\" + ch : ch;
-          }
-          const pattern = escaped.split(\"\").join(\".*\");
-          const re = new RegExp(pattern, \"i\");
-          process.exit(re.test(haystack) ? 0 : 1);
+          const stripAnsi = (value) => value.replace(/\\x1b\\[[0-9;]*[A-Za-z]/g, \"\");
+          const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z0-9]+/g, \"\");
+          const haystack = compact(text);
+          const compactNeedle = compact(needle);
+          if (!compactNeedle) process.exit(1);
+          process.exit(haystack.includes(compactNeedle) ? 0 : 1);
         "; then
           return 0
         fi
@@ -260,9 +255,11 @@ TRASH
 
   send_skills_flow() {
     # Select skills section and skip optional installs.
-    send $'"'"'\r'"'"' 1.2
+    wait_for_log "Where will the Gateway run?" 60 || true
+    send $'"'"'\r'"'"' 0.6
     # Configure skills now? -> No
-    send $'"'"'n\r'"'"' 1.5
+    wait_for_log "Configure skills now?" 60 || true
+    send $'"'"'n\r'"'"' 0.8
     send "" 1.0
   }
 

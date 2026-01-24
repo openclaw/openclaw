@@ -4,14 +4,11 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
+  createAgentToAgentPolicy,
   classifySessionKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -98,24 +95,8 @@ export function createSessionsListTool(opts?: {
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
-      const routingA2A = cfg.tools?.agentToAgent;
-      const a2aEnabled = routingA2A?.enabled === true;
-      const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
-      const matchesAllow = (agentId: string) => {
-        if (allowPatterns.length === 0) return true;
-        return allowPatterns.some((pattern) => {
-          const raw = String(pattern ?? "").trim();
-          if (!raw) return false;
-          if (raw === "*") return true;
-          if (!raw.includes("*")) return raw === agentId;
-          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
-          return re.test(agentId);
-        });
-      };
-      const requesterAgentId = normalizeAgentId(
-        parseAgentSessionKey(requesterInternalKey)?.agentId,
-      );
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
       const rows: SessionListRow[] = [];
 
       for (const entry of sessions) {
@@ -123,12 +104,9 @@ export function createSessionsListTool(opts?: {
         const key = typeof entry.key === "string" ? entry.key : "";
         if (!key) continue;
 
-        const entryAgentId = normalizeAgentId(parseAgentSessionKey(key)?.agentId);
+        const entryAgentId = resolveAgentIdFromSessionKey(key);
         const crossAgent = entryAgentId !== requesterAgentId;
-        if (crossAgent) {
-          if (!a2aEnabled) continue;
-          if (!matchesAllow(requesterAgentId) || !matchesAllow(entryAgentId)) continue;
-        }
+        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) continue;
 
         if (key === "unknown") continue;
         if (key === "global" && alias !== "global") continue;

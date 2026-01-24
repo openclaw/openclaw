@@ -19,7 +19,12 @@ echo "==> Verify git installed"
 command -v git >/dev/null
 
 echo "==> Verify clawdbot installed"
-LATEST_VERSION="$(npm view clawdbot version)"
+EXPECTED_VERSION="${CLAWDBOT_INSTALL_EXPECT_VERSION:-}"
+if [[ -n "$EXPECTED_VERSION" ]]; then
+  LATEST_VERSION="$EXPECTED_VERSION"
+else
+  LATEST_VERSION="$(npm view clawdbot version)"
+fi
 CMD_PATH="$(command -v clawdbot || true)"
 if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/clawdbot" ]]; then
   CMD_PATH="$HOME/.npm-global/bin/clawdbot"

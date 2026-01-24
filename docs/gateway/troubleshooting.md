@@ -7,7 +7,7 @@ read_when:
 
 When Clawdbot misbehaves, here's how to fix it.
 
-Start with the FAQ’s [First 60 seconds](/start/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
+Start with the FAQ’s [First 60 seconds](/help/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
 
 Provider-specific shortcuts: [/channels/troubleshooting](/channels/troubleshooting)
 
@@ -30,6 +30,34 @@ Quick triage commands (in order):
 See also: [Health checks](/gateway/health) and [Logging](/logging).
 
 ## Common Issues
+
+### OAuth token refresh failed (Anthropic Claude subscription)
+
+This means the stored Anthropic OAuth token expired and the refresh failed.
+If you’re on a Claude subscription (no API key), the most reliable fix is to
+switch to a **Claude Code setup-token** or re-sync Claude Code CLI OAuth on the
+**gateway host**.
+
+**Recommended (setup-token):**
+
+```bash
+# Run on the gateway host (runs Claude Code CLI)
+clawdbot models auth setup-token --provider anthropic
+clawdbot models status
+```
+
+If you generated the token elsewhere:
+
+```bash
+clawdbot models auth paste-token --provider anthropic
+clawdbot models status
+```
+
+**If you want to keep OAuth reuse:**
+log in with Claude Code CLI on the gateway host, then run `clawdbot models status`
+to sync the refreshed token into Clawdbot’s auth store.
+
+More detail: [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
 ### Control UI fails on HTTP ("device identity required" / "connect failed")
 

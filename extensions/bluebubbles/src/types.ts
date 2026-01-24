@@ -4,6 +4,8 @@ export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type BlueBubblesGroupConfig = {
   /** If true, only respond in this group when mentioned. */
   requireMention?: boolean;
+  /** Optional tool policy overrides for this group. */
+  tools?: { allow?: string[]; deny?: string[] };
 };
 
 export type BlueBubblesAccountConfig = {

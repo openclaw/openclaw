@@ -1,4 +1,6 @@
 import { chunkMarkdownText } from "../../auto-reply/chunk.js";
+import type { MarkdownTableMode } from "../../config/types.base.js";
+import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { loadWebMedia } from "../media.js";
@@ -19,10 +21,13 @@ export async function deliverWebReply(params: {
   };
   connectionId?: string;
   skipLog?: boolean;
+  tableMode?: MarkdownTableMode;
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
-  const textChunks = chunkMarkdownText(replyResult.text || "", textLimit);
+  const tableMode = params.tableMode ?? "code";
+  const convertedText = convertMarkdownTables(replyResult.text || "", tableMode);
+  const textChunks = chunkMarkdownText(convertedText, textLimit);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl

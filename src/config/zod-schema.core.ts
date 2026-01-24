@@ -59,10 +59,23 @@ export const ModelProviderSchema = z
   })
   .strict();
 
+export const BedrockDiscoverySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    region: z.string().optional(),
+    providerFilter: z.array(z.string()).optional(),
+    refreshInterval: z.number().int().nonnegative().optional(),
+    defaultContextWindow: z.number().int().positive().optional(),
+    defaultMaxTokens: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
+    bedrockDiscovery: BedrockDiscoverySchema,
   })
   .strict()
   .optional();
@@ -132,6 +145,73 @@ export const BlockStreamingChunkSchema = z
       .optional(),
   })
   .strict();
+
+export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+
+export const MarkdownConfigSchema = z
+  .object({
+    tables: MarkdownTableModeSchema.optional(),
+  })
+  .strict()
+  .optional();
+
+export const TtsProviderSchema = z.enum(["elevenlabs", "openai"]);
+export const TtsModeSchema = z.enum(["final", "all"]);
+export const TtsConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: TtsModeSchema.optional(),
+    provider: TtsProviderSchema.optional(),
+    summaryModel: z.string().optional(),
+    modelOverrides: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowText: z.boolean().optional(),
+        allowProvider: z.boolean().optional(),
+        allowVoice: z.boolean().optional(),
+        allowModelId: z.boolean().optional(),
+        allowVoiceSettings: z.boolean().optional(),
+        allowNormalization: z.boolean().optional(),
+        allowSeed: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    elevenlabs: z
+      .object({
+        apiKey: z.string().optional(),
+        baseUrl: z.string().optional(),
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+        seed: z.number().int().min(0).max(4294967295).optional(),
+        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
+        languageCode: z.string().optional(),
+        voiceSettings: z
+          .object({
+            stability: z.number().min(0).max(1).optional(),
+            similarityBoost: z.number().min(0).max(1).optional(),
+            style: z.number().min(0).max(1).optional(),
+            useSpeakerBoost: z.boolean().optional(),
+            speed: z.number().min(0.5).max(2).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    openai: z
+      .object({
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 
 export const HumanDelaySchema = z
   .object({

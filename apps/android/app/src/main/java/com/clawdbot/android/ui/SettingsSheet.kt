@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -49,7 +51,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -58,6 +63,7 @@ import com.clawdbot.android.LocationMode
 import com.clawdbot.android.MainViewModel
 import com.clawdbot.android.NodeForegroundService
 import com.clawdbot.android.VoiceWakeMode
+import com.clawdbot.android.WakeWords
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
@@ -86,6 +92,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val listState = rememberLazyListState()
   val (wakeWordsText, setWakeWordsText) = remember { mutableStateOf("") }
   val (advancedExpanded, setAdvancedExpanded) = remember { mutableStateOf(false) }
+  val focusManager = LocalFocusManager.current
+  var wakeWordsHadFocus by remember { mutableStateOf(false) }
   val deviceModel =
     remember {
       listOfNotNull(Build.MANUFACTURER, Build.MODEL)
@@ -104,6 +112,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
 
   LaunchedEffect(wakeWords) { setWakeWordsText(wakeWords.joinToString(", ")) }
+  val commitWakeWords = {
+    val parsed = WakeWords.parseIfChanged(wakeWordsText, wakeWords)
+    if (parsed != null) {
+      viewModel.setWakeWords(parsed)
+    }
+  }
 
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
@@ -481,25 +495,27 @@ fun SettingsSheet(viewModel: MainViewModel) {
         value = wakeWordsText,
         onValueChange = setWakeWordsText,
         label = { Text("Wake Words (comma-separated)") },
-        modifier = Modifier.fillMaxWidth(),
+        modifier =
+          Modifier.fillMaxWidth().onFocusChanged { focusState ->
+            if (focusState.isFocused) {
+              wakeWordsHadFocus = true
+            } else if (wakeWordsHadFocus) {
+              wakeWordsHadFocus = false
+              commitWakeWords()
+            }
+          },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions =
+          KeyboardActions(
+            onDone = {
+              commitWakeWords()
+              focusManager.clearFocus()
+            },
+          ),
       )
     }
-    item {
-      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Button(
-          onClick = {
-            val parsed = com.clawdbot.android.WakeWords.parseCommaSeparated(wakeWordsText)
-            viewModel.setWakeWords(parsed)
-          },
-          enabled = isConnected,
-        ) {
-          Text("Save + Sync")
-        }
-
-        Button(onClick = viewModel::resetWakeWordsDefaults) { Text("Reset defaults") }
-      }
-    }
+    item { Button(onClick = viewModel::resetWakeWordsDefaults) { Text("Reset defaults") } }
     item {
       Text(
         if (isConnected) {

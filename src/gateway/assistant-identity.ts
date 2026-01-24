@@ -7,7 +7,8 @@ import { normalizeAgentId } from "../routing/session-key.js";
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
 
-export const DEFAULT_ASSISTANT_IDENTITY = {
+export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
+  agentId: "main",
   name: "Assistant",
   avatar: "A",
 };

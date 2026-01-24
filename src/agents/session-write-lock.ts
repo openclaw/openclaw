@@ -45,20 +45,28 @@ export async function acquireSessionWriteLock(params: {
 }> {
   const timeoutMs = params.timeoutMs ?? 10_000;
   const staleMs = params.staleMs ?? 30 * 60 * 1000;
-  const sessionFile = params.sessionFile;
-  const lockPath = `${sessionFile}.lock`;
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  const sessionFile = path.resolve(params.sessionFile);
+  const sessionDir = path.dirname(sessionFile);
+  await fs.mkdir(sessionDir, { recursive: true });
+  let normalizedDir = sessionDir;
+  try {
+    normalizedDir = await fs.realpath(sessionDir);
+  } catch {
+    // Fall back to the resolved path if realpath fails (permissions, transient FS).
+  }
+  const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
+  const lockPath = `${normalizedSessionFile}.lock`;
 
-  const held = HELD_LOCKS.get(sessionFile);
+  const held = HELD_LOCKS.get(normalizedSessionFile);
   if (held) {
     held.count += 1;
     return {
       release: async () => {
-        const current = HELD_LOCKS.get(sessionFile);
+        const current = HELD_LOCKS.get(normalizedSessionFile);
         if (!current) return;
         current.count -= 1;
         if (current.count > 0) return;
-        HELD_LOCKS.delete(sessionFile);
+        HELD_LOCKS.delete(normalizedSessionFile);
         await current.handle.close();
         await fs.rm(current.lockPath, { force: true });
       },
@@ -75,14 +83,14 @@ export async function acquireSessionWriteLock(params: {
         JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
         "utf8",
       );
-      HELD_LOCKS.set(sessionFile, { count: 1, handle, lockPath });
+      HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
       return {
         release: async () => {
-          const current = HELD_LOCKS.get(sessionFile);
+          const current = HELD_LOCKS.get(normalizedSessionFile);
           if (!current) return;
           current.count -= 1;
           if (current.count > 0) return;
-          HELD_LOCKS.delete(sessionFile);
+          HELD_LOCKS.delete(normalizedSessionFile);
           await current.handle.close();
           await fs.rm(current.lockPath, { force: true });
         },

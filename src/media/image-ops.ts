@@ -340,6 +340,108 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
 }
 
 /**
+ * Checks if an image has an alpha channel (transparency).
+ * Returns true if the image has alpha, false otherwise.
+ */
+export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
+  try {
+    const sharp = await loadSharp();
+    const meta = await sharp(buffer).metadata();
+    // Check if the image has an alpha channel
+    // PNG color types with alpha: 4 (grayscale+alpha), 6 (RGBA)
+    // Sharp reports this via 'channels' (4 = RGBA) or 'hasAlpha'
+    return meta.hasAlpha === true || meta.channels === 4;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resizes an image to PNG format, preserving alpha channel (transparency).
+ * Falls back to sharp only (no sips fallback for PNG with alpha).
+ */
+export async function resizeToPng(params: {
+  buffer: Buffer;
+  maxSide: number;
+  compressionLevel?: number;
+  withoutEnlargement?: boolean;
+}): Promise<Buffer> {
+  const sharp = await loadSharp();
+  // Compression level 6 is a good balance (0=fastest, 9=smallest)
+  const compressionLevel = params.compressionLevel ?? 6;
+
+  return await sharp(params.buffer)
+    .rotate() // Auto-rotate based on EXIF if present
+    .resize({
+      width: params.maxSide,
+      height: params.maxSide,
+      fit: "inside",
+      withoutEnlargement: params.withoutEnlargement !== false,
+    })
+    .png({ compressionLevel })
+    .toBuffer();
+}
+
+export async function optimizeImageToPng(
+  buffer: Buffer,
+  maxBytes: number,
+): Promise<{
+  buffer: Buffer;
+  optimizedSize: number;
+  resizeSide: number;
+  compressionLevel: number;
+}> {
+  // Try a grid of sizes/compression levels until under the limit.
+  // PNG uses compression levels 0-9 (higher = smaller but slower).
+  const sides = [2048, 1536, 1280, 1024, 800];
+  const compressionLevels = [6, 7, 8, 9];
+  let smallest: {
+    buffer: Buffer;
+    size: number;
+    resizeSide: number;
+    compressionLevel: number;
+  } | null = null;
+
+  for (const side of sides) {
+    for (const compressionLevel of compressionLevels) {
+      try {
+        const out = await resizeToPng({
+          buffer,
+          maxSide: side,
+          compressionLevel,
+          withoutEnlargement: true,
+        });
+        const size = out.length;
+        if (!smallest || size < smallest.size) {
+          smallest = { buffer: out, size, resizeSide: side, compressionLevel };
+        }
+        if (size <= maxBytes) {
+          return {
+            buffer: out,
+            optimizedSize: size,
+            resizeSide: side,
+            compressionLevel,
+          };
+        }
+      } catch {
+        // Continue trying other size/compression combinations.
+      }
+    }
+  }
+
+  if (smallest) {
+    return {
+      buffer: smallest.buffer,
+      optimizedSize: smallest.size,
+      resizeSide: smallest.resizeSide,
+      compressionLevel: smallest.compressionLevel,
+    };
+  }
+
+  throw new Error("Failed to optimize PNG image");
+}
+
+/**
  * Internal sips-only EXIF normalization (no sharp fallback).
  * Used by resizeToJpeg to normalize before sips resize.
  */

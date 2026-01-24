@@ -159,7 +159,7 @@ describe("RawBody directive parsing", () => {
         ChatType: "group",
         From: "+1222",
         To: "+1222",
-        SessionKey: "agent:main:whatsapp:group:G1",
+        SessionKey: "agent:main:whatsapp:group:g1",
         Provider: "whatsapp",
         Surface: "whatsapp",
         SenderE164: "+1222",
@@ -182,7 +182,7 @@ describe("RawBody directive parsing", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Session: agent:main:whatsapp:group:G1");
+      expect(text).toContain("Session: agent:main:whatsapp:group:g1");
       expect(text).toContain("anthropic/claude-opus-4-5");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });

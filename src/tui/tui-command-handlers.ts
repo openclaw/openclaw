@@ -408,6 +408,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "new":
       case "reset":
         try {
+          // Clear token counts immediately to avoid stale display (#1523)
+          state.sessionInfo.inputTokens = null;
+          state.sessionInfo.outputTokens = null;
+          state.sessionInfo.totalTokens = null;
+          tui.requestRender();
+
           await client.resetSession(state.currentSessionKey);
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
@@ -428,7 +434,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         process.exit(0);
         break;
       default:
-        chatLog.addSystem(`unknown command: /${name}`);
+        await sendMessage(raw);
         break;
     }
     tui.requestRender();

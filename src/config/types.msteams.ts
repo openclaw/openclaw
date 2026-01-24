@@ -1,5 +1,12 @@
-import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./types.base.js";
+import type {
+  BlockStreamingCoalesceConfig,
+  DmPolicy,
+  GroupPolicy,
+  MarkdownConfig,
+} from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
   /** Port for the webhook server. Default: 3978. */
@@ -15,6 +22,8 @@ export type MSTeamsReplyStyle = "thread" | "top-level";
 export type MSTeamsChannelConfig = {
   /** Require @mention to respond. Default: true. */
   requireMention?: boolean;
+  /** Optional tool policy overrides for this channel. */
+  tools?: GroupToolPolicyConfig;
   /** Reply style: "thread" replies to the message, "top-level" posts a new message. */
   replyStyle?: MSTeamsReplyStyle;
 };
@@ -23,6 +32,8 @@ export type MSTeamsChannelConfig = {
 export type MSTeamsTeamConfig = {
   /** Default requireMention for channels in this team. */
   requireMention?: boolean;
+  /** Default tool policy for channels in this team. */
+  tools?: GroupToolPolicyConfig;
   /** Default reply style for channels in this team. */
   replyStyle?: MSTeamsReplyStyle;
   /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
@@ -34,6 +45,8 @@ export type MSTeamsConfig = {
   enabled?: boolean;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Markdown formatting overrides (tables). */
+  markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /** Azure Bot App ID (from Azure Bot registration). */
@@ -82,4 +95,6 @@ export type MSTeamsConfig = {
   mediaMaxMb?: number;
   /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2"). */
   sharePointSiteId?: string;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };

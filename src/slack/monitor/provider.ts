@@ -17,6 +17,7 @@ import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
+import { resolveSlackWebClientOptions } from "../client.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
@@ -130,16 +131,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           endpoints: slackWebhookPath,
         })
       : null;
+  const clientOptions = resolveSlackWebClientOptions();
   const app = new App(
     slackMode === "socket"
       ? {
           token: botToken,
           appToken,
           socketMode: true,
+          clientOptions,
         }
       : {
           token: botToken,
           receiver: receiver ?? undefined,
+          clientOptions,
         },
   );
   const slackHttpHandler =

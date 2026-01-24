@@ -34,6 +34,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["message", "memory_search"],
       docsPath: "/tmp/clawd/docs",
       extraSystemPrompt: "Subagent details",
+      ttsHint: "Voice (TTS) is enabled.",
     });
 
     expect(prompt).not.toContain("## User Identity");
@@ -42,11 +43,22 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
     expect(prompt).not.toContain("## Messaging");
+    expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
+  });
+
+  it("includes voice hint when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      ttsHint: "Voice (TTS) is enabled.",
+    });
+
+    expect(prompt).toContain("## Voice (TTS)");
+    expect(prompt).toContain("Voice (TTS) is enabled.");
   });
 
   it("adds reasoning tag hint when enabled", () => {
@@ -124,7 +136,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("includes user time when provided (12-hour)", () => {
+  it("includes user timezone when provided (12-hour)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
@@ -133,11 +145,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Monday, January 5th, 2026 — 3:26 PM (America/Chicago)");
-    expect(prompt).toContain("Time format: 12-hour");
+    expect(prompt).toContain("Time zone: America/Chicago");
   });
 
-  it("includes user time when provided (24-hour)", () => {
+  it("includes user timezone when provided (24-hour)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
@@ -146,11 +157,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Monday, January 5th, 2026 — 15:26 (America/Chicago)");
-    expect(prompt).toContain("Time format: 24-hour");
+    expect(prompt).toContain("Time zone: America/Chicago");
   });
 
-  it("shows UTC fallback when only timezone is provided", () => {
+  it("shows timezone when only timezone is provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
@@ -158,9 +168,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain(
-      "Time zone: America/Chicago. Current time unknown; assume UTC for date/time references.",
-    );
+    expect(prompt).toContain("Time zone: America/Chicago");
   });
 
   it("includes model alias guidance when aliases are provided", () => {
@@ -235,6 +243,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Alpha");
     expect(prompt).toContain("## IDENTITY.md");
     expect(prompt).toContain("Bravo");
+  });
+
+  it("adds SOUL guidance when a soul file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      contextFiles: [
+        { path: "./SOUL.md", content: "Persona" },
+        { path: "dir\\SOUL.md", content: "Persona Windows" },
+      ],
+    });
+
+    expect(prompt).toContain(
+      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+    );
   });
 
   it("summarizes the message tool when available", () => {

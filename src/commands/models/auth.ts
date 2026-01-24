@@ -16,11 +16,8 @@ import {
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import {
-  CONFIG_PATH_CLAWDBOT,
-  readConfigFileSnapshot,
-  type ClawdbotConfig,
-} from "../../config/config.js";
+import { readConfigFileSnapshot, type ClawdbotConfig } from "../../config/config.js";
+import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
@@ -117,7 +114,7 @@ export async function modelsAuthSetupTokenCommand(
     }),
   );
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${CLAUDE_CLI_PROFILE_ID} (anthropic/oauth)`);
 }
 
@@ -159,7 +156,7 @@ export async function modelsAuthPasteTokenCommand(
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
@@ -425,7 +422,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     return next;
   });
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  logConfigUpdated(runtime);
   for (const profile of result.profiles) {
     runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,

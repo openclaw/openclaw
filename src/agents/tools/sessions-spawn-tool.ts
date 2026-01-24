@@ -63,6 +63,9 @@ export function createSessionsSpawnTool(opts?: {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  agentGroupId?: string | null;
+  agentGroupChannel?: string | null;
+  agentGroupSpace?: string | null;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -153,7 +156,7 @@ export function createSessionsSpawnTool(opts?: {
         }
       }
       const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
-      const shouldPatchSpawnedBy = opts?.sandboxed === true;
+      const spawnedByKey = requesterInternalKey;
       const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
       const resolvedModel =
         normalizeModelSelection(modelOverride) ??
@@ -219,7 +222,10 @@ export function createSessionsSpawnTool(opts?: {
             thinking: thinkingOverride,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
             label: label || undefined,
-            spawnedBy: shouldPatchSpawnedBy ? requesterInternalKey : undefined,
+            spawnedBy: spawnedByKey,
+            groupId: opts?.agentGroupId ?? undefined,
+            groupChannel: opts?.agentGroupChannel ?? undefined,
+            groupSpace: opts?.agentGroupSpace ?? undefined,
           },
           timeoutMs: 10_000,
         })) as { runId?: string };

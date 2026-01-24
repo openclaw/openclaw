@@ -13,7 +13,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 ## Operator trigger
 When the operator says “release”, immediately do this preflight (no extra questions unless blocked):
 - Read this doc and `docs/platforms/mac/release.md`.
-- Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set.
+- Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set (SPARKLE_PRIVATE_KEY_FILE should live in `~/.profile`).
 - Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
 
 1) **Version & metadata**
@@ -39,8 +39,9 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - [ ] `pnpm test` (or `pnpm test:coverage` if you need coverage output)
 - [ ] `pnpm run build` (last sanity check after tests)
 - [ ] `pnpm release:check` (verifies npm pack contents)
-- [ ] `pnpm test:install:smoke` (Docker install smoke test; required before release)
+- [ ] `CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` (Docker install smoke test, fast path; required before release)
   - If the immediate previous npm release is known broken, set `CLAWDBOT_INSTALL_SMOKE_PREVIOUS=<last-good-version>` or `CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS=1` for the preinstall step.
+- [ ] (Optional) Full installer smoke (adds non-root + CLI coverage): `pnpm test:install:smoke`
 - [ ] (Optional) Installer E2E (Docker, runs `curl -fsSL https://clawd.bot/install.sh | bash`, onboards, then runs real tool calls):
   - `pnpm test:install:e2e:openai` (requires `OPENAI_API_KEY`)
   - `pnpm test:install:e2e:anthropic` (requires `ANTHROPIC_API_KEY`)
@@ -77,3 +78,30 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
 - [ ] From a clean temp directory (no `package.json`), run `npx -y clawdbot@X.Y.Z send --help` to confirm install/CLI entrypoints work.
 - [ ] Announce/share release notes.
+
+## Plugin publish scope (npm)
+
+We only publish **existing npm plugins** under the `@clawdbot/*` scope. Bundled
+plugins that are not on npm stay **disk-tree only** (still shipped in
+`extensions/**`).
+
+Process to derive the list:
+1) `npm search @clawdbot --json` and capture the package names.
+2) Compare with `extensions/*/package.json` names.
+3) Publish only the **intersection** (already on npm).
+
+Current npm plugin list (update as needed):
+- @clawdbot/bluebubbles
+- @clawdbot/diagnostics-otel
+- @clawdbot/discord
+- @clawdbot/lobster
+- @clawdbot/matrix
+- @clawdbot/msteams
+- @clawdbot/nextcloud-talk
+- @clawdbot/nostr
+- @clawdbot/voice-call
+- @clawdbot/zalo
+- @clawdbot/zalouser
+
+Release notes must also call out **new optional bundled plugins** that are **not
+on by default** (example: `tlon`).

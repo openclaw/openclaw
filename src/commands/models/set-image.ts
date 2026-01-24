@@ -1,4 +1,4 @@
-import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
+import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveModelTarget, updateConfig } from "./shared.js";
 
@@ -27,6 +27,6 @@ export async function modelsSetImageCommand(modelRaw: string, runtime: RuntimeEn
     };
   });
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  logConfigUpdated(runtime);
   runtime.log(`Image model: ${updated.agents?.defaults?.imageModel?.primary ?? modelRaw}`);
 }

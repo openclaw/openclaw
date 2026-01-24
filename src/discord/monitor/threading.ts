@@ -14,6 +14,7 @@ export type DiscordThreadChannel = {
   name?: string | null;
   parentId?: string | null;
   parent?: { id?: string; name?: string };
+  ownerId?: string | null;
 };
 
 export type DiscordThreadStarter = {
@@ -29,6 +30,10 @@ type DiscordThreadParentInfo = {
 };
 
 const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarter>();
+
+export function __resetDiscordThreadStarterCacheForTest() {
+  DISCORD_THREAD_STARTER_CACHE.clear();
+}
 
 function isDiscordThreadType(type: ChannelType | undefined): boolean {
   return (
@@ -59,6 +64,7 @@ export function resolveDiscordThreadChannel(params: {
     name: channelInfo?.name ?? undefined,
     parentId: channelInfo?.parentId ?? undefined,
     parent: undefined,
+    ownerId: channelInfo?.ownerId ?? undefined,
   };
 }
 

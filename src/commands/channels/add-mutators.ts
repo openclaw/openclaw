@@ -46,6 +46,12 @@ export function applyChannelAccountConfig(params: {
   password?: string;
   deviceName?: string;
   initialSyncLimit?: number;
+  ship?: string;
+  url?: string;
+  code?: string;
+  groupChannels?: string[];
+  dmAllowlist?: string[];
+  autoDiscoverChannels?: boolean;
 }): ClawdbotConfig {
   const accountId = normalizeAccountId(params.accountId);
   const plugin = getChannelPlugin(params.channel);
@@ -77,6 +83,12 @@ export function applyChannelAccountConfig(params: {
     password: params.password,
     deviceName: params.deviceName,
     initialSyncLimit: params.initialSyncLimit,
+    ship: params.ship,
+    url: params.url,
+    code: params.code,
+    groupChannels: params.groupChannels,
+    dmAllowlist: params.dmAllowlist,
+    autoDiscoverChannels: params.autoDiscoverChannels,
   };
   return apply({ cfg: params.cfg, accountId, input });
 }

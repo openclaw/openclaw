@@ -553,6 +553,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   process.noDeprecation = true;
   process.env.NODE_NO_WARNINGS = "1";
   const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
+  const shouldRestart = opts.restart !== false;
 
   if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
     defaultRuntime.error("--timeout must be a positive integer (seconds)");
@@ -898,7 +899,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   // Restart service if requested
-  if (opts.restart) {
+  if (shouldRestart) {
     if (!opts.json) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Restarting service..."));
@@ -1068,7 +1069,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
 
   const restart = await confirm({
     message: stylePromptMessage("Restart the gateway service after update?"),
-    initialValue: false,
+    initialValue: true,
   });
   if (isCancel(restart)) {
     defaultRuntime.log(theme.muted("Update cancelled."));
@@ -1093,7 +1094,7 @@ export function registerUpdateCli(program: Command) {
     .command("update")
     .description("Update Clawdbot to the latest version")
     .option("--json", "Output result as JSON", false)
-    .option("--restart", "Restart the gateway service after a successful update", false)
+    .option("--no-restart", "Skip restarting the gateway service after a successful update")
     .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
     .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
@@ -1104,7 +1105,7 @@ export function registerUpdateCli(program: Command) {
         ["clawdbot update --channel beta", "Switch to beta channel (git + npm)"],
         ["clawdbot update --channel dev", "Switch to dev channel (git + npm)"],
         ["clawdbot update --tag beta", "One-off update to a dist-tag or version"],
-        ["clawdbot update --restart", "Update and restart the service"],
+        ["clawdbot update --no-restart", "Update without restarting the service"],
         ["clawdbot update --json", "Output result as JSON"],
         ["clawdbot update --yes", "Non-interactive (accept downgrade prompts)"],
         ["clawdbot update wizard", "Interactive update wizard"],

@@ -1,8 +1,58 @@
 import type { ClawdbotConfig } from "../config/config.js";
+import { getChannelDock } from "../channels/dock.js";
+import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
+
+type CompiledPattern =
+  | { kind: "all" }
+  | { kind: "exact"; value: string }
+  | { kind: "regex"; value: RegExp };
+
+function compilePattern(pattern: string): CompiledPattern {
+  const normalized = normalizeToolName(pattern);
+  if (!normalized) return { kind: "exact", value: "" };
+  if (normalized === "*") return { kind: "all" };
+  if (!normalized.includes("*")) return { kind: "exact", value: normalized };
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return {
+    kind: "regex",
+    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
+  };
+}
+
+function compilePatterns(patterns?: string[]): CompiledPattern[] {
+  if (!Array.isArray(patterns)) return [];
+  return expandToolGroups(patterns)
+    .map(compilePattern)
+    .filter((pattern) => pattern.kind !== "exact" || pattern.value);
+}
+
+function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
+  for (const pattern of patterns) {
+    if (pattern.kind === "all") return true;
+    if (pattern.kind === "exact" && name === pattern.value) return true;
+    if (pattern.kind === "regex" && pattern.value.test(name)) return true;
+  }
+  return false;
+}
+
+function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
+  const deny = compilePatterns(policy.deny);
+  const allow = compilePatterns(policy.allow);
+  return (name: string) => {
+    const normalized = normalizeToolName(name);
+    if (matchesAny(normalized, deny)) return false;
+    if (allow.length === 0) return true;
+    if (matchesAny(normalized, allow)) return true;
+    if (normalized === "apply_patch" && matchesAny("exec", allow)) return true;
+    return false;
+  };
+}
 
 const DEFAULT_SUBAGENT_TOOL_DENY = [
   // Session management - main agent orchestrates
@@ -35,22 +85,13 @@ export function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPoli
 
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
   if (!policy) return true;
-  const deny = new Set(expandToolGroups(policy.deny));
-  const allowRaw = expandToolGroups(policy.allow);
-  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
-  const normalized = normalizeToolName(name);
-  if (deny.has(normalized)) return false;
-  if (allow) {
-    if (allow.has(normalized)) return true;
-    if (normalized === "apply_patch" && allow.has("exec")) return true;
-    return false;
-  }
-  return true;
+  return makeToolPolicyMatcher(policy)(name);
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
   if (!policy) return tools;
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+  const matcher = makeToolPolicyMatcher(policy);
+  return tools.filter((tool) => matcher(tool.name));
 }
 
 type ToolPolicyConfig = {
@@ -69,6 +110,26 @@ function pickToolPolicy(config?: ToolPolicyConfig): SandboxToolPolicy | undefine
 
 function normalizeProviderKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
+  channel?: string;
+  groupId?: string;
+} {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) return {};
+  const base = resolveThreadParentSessionKey(raw) ?? raw;
+  const parts = base.split(":").filter(Boolean);
+  let body = parts[0] === "agent" ? parts.slice(2) : parts;
+  if (body[0] === "subagent") {
+    body = body.slice(1);
+  }
+  if (body.length < 3) return {};
+  const [channel, kind, ...rest] = body;
+  if (kind !== "group" && kind !== "channel") return {};
+  const groupId = rest.join(":").trim();
+  if (!groupId) return {};
+  return { channel: channel.trim().toLowerCase(), groupId };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -135,6 +196,47 @@ export function resolveEffectiveToolPolicy(params: {
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
   };
+}
+
+export function resolveGroupToolPolicy(params: {
+  config?: ClawdbotConfig;
+  sessionKey?: string;
+  spawnedBy?: string | null;
+  messageProvider?: string;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+}): SandboxToolPolicy | undefined {
+  if (!params.config) return undefined;
+  const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
+  const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
+  const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
+  if (!groupId) return undefined;
+  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
+  const channel = normalizeMessageChannel(channelRaw);
+  if (!channel) return undefined;
+  let dock;
+  try {
+    dock = getChannelDock(channel);
+  } catch {
+    dock = undefined;
+  }
+  const toolsConfig =
+    dock?.groups?.resolveToolPolicy?.({
+      cfg: params.config,
+      groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      accountId: params.accountId,
+    }) ??
+    resolveChannelGroupToolsPolicy({
+      cfg: params.config,
+      channel,
+      groupId,
+      accountId: params.accountId,
+    });
+  return pickToolPolicy(toolsConfig);
 }
 
 export function isToolAllowedByPolicies(

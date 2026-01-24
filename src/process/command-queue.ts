@@ -68,9 +68,12 @@ function drainLane(lane: string) {
           entry.resolve(result);
         } catch (err) {
           state.active -= 1;
-          diag.error(
-            `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
-          );
+          const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+          if (!isProbeLane) {
+            diag.error(
+              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+            );
+          }
           pump();
           entry.reject(err);
         }

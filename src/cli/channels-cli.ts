@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { formatCliChannelOptions } from "./channel-options.js";
 import {
   channelsAddCommand,
   channelsCapabilitiesCommand,
@@ -45,6 +45,12 @@ const optionNamesAdd = [
   "password",
   "deviceName",
   "initialSyncLimit",
+  "ship",
+  "url",
+  "code",
+  "groupChannels",
+  "dmAllowlist",
+  "autoDiscoverChannels",
 ] as const;
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
@@ -61,9 +67,7 @@ function runChannelsCommandWithDanger(action: () => Promise<void>, label: string
 }
 
 export function registerChannelsCli(program: Command) {
-  const channelNames = listChannelPlugins()
-    .map((plugin) => plugin.id)
-    .join("|");
+  const channelNames = formatCliChannelOptions();
   const channels = program
     .command("channels")
     .description("Manage chat channel accounts")
@@ -102,7 +106,7 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("capabilities")
     .description("Show provider capabilities (intents/scopes + supported features)")
-    .option("--channel <name>", `Channel (${channelNames}|all)`)
+    .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`)
     .option("--account <id>", "Account id (only with --channel)")
     .option("--target <dest>", "Channel target for permission audit (Discord channel:<id>)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
@@ -139,7 +143,7 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("logs")
     .description("Show recent channel logs from the gateway log file")
-    .option("--channel <name>", `Channel (${channelNames}|all)`, "all")
+    .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`, "all")
     .option("--lines <n>", "Number of lines (default: 200)", "200")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -177,6 +181,13 @@ export function registerChannelsCli(program: Command) {
     .option("--password <password>", "Matrix password")
     .option("--device-name <name>", "Matrix device name")
     .option("--initial-sync-limit <n>", "Matrix initial sync limit")
+    .option("--ship <ship>", "Tlon ship name (~sampel-palnet)")
+    .option("--url <url>", "Tlon ship URL")
+    .option("--code <code>", "Tlon login code")
+    .option("--group-channels <list>", "Tlon group channels (comma-separated)")
+    .option("--dm-allowlist <list>", "Tlon DM allowlist (comma-separated ships)")
+    .option("--auto-discover-channels", "Tlon auto-discover group channels")
+    .option("--no-auto-discover-channels", "Disable Tlon auto-discovery")
     .option("--use-env", "Use env token (default account only)", false)
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {

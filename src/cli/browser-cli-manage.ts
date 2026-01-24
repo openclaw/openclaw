@@ -18,6 +18,7 @@ import {
 import { browserAct } from "../browser/client-actions-core.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
@@ -46,6 +47,8 @@ export function registerBrowserManageCommands(
           defaultRuntime.log(JSON.stringify(status, null, 2));
           return;
         }
+        const detectedPath = status.detectedExecutablePath ?? status.executablePath;
+        const detectedDisplay = detectedPath ? shortenHomePath(detectedPath) : "auto";
         defaultRuntime.log(
           [
             `profile: ${status.profile ?? "clawd"}`,
@@ -56,7 +59,7 @@ export function registerBrowserManageCommands(
             `cdpUrl: ${status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`}`,
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
-            `detectedPath: ${status.detectedExecutablePath ?? status.executablePath ?? "auto"}`,
+            `detectedPath: ${detectedDisplay}`,
             `profileColor: ${status.color}`,
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),

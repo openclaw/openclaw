@@ -7,6 +7,7 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "../../agents/tools/common.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type {
@@ -26,6 +27,7 @@ import {
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import { applyTargetToParams } from "./channel-target.js";
+import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
@@ -37,9 +39,10 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
-import { resolveChannelTarget } from "./target-resolver.js";
+import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { loadWebMedia } from "../../web/media.js";
 import { extensionForMime } from "../../media/mime.js";
+import { parseSlackTarget } from "../../slack/targets.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -202,6 +205,21 @@ function readBooleanParam(params: Record<string, unknown>, key: string): boolean
     if (trimmed === "false") return false;
   }
   return undefined;
+}
+
+function resolveSlackAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) return undefined;
+  // Only mirror auto-threading when Slack would reply in the active thread for this channel.
+  if (context.replyToMode !== "all" && context.replyToMode !== "first") return undefined;
+  const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
+  if (!parsedTarget || parsedTarget.kind !== "channel") return undefined;
+  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) return undefined;
+  if (context.replyToMode === "first" && context.hasRepliedRef?.value) return undefined;
+  return context.currentThreadTs;
 }
 
 function resolveAttachmentMaxBytes(params: {
@@ -440,7 +458,8 @@ async function resolveActionTarget(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
-}): Promise<void> {
+}): Promise<ResolvedMessagingTarget | undefined> {
+  let resolvedTarget: ResolvedMessagingTarget | undefined;
   const toRaw = typeof params.args.to === "string" ? params.args.to.trim() : "";
   if (toRaw) {
     const resolved = await resolveChannelTarget({
@@ -451,6 +470,7 @@ async function resolveActionTarget(params: {
     });
     if (resolved.ok) {
       params.args.to = resolved.target.to;
+      resolvedTarget = resolved.target;
     } else {
       throw resolved.error;
     }
@@ -474,6 +494,7 @@ async function resolveActionTarget(params: {
       throw resolved.error;
     }
   }
+  return resolvedTarget;
 }
 
 type ResolvedActionContext = {
@@ -484,6 +505,8 @@ type ResolvedActionContext = {
   dryRun: boolean;
   gateway?: MessageActionRunnerGateway;
   input: RunMessageActionParams;
+  agentId?: string;
+  resolvedTarget?: ResolvedMessagingTarget;
 };
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) return undefined;
@@ -570,7 +593,7 @@ async function handleBroadcastAction(
 }
 
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
+  const { cfg, params, channel, accountId, dryRun, gateway, input, agentId, resolvedTarget } = ctx;
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
   // Support media, path, and filePath parameters for attachments
@@ -586,12 +609,24 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }) ?? "";
 
   const parsed = parseReplyDirectives(message);
+  const mergedMediaUrls: string[] = [];
+  const seenMedia = new Set<string>();
+  const pushMedia = (value?: string | null) => {
+    const trimmed = value?.trim();
+    if (!trimmed) return;
+    if (seenMedia.has(trimmed)) return;
+    seenMedia.add(trimmed);
+    mergedMediaUrls.push(trimmed);
+  };
+  pushMedia(mediaHint);
+  for (const url of parsed.mediaUrls ?? []) pushMedia(url);
+  pushMedia(parsed.mediaUrl);
   message = parsed.text;
   params.message = message;
   if (!params.replyTo && parsed.replyToId) params.replyTo = parsed.replyToId;
   if (!params.media) {
     // Use path/filePath if media not set, then fall back to parsed directives
-    params.media = mediaHint || parsed.mediaUrls?.[0] || parsed.mediaUrl || undefined;
+    params.media = mergedMediaUrls[0] || undefined;
   }
 
   message = await maybeApplyCrossContextMarker({
@@ -609,6 +644,38 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const mediaUrl = readStringParam(params, "media", { trim: false });
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
+
+  const replyToId = readStringParam(params, "replyTo");
+  const threadId = readStringParam(params, "threadId");
+  // Slack auto-threading can inject threadTs without explicit params; mirror to that session key.
+  const slackAutoThreadId =
+    channel === "slack" && !replyToId && !threadId
+      ? resolveSlackAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  const outboundRoute =
+    agentId && !dryRun
+      ? await resolveOutboundSessionRoute({
+          cfg,
+          channel,
+          agentId,
+          accountId,
+          target: to,
+          resolvedTarget,
+          replyToId,
+          threadId: threadId ?? slackAutoThreadId,
+        })
+      : null;
+  if (outboundRoute && agentId && !dryRun) {
+    await ensureOutboundSessionEntry({
+      cfg,
+      agentId,
+      channel,
+      accountId,
+      route: outboundRoute,
+    });
+  }
+  const mirrorMediaUrls =
+    mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
   const send = await executeSendAction({
     ctx: {
       cfg,
@@ -620,16 +687,19 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       deps: input.deps,
       dryRun,
       mirror:
-        input.sessionKey && !dryRun
+        outboundRoute && !dryRun
           ? {
-              sessionKey: input.sessionKey,
-              agentId: input.agentId,
+              sessionKey: outboundRoute.sessionKey,
+              agentId,
+              text: message,
+              mediaUrls: mirrorMediaUrls,
             }
           : undefined,
     },
     to,
     message,
     mediaUrl: mediaUrl || undefined,
+    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
     gifPlayback,
     bestEffort: bestEffort ?? undefined,
   });
@@ -749,6 +819,11 @@ export async function runMessageAction(
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
   const params = { ...input.params };
+  const resolvedAgentId =
+    input.agentId ??
+    (input.sessionKey
+      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
+      : undefined);
   parseButtonsParam(params);
   parseCardParam(params);
 
@@ -803,6 +878,9 @@ export async function runMessageAction(
 
   const channel = await resolveChannel(cfg, params);
   const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+  if (accountId) {
+    params.accountId = accountId;
+  }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
 
   await hydrateSendAttachmentParams({
@@ -823,7 +901,7 @@ export async function runMessageAction(
     dryRun,
   });
 
-  await resolveActionTarget({
+  const resolvedTarget = await resolveActionTarget({
     cfg,
     channel,
     action,
@@ -850,6 +928,8 @@ export async function runMessageAction(
       dryRun,
       gateway,
       input,
+      agentId: resolvedAgentId,
+      resolvedTarget,
     });
   }
 

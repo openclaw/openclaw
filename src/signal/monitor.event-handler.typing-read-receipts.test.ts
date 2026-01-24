@@ -9,14 +9,21 @@ vi.mock("./send.js", () => ({
   sendReadReceiptSignal: (...args: unknown[]) => sendReadReceiptMock(...args),
 }));
 
-vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
-  dispatchReplyFromConfig: vi.fn(
+vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/dispatch.js")>();
+  const dispatchInboundMessage = vi.fn(
     async (params: { replyOptions?: { onReplyStart?: () => void } }) => {
       await Promise.resolve(params.replyOptions?.onReplyStart?.());
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     },
-  ),
-}));
+  );
+  return {
+    ...actual,
+    dispatchInboundMessage,
+    dispatchInboundMessageWithDispatcher: dispatchInboundMessage,
+    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessage,
+  };
+});
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
@@ -25,11 +32,13 @@ vi.mock("../pairing/pairing-store.js", () => ({
 
 describe("signal event handler typing + read receipts", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
   });
 
   it("sends typing + read receipt for allowed DMs", async () => {
+    vi.resetModules();
     const { createSignalEventHandler } = await import("./monitor/event-handler.js");
     const handler = createSignalEventHandler({
       runtime: { log: () => {}, error: () => {} } as any,

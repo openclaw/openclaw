@@ -20,7 +20,9 @@ describe("fetchDiscord", () => {
 
     let error: unknown;
     try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch);
+      await fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch, {
+        retry: { attempts: 1 },
+      });
     } catch (err) {
       error = err;
     }
@@ -36,7 +38,37 @@ describe("fetchDiscord", () => {
   it("preserves non-JSON error text", async () => {
     const fetcher = async () => new Response("Not Found", { status: 404 });
     await expect(
-      fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch),
+      fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch, {
+        retry: { attempts: 1 },
+      }),
     ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
+  });
+
+  it("retries rate limits before succeeding", async () => {
+    let calls = 0;
+    const fetcher = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return jsonResponse(
+          {
+            message: "You are being rate limited.",
+            retry_after: 0,
+            global: false,
+          },
+          429,
+        );
+      }
+      return jsonResponse([{ id: "1", name: "Guild" }], 200);
+    };
+
+    const result = await fetchDiscord<Array<{ id: string; name: string }>>(
+      "/users/@me/guilds",
+      "test",
+      fetcher as typeof fetch,
+      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(calls).toBe(2);
   });
 });

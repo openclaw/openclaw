@@ -4,6 +4,7 @@ import { NonEmptyString } from "./primitives.js";
 
 export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   {
+    id: Type.Optional(NonEmptyString),
     pattern: Type.String(),
     lastUsedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastUsedCommand: Type.Optional(Type.String()),
@@ -91,13 +92,13 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
     command: NonEmptyString,
-    cwd: Type.Optional(Type.String()),
-    host: Type.Optional(Type.String()),
-    security: Type.Optional(Type.String()),
-    ask: Type.Optional(Type.String()),
-    agentId: Type.Optional(Type.String()),
-    resolvedPath: Type.Optional(Type.String()),
-    sessionKey: Type.Optional(Type.String()),
+    cwd: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    security: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    ask: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },

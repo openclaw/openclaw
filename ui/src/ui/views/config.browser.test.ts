@@ -67,53 +67,37 @@ describe("config view", () => {
     expect(saveButton?.disabled).toBe(true);
   });
 
-  it("applies MiniMax preset via onRawChange + onFormPatch", () => {
+  it("switches mode via the sidebar toggle", () => {
     const container = document.createElement("div");
-    const onRawChange = vi.fn();
-    const onFormPatch = vi.fn();
+    const onFormModeChange = vi.fn();
     render(
       renderConfig({
         ...baseProps(),
-        onRawChange,
-        onFormPatch,
+        onFormModeChange,
       }),
       container,
     );
 
     const btn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("MiniMax M2.1"),
+      b.textContent?.trim() === "Raw",
     ) as HTMLButtonElement | undefined;
     expect(btn).toBeTruthy();
     btn?.click();
-
-    expect(onRawChange).toHaveBeenCalled();
-    const raw = String(onRawChange.mock.calls.at(-1)?.[0] ?? "");
-    expect(raw).toContain("https://api.minimax.io/anthropic");
-    expect(raw).toContain("anthropic-messages");
-    expect(raw).toContain("minimax/MiniMax-M2.1");
-    expect(raw).toContain("MINIMAX_API_KEY");
-
-    expect(onFormPatch).toHaveBeenCalledWith(
-      ["agents", "defaults", "model", "primary"],
-      "minimax/MiniMax-M2.1",
-    );
+    expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
-  it("does not clobber existing MiniMax apiKey when applying preset", () => {
+  it("switches sections from the sidebar", () => {
     const container = document.createElement("div");
-    const onRawChange = vi.fn();
+    const onSectionChange = vi.fn();
     render(
       renderConfig({
         ...baseProps(),
-        onRawChange,
-        formValue: {
-          models: {
-            mode: "merge",
-            providers: {
-              minimax: {
-                apiKey: "EXISTING_KEY",
-              },
-            },
+        onSectionChange,
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: {} },
+            agents: { type: "object", properties: {} },
           },
         },
       }),
@@ -121,75 +105,31 @@ describe("config view", () => {
     );
 
     const btn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("MiniMax M2.1"),
+      b.textContent?.trim() === "Gateway",
     ) as HTMLButtonElement | undefined;
     expect(btn).toBeTruthy();
     btn?.click();
-
-    const raw = String(onRawChange.mock.calls.at(-1)?.[0] ?? "");
-    expect(raw).toContain("EXISTING_KEY");
+    expect(onSectionChange).toHaveBeenCalledWith("gateway");
   });
 
-  it("applies Z.AI (GLM 4.7) preset", () => {
+  it("wires search input to onSearchChange", () => {
     const container = document.createElement("div");
-    const onRawChange = vi.fn();
-    const onFormPatch = vi.fn();
+    const onSearchChange = vi.fn();
     render(
       renderConfig({
         ...baseProps(),
-        onRawChange,
-        onFormPatch,
+        onSearchChange,
       }),
       container,
     );
 
-    const btn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("GLM 4.7"),
-    ) as HTMLButtonElement | undefined;
-    expect(btn).toBeTruthy();
-    btn?.click();
-
-    const raw = String(onRawChange.mock.calls.at(-1)?.[0] ?? "");
-    expect(raw).toContain("zai/glm-4.7");
-    expect(raw).toContain("ZAI_API_KEY");
-    expect(onFormPatch).toHaveBeenCalledWith(
-      ["agents", "defaults", "model", "primary"],
-      "zai/glm-4.7",
-    );
-  });
-
-  it("applies Moonshot (Kimi) preset", () => {
-    const container = document.createElement("div");
-    const onRawChange = vi.fn();
-    const onFormPatch = vi.fn();
-    render(
-      renderConfig({
-        ...baseProps(),
-        onRawChange,
-        onFormPatch,
-      }),
-      container,
-    );
-
-    const btn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Kimi"),
-    ) as HTMLButtonElement | undefined;
-    expect(btn).toBeTruthy();
-    btn?.click();
-
-    const raw = String(onRawChange.mock.calls.at(-1)?.[0] ?? "");
-    expect(raw).toContain("https://api.moonshot.ai/v1");
-    expect(raw).toContain("moonshot/kimi-k2-0905-preview");
-    expect(raw).toContain("moonshot/kimi-k2-turbo-preview");
-    expect(raw).toContain("moonshot/kimi-k2-thinking");
-    expect(raw).toContain("moonshot/kimi-k2-thinking-turbo");
-    expect(raw).toContain("Kimi K2 Turbo");
-    expect(raw).toContain("Kimi K2 Thinking");
-    expect(raw).toContain("Kimi K2 Thinking Turbo");
-    expect(raw).toContain("MOONSHOT_API_KEY");
-    expect(onFormPatch).toHaveBeenCalledWith(
-      ["agents", "defaults", "model", "primary"],
-      "moonshot/kimi-k2-0905-preview",
-    );
+    const input = container.querySelector(
+      ".config-search__input",
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    if (!input) return;
+    input.value = "gateway";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 });

@@ -3,6 +3,8 @@ import {
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
+  ToolPolicySchema,
   requireOpenAllowFrom,
 } from "clawdbot/plugin-sdk";
 import { z } from "zod";
@@ -10,6 +12,7 @@ import { z } from "zod";
 export const NextcloudTalkRoomSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.string()).optional(),
@@ -21,6 +24,7 @@ export const NextcloudTalkAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    markdown: MarkdownConfigSchema,
     baseUrl: z.string().optional(),
     botSecret: z.string().optional(),
     botSecretFile: z.string().optional(),

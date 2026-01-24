@@ -7,7 +7,7 @@ read_when:
 
 # Updating
 
-Clawdbot is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart → verify.
+Clawdbot is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart (or use `clawdbot update`, which restarts) → verify.
 
 ## Recommended: re-run the website installer (upgrade in place)
 
@@ -81,7 +81,7 @@ Notes:
 For **source installs** (git checkout), prefer:
 
 ```bash
-clawdbot update --restart
+clawdbot update
 ```
 
 It runs a safe-ish update flow:
@@ -89,6 +89,7 @@ It runs a safe-ish update flow:
 - Switches to the selected channel (tag or branch).
 - Fetches + rebases against the configured upstream (dev channel).
 - Installs deps, builds, builds the Control UI, and runs `clawdbot doctor`.
+- Restarts the gateway by default (use `--no-restart` to skip).
 
 If you installed via **npm/pnpm** (no git metadata), `clawdbot update` will try to update via your package manager. If it can’t detect the install, use “Update (global install)” instead.
 

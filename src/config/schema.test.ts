@@ -84,4 +84,22 @@ describe("config schema", () => {
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps?.accessToken).toBeTruthy();
   });
+
+  it("adds heartbeat target hints with dynamic channels", () => {
+    const res = buildConfigSchema({
+      channels: [
+        {
+          id: "bluebubbles",
+          label: "BlueBubbles",
+          configSchema: { type: "object" },
+        },
+      ],
+    });
+
+    const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
+    const listHint = res.uiHints["agents.list.*.heartbeat.target"];
+    expect(defaultsHint?.help).toContain("bluebubbles");
+    expect(defaultsHint?.help).toContain("last");
+    expect(listHint?.help).toContain("bluebubbles");
+  });
 });

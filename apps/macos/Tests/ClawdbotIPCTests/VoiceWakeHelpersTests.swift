@@ -12,6 +12,18 @@ struct VoiceWakeHelpersTests {
         #expect(cleaned == defaultVoiceWakeTriggers)
     }
 
+    @Test func sanitizeTriggersLimitsWordLength() {
+        let long = String(repeating: "x", count: voiceWakeMaxWordLength + 5)
+        let cleaned = sanitizeVoiceWakeTriggers(["ok", long])
+        #expect(cleaned[1].count == voiceWakeMaxWordLength)
+    }
+
+    @Test func sanitizeTriggersLimitsWordCount() {
+        let words = (1...voiceWakeMaxWords + 3).map { "w\($0)" }
+        let cleaned = sanitizeVoiceWakeTriggers(words)
+        #expect(cleaned.count == voiceWakeMaxWords)
+    }
+
     @Test func normalizeLocaleStripsCollation() {
         #expect(normalizeLocaleIdentifier("en_US@collation=phonebook") == "en_US")
     }

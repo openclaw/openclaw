@@ -4,7 +4,11 @@ import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-age
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../../agents/models-config.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { ModelRow } from "./list.types.js";
@@ -28,6 +32,7 @@ const isLocalBaseUrl = (baseUrl: string) => {
 
 const hasAuthForProvider = (provider: string, cfg: ClawdbotConfig, authStore: AuthProfileStore) => {
   if (listProfilesForProvider(authStore, provider).length > 0) return true;
+  if (provider === "amazon-bedrock" && resolveAwsSdkEnvVarName()) return true;
   if (resolveEnvApiKey(provider)) return true;
   if (getCustomProviderApiKey(cfg, provider)) return true;
   return false;

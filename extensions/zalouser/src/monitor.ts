@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 
-import type { ClawdbotConfig, RuntimeEnv } from "clawdbot/plugin-sdk";
+import type { ClawdbotConfig, MarkdownTableMode, RuntimeEnv } from "clawdbot/plugin-sdk";
 import { mergeAllowlist, summarizeMapping } from "clawdbot/plugin-sdk";
 import { sendMessageZalouser } from "./send.js";
 import type {
@@ -311,12 +311,13 @@ async function processMessage(
     OriginatingTo: `zalouser:${chatId}`,
   });
 
-  void core.channel.session.recordSessionMetaFromInbound({
+  await core.channel.session.recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+    onRecordError: (err) => {
+      runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+    },
   });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -332,6 +333,11 @@ async function processMessage(
           runtime,
           core,
           statusSink,
+          tableMode: core.channel.text.resolveMarkdownTableMode({
+            cfg: config,
+            channel: "zalouser",
+            accountId: account.accountId,
+          }),
         });
       },
       onError: (err, info) => {
@@ -351,8 +357,11 @@ async function deliverZalouserReply(params: {
   runtime: RuntimeEnv;
   core: ZalouserCoreRuntime;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  tableMode?: MarkdownTableMode;
 }): Promise<void> {
   const { payload, profile, chatId, isGroup, runtime, core, statusSink } = params;
+  const tableMode = params.tableMode ?? "code";
+  const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
@@ -363,7 +372,7 @@ async function deliverZalouserReply(params: {
   if (mediaList.length > 0) {
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first ? payload.text : undefined;
+      const caption = first ? text : undefined;
       first = false;
       try {
         logVerbose(core, runtime, `Sending media to ${chatId}`);
@@ -380,8 +389,8 @@ async function deliverZalouserReply(params: {
     return;
   }
 
-  if (payload.text) {
-    const chunks = core.channel.text.chunkMarkdownText(payload.text, ZALOUSER_TEXT_LIMIT);
+  if (text) {
+    const chunks = core.channel.text.chunkMarkdownText(text, ZALOUSER_TEXT_LIMIT);
     logVerbose(core, runtime, `Sending ${chunks.length} text chunk(s) to ${chatId}`);
     for (const chunk of chunks) {
       try {

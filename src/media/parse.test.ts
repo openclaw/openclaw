@@ -34,4 +34,17 @@ describe("splitMediaFromOutput", () => {
     expect(first.audioAsVoice).toBe(true);
     expect(second.audioAsVoice).toBe(true);
   });
+
+  it("keeps MEDIA mentions in prose", () => {
+    const input = "The MEDIA: tag fails to deliver";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("parses MEDIA tags with leading whitespace", () => {
+    const result = splitMediaFromOutput("  MEDIA:/tmp/screenshot.png");
+    expect(result.mediaUrls).toEqual(["/tmp/screenshot.png"]);
+    expect(result.text).toBe("");
+  });
 });

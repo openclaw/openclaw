@@ -49,6 +49,25 @@ const browserConfigMocks = vi.hoisted(() => ({
 }));
 vi.mock("../../browser/config.js", () => browserConfigMocks);
 
+const nodesUtilsMocks = vi.hoisted(() => ({
+  listNodes: vi.fn(async () => []),
+}));
+vi.mock("./nodes-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("./nodes-utils.js")>("./nodes-utils.js");
+  return {
+    ...actual,
+    listNodes: nodesUtilsMocks.listNodes,
+  };
+});
+
+const gatewayMocks = vi.hoisted(() => ({
+  callGatewayTool: vi.fn(async () => ({
+    ok: true,
+    payload: { result: { ok: true, running: true } },
+  })),
+}));
+vi.mock("./gateway.js", () => gatewayMocks);
+
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ browser: {} })),
 }));
@@ -72,6 +91,7 @@ describe("browser tool snapshot maxChars", () => {
   afterEach(() => {
     vi.clearAllMocks();
     configMocks.loadConfig.mockReturnValue({ browser: {} });
+    nodesUtilsMocks.listNodes.mockResolvedValue([]);
   });
 
   it("applies the default ai snapshot limit", async () => {
@@ -174,6 +194,70 @@ describe("browser tool snapshot maxChars", () => {
         profile: "chrome",
       }),
     );
+  });
+
+  it("routes to node proxy when target=node", async () => {
+    nodesUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Browser Node",
+        connected: true,
+        caps: ["browser"],
+        commands: ["browser.proxy"],
+      },
+    ]);
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "status", target: "node" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 20000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps sandbox control url when node proxy is available", async () => {
+    nodesUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Browser Node",
+        connected: true,
+        caps: ["browser"],
+        commands: ["browser.proxy"],
+      },
+    ]);
+    const tool = createBrowserTool({ defaultControlUrl: "http://127.0.0.1:9999" });
+    await tool.execute?.(null, { action: "status" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      "http://127.0.0.1:9999",
+      expect.objectContaining({ profile: undefined }),
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps chrome profile on host when node proxy is available", async () => {
+    nodesUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Browser Node",
+        connected: true,
+        caps: ["browser"],
+        commands: ["browser.proxy"],
+      },
+    ]);
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "status", profile: "chrome" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      "http://127.0.0.1:18791",
+      expect.objectContaining({ profile: "chrome" }),
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 });
 

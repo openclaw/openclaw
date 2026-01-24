@@ -10,6 +10,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 
 export type SkillsListOptions = {
@@ -176,7 +177,7 @@ export function formatSkillInfo(
   // Details
   lines.push(theme.heading("Details:"));
   lines.push(`${theme.muted("  Source:")} ${skill.source}`);
-  lines.push(`${theme.muted("  Path:")} ${skill.filePath}`);
+  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
   if (skill.homepage) {
     lines.push(`${theme.muted("  Homepage:")} ${skill.homepage}`);
   }

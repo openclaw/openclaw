@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
@@ -9,7 +10,7 @@ import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
  * - <invoke name="...">...</invoke> blocks
  * - </minimax:tool_call> closing tags
  */
-function stripMinimaxToolCallXml(text: string): string {
+export function stripMinimaxToolCallXml(text: string): string {
   if (!text) return text;
   if (!/minimax:tool_call/i.test(text)) return text;
 
@@ -28,7 +29,7 @@ function stripMinimaxToolCallXml(text: string): string {
  * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
  * not be shown to users.
  */
-function stripDowngradedToolCallText(text: string): string {
+export function stripDowngradedToolCallText(text: string): string {
   if (!text) return text;
   if (!/\[Tool (?:Call|Result)/i.test(text)) return text;
 
@@ -165,37 +166,8 @@ function stripDowngradedToolCallText(text: string): string {
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
  */
-function stripThinkingTagsFromText(text: string): string {
-  if (!text) return text;
-  // Quick check to avoid regex overhead when no tags present.
-  if (!/(?:think(?:ing)?|thought|antthinking)/i.test(text)) return text;
-
-  const tagRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^>]*>/gi;
-  let result = "";
-  let lastIndex = 0;
-  let inThinking = false;
-
-  for (const match of text.matchAll(tagRe)) {
-    const idx = match.index ?? 0;
-    const isClose = match[1] === "/";
-
-    if (!inThinking && !isClose) {
-      // Opening tag - save text before it.
-      result += text.slice(lastIndex, idx);
-      inThinking = true;
-    } else if (inThinking && isClose) {
-      // Closing tag - skip content inside.
-      inThinking = false;
-    }
-    lastIndex = idx + match[0].length;
-  }
-
-  // Append remaining text if we're not inside thinking.
-  if (!inThinking) {
-    result += text.slice(lastIndex);
-  }
-
-  return result.trim();
+export function stripThinkingTagsFromText(text: string): string {
+  return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {

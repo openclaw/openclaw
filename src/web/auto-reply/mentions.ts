@@ -43,13 +43,16 @@ export function isBotMentionedFromTargets(
 
   const isSelfChat = isSelfChatMode(targets.selfE164, mentionCfg.allowFrom);
 
-  if (msg.mentionedJids?.length && !isSelfChat) {
+  const hasMentions = (msg.mentionedJids?.length ?? 0) > 0;
+  if (hasMentions && !isSelfChat) {
     if (targets.selfE164 && targets.normalizedMentions.includes(targets.selfE164)) return true;
-    if (targets.selfJid && targets.selfE164) {
+    if (targets.selfJid) {
       // Some mentions use the bare JID; match on E.164 to be safe.
       if (targets.normalizedMentions.includes(targets.selfJid)) return true;
     }
-  } else if (msg.mentionedJids?.length && isSelfChat) {
+    // If the message explicitly mentions someone else, do not fall back to regex matches.
+    return false;
+  } else if (hasMentions && isSelfChat) {
     // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in group chats triggers the bot.
   }
   const bodyClean = clean(msg.body);

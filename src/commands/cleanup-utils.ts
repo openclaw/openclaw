@@ -4,7 +4,7 @@ import path from "node:path";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { resolveHomeDir, resolveUserPath, shortenHomeInString } from "../utils.js";
 
 export type RemovalResult = {
   ok: boolean;
@@ -53,20 +53,21 @@ export async function removePath(
   if (!target?.trim()) return { ok: false, skipped: true };
   const resolved = path.resolve(target);
   const label = opts?.label ?? resolved;
+  const displayLabel = shortenHomeInString(label);
   if (isUnsafeRemovalTarget(resolved)) {
-    runtime.error(`Refusing to remove unsafe path: ${label}`);
+    runtime.error(`Refusing to remove unsafe path: ${displayLabel}`);
     return { ok: false };
   }
   if (opts?.dryRun) {
-    runtime.log(`[dry-run] remove ${label}`);
+    runtime.log(`[dry-run] remove ${displayLabel}`);
     return { ok: true, skipped: true };
   }
   try {
     await fs.rm(resolved, { recursive: true, force: true });
-    runtime.log(`Removed ${label}`);
+    runtime.log(`Removed ${displayLabel}`);
     return { ok: true };
   } catch (err) {
-    runtime.error(`Failed to remove ${label}: ${String(err)}`);
+    runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
     return { ok: false };
   }
 }

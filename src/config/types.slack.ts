@@ -2,9 +2,12 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  MarkdownConfig,
   ReplyToMode,
 } from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
@@ -17,6 +20,8 @@ export type SlackDmConfig = {
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
   groupChannels?: Array<string | number>;
+  /** @deprecated Prefer channels.slack.replyToModeByChatType.direct. */
+  replyToMode?: ReplyToMode;
 };
 
 export type SlackChannelConfig = {
@@ -26,6 +31,8 @@ export type SlackChannelConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** Optional tool policy overrides for this channel. */
+  tools?: GroupToolPolicyConfig;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /** Allowlist of users that can invoke the bot in this channel. */
@@ -78,6 +85,8 @@ export type SlackAccountConfig = {
   webhookPath?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Markdown formatting overrides (tables). */
+  markdown?: MarkdownConfig;
   /** Override native command registration for Slack (bool or "auto"). */
   commands?: ProviderCommandsConfig;
   /** Allow channel-initiated config writes (default: true). */
@@ -117,12 +126,19 @@ export type SlackAccountConfig = {
   reactionAllowlist?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /**
+   * Optional per-chat-type reply threading overrides.
+   * Example: { direct: "all", group: "first", channel: "off" }.
+   */
+  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   dm?: SlackDmConfig;
   channels?: Record<string, SlackChannelConfig>;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type SlackConfig = {

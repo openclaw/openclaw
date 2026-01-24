@@ -115,7 +115,11 @@ if (!shouldBuild()) {
   runNode();
 } else {
   logRunner("Building TypeScript (dist is stale).");
-  const build = spawn("pnpm", ["exec", compiler, ...projectArgs], {
+  const pnpmArgs = ["exec", compiler, ...projectArgs];
+  const buildCmd = process.platform === "win32" ? "cmd.exe" : "pnpm";
+  const buildArgs =
+    process.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...pnpmArgs] : pnpmArgs;
+  const build = spawn(buildCmd, buildArgs, {
     cwd,
     env,
     stdio: "inherit",

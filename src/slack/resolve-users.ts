@@ -1,4 +1,6 @@
-import { WebClient } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
+
+import { createSlackWebClient } from "./client.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -101,7 +103,7 @@ export async function resolveSlackUserAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
-  const client = params.client ?? new WebClient(params.token);
+  const client = params.client ?? createSlackWebClient(params.token);
   const users = await listSlackUsers(client);
   const results: SlackUserResolution[] = [];
 

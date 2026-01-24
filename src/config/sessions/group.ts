@@ -88,7 +88,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
       ? parts.slice(2).join(":")
       : parts.slice(1).join(":")
     : from;
-  const finalId = id.trim();
+  const finalId = id.trim().toLowerCase();
   if (!finalId) return null;
 
   return {

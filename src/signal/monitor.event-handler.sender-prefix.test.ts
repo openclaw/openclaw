@@ -12,21 +12,21 @@ describe("signal event handler sender prefix", () => {
   beforeEach(() => {
     dispatchMock.mockReset().mockImplementation(async ({ dispatcher, ctx }) => {
       dispatcher.sendFinalReply({ text: "ok" });
-      return { queuedFinal: true, counts: { final: 1 }, ctx };
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 }, ctx };
     });
     readAllowFromMock.mockReset().mockResolvedValue([]);
   });
 
   it("prefixes group bodies with sender label", async () => {
     let capturedBody = "";
-    const dispatchModule = await import("../auto-reply/reply/dispatch-from-config.js");
-    vi.spyOn(dispatchModule, "dispatchReplyFromConfig").mockImplementation(
+    const dispatchModule = await import("../auto-reply/dispatch.js");
+    vi.spyOn(dispatchModule, "dispatchInboundMessage").mockImplementation(
       async (...args: unknown[]) => dispatchMock(...args),
     );
     dispatchMock.mockImplementationOnce(async ({ dispatcher, ctx }) => {
       capturedBody = ctx.Body ?? "";
       dispatcher.sendFinalReply({ text: "ok" });
-      return { queuedFinal: true, counts: { final: 1 } };
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     });
 
     const { createSignalEventHandler } = await import("./monitor/event-handler.js");

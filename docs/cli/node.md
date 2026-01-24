@@ -23,6 +23,24 @@ Common use cases:
 Execution is still guarded by **exec approvals** and per‑agent allowlists on the
 node host, so you can keep command access scoped and explicit.
 
+## Browser proxy (zero-config)
+
+Node hosts automatically advertise a browser proxy if `browser.enabled` is not
+disabled on the node. This lets the agent use browser automation on that node
+without extra configuration.
+
+Disable it on the node if needed:
+
+```json5
+{
+  nodeHost: {
+    browserProxy: {
+      enabled: false
+    }
+  }
+}
+```
+
 ## Run (foreground)
 
 ```bash

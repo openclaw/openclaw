@@ -201,13 +201,12 @@ describe("deliverOutboundPayloads", () => {
   it("normalizes payloads and drops empty entries", () => {
     const normalized = normalizeOutboundPayloads([
       { text: "hi" },
-      { mediaUrl: "https://x.test/a.jpg" },
+      { text: "MEDIA:https://x.test/a.jpg" },
       { text: " ", mediaUrls: [] },
     ]);
     expect(normalized).toEqual([
       { text: "hi", mediaUrls: [] },
       { text: "", mediaUrls: ["https://x.test/a.jpg"] },
-      { text: " ", mediaUrls: [] },
     ]);
   });
 

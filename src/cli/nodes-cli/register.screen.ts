@@ -10,6 +10,7 @@ import { parseDurationMs } from "../parse-duration.js";
 import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
+import { shortenHomePath } from "../../utils.js";
 
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
@@ -77,7 +78,7 @@ export function registerNodesScreenCommands(nodes: Command) {
             );
             return;
           }
-          defaultRuntime.log(`MEDIA:${written.path}`);
+          defaultRuntime.log(`MEDIA:${shortenHomePath(written.path)}`);
         });
       }),
     { timeoutMs: 180_000 },

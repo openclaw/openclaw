@@ -357,6 +357,20 @@ describe("handleSlackAction", () => {
     expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("passes threadId through to readSlackMessages", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
+    readSlackMessages.mockClear();
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    await handleSlackAction(
+      { action: "readMessages", channelId: "C1", threadId: "12345.6789" },
+      cfg,
+    );
+
+    const [, opts] = readSlackMessages.mock.calls[0] ?? [];
+    expect(opts?.threadId).toBe("12345.6789");
+  });
+
   it("adds normalized timestamps to pin payloads", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
     listSlackPins.mockResolvedValueOnce([

@@ -1,3 +1,4 @@
+import { MarkdownConfigSchema, ToolPolicySchema } from "clawdbot/plugin-sdk";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
@@ -20,11 +21,13 @@ const bluebubblesActionSchema = z
 
 const bluebubblesGroupConfigSchema = z.object({
   requireMention: z.boolean().optional(),
+  tools: ToolPolicySchema,
 });
 
 const bluebubblesAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  markdown: MarkdownConfigSchema,
   serverUrl: z.string().optional(),
   password: z.string().optional(),
   webhookPath: z.string().optional(),

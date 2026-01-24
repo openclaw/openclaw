@@ -4,9 +4,11 @@ import JSON5 from "json5";
 
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { type ClawdbotConfig, CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
+import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 
 async function readConfigFileRaw(): Promise<{
   exists: boolean;
@@ -52,22 +54,22 @@ export async function setupCommand(
 
   if (!existingRaw.exists || defaults.workspace !== workspace) {
     await writeConfigFile(next);
-    runtime.log(
-      !existingRaw.exists
-        ? `Wrote ${CONFIG_PATH_CLAWDBOT}`
-        : `Updated ${CONFIG_PATH_CLAWDBOT} (set agents.defaults.workspace)`,
-    );
+    if (!existingRaw.exists) {
+      runtime.log(`Wrote ${formatConfigPath()}`);
+    } else {
+      logConfigUpdated(runtime, { suffix: "(set agents.defaults.workspace)" });
+    }
   } else {
-    runtime.log(`Config OK: ${CONFIG_PATH_CLAWDBOT}`);
+    runtime.log(`Config OK: ${formatConfigPath()}`);
   }
 
   const ws = await ensureAgentWorkspace({
     dir: workspace,
     ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
   });
-  runtime.log(`Workspace OK: ${ws.dir}`);
+  runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
   const sessionsDir = resolveSessionTranscriptsDir();
   await fs.mkdir(sessionsDir, { recursive: true });
-  runtime.log(`Sessions OK: ${sessionsDir}`);
+  runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }

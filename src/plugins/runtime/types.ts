@@ -19,6 +19,11 @@ type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
+type MatchesMentionWithExplicit =
+  typeof import("../../auto-reply/reply/mentions.js").matchesMentionWithExplicit;
+type ShouldAckReaction = typeof import("../../channels/ack-reactions.js").shouldAckReaction;
+type RemoveAckReactionAfterReply =
+  typeof import("../../channels/ack-reactions.js").removeAckReactionAfterReply;
 type ResolveChannelGroupPolicy =
   typeof import("../../config/group-policy.js").resolveChannelGroupPolicy;
 type ResolveChannelGroupRequireMention =
@@ -32,6 +37,9 @@ type ResolveCommandAuthorizedFromAuthorizers =
 type ResolveTextChunkLimit = typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
 type ChunkMarkdownText = typeof import("../../auto-reply/chunk.js").chunkMarkdownText;
 type ChunkText = typeof import("../../auto-reply/chunk.js").chunkText;
+type ResolveMarkdownTableMode =
+  typeof import("../../config/markdown-tables.js").resolveMarkdownTableMode;
+type ConvertMarkdownTables = typeof import("../../markdown/tables.js").convertMarkdownTables;
 type HasControlCommand = typeof import("../../auto-reply/command-detection.js").hasControlCommand;
 type IsControlCommandMessage =
   typeof import("../../auto-reply/command-detection.js").isControlCommandMessage;
@@ -48,6 +56,7 @@ type FormatInboundEnvelope = typeof import("../../auto-reply/envelope.js").forma
 type ResolveEnvelopeFormatOptions =
   typeof import("../../auto-reply/envelope.js").resolveEnvelopeFormatOptions;
 type ResolveStateDir = typeof import("../../config/paths.js").resolveStateDir;
+type RecordInboundSession = typeof import("../../channels/session.js").recordInboundSession;
 type RecordSessionMetaFromInbound =
   typeof import("../../config/sessions.js").recordSessionMetaFromInbound;
 type ResolveStorePath = typeof import("../../config/sessions.js").resolveStorePath;
@@ -168,6 +177,8 @@ export type PluginRuntime = {
       chunkText: ChunkText;
       resolveTextChunkLimit: ResolveTextChunkLimit;
       hasControlCommand: HasControlCommand;
+      resolveMarkdownTableMode: ResolveMarkdownTableMode;
+      convertMarkdownTables: ConvertMarkdownTables;
     };
     reply: {
       dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
@@ -200,11 +211,17 @@ export type PluginRuntime = {
       resolveStorePath: ResolveStorePath;
       readSessionUpdatedAt: ReadSessionUpdatedAt;
       recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
+      recordInboundSession: RecordInboundSession;
       updateLastRoute: UpdateLastRoute;
     };
     mentions: {
       buildMentionRegexes: BuildMentionRegexes;
       matchesMentionPatterns: MatchesMentionPatterns;
+      matchesMentionWithExplicit: MatchesMentionWithExplicit;
+    };
+    reactions: {
+      shouldAckReaction: ShouldAckReaction;
+      removeAckReactionAfterReply: RemoveAckReactionAfterReply;
     };
     groups: {
       resolveGroupPolicy: ResolveChannelGroupPolicy;

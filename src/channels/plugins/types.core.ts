@@ -42,6 +42,12 @@ export type ChannelSetupInput = {
   password?: string;
   deviceName?: string;
   initialSyncLimit?: number;
+  ship?: string;
+  url?: string;
+  code?: string;
+  groupChannels?: string[];
+  dmAllowlist?: string[];
+  autoDiscoverChannels?: boolean;
 };
 
 export type ChannelStatusIssue = {
@@ -206,6 +212,7 @@ export type ChannelThreadingAdapter = {
   resolveReplyToMode?: (params: {
     cfg: ClawdbotConfig;
     accountId?: string | null;
+    chatType?: string | null;
   }) => "off" | "first" | "all";
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {

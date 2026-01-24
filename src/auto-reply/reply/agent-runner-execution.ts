@@ -14,6 +14,7 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
@@ -82,7 +83,8 @@ export async function runAgentTurnWithFallback(params: {
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
-  const runId = crypto.randomUUID();
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  params.opts?.onAgentRunStart?.(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
@@ -174,6 +176,7 @@ export async function runAgentTurnWithFallback(params: {
               extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
               ownerNumbers: params.followupRun.run.ownerNumbers,
               cliSessionId,
+              images: params.opts?.images,
             })
               .then((result) => {
                 emitAgentEvent({
@@ -212,6 +215,10 @@ export async function runAgentTurnWithFallback(params: {
             agentAccountId: params.sessionCtx.AccountId,
             messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
             messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+            groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+            groupChannel:
+              params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+            groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
             // Provider threading context for tool auto-injection
             ...buildThreadingToolContext({
               sessionCtx: params.sessionCtx,
@@ -248,6 +255,8 @@ export async function runAgentTurnWithFallback(params: {
             bashElevated: params.followupRun.run.bashElevated,
             timeoutMs: params.followupRun.run.timeoutMs,
             runId,
+            images: params.opts?.images,
+            abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
             onPartialReply: allowPartialStream
@@ -503,14 +512,17 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      const trimmedMessage = message.replace(/\.\s*$/, "");
+      const fallbackText = isContextOverflow
+        ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+        : isRoleOrderingError
+          ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: clawdbot logs --follow`;
+
       return {
         kind: "final",
         payload: {
-          text: isContextOverflow
-            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-            : isRoleOrderingError
-              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-              : `⚠️ Agent failed before reply: ${message}. Check gateway logs for details.`,
+          text: fallbackText,
         },
       };
     }

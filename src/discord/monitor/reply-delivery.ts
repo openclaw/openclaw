@@ -1,6 +1,8 @@
 import type { RequestClient } from "@buape/carbon";
 
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { MarkdownTableMode } from "../../config/types.base.js";
+import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordText } from "../chunk.js";
 import { sendMessageDiscord } from "../send.js";
@@ -15,11 +17,14 @@ export async function deliverDiscordReply(params: {
   textLimit: number;
   maxLinesPerMessage?: number;
   replyToId?: string;
+  tableMode?: MarkdownTableMode;
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
+    const rawText = payload.text ?? "";
+    const tableMode = params.tableMode ?? "code";
+    const text = convertMarkdownTables(rawText, tableMode);
     if (!text && mediaList.length === 0) continue;
     const replyTo = params.replyToId?.trim() || undefined;
 

@@ -74,5 +74,5 @@ See [Configuration: Env var substitution](/gateway/configuration#env-var-substit
 ## Related
 
 - [Gateway configuration](/gateway/configuration)
-- [FAQ: env vars and .env loading](/start/faq#env-vars-and-env-loading)
+- [FAQ: env vars and .env loading](/help/faq#env-vars-and-env-loading)
 - [Models overview](/concepts/models)

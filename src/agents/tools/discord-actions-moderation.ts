@@ -8,6 +8,7 @@ export async function handleDiscordModerationAction(
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
 ): Promise<AgentToolResult<unknown>> {
+  const accountId = readStringParam(params, "accountId");
   switch (action) {
     case "timeout": {
       if (!isActionEnabled("moderation", false)) {
@@ -25,13 +26,24 @@ export async function handleDiscordModerationAction(
           : undefined;
       const until = readStringParam(params, "until");
       const reason = readStringParam(params, "reason");
-      const member = await timeoutMemberDiscord({
-        guildId,
-        userId,
-        durationMinutes,
-        until,
-        reason,
-      });
+      const member = accountId
+        ? await timeoutMemberDiscord(
+            {
+              guildId,
+              userId,
+              durationMinutes,
+              until,
+              reason,
+            },
+            { accountId },
+          )
+        : await timeoutMemberDiscord({
+            guildId,
+            userId,
+            durationMinutes,
+            until,
+            reason,
+          });
       return jsonResult({ ok: true, member });
     }
     case "kick": {
@@ -45,7 +57,11 @@ export async function handleDiscordModerationAction(
         required: true,
       });
       const reason = readStringParam(params, "reason");
-      await kickMemberDiscord({ guildId, userId, reason });
+      if (accountId) {
+        await kickMemberDiscord({ guildId, userId, reason }, { accountId });
+      } else {
+        await kickMemberDiscord({ guildId, userId, reason });
+      }
       return jsonResult({ ok: true });
     }
     case "ban": {
@@ -63,12 +79,24 @@ export async function handleDiscordModerationAction(
         typeof params.deleteMessageDays === "number" && Number.isFinite(params.deleteMessageDays)
           ? params.deleteMessageDays
           : undefined;
-      await banMemberDiscord({
-        guildId,
-        userId,
-        reason,
-        deleteMessageDays,
-      });
+      if (accountId) {
+        await banMemberDiscord(
+          {
+            guildId,
+            userId,
+            reason,
+            deleteMessageDays,
+          },
+          { accountId },
+        );
+      } else {
+        await banMemberDiscord({
+          guildId,
+          userId,
+          reason,
+          deleteMessageDays,
+        });
+      }
       return jsonResult({ ok: true });
     }
     default:

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import type { ClawdbotConfig, MarkdownTableMode } from "clawdbot/plugin-sdk";
 
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
@@ -570,12 +570,19 @@ async function processMessageWithPipeline(params: {
     OriginatingTo: `zalo:${chatId}`,
   });
 
-  void core.channel.session.recordSessionMetaFromInbound({
+  await core.channel.session.recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+    onRecordError: (err) => {
+      runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+    },
+  });
+
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg: config,
+    channel: "zalo",
+    accountId: account.accountId,
   });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -591,6 +598,7 @@ async function processMessageWithPipeline(params: {
           core,
           statusSink,
           fetcher,
+          tableMode,
         });
       },
       onError: (err, info) => {
@@ -608,8 +616,11 @@ async function deliverZaloReply(params: {
   core: ZaloCoreRuntime;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   fetcher?: ZaloFetch;
+  tableMode?: MarkdownTableMode;
 }): Promise<void> {
   const { payload, token, chatId, runtime, core, statusSink, fetcher } = params;
+  const tableMode = params.tableMode ?? "code";
+  const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
@@ -620,7 +631,7 @@ async function deliverZaloReply(params: {
   if (mediaList.length > 0) {
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first ? payload.text : undefined;
+      const caption = first ? text : undefined;
       first = false;
       try {
         await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
@@ -632,8 +643,8 @@ async function deliverZaloReply(params: {
     return;
   }
 
-  if (payload.text) {
-    const chunks = core.channel.text.chunkMarkdownText(payload.text, ZALO_TEXT_LIMIT);
+  if (text) {
+    const chunks = core.channel.text.chunkMarkdownText(text, ZALO_TEXT_LIMIT);
     for (const chunk of chunks) {
       try {
         await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);

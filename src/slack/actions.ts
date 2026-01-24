@@ -1,8 +1,9 @@
-import { WebClient } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
 
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { createSlackWebClient } from "./client.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -56,7 +57,7 @@ function normalizeEmoji(raw: string) {
 
 async function getClient(opts: SlackActionClientOpts = {}) {
   const token = resolveToken(opts.token, opts.accountId);
-  return opts.client ?? new WebClient(token);
+  return opts.client ?? createSlackWebClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -186,9 +187,29 @@ export async function readSlackMessages(
     limit?: number;
     before?: string;
     after?: string;
+    threadId?: string;
   } = {},
 ): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
   const client = await getClient(opts);
+
+  // Use conversations.replies for thread messages, conversations.history for channel messages.
+  if (opts.threadId) {
+    const result = await client.conversations.replies({
+      channel: channelId,
+      ts: opts.threadId,
+      limit: opts.limit,
+      latest: opts.before,
+      oldest: opts.after,
+    });
+    return {
+      // conversations.replies includes the parent message; drop it for replies-only reads.
+      messages: (result.messages ?? []).filter(
+        (message) => (message as SlackMessageSummary)?.ts !== opts.threadId,
+      ) as SlackMessageSummary[],
+      hasMore: Boolean(result.has_more),
+    };
+  }
+
   const result = await client.conversations.history({
     channel: channelId,
     limit: opts.limit,

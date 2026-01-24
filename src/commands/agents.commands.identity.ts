@@ -4,12 +4,13 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
-import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
+import { writeConfigFile } from "../config/config.js";
+import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { requireValidConfig } from "./agents.command-shared.js";
 import {
   type AgentIdentity,
@@ -105,14 +106,14 @@ export async function agentsSetIdentityCommand(
     const matches = resolveAgentIdByWorkspace(cfg, workspaceDir);
     if (matches.length === 0) {
       runtime.error(
-        `No agent workspace matches ${workspaceDir}. Pass --agent to target a specific agent.`,
+        `No agent workspace matches ${shortenHomePath(workspaceDir)}. Pass --agent to target a specific agent.`,
       );
       runtime.exit(1);
       return;
     }
     if (matches.length > 1) {
       runtime.error(
-        `Multiple agents match ${workspaceDir}: ${matches.join(", ")}. Pass --agent to choose one.`,
+        `Multiple agents match ${shortenHomePath(workspaceDir)}: ${matches.join(", ")}. Pass --agent to choose one.`,
       );
       runtime.exit(1);
       return;
@@ -131,7 +132,7 @@ export async function agentsSetIdentityCommand(
       const targetPath =
         identityFilePath ??
         (workspaceDir ? path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME) : "IDENTITY.md");
-      runtime.error(`No identity data found in ${targetPath}.`);
+      runtime.error(`No identity data found in ${shortenHomePath(targetPath)}.`);
       runtime.exit(1);
       return;
     }
@@ -211,11 +212,11 @@ export async function agentsSetIdentityCommand(
     return;
   }
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  logConfigUpdated(runtime);
   runtime.log(`Agent: ${agentId}`);
   if (nextIdentity.name) runtime.log(`Name: ${nextIdentity.name}`);
   if (nextIdentity.theme) runtime.log(`Theme: ${nextIdentity.theme}`);
   if (nextIdentity.emoji) runtime.log(`Emoji: ${nextIdentity.emoji}`);
   if (nextIdentity.avatar) runtime.log(`Avatar: ${nextIdentity.avatar}`);
-  if (workspaceDir) runtime.log(`Workspace: ${workspaceDir}`);
+  if (workspaceDir) runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
 }

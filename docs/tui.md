@@ -88,6 +88,8 @@ Session lifecycle:
 - `/settings`
 - `/exit`
 
+Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
+
 ## Local shell commands
 - Prefix a line with `!` to run a local shell command on the TUI host.
 - The TUI prompts once per session to allow local execution; declining keeps `!` disabled for the session.

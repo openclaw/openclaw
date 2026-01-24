@@ -4,6 +4,8 @@
   "type": "module",
   "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
   "clawdbot": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

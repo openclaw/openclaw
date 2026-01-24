@@ -18,6 +18,7 @@ export type ExecApprovalsDefaults = {
 };
 
 export type ExecAllowlistEntry = {
+  id?: string;
   pattern: string;
   lastUsedAt?: number;
   lastUsedCommand?: string;
@@ -120,6 +121,19 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function ensureAllowlistIds(
+  allowlist: ExecAllowlistEntry[] | undefined,
+): ExecAllowlistEntry[] | undefined {
+  if (!Array.isArray(allowlist) || allowlist.length === 0) return allowlist;
+  let changed = false;
+  const next = allowlist.map((entry) => {
+    if (entry.id) return entry;
+    changed = true;
+    return { ...entry, id: crypto.randomUUID() };
+  });
+  return changed ? next : allowlist;
+}
+
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
@@ -129,6 +143,12 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     const main = agents[DEFAULT_AGENT_ID];
     agents[DEFAULT_AGENT_ID] = main ? mergeLegacyAgent(main, legacyDefault) : legacyDefault;
     delete agents.default;
+  }
+  for (const [key, agent] of Object.entries(agents)) {
+    const allowlist = ensureAllowlistIds(agent.allowlist);
+    if (allowlist !== agent.allowlist) {
+      agents[key] = { ...agent, allowlist };
+    }
   }
   const normalized: ExecApprovalsFile = {
     version: 1,
@@ -1145,6 +1165,7 @@ export function recordAllowlistUse(
     item.pattern === entry.pattern
       ? {
           ...item,
+          id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
@@ -1168,7 +1189,7 @@ export function addAllowlistEntry(
   const trimmed = pattern.trim();
   if (!trimmed) return;
   if (allowlist.some((entry) => entry.pattern === trimmed)) return;
-  allowlist.push({ pattern: trimmed, lastUsedAt: Date.now() });
+  allowlist.push({ id: crypto.randomUUID(), pattern: trimmed, lastUsedAt: Date.now() });
   agents[target] = { ...existing, allowlist };
   approvals.agents = agents;
   saveExecApprovals(approvals);

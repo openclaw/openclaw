@@ -68,10 +68,10 @@ function scopeCandidatesForUrl(url: string): string[] {
       host.endsWith("1drv.ms") ||
       host.includes("sharepoint");
     return looksLikeGraph
-      ? ["https://graph.microsoft.com/.default", "https://api.botframework.com/.default"]
-      : ["https://api.botframework.com/.default", "https://graph.microsoft.com/.default"];
+      ? ["https://graph.microsoft.com", "https://api.botframework.com"]
+      : ["https://api.botframework.com", "https://graph.microsoft.com"];
   } catch {
-    return ["https://api.botframework.com/.default", "https://graph.microsoft.com/.default"];
+    return ["https://api.botframework.com", "https://graph.microsoft.com"];
   }
 }
 

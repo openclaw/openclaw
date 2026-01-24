@@ -15,7 +15,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
 
 export type PluginsListOptions = {
   json?: boolean;
@@ -55,7 +55,7 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
 
   const parts = [
     `${name}${idSuffix} ${status}`,
-    `  source: ${theme.muted(plugin.source)}`,
+    `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
     `  origin: ${plugin.origin}`,
   ];
   if (plugin.version) parts.push(`  version: ${plugin.version}`);
@@ -135,19 +135,22 @@ export function registerPluginsCli(program: Command) {
 
       if (!opts.verbose) {
         const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-        const rows = list.map((plugin) => ({
-          Name: plugin.name || plugin.id,
-          ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
-          Status:
-            plugin.status === "loaded"
-              ? theme.success("loaded")
-              : plugin.status === "disabled"
-                ? theme.warn("disabled")
-                : theme.error("error"),
-          Source: plugin.source,
-          Version: plugin.version ?? "",
-          Description: plugin.description ?? "",
-        }));
+        const rows = list.map((plugin) => {
+          const desc = plugin.description ? theme.muted(plugin.description) : "";
+          const sourceLine = desc ? `${plugin.source}\n${desc}` : plugin.source;
+          return {
+            Name: plugin.name || plugin.id,
+            ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
+            Status:
+              plugin.status === "loaded"
+                ? theme.success("loaded")
+                : plugin.status === "disabled"
+                  ? theme.warn("disabled")
+                  : theme.error("error"),
+            Source: sourceLine,
+            Version: plugin.version ?? "",
+          };
+        });
         defaultRuntime.log(
           renderTable({
             width: tableWidth,
@@ -155,9 +158,8 @@ export function registerPluginsCli(program: Command) {
               { key: "Name", header: "Name", minWidth: 14, flex: true },
               { key: "ID", header: "ID", minWidth: 10, flex: true },
               { key: "Status", header: "Status", minWidth: 10 },
-              { key: "Source", header: "Source", minWidth: 10 },
+              { key: "Source", header: "Source", minWidth: 26, flex: true },
               { key: "Version", header: "Version", minWidth: 8 },
-              { key: "Description", header: "Description", minWidth: 18, flex: true },
             ],
             rows,
           }).trimEnd(),
@@ -201,7 +203,7 @@ export function registerPluginsCli(program: Command) {
       if (plugin.description) lines.push(plugin.description);
       lines.push("");
       lines.push(`${theme.muted("Status:")} ${plugin.status}`);
-      lines.push(`${theme.muted("Source:")} ${plugin.source}`);
+      lines.push(`${theme.muted("Source:")} ${shortenHomeInString(plugin.source)}`);
       lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
       if (plugin.version) lines.push(`${theme.muted("Version:")} ${plugin.version}`);
       if (plugin.toolNames.length > 0) {
@@ -227,9 +229,10 @@ export function registerPluginsCli(program: Command) {
         lines.push("");
         lines.push(`${theme.muted("Install:")} ${install.source}`);
         if (install.spec) lines.push(`${theme.muted("Spec:")} ${install.spec}`);
-        if (install.sourcePath) lines.push(`${theme.muted("Source path:")} ${install.sourcePath}`);
+        if (install.sourcePath)
+          lines.push(`${theme.muted("Source path:")} ${shortenHomePath(install.sourcePath)}`);
         if (install.installPath)
-          lines.push(`${theme.muted("Install path:")} ${install.installPath}`);
+          lines.push(`${theme.muted("Install path:")} ${shortenHomePath(install.installPath)}`);
         if (install.version) lines.push(`${theme.muted("Recorded version:")} ${install.version}`);
         if (install.installedAt)
           lines.push(`${theme.muted("Installed at:")} ${install.installedAt}`);
@@ -333,7 +336,7 @@ export function registerPluginsCli(program: Command) {
           next = slotResult.config;
           await writeConfigFile(next);
           logSlotWarnings(slotResult.warnings);
-          defaultRuntime.log(`Linked plugin path: ${resolved}`);
+          defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
           defaultRuntime.log(`Restart the gateway to load plugins.`);
           return;
         }

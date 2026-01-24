@@ -18,6 +18,8 @@ export type MatrixRoomConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** Optional tool policy overrides for this room. */
+  tools?: { allow?: string[]; deny?: string[] };
   /** If true, reply without mention requirements. */
   autoReply?: boolean;
   /** Optional allowlist for room senders (user IDs or localparts). */

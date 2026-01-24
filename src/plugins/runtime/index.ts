@@ -17,7 +17,11 @@ import {
   resolveEnvelopeFormatOptions,
 } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
-import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+  matchesMentionWithExplicit,
+} from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -25,7 +29,9 @@ import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../a
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
+import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { recordInboundSession } from "../../channels/session.js";
 import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
@@ -34,6 +40,7 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
+import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import {
@@ -58,6 +65,7 @@ import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
 import { isVoiceCompatibleAudio } from "../../media/audio.js";
@@ -156,6 +164,8 @@ export function createPluginRuntime(): PluginRuntime {
         chunkText,
         resolveTextChunkLimit,
         hasControlCommand,
+        resolveMarkdownTableMode,
+        convertMarkdownTables,
       },
       reply: {
         dispatchReplyWithBufferedBlockDispatcher,
@@ -188,11 +198,17 @@ export function createPluginRuntime(): PluginRuntime {
         resolveStorePath,
         readSessionUpdatedAt,
         recordSessionMetaFromInbound,
+        recordInboundSession,
         updateLastRoute,
       },
       mentions: {
         buildMentionRegexes,
         matchesMentionPatterns,
+        matchesMentionWithExplicit,
+      },
+      reactions: {
+        shouldAckReaction,
+        removeAckReactionAfterReply,
       },
       groups: {
         resolveGroupPolicy: resolveChannelGroupPolicy,

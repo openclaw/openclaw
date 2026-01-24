@@ -23,7 +23,7 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
  */
 export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
   const explicit = ctx.SessionKey?.trim();
-  if (explicit) return explicit;
+  if (explicit) return explicit.toLowerCase();
   const raw = deriveSessionKey(scope, ctx);
   if (scope === "global") return raw;
   const canonicalMainKey = normalizeMainKey(mainKey);

@@ -5,6 +5,10 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+vi.mock("../agent-scope.js", () => ({
+  resolveSessionAgentId: () => "agent-123",
+}));
+
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
@@ -83,6 +87,23 @@ describe("cron tool", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },
     });
+  });
+
+  it("does not default agentId when job.agentId is null", async () => {
+    const tool = createCronTool({ agentSessionKey: "main" });
+    await tool.execute("call-null", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { atMs: 123 },
+        agentId: null,
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { agentId?: unknown };
+    };
+    expect(call?.params?.agentId).toBeNull();
   });
 
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
@@ -187,5 +208,27 @@ describe("cron tool", () => {
     expect(cronCall.method).toBe("cron.add");
     const text = cronCall.params?.payload?.text ?? "";
     expect(text).not.toContain("Recent context:");
+  });
+
+  it("preserves explicit agentId null on add", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "main" });
+    await tool.execute("call6", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { atMs: 123 },
+        agentId: null,
+        payload: { kind: "systemEvent", text: "Reminder: the thing." },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { agentId?: string | null };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.agentId).toBeNull();
   });
 });
