@@ -139,6 +139,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Logging and debugging](#logging-and-debugging)
   - [Where are logs?](#where-are-logs)
   - [How do I start/stop/restart the Gateway service?](#how-do-i-startstoprestart-the-gateway-service)
+  - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `clawdbot gateway restart` vs `clawdbot gateway`](#eli5-clawdbot-gateway-restart-vs-clawdbot-gateway)
   - [What’s the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
 - [Media & attachments](#media-attachments)
@@ -1914,6 +1915,26 @@ clawdbot gateway restart
 ```
 
 If you run the gateway manually, `clawdbot gateway --force` can reclaim the port. See [Gateway](/gateway).
+
+### How do I completely stop then start the Gateway?
+
+If you installed the service:
+
+```bash
+clawdbot gateway stop
+clawdbot gateway start
+```
+
+This stops/starts the **supervised service** (launchd on macOS, systemd on Linux).
+Use this when the Gateway runs in the background as a daemon.
+
+If you’re running in the foreground, stop with Ctrl‑C, then:
+
+```bash
+clawdbot gateway run
+```
+
+Docs: [Gateway service runbook](/gateway).
 
 ### ELI5: `clawdbot gateway restart` vs `clawdbot gateway`
 
