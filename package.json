@@ -43,6 +43,7 @@
     "dist/slack/**",
     "dist/telegram/**",
     "dist/tui/**",
+    "dist/tts/**",
     "dist/web/**",
     "dist/wizard/**",
     "dist/*.js",
