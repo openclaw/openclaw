@@ -1,6 +1,13 @@
 import { resolveFetch } from "../infra/fetch.js";
+import { resolveRetryConfig, retryAsync, type RetryConfig } from "../infra/retry.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DISCORD_API_RETRY_DEFAULTS = {
+  attempts: 3,
+  minDelayMs: 500,
+  maxDelayMs: 30_000,
+  jitter: 0.1,
+};
 
 type DiscordApiErrorPayload = {
   message?: string;
@@ -19,6 +26,19 @@ function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | nul
     return null;
   }
   return null;
+}
+
+function parseRetryAfterSeconds(text: string, response: Response): number | undefined {
+  const payload = parseDiscordApiErrorPayload(text);
+  const retryAfter =
+    payload && typeof payload.retry_after === "number" && Number.isFinite(payload.retry_after)
+      ? payload.retry_after
+      : undefined;
+  if (retryAfter !== undefined) return retryAfter;
+  const header = response.headers.get("Retry-After");
+  if (!header) return undefined;
+  const parsed = Number(header);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function formatRetryAfterSeconds(value: number | undefined): string | undefined {
@@ -45,23 +65,60 @@ function formatDiscordApiErrorText(text: string): string | undefined {
   return retryAfter ? `${message} (retry after ${retryAfter})` : message;
 }
 
+export class DiscordApiError extends Error {
+  status: number;
+  retryAfter?: number;
+
+  constructor(message: string, status: number, retryAfter?: number) {
+    super(message);
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+}
+
+export type DiscordFetchOptions = {
+  retry?: RetryConfig;
+  label?: string;
+};
+
 export async function fetchDiscord<T>(
   path: string,
   token: string,
   fetcher: typeof fetch = fetch,
+  options?: DiscordFetchOptions,
 ): Promise<T> {
   const fetchImpl = resolveFetch(fetcher);
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
-  const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
-    headers: { Authorization: `Bot ${token}` },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    const detail = formatDiscordApiErrorText(text);
-    const suffix = detail ? `: ${detail}` : "";
-    throw new Error(`Discord API ${path} failed (${res.status})${suffix}`);
-  }
-  return (await res.json()) as T;
+
+  const retryConfig = resolveRetryConfig(DISCORD_API_RETRY_DEFAULTS, options?.retry);
+  return retryAsync(
+    async () => {
+      const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
+        headers: { Authorization: `Bot ${token}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        const detail = formatDiscordApiErrorText(text);
+        const suffix = detail ? `: ${detail}` : "";
+        const retryAfter = res.status === 429 ? parseRetryAfterSeconds(text, res) : undefined;
+        throw new DiscordApiError(
+          `Discord API ${path} failed (${res.status})${suffix}`,
+          res.status,
+          retryAfter,
+        );
+      }
+      return (await res.json()) as T;
+    },
+    {
+      ...retryConfig,
+      label: options?.label ?? path,
+      shouldRetry: (err) => err instanceof DiscordApiError && err.status === 429,
+      retryAfterMs: (err) =>
+        err instanceof DiscordApiError && typeof err.retryAfter === "number"
+          ? err.retryAfter * 1000
+          : undefined,
+    },
+  );
 }
