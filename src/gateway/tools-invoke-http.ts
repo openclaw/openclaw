@@ -1,13 +1,25 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { loadConfig } from "../config/config.js";
-import { resolveAgentIdFromSessionKey } from "../agents/agent-scope.js";
 import { createClawdbotTools } from "../agents/clawdbot-tools.js";
 import {
+  filterToolsByPolicy,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
-  isToolAllowedByPolicies,
+  resolveSubagentToolPolicy,
 } from "../agents/pi-tools.policy.js";
+import {
+  buildPluginToolGroups,
+  collectExplicitAllowlist,
+  expandPolicyWithPluginGroups,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+  stripPluginOnlyAllowlist,
+} from "../agents/tool-policy.js";
+import { loadConfig } from "../config/config.js";
+import { resolveMainSessionKey } from "../config/sessions.js";
+import { logWarn } from "../logger.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
@@ -71,7 +83,7 @@ export async function handleToolsInvokeHttpRequest(
   const token = getBearerToken(req);
   const authResult = await authorizeGatewayConnect({
     auth: opts.auth,
-    connectAuth: token ? { token } : null,
+    connectAuth: token ? { token, password: token } : null,
     req,
   });
   if (!authResult.ok) {
@@ -98,9 +110,10 @@ export async function handleToolsInvokeHttpRequest(
       : {}
   ) as Record<string, unknown>;
 
-  const sessionKey = resolveSessionKeyFromBody(body) ?? "main";
   const cfg = loadConfig();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const rawSessionKey = resolveSessionKeyFromBody(body);
+  const sessionKey =
+    !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(
@@ -108,34 +121,113 @@ export async function handleToolsInvokeHttpRequest(
   );
   const accountId = getHeader(req, "x-clawdbot-account-id")?.trim() || undefined;
 
-  // Build tool list (core + plugin tools).
-  const allTools = createClawdbotTools({
-    agentSessionKey: sessionKey,
-    agentChannel: messageChannel ?? undefined,
-    agentAccountId: accountId,
-    config: cfg,
-  });
-
-  const policy = resolveEffectiveToolPolicy({ config: cfg, sessionKey });
+  const {
+    agentId,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+  } = resolveEffectiveToolPolicy({ config: cfg, sessionKey });
+  const profilePolicy = resolveToolProfilePolicy(profile);
+  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const groupPolicy = resolveGroupToolPolicy({
     config: cfg,
     sessionKey,
     messageProvider: messageChannel ?? undefined,
     accountId: accountId ?? null,
   });
+  const subagentPolicy = isSubagentSessionKey(sessionKey)
+    ? resolveSubagentToolPolicy(cfg)
+    : undefined;
 
-  const allowed = (name: string) =>
-    isToolAllowedByPolicies(name, [
-      policy.globalPolicy,
-      policy.agentPolicy,
-      policy.globalProviderPolicy,
-      policy.agentProviderPolicy,
+  // Build tool list (core + plugin tools).
+  const allTools = createClawdbotTools({
+    agentSessionKey: sessionKey,
+    agentChannel: messageChannel ?? undefined,
+    agentAccountId: accountId,
+    config: cfg,
+    pluginToolAllowlist: collectExplicitAllowlist([
+      profilePolicy,
+      providerProfilePolicy,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
       groupPolicy,
-    ]);
+      subagentPolicy,
+    ]),
+  });
 
-  const tools = (allTools as any[]).filter((t) => allowed(t.name));
+  const coreToolNames = new Set(
+    allTools
+      .filter((tool) => !getPluginToolMeta(tool as any))
+      .map((tool) => normalizeToolName(tool.name))
+      .filter(Boolean),
+  );
+  const pluginGroups = buildPluginToolGroups({
+    tools: allTools,
+    toolMeta: (tool) => getPluginToolMeta(tool as any),
+  });
+  const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
+    const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
+    if (resolved.unknownAllowlist.length > 0) {
+      const entries = resolved.unknownAllowlist.join(", ");
+      const suffix = resolved.strippedAllowlist
+        ? "Ignoring allowlist so core tools remain available."
+        : "These entries won't match any tool unless the plugin is enabled.";
+      logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
+    }
+    return expandPolicyWithPluginGroups(resolved.policy, pluginGroups);
+  };
+  const profilePolicyExpanded = resolvePolicy(
+    profilePolicy,
+    profile ? `tools.profile (${profile})` : "tools.profile",
+  );
+  const providerProfileExpanded = resolvePolicy(
+    providerProfilePolicy,
+    providerProfile ? `tools.byProvider.profile (${providerProfile})` : "tools.byProvider.profile",
+  );
+  const globalPolicyExpanded = resolvePolicy(globalPolicy, "tools.allow");
+  const globalProviderExpanded = resolvePolicy(globalProviderPolicy, "tools.byProvider.allow");
+  const agentPolicyExpanded = resolvePolicy(
+    agentPolicy,
+    agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+  );
+  const agentProviderExpanded = resolvePolicy(
+    agentProviderPolicy,
+    agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+  );
+  const groupPolicyExpanded = resolvePolicy(groupPolicy, "group tools.allow");
+  const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
 
-  const tool = tools.find((t) => t.name === toolName);
+  const toolsFiltered = profilePolicyExpanded
+    ? filterToolsByPolicy(allTools, profilePolicyExpanded)
+    : allTools;
+  const providerProfileFiltered = providerProfileExpanded
+    ? filterToolsByPolicy(toolsFiltered, providerProfileExpanded)
+    : toolsFiltered;
+  const globalFiltered = globalPolicyExpanded
+    ? filterToolsByPolicy(providerProfileFiltered, globalPolicyExpanded)
+    : providerProfileFiltered;
+  const globalProviderFiltered = globalProviderExpanded
+    ? filterToolsByPolicy(globalFiltered, globalProviderExpanded)
+    : globalFiltered;
+  const agentFiltered = agentPolicyExpanded
+    ? filterToolsByPolicy(globalProviderFiltered, agentPolicyExpanded)
+    : globalProviderFiltered;
+  const agentProviderFiltered = agentProviderExpanded
+    ? filterToolsByPolicy(agentFiltered, agentProviderExpanded)
+    : agentFiltered;
+  const groupFiltered = groupPolicyExpanded
+    ? filterToolsByPolicy(agentProviderFiltered, groupPolicyExpanded)
+    : agentProviderFiltered;
+  const subagentFiltered = subagentPolicyExpanded
+    ? filterToolsByPolicy(groupFiltered, subagentPolicyExpanded)
+    : groupFiltered;
+
+  const tool = subagentFiltered.find((t) => t.name === toolName);
   if (!tool) {
     sendJson(res, 404, {
       ok: false,

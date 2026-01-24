@@ -916,6 +916,7 @@
           "gateway/configuration-examples",
           "gateway/authentication",
           "gateway/openai-http-api",
+          "gateway/tools-invoke-http-api",
           "gateway/cli-backends",
           "gateway/local-models",
           "gateway/background-process",

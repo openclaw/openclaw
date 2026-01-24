@@ -5,6 +5,7 @@ Docs: https://docs.clawd.bot
 ## 2026.1.23 (Unreleased)
 
 ### Changes
+- Gateway: add /tools/invoke HTTP endpoint for direct tool calls and document it. (#1575) Thanks @vignesh07.
 - Agents: keep system prompt time zone-only and move current time to `session_status` for better cache hits.
 - Agents: remove redundant bash tool alias from tool registration/display. (#1571) Thanks @Takhoffman.
 - Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node).
