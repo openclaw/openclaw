@@ -12,6 +12,30 @@ export type AgentIdentityFile = {
   avatar?: string;
 };
 
+const IDENTITY_PLACEHOLDER_VALUES = new Set([
+  "pick something you like",
+  "ai? robot? familiar? ghost in the machine? something weirder?",
+  "how do you come across? sharp? warm? chaotic? calm?",
+  "your signature - pick one that feels right",
+  "workspace-relative path, http(s) url, or data uri",
+]);
+
+function normalizeIdentityValue(value: string): string {
+  let normalized = value.trim();
+  normalized = normalized.replace(/^[*_]+|[*_]+$/g, "").trim();
+  if (normalized.startsWith("(") && normalized.endsWith(")")) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  normalized = normalized.replace(/[\u2013\u2014]/g, "-");
+  normalized = normalized.replace(/\s+/g, " ").toLowerCase();
+  return normalized;
+}
+
+function isIdentityPlaceholder(value: string): boolean {
+  const normalized = normalizeIdentityValue(value);
+  return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
+}
+
 export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const identity: AgentIdentityFile = {};
   const lines = content.split(/\r?\n/);
@@ -25,6 +49,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
       .replace(/^[*_]+|[*_]+$/g, "")
       .trim();
     if (!value) continue;
+    if (isIdentityPlaceholder(value)) continue;
     if (label === "name") identity.name = value;
     if (label === "emoji") identity.emoji = value;
     if (label === "creature") identity.creature = value;
