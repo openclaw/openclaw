@@ -43,6 +43,14 @@ Almost always a Node/npm PATH issue. Start here:
 - [Gateway troubleshooting](/gateway/troubleshooting)
 - [Control UI](/web/control-ui#insecure-http)
 
+### `docs.clawd.bot` shows an SSL error (Comcast/Xfinity)
+
+Some Comcast/Xfinity connections block `docs.clawd.bot` via Xfinity Advanced Security.
+Disable Advanced Security or add `docs.clawd.bot` to the allowlist, then retry.
+
+- Xfinity Advanced Security help: https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security
+- Quick sanity checks: try a mobile hotspot or VPN to confirm it’s ISP-level filtering
+
 ### Service says running, but RPC probe fails
 
 - [Gateway troubleshooting](/gateway/troubleshooting)
