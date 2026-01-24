@@ -2,17 +2,14 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
+  createAgentToAgentPolicy,
+  resolveSessionReference,
   resolveMainSessionAlias,
+  resolveInternalSessionKey,
   stripToolMessages,
 } from "./sessions-helpers.js";
 
@@ -58,7 +55,7 @@ export function createSessionsHistoryTool(opts?: {
     parameters: SessionsHistoryToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const sessionKey = readStringParam(params, "sessionKey", {
+      const sessionKeyParam = readStringParam(params, "sessionKey", {
         required: true,
       });
       const cfg = loadConfig();
@@ -72,17 +69,26 @@ export function createSessionsHistoryTool(opts?: {
               mainKey,
             })
           : undefined;
-      const resolvedKey = resolveInternalSessionKey({
-        key: sessionKey,
-        alias,
-        mainKey,
-      });
       const restrictToSpawned =
         opts?.sandboxed === true &&
         visibility === "spawned" &&
-        requesterInternalKey &&
+        !!requesterInternalKey &&
         !isSubagentSessionKey(requesterInternalKey);
-      if (restrictToSpawned) {
+      const resolvedSession = await resolveSessionReference({
+        sessionKey: sessionKeyParam,
+        alias,
+        mainKey,
+        requesterInternalKey,
+        restrictToSpawned,
+      });
+      if (!resolvedSession.ok) {
+        return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
+      }
+      // From here on, use the canonical key (sessionId inputs already resolved).
+      const resolvedKey = resolvedSession.key;
+      const displayKey = resolvedSession.displayKey;
+      const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
+      if (restrictToSpawned && !resolvedViaSessionId) {
         const ok = await isSpawnedSessionAllowed({
           requesterSessionKey: requesterInternalKey,
           targetSessionKey: resolvedKey,
@@ -90,40 +96,24 @@ export function createSessionsHistoryTool(opts?: {
         if (!ok) {
           return jsonResult({
             status: "forbidden",
-            error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
+            error: `Session not visible from this sandboxed agent session: ${sessionKeyParam}`,
           });
         }
       }
 
-      const routingA2A = cfg.tools?.agentToAgent;
-      const a2aEnabled = routingA2A?.enabled === true;
-      const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
-      const matchesAllow = (agentId: string) => {
-        if (allowPatterns.length === 0) return true;
-        return allowPatterns.some((pattern) => {
-          const raw = String(pattern ?? "").trim();
-          if (!raw) return false;
-          if (raw === "*") return true;
-          if (!raw.includes("*")) return raw === agentId;
-          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
-          return re.test(agentId);
-        });
-      };
-      const requesterAgentId = normalizeAgentId(
-        parseAgentSessionKey(requesterInternalKey)?.agentId,
-      );
-      const targetAgentId = normalizeAgentId(parseAgentSessionKey(resolvedKey)?.agentId);
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
       const isCrossAgent = requesterAgentId !== targetAgentId;
       if (isCrossAgent) {
-        if (!a2aEnabled) {
+        if (!a2aPolicy.enabled) {
           return jsonResult({
             status: "forbidden",
             error:
               "Agent-to-agent history is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
           });
         }
-        if (!matchesAllow(requesterAgentId) || !matchesAllow(targetAgentId)) {
+        if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
           return jsonResult({
             status: "forbidden",
             error: "Agent-to-agent history denied by tools.agentToAgent.allow.",
@@ -143,11 +133,7 @@ export function createSessionsHistoryTool(opts?: {
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const messages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       return jsonResult({
-        sessionKey: resolveDisplaySessionKey({
-          key: sessionKey,
-          alias,
-          mainKey,
-        }),
+        sessionKey: displayKey,
         messages,
       });
     },

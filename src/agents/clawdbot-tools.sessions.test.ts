@@ -172,6 +172,62 @@ describe("sessions tools", () => {
     expect(withToolsDetails.messages).toHaveLength(2);
   });
 
+  it("sessions_history resolves sessionId inputs", async () => {
+    callGatewayMock.mockReset();
+    const sessionId = "sess-group";
+    const targetKey = "agent:main:discord:channel:1457165743010611293";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        return {
+          key: targetKey,
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) throw new Error("missing sessions_history tool");
+
+    const result = await tool.execute("call5", { sessionKey: sessionId });
+    const details = result.details as { messages?: unknown[] };
+    expect(details.messages).toHaveLength(1);
+    const historyCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "chat.history",
+    );
+    expect(historyCall?.[0]).toMatchObject({
+      method: "chat.history",
+      params: { sessionKey: targetKey },
+    });
+  });
+
+  it("sessions_history errors on missing sessionId", async () => {
+    callGatewayMock.mockReset();
+    const sessionId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.resolve") {
+        throw new Error("No session found");
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) throw new Error("missing sessions_history tool");
+
+    const result = await tool.execute("call6", { sessionKey: sessionId });
+    const details = result.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toMatch(/Session not found|No session found/);
+  });
+
   it("sessions_send supports fire-and-forget and wait", async () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
@@ -311,6 +367,50 @@ describe("sessions tools", () => {
     expect(waitCalls).toHaveLength(8);
     expect(historyOnlyCalls).toHaveLength(8);
     expect(sendCallCount).toBe(0);
+  });
+
+  it("sessions_send resolves sessionId inputs", async () => {
+    callGatewayMock.mockReset();
+    const sessionId = "sess-send";
+    const targetKey = "agent:main:discord:channel:123";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        return { key: targetKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-1", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) throw new Error("missing sessions_send tool");
+
+    const result = await tool.execute("call7", {
+      sessionKey: sessionId,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    const details = result.details as { status?: string };
+    expect(details.status).toBe("accepted");
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    );
+    expect(agentCall?.[0]).toMatchObject({
+      method: "agent",
+      params: { sessionKey: targetKey },
+    });
   });
 
   it("sessions_send runs ping-pong then announces", async () => {
