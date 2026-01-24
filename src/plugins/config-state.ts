@@ -58,7 +58,7 @@ export const normalizePluginsConfig = (
     deny: normalizeList(config?.deny),
     loadPaths: normalizeList(config?.load?.paths),
     slots: {
-      memory: memorySlot ?? defaultSlotIdForKey("memory"),
+      memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
     },
     entries: normalizePluginEntries(config?.entries),
   };
