@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { TemplateContext } from "../templating.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -38,8 +42,12 @@ vi.mock("./queue.js", async () => {
 
 import { runReplyAgent } from "./agent-runner.js";
 
-function createRun(messageProvider = "slack") {
+function createRun(
+  messageProvider = "slack",
+  opts: { storePath?: string; sessionKey?: string } = {},
+) {
   const typing = createMockTypingController();
+  const sessionKey = opts.sessionKey ?? "main";
   const sessionCtx = {
     Provider: messageProvider,
     OriginatingTo: "channel:C1",
@@ -53,7 +61,7 @@ function createRun(messageProvider = "slack") {
     enqueuedAt: Date.now(),
     run: {
       sessionId: "session",
-      sessionKey: "main",
+      sessionKey,
       messageProvider,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
@@ -85,6 +93,8 @@ function createRun(messageProvider = "slack") {
     isStreaming: false,
     typing,
     sessionCtx,
+    sessionKey,
+    storePath: opts.storePath,
     defaultModel: "anthropic/claude-opus-4-5",
     resolvedVerboseLevel: "off",
     isNewSession: false,
@@ -140,5 +150,35 @@ describe("runReplyAgent messaging tool suppression", () => {
     const result = await createRun("slack");
 
     expect(result).toMatchObject({ text: "hello world!" });
+  });
+
+  it("persists usage even when replies are suppressed", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-session-store-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const entry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    await saveSessionStore(storePath, { [sessionKey]: entry });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          model: "claude-opus-4-5",
+          provider: "anthropic",
+        },
+      },
+    });
+
+    const result = await createRun("slack", { storePath, sessionKey });
+
+    expect(result).toBeUndefined();
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.totalTokens ?? 0).toBeGreaterThan(0);
+    expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
   });
 });
