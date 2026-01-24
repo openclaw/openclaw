@@ -4,6 +4,7 @@ import type { Logger as TsLogger } from "tslog";
 import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
+import { isVerbose } from "../globals.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger } from "./logger.js";
 import { loggingState } from "./state.js";
@@ -220,10 +221,18 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     logToFile(getFileLogger(), level, message, fileMeta);
     if (!shouldLogToConsole(level, { level: consoleSettings.level })) return;
     if (!shouldLogSubsystemToConsole(subsystem)) return;
+    const consoleMessage = consoleMessageOverride ?? message;
+    if (
+      !isVerbose() &&
+      subsystem === "agent/embedded" &&
+      /(sessionId|runId)=probe-/.test(consoleMessage)
+    ) {
+      return;
+    }
     const line = formatConsoleLine({
       level,
       subsystem,
-      message: consoleSettings.style === "json" ? message : (consoleMessageOverride ?? message),
+      message: consoleSettings.style === "json" ? message : consoleMessage,
       style: consoleSettings.style,
       meta: fileMeta,
     });
@@ -241,6 +250,13 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     raw: (message) => {
       logToFile(getFileLogger(), "info", message, { raw: true });
       if (shouldLogSubsystemToConsole(subsystem)) {
+        if (
+          !isVerbose() &&
+          subsystem === "agent/embedded" &&
+          /(sessionId|runId)=probe-/.test(message)
+        ) {
+          return;
+        }
         writeConsoleLine("info", message);
       }
     },
