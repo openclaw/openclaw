@@ -14,6 +14,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
   - [What runtime do I need?](#what-runtime-do-i-need)
+  - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
   - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
@@ -38,6 +39,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
+  - [Can Clawdbot run tasks on a schedule or continuously in the background?](#can-clawdbot-run-tasks-on-a-schedule-or-continuously-in-the-background)
   - [Can I run Apple/macOS-only skills from Linux?](#can-i-run-applemacos-only-skills-from-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
   - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
@@ -85,6 +87,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Why doesn’t Clawdbot reply in a group?](#why-doesnt-clawdbot-reply-in-a-group)
   - [Do groups/threads share context with DMs?](#do-groupsthreads-share-context-with-dms)
   - [How many workspaces and agents can I create?](#how-many-workspaces-and-agents-can-i-create)
+  - [Can I run multiple bots or chats at the same time (Slack), and how should I set that up?](#can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up)
 - [Models: defaults, selection, aliases, switching](#models-defaults-selection-aliases-switching)
   - [What is the “default model”?](#what-is-the-default-model)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
@@ -234,6 +237,22 @@ See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth
 ### What runtime do I need?
 
 Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
+
+### Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?
+
+Yes. Copy the **state directory** and **workspace**, then run Doctor once:
+
+1) Install Clawdbot on the new machine.
+2) Copy `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`) from the old machine.
+3) Copy your workspace (default: `~/clawd`).
+4) Run `clawdbot doctor` and restart the Gateway service.
+
+That preserves config, auth profiles, WhatsApp creds, sessions, and memory. If you’re in
+remote mode, remember the gateway host owns the session store and workspace.
+
+Related: [Where things live on disk](/help/faq#where-does-clawdbot-store-its-data),
+[Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
+[Remote mode](/gateway/remote).
 
 ### Where do I see what’s new in the latest version?
 
@@ -455,6 +474,17 @@ npm i -g clawdhub
 ```bash
 pnpm add -g clawdhub
 ```
+
+### Can Clawdbot run tasks on a schedule or continuously in the background?
+
+Yes. Use the Gateway scheduler:
+
+- **Cron jobs** for scheduled or recurring tasks (persist across restarts).
+- **Heartbeat** for “main session” periodic checks.
+- **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
+
+Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
+[Heartbeat](/gateway/heartbeat).
 
 ### Is there a way to run Apple/macOS-only skills if my Gateway runs on Linux?
 
@@ -1092,6 +1122,24 @@ Tips:
 - Keep one **active** workspace per agent (`agents.defaults.workspace`).
 - Prune old sessions (delete JSONL or store entries) if disk grows.
 - Use `clawdbot doctor` to spot stray workspaces and profile mismatches.
+
+### Can I run multiple bots or chats at the same time (Slack), and how should I set that up?
+
+Yes. Use **Multi‑Agent Routing** to run multiple isolated agents and route inbound messages by
+channel/account/peer. Slack is supported as a channel and can be bound to specific agents.
+
+Browser access is powerful but not “do anything a human can” — anti‑bot, CAPTCHAs, and MFA can
+still block automation. For the most reliable browser control, use the Chrome extension relay
+on the machine that runs the browser (and keep the Gateway anywhere).
+
+Best‑practice setup:
+- Always‑on Gateway host (VPS/Mac mini).
+- One agent per role (bindings).
+- Slack channel(s) bound to those agents.
+- Local browser via extension relay (or a node) when needed.
+
+Docs: [Multi‑Agent Routing](/concepts/multi-agent), [Slack](/channels/slack),
+[Browser](/tools/browser), [Chrome extension](/tools/chrome-extension), [Nodes](/nodes).
 
 ## Models: defaults, selection, aliases, switching
 
