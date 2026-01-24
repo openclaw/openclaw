@@ -24,6 +24,7 @@ Docs: https://docs.clawd.bot
 - Agents: use the active auth profile for auto-compaction recovery.
 - Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
 - macOS: default direct-transport `ws://` URLs to port 18789; document `gateway.remote.transport`. (#1603) Thanks @ngutman.
+- Voice Call: return stream TwiML for outbound conversation calls on initial Twilio webhook. (#1634)
 
 ## 2026.1.23-1
 

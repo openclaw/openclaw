@@ -294,6 +294,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const isStatusCallback = type === "status";
     const callStatus = params.get("CallStatus");
     const direction = params.get("Direction");
+    const isOutbound = direction?.startsWith("outbound") ?? false;
     const callIdFromQuery =
       typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
         ? ctx.query.callId.trim()
@@ -312,6 +313,14 @@ export class TwilioProvider implements VoiceCallProvider {
       }
       if (this.notifyCalls.has(callIdFromQuery)) {
         return TwilioProvider.EMPTY_TWIML;
+      }
+
+      // Conversation mode: return streaming TwiML immediately for outbound calls.
+      if (isOutbound) {
+        const streamUrl = this.getStreamUrl();
+        return streamUrl
+          ? this.getStreamConnectXml(streamUrl)
+          : TwilioProvider.PAUSE_TWIML;
       }
     }
 
