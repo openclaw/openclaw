@@ -23,6 +23,8 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Gateway: compare Linux process start time to avoid PID recycling lock loops; keep locks unless stale. (#1572) Thanks @steipete.
 - Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
+- Slack: honor open groupPolicy for unlisted channels in message + slash gating. (#1563) Thanks @itsjaydesu.
+- Agents: show tool error fallback when the last assistant turn only invoked tools (prevents silent stops).
 - Agents: ignore IDENTITY.md template placeholders when parsing identity to avoid placeholder replies. (#1556)
 - Agents: drop orphaned OpenAI Responses reasoning blocks on model switches. (#1562) Thanks @roshanasingh4.
 - Docker: update gateway command in docker-compose and Hetzner guide. (#1514)
