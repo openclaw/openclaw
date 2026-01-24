@@ -1,9 +1,18 @@
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   DEFAULT_HEARTBEAT_EVERY,
+  isHeartbeatContentEffectivelyEmpty,
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
@@ -438,6 +447,25 @@ export async function runHeartbeatOnce(opts: {
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
+  }
+
+  // Skip heartbeat if HEARTBEAT.md exists but has no actionable content.
+  // This saves API calls/costs when the file is effectively empty (only comments/headers).
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  try {
+    const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "empty-heartbeat-file",
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: "empty-heartbeat-file" };
+    }
+  } catch {
+    // File doesn't exist or can't be read - proceed with heartbeat.
+    // The LLM prompt says "if it exists" so this is expected behavior.
   }
 
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
