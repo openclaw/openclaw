@@ -122,11 +122,14 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 });
 
 describe("buildMinimalServicePath", () => {
+  const splitPath = (value: string, platform: NodeJS.Platform) =>
+    value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
+
   it("includes Homebrew + system dirs on macOS", () => {
     const result = buildMinimalServicePath({
       platform: "darwin",
     });
-    const parts = result.split(path.delimiter);
+    const parts = splitPath(result, "darwin");
     expect(parts).toContain("/opt/homebrew/bin");
     expect(parts).toContain("/usr/local/bin");
     expect(parts).toContain("/usr/bin");
@@ -146,7 +149,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       env: { HOME: "/home/alice" },
     });
-    const parts = result.split(path.delimiter);
+    const parts = splitPath(result, "linux");
 
     // Verify user directories are included
     expect(parts).toContain("/home/alice/.local/bin");
@@ -164,7 +167,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       env: {},
     });
-    const parts = result.split(path.delimiter);
+    const parts = splitPath(result, "linux");
 
     // Should only have system directories
     expect(parts).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
@@ -178,7 +181,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       env: { HOME: "/home/bob" },
     });
-    const parts = result.split(path.delimiter);
+    const parts = splitPath(result, "linux");
 
     const firstUserDirIdx = parts.indexOf("/home/bob/.local/bin");
     const firstSystemDirIdx = parts.indexOf("/usr/local/bin");
@@ -191,7 +194,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       extraDirs: ["/custom/tools"],
     });
-    expect(result.split(path.delimiter)).toContain("/custom/tools");
+    expect(splitPath(result, "linux")).toContain("/custom/tools");
   });
 
   it("deduplicates directories", () => {
@@ -199,7 +202,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       extraDirs: ["/usr/bin"],
     });
-    const parts = result.split(path.delimiter);
+    const parts = splitPath(result, "linux");
     const unique = [...new Set(parts)];
     expect(parts.length).toBe(unique.length);
   });
