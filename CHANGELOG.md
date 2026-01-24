@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.23-1
+
+### Fixes
+- Packaging: include dist/tts output in npm tarball (fixes missing dist/tts/tts.js).
+
 ## 2026.1.23
 
 ### Highlights
