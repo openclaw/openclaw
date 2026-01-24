@@ -89,4 +89,30 @@ describe("runMessageAction Slack threading", () => {
     const call = mocks.executeSendAction.mock.calls[0]?.[0];
     expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:111.222");
   });
+
+  it("matches auto-threading when channel ids differ in case", async () => {
+    mocks.executeSendAction.mockResolvedValue({
+      handledBy: "plugin",
+      payload: {},
+    });
+
+    await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:c123",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "C123",
+        currentThreadTs: "333.444",
+        replyToMode: "all",
+      },
+      agentId: "main",
+    });
+
+    const call = mocks.executeSendAction.mock.calls[0]?.[0];
+    expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:333.444");
+  });
 });

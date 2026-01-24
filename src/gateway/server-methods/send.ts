@@ -145,7 +145,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         );
         const providedSessionKey =
           typeof request.sessionKey === "string" && request.sessionKey.trim()
-            ? request.sessionKey.trim()
+            ? request.sessionKey.trim().toLowerCase()
             : undefined;
         const derivedAgentId = resolveSessionAgentId({ config: cfg });
         // If callers omit sessionKey, derive a target session key from the outbound route.

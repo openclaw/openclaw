@@ -137,6 +137,34 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("lowercases provided session keys for mirroring", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-lower", channel: "slack" }]);
+
+    const respond = vi.fn();
+    await sendHandlers.send({
+      params: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        idempotencyKey: "idem-lower",
+        sessionKey: "agent:main:slack:channel:C123",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "1", method: "send" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c123",
+        }),
+      }),
+    );
+  });
+
   it("derives a target session key when none is provided", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m3", channel: "slack" }]);
 

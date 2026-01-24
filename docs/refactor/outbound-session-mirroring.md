@@ -40,6 +40,8 @@ Outbound sends were mirrored into the *current* agent session (tool session key)
   - Mattermost targets now strip `@` for DM session key routing.
   - Zalo Personal uses DM peer kind for 1:1 targets (group only when `group:` is present).
   - BlueBubbles group targets strip `chat_*` prefixes to match inbound session keys.
+  - Slack auto-thread mirroring matches channel ids case-insensitively.
+  - Gateway send lowercases provided session keys before mirroring.
 
 ## Decisions
 - **Gateway send session derivation**: if `sessionKey` is provided, use it. If omitted, derive a sessionKey from target + default agent and mirror there.
