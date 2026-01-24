@@ -6,7 +6,7 @@ read_when:
 ---
 # Ollama
 
-Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. Clawdbot integrates with Ollama's OpenAI-compatible API and **automatically discovers models** installed on your machine.
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. Clawdbot integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ ollama pull qwen2.5-coder:32b
 ollama pull deepseek-r1:32b
 ```
 
-3) Configure Clawdbot with Ollama API key:
+3) Enable Ollama for Clawdbot (any value works; Ollama doesn't require a real key):
 
 ```bash
 # Set environment variable
@@ -44,9 +44,18 @@ clawdbot config set models.providers.ollama.apiKey "ollama-local"
 }
 ```
 
-## Model Discovery
+## Model discovery (implicit provider)
 
-When the Ollama provider is configured, Clawdbot automatically detects all models installed on your Ollama instance by querying the `/api/tags` endpoint at `http://localhost:11434`. You don't need to manually configure individual models in your config file.
+When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models.providers.ollama`, Clawdbot discovers models from the local Ollama instance at `http://127.0.0.1:11434`:
+
+- Queries `/api/tags` and `/api/show`
+- Keeps only models that report `tools` capability
+- Marks `reasoning` when the model reports `thinking`
+- Reads `contextWindow` from `model_info["<arch>.context_length"]` when available
+- Sets `maxTokens` to 10× the context window
+- Sets all costs to `0`
+
+This avoids manual model entries while keeping the catalog aligned with Ollama's capabilities.
 
 To see what models are available:
 
@@ -63,9 +72,11 @@ ollama pull mistral
 
 The new model will be automatically discovered and available to use.
 
+If you set `models.providers.ollama` explicitly, auto-discovery is skipped and you must define models manually (see below).
+
 ## Configuration
 
-### Basic Setup
+### Basic setup (implicit discovery)
 
 The simplest way to enable Ollama is via environment variable:
 
@@ -73,9 +84,44 @@ The simplest way to enable Ollama is via environment variable:
 export OLLAMA_API_KEY="ollama-local"
 ```
 
-### Custom Base URL
+### Explicit setup (manual models)
 
-If Ollama is running on a different host or port:
+Use explicit config when:
+- Ollama runs on another host/port.
+- You want to force specific context windows or model lists.
+- You want to include models that do not report tool support.
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        // Use a host that includes /v1 for OpenAI-compatible APIs
+        baseUrl: "http://ollama-host:11434/v1",
+        apiKey: "ollama-local",
+        api: "openai-completions",
+        models: [
+          {
+            id: "llama3.3",
+            name: "Llama 3.3",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 8192,
+            maxTokens: 8192 * 10
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+If `OLLAMA_API_KEY` is set, you can omit `apiKey` in the provider entry and Clawdbot will fill it for availability checks.
+
+### Custom base URL (explicit config)
+
+If Ollama is running on a different host or port (explicit config disables auto-discovery, so define models manually):
 
 ```json5
 {
@@ -83,14 +129,14 @@ If Ollama is running on a different host or port:
     providers: {
       ollama: {
         apiKey: "ollama-local",
-        baseUrl: "http://192.168.1.100:11434/v1"
+        baseUrl: "http://ollama-host:11434/v1"
       }
     }
   }
 }
 ```
 
-### Model Selection
+### Model selection
 
 Once configured, all your Ollama models are available:
 
@@ -109,9 +155,9 @@ Once configured, all your Ollama models are available:
 
 ## Advanced
 
-### Reasoning Models
+### Reasoning models
 
-Models with "r1" or "reasoning" in their name are automatically detected as reasoning models and will use extended thinking features:
+Clawdbot marks models as reasoning-capable when Ollama reports `thinking` in `/api/show`:
 
 ```bash
 ollama pull deepseek-r1:32b
@@ -121,15 +167,15 @@ ollama pull deepseek-r1:32b
 
 Ollama is free and runs locally, so all model costs are set to $0.
 
-### Context Windows
+### Context windows
 
-Ollama models use default context windows. You can customize these in your provider configuration if needed.
+For auto-discovered models, Clawdbot uses the context window reported by Ollama when available, otherwise it defaults to `8192`. You can override `contextWindow` and `maxTokens` in explicit provider config.
 
 ## Troubleshooting
 
 ### Ollama not detected
 
-Make sure Ollama is running:
+Make sure Ollama is running and that you set `OLLAMA_API_KEY` (or an auth profile), and that you did **not** define an explicit `models.providers.ollama` entry:
 
 ```bash
 ollama serve
@@ -143,7 +189,11 @@ curl http://localhost:11434/api/tags
 
 ### No models available
 
-Pull at least one model:
+Clawdbot only auto-discovers models that report tool support. If your model isn't listed, either:
+- Pull a tool-capable model, or
+- Define the model explicitly in `models.providers.ollama`.
+
+To add models:
 
 ```bash
 ollama list  # See what's installed
