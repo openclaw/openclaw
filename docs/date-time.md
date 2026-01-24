@@ -7,8 +7,8 @@ read_when:
 
 # Date & Time
 
-Clawdbot defaults to **host-local time for transport timestamps** and **user-local time only in the system prompt**.
-Provider timestamps are preserved so tools keep their native semantics.
+Clawdbot defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
+Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
 
 ## Message envelopes (local by default)
 
@@ -63,16 +63,16 @@ You can override this behavior:
 
 ## System prompt: Current Date & Time
 
-If the user timezone or local time is known, the system prompt includes a dedicated
-**Current Date & Time** section:
+If the user timezone is known, the system prompt includes a dedicated
+**Current Date & Time** section with the **time zone only** (no clock/time format)
+to keep prompt caching stable:
 
 ```
-Thursday, January 15th, 2026 — 3:07 PM (America/Chicago)
-Time format: 12-hour
+Time zone: America/Chicago
 ```
 
-If only the timezone is known, we still include the section and instruct the model
-to assume UTC for unknown time references.
+When the agent needs the current time, use the `session_status` tool; the status
+card includes a timestamp line.
 
 ## System event lines (local by default)
 

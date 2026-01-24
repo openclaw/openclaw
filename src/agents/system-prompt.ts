@@ -49,22 +49,9 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
   return ["## User Identity", ownerLine, ""];
 }
 
-function buildTimeSection(params: {
-  userTimezone?: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
-}) {
-  if (!params.userTimezone && !params.userTime) return [];
-  return [
-    "## Current Date & Time",
-    params.userTime
-      ? `${params.userTime} (${params.userTimezone ?? "unknown"})`
-      : `Time zone: ${params.userTimezone}. Current time unknown; assume UTC for date/time references.`,
-    params.userTimeFormat
-      ? `Time format: ${params.userTimeFormat === "24" ? "24-hour" : "12-hour"}`
-      : "",
-    "",
-  ];
+function buildTimeSection(params: { userTimezone?: string }) {
+  if (!params.userTimezone) return [];
+  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -212,7 +199,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: "Spawn a sub-agent session",
     session_status:
-      "Show a /status-equivalent status card (usage + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
   };
 
@@ -302,7 +289,6 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
-  const userTime = params.userTime?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
@@ -465,8 +451,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
-      userTime,
-      userTimeFormat: params.userTimeFormat,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by Clawdbot and included below in Project Context.",

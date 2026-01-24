@@ -52,6 +52,7 @@ type StatusArgs = {
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
   usageLine?: string;
+  timeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: MediaUnderstandingDecision[];
   subagentsLine?: string;
@@ -381,6 +382,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   return [
     versionLine,
+    args.timeLine,
     modelLine,
     usageCostLine,
     `📚 ${contextLine}`,
