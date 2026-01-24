@@ -9,6 +9,7 @@ import {
 import {
   downloadGoogleChatMedia,
   sendGoogleChatMessage,
+  updateGoogleChatMessage,
 } from "./api.js";
 import { verifyGoogleChatRequest, type GoogleChatAudienceType } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
@@ -344,6 +345,24 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
   return { hasAnyMention, wasMentioned };
 }
 
+/**
+ * Resolve bot display name with fallback chain:
+ * 1. Account config name
+ * 2. Agent name from config
+ * 3. "Clawdbot" as generic fallback
+ */
+function resolveBotDisplayName(params: {
+  accountName?: string;
+  agentId: string;
+  config: ClawdbotConfig;
+}): string {
+  const { accountName, agentId, config } = params;
+  if (accountName?.trim()) return accountName.trim();
+  const agent = config.agents?.list?.find((a) => a.id === agentId);
+  if (agent?.name?.trim()) return agent.name.trim();
+  return "Clawdbot";
+}
+
 async function processMessageWithPipeline(params: {
   event: GoogleChatEvent;
   account: ResolvedGoogleChatAccount;
@@ -614,6 +633,38 @@ async function processMessageWithPipeline(params: {
       runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
     });
 
+  // Typing indicator setup
+  // Note: Reaction mode requires user OAuth, not available with service account auth.
+  // If reaction is configured, we fall back to message mode with a warning.
+  let typingIndicator = account.config.typingIndicator ?? "message";
+  if (typingIndicator === "reaction") {
+    runtime.error?.(
+      `[${account.accountId}] typingIndicator="reaction" requires user OAuth (not supported with service account). Falling back to "message" mode.`,
+    );
+    typingIndicator = "message";
+  }
+  let typingMessageName: string | undefined;
+
+  // Start typing indicator (message mode only, reaction mode not supported with app auth)
+  if (typingIndicator === "message") {
+    try {
+      const botName = resolveBotDisplayName({
+        accountName: account.config.name,
+        agentId: route.agentId,
+        config,
+      });
+      const result = await sendGoogleChatMessage({
+        account,
+        space: spaceId,
+        text: `_${botName} is typing..._`,
+        thread: message.thread?.name,
+      });
+      typingMessageName = result?.messageName;
+    } catch (err) {
+      runtime.error?.(`Failed sending typing message: ${String(err)}`);
+    }
+  }
+
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: config,
@@ -626,7 +677,10 @@ async function processMessageWithPipeline(params: {
           runtime,
           core,
           statusSink,
+          typingMessageName,
         });
+        // Only use typing message for first delivery
+        typingMessageName = undefined;
       },
       onError: (err, info) => {
         runtime.error?.(
@@ -664,8 +718,9 @@ async function deliverGoogleChatReply(params: {
   runtime: GoogleChatRuntimeEnv;
   core: GoogleChatCoreRuntime;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  typingMessageName?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, statusSink } = params;
+  const { payload, account, spaceId, runtime, core, statusSink, typingMessageName } = params;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -711,14 +766,24 @@ async function deliverGoogleChatReply(params: {
   if (payload.text) {
     const chunkLimit = account.config.textChunkLimit ?? 4000;
     const chunks = core.channel.text.chunkMarkdownText(payload.text, chunkLimit);
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
       try {
-        await sendGoogleChatMessage({
-          account,
-          space: spaceId,
-          text: chunk,
-          thread: payload.replyToId,
-        });
+        // Edit typing message with first chunk if available
+        if (i === 0 && typingMessageName) {
+          await updateGoogleChatMessage({
+            account,
+            messageName: typingMessageName,
+            text: chunk,
+          });
+        } else {
+          await sendGoogleChatMessage({
+            account,
+            space: spaceId,
+            text: chunk,
+            thread: payload.replyToId,
+          });
+        }
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         runtime.error?.(`Google Chat message send failed: ${String(err)}`);

@@ -321,6 +321,7 @@ export const GoogleChatAccountSchema = z
       .strict()
       .optional(),
     dm: GoogleChatDmSchema.optional(),
+    typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
   })
   .strict();
 
