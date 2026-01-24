@@ -262,8 +262,7 @@ export function registerSlackMonitorSlashCommands(params: {
               groupPolicy: ctx.groupPolicy,
               channelAllowlistConfigured,
               channelAllowed,
-            }) ||
-            !channelAllowed
+            })
           ) {
             await respond({
               text: "This channel is not allowed.",
@@ -271,13 +270,17 @@ export function registerSlackMonitorSlashCommands(params: {
             });
             return;
           }
-        }
-        if (ctx.useAccessGroups && channelConfig?.allowed === false) {
-          await respond({
-            text: "This channel is not allowed.",
-            response_type: "ephemeral",
-          });
-          return;
+          // When groupPolicy is "open", only block channels that are EXPLICITLY denied
+          // (i.e., have a matching config entry with allow:false). Channels not in the
+          // config (matchSource undefined) should be allowed under open policy.
+          const hasExplicitConfig = Boolean(channelConfig?.matchSource);
+          if (!channelAllowed && (ctx.groupPolicy !== "open" || hasExplicitConfig)) {
+            await respond({
+              text: "This channel is not allowed.",
+              response_type: "ephemeral",
+            });
+            return;
+          }
         }
       }
 
