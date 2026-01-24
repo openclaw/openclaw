@@ -39,6 +39,16 @@ describe("llm-task tool (json-only)", () => {
     expect((res as any).details.json).toEqual({ foo: "bar" });
   });
 
+  it("strips fenced json", async () => {
+    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+      meta: {},
+      payloads: [{ text: "```json\n{\"ok\":true}\n```" }],
+    });
+    const tool = createLlmTaskTool(fakeApi() as any);
+    const res = await tool.execute("id", { prompt: "return ok" });
+    expect((res as any).details.json).toEqual({ ok: true });
+  });
+
   it("validates schema", async () => {
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
       meta: {},
@@ -92,5 +102,16 @@ describe("llm-task tool (json-only)", () => {
     await expect(tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" })).rejects.toThrow(
       /not allowed/i,
     );
+  });
+
+  it("disables tools for embedded run", async () => {
+    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+      meta: {},
+      payloads: [{ text: JSON.stringify({ ok: true }) }],
+    });
+    const tool = createLlmTaskTool(fakeApi() as any);
+    await tool.execute("id", { prompt: "x" });
+    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    expect(call.disableTools).toBe(true);
   });
 });

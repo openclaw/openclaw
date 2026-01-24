@@ -44,6 +44,8 @@ export type RunEmbeddedPiAgentParams = {
   images?: ImageContent[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
+  /** Disable built-in tools for this run (LLM-only mode). */
+  disableTools?: boolean;
   provider?: string;
   model?: string;
   authProfileId?: string;
