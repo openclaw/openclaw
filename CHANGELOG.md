@@ -4,6 +4,9 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.24
 
+### Highlights
+- Ollama: provider discovery + docs. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama
+
 ### Changes
 - Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).
 - Docs: add verbose installer troubleshooting guidance.
