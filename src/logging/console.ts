@@ -35,13 +35,20 @@ function resolveConsoleSettings(): ConsoleSettings {
   let cfg: ClawdbotConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
-    try {
-      const loaded = requireConfig("../config/config.js") as {
-        loadConfig?: () => ClawdbotConfig;
-      };
-      cfg = loaded.loadConfig?.().logging;
-    } catch {
+    if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
+    } else {
+      loggingState.resolvingConsoleSettings = true;
+      try {
+        const loaded = requireConfig("../config/config.js") as {
+          loadConfig?: () => ClawdbotConfig;
+        };
+        cfg = loaded.loadConfig?.().logging;
+      } catch {
+        cfg = undefined;
+      } finally {
+        loggingState.resolvingConsoleSettings = false;
+      }
     }
   }
   const level = normalizeConsoleLevel(cfg?.consoleLevel);
