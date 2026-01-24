@@ -42,9 +42,10 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          if (params.cliSessionId) {
+          const cliProvider = params.providerUsed ?? entry.modelProvider;
+          if (params.cliSessionId && cliProvider) {
             const nextEntry = { ...entry, ...patch };
-            setCliSessionId(nextEntry, params.providerUsed, params.cliSessionId);
+            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
             return {
               ...patch,
               cliSessionIds: nextEntry.cliSessionIds,
@@ -73,9 +74,10 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          if (params.cliSessionId) {
+          const cliProvider = params.providerUsed ?? entry.modelProvider;
+          if (params.cliSessionId && cliProvider) {
             const nextEntry = { ...entry, ...patch };
-            setCliSessionId(nextEntry, params.providerUsed, params.cliSessionId);
+            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
             return {
               ...patch,
               cliSessionIds: nextEntry.cliSessionIds,
