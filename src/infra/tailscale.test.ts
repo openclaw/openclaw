@@ -10,6 +10,7 @@ const {
   disableTailscaleServe,
   ensureFunnel,
 } = tailscale;
+const tailscaleBin = expect.stringMatching(/tailscale$/);
 
 describe("tailscale helpers", () => {
   afterEach(() => {
@@ -75,7 +76,7 @@ describe("tailscale helpers", () => {
 
     expect(exec).toHaveBeenNthCalledWith(
       1,
-      "tailscale",
+      tailscaleBin,
       expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
       expect.any(Object),
     );
@@ -83,7 +84,7 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenNthCalledWith(
       2,
       "sudo",
-      expect.arrayContaining(["-n", "tailscale", "serve", "--bg", "--yes", "3000"]),
+      expect.arrayContaining(["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"]),
       expect.any(Object),
     );
   });
@@ -96,7 +97,7 @@ describe("tailscale helpers", () => {
 
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith(
-      "tailscale",
+      tailscaleBin,
       expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
       expect.any(Object),
     );
@@ -115,7 +116,7 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenNthCalledWith(
       2,
       "sudo",
-      expect.arrayContaining(["-n", "tailscale", "serve", "reset"]),
+      expect.arrayContaining(["-n", tailscaleBin, "serve", "reset"]),
       expect.any(Object),
     );
   });
@@ -144,14 +145,14 @@ describe("tailscale helpers", () => {
     // 1. status
     expect(exec).toHaveBeenNthCalledWith(
       1,
-      "tailscale",
+      tailscaleBin,
       expect.arrayContaining(["funnel", "status", "--json"]),
     );
 
     // 2. enable normal
     expect(exec).toHaveBeenNthCalledWith(
       2,
-      "tailscale",
+      tailscaleBin,
       expect.arrayContaining(["funnel", "--yes", "--bg", "8080"]),
       expect.any(Object),
     );
@@ -160,7 +161,7 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenNthCalledWith(
       3,
       "sudo",
-      expect.arrayContaining(["-n", "tailscale", "funnel", "--yes", "--bg", "8080"]),
+      expect.arrayContaining(["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"]),
       expect.any(Object),
     );
   });
