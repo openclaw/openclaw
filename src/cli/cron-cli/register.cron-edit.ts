@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import { danger } from "../../globals.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
@@ -91,7 +90,7 @@ export function registerCronEditCommand(cron: Command) {
             throw new Error("Use --agent or --clear-agent, not both");
           }
           if (typeof opts.agent === "string" && opts.agent.trim()) {
-            patch.agentId = normalizeAgentId(opts.agent);
+            patch.agentId = opts.agent.trim();
           }
           if (opts.clearAgent) {
             patch.agentId = null;
