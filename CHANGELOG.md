@@ -21,6 +21,7 @@ Docs: https://docs.clawd.bot
 - TTS: move Telegram TTS into core with auto-replies, commands, and gateway methods. (#1559) Thanks @Glucksberg.
 
 ### Fixes
+- Gateway: compare Linux process start time to avoid PID recycling lock loops; keep locks unless stale. (#1572) Thanks @steipete.
 - Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
 - Agents: ignore IDENTITY.md template placeholders when parsing identity to avoid placeholder replies. (#1556)
 - Docker: update gateway command in docker-compose and Hetzner guide. (#1514)
