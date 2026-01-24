@@ -5,9 +5,20 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadWebMedia, optimizeImageToJpeg, optimizeImageToPng } from "./media.js";
+import { optimizeImageToPng } from "../media/image-ops.js";
+import { loadWebMedia, optimizeImageToJpeg } from "./media.js";
 
 const tmpFiles: string[] = [];
+
+async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
+  const file = path.join(
+    os.tmpdir(),
+    `clawdbot-media-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
+  );
+  tmpFiles.push(file);
+  await fs.writeFile(file, buffer);
+  return file;
+}
 
 function buildDeterministicBytes(length: number): Buffer {
   const buffer = Buffer.allocUnsafe(length);
@@ -37,9 +48,7 @@ describe("web media loading", () => {
       .jpeg({ quality: 95 })
       .toBuffer();
 
-    const file = path.join(os.tmpdir(), `clawdbot-media-${Date.now()}.jpg`);
-    tmpFiles.push(file);
-    await fs.writeFile(file, buffer);
+    const file = await writeTempFile(buffer, ".jpg");
 
     const cap = Math.floor(buffer.length * 0.8);
     const result = await loadWebMedia(file, cap);
@@ -55,9 +64,7 @@ describe("web media loading", () => {
     })
       .png()
       .toBuffer();
-    const wrongExt = path.join(os.tmpdir(), `clawdbot-media-${Date.now()}.bin`);
-    tmpFiles.push(wrongExt);
-    await fs.writeFile(wrongExt, pngBuffer);
+    const wrongExt = await writeTempFile(pngBuffer, ".bin");
 
     const result = await loadWebMedia(wrongExt, 1024 * 1024);
 
@@ -160,9 +167,7 @@ describe("web media loading", () => {
       0x3b, // minimal LZW data + trailer
     ]);
 
-    const file = path.join(os.tmpdir(), `clawdbot-media-${Date.now()}.gif`);
-    tmpFiles.push(file);
-    await fs.writeFile(file, gifBuffer);
+    const file = await writeTempFile(gifBuffer, ".gif");
 
     const result = await loadWebMedia(file, 1024 * 1024);
 
@@ -208,9 +213,7 @@ describe("web media loading", () => {
       .png()
       .toBuffer();
 
-    const file = path.join(os.tmpdir(), `clawdbot-media-${Date.now()}.png`);
-    tmpFiles.push(file);
-    await fs.writeFile(file, buffer);
+    const file = await writeTempFile(buffer, ".png");
 
     const result = await loadWebMedia(file, 1024 * 1024);
 
@@ -250,9 +253,7 @@ describe("web media loading", () => {
       );
     }
 
-    const file = path.join(os.tmpdir(), `clawdbot-media-${Date.now()}-alpha.png`);
-    tmpFiles.push(file);
-    await fs.writeFile(file, pngBuffer);
+    const file = await writeTempFile(pngBuffer, ".png");
 
     const result = await loadWebMedia(file, cap);
 
