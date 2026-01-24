@@ -19,6 +19,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
   - [I can't access docs.clawd.bot (SSL error). What now?](#i-cant-access-docsclawdbot-ssl-error-what-now)
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
+  - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setup-token-auth-work)
@@ -303,6 +304,17 @@ Windows installer (PowerShell):
 https://clawd.bot/install.ps1
 
 More detail: [Development channels](/install/development-channels) and [Installer flags](/install/installer).
+
+### The docs didn’t answer my question — how do I get a better answer?
+
+Use the **hackable (git) install** so you have the full source and docs locally, then ask
+your bot (or Claude/Codex) *from that folder* so it can read the repo and answer precisely.
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git
+```
+
+More detail: [Install](/install) and [Installer flags](/install/installer).
 
 ### How do I install Clawdbot on a VPS?
 
