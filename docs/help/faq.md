@@ -40,6 +40,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I keep hosted model traffic in a specific region?](#how-do-i-keep-hosted-model-traffic-in-a-specific-region)
   - [Do I have to buy a Mac Mini to install this?](#do-i-have-to-buy-a-mac-mini-to-install-this)
   - [Do I need a Mac mini for iMessage support?](#do-i-need-a-mac-mini-for-imessage-support)
+  - [If I buy a Mac mini to run Clawdbot, can I connect it to my MacBook Pro?](#if-i-buy-a-mac-mini-to-run-clawdbot-can-i-connect-it-to-my-macbook-pro)
   - [Can I use Bun?](#can-i-use-bun)
   - [Telegram: what goes in `allowFrom`?](#telegram-what-goes-in-allowfrom)
   - [Can multiple people use one WhatsApp number with different Clawdbots?](#can-multiple-people-use-one-whatsapp-number-with-different-clawdbots)
@@ -99,6 +100,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Why am I seeing “LLM request rejected: messages.N.content.X.tool_use.input: Field required”?](#why-am-i-seeing-llm-request-rejected-messagesncontentxtool_useinput-field-required)
   - [Why am I getting heartbeat messages every 30 minutes?](#why-am-i-getting-heartbeat-messages-every-30-minutes)
   - [Do I need to add a “bot account” to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
+  - [How do I get the JID of a WhatsApp group?](#how-do-i-get-the-jid-of-a-whatsapp-group)
   - [Why doesn’t Clawdbot reply in a group?](#why-doesnt-clawdbot-reply-in-a-group)
   - [Do groups/threads share context with DMs?](#do-groupsthreads-share-context-with-dms)
   - [How many workspaces and agents can I create?](#how-many-workspaces-and-agents-can-i-create)
@@ -564,6 +566,19 @@ Common setups:
 Docs: [iMessage](/channels/imessage), [BlueBubbles](/channels/bluebubbles),
 [Mac remote mode](/platforms/mac/remote).
 
+### If I buy a Mac mini to run Clawdbot, can I connect it to my MacBook Pro?
+
+Yes. The **Mac mini can run the Gateway**, and your MacBook Pro can connect as a
+**node** (companion device). Nodes don’t run the Gateway — they provide extra
+capabilities like screen/camera/canvas and `system.run` on that device.
+
+Common pattern:
+- Gateway on the Mac mini (always‑on).
+- MacBook Pro runs the macOS app or a node host and pairs to the Gateway.
+- Use `clawdbot nodes status` / `clawdbot nodes list` to see it.
+
+Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
+
 ### Can I use Bun?
 
 Bun is **not recommended**. We see runtime bugs, especially with WhatsApp and Telegram.
@@ -621,6 +636,8 @@ Docs: [Getting started](/start/getting-started), [Updating](/install/updating).
 ### Can I switch between npm and git installs later?
 
 Yes. Install the other flavor, then run Doctor so the gateway service points at the new entrypoint.
+This **does not delete your data** — it only changes the Clawdbot code install. Your state
+(`~/.clawdbot`) and workspace (`~/clawd`) stay untouched.
 
 From npm → git:
 
@@ -642,6 +659,8 @@ clawdbot gateway restart
 ```
 
 Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
+
+Backup tips: see [Backup strategy](/help/faq#whats-the-recommended-backup-strategy).
 
 ### Should I run the Gateway on my laptop or a VPS?
 
@@ -1328,6 +1347,25 @@ If you want only **you** to be able to trigger group replies:
   }
 }
 ```
+
+### How do I get the JID of a WhatsApp group?
+
+Option 1 (fastest): tail logs and send a test message in the group:
+
+```bash
+clawdbot logs --follow --json
+```
+
+Look for `chatId` (or `from`) ending in `@g.us`, like:
+`1234567890-1234567890@g.us`.
+
+Option 2 (if already configured/allowlisted): list groups from config:
+
+```bash
+clawdbot directory groups list --channel whatsapp
+```
+
+Docs: [WhatsApp](/channels/whatsapp), [Directory](/cli/directory), [Logs](/cli/logs).
 
 ### Why doesn’t Clawdbot reply in a group?
 
