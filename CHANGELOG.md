@@ -31,6 +31,8 @@ Docs: https://docs.clawd.bot
 - Messaging: mirror outbound sends into target session keys (threads + dmScope) and create session entries on send. (#1520)
 - Sessions: normalize session key casing to lowercase for consistent routing.
 - BlueBubbles: normalize group session keys for outbound mirroring. (#1520)
+- Slack: match auto-thread mirroring channel ids case-insensitively. (#1520)
+- Gateway: lowercase provided session keys when mirroring outbound sends. (#1520)
 - Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
 - Slack: honor open groupPolicy for unlisted channels in message + slash gating. (#1563) Thanks @itsjaydesu.
 - Agents: show tool error fallback when the last assistant turn only invoked tools (prevents silent stops).
