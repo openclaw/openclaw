@@ -25,6 +25,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
   - [Can I ask Clawd to update itself?](#can-i-ask-clawd-to-update-itself)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
+  - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setup-token-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setup-token)
   - [Do you support Claude subscription auth (Claude Code OAuth)?](#do-you-support-claude-subscription-auth-claude-code-oauth)
@@ -403,6 +404,15 @@ Docs: [Update](/cli/update), [Updating](/install/updating).
 - **Health checks** and **skills** selection
 
 It also warns if your configured model is unknown or missing auth.
+
+### Do I need a Claude or OpenAI subscription to run this?
+
+No. You can run Clawdbot with **API keys** (Anthropic/OpenAI/others) or with
+**local‑only models** so your data stays on your device. Subscriptions (Claude
+Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
+
+Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
+[Local models](/gateway/local-models), [Models](/concepts/models).
 
 ### How does Anthropic "setup-token" auth work?
 
