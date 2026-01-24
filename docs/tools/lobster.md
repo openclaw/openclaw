@@ -65,6 +65,52 @@ gog.gmail.search --query 'newer_than:1d' \
   | clawd.invoke --tool message --action send --each --item-key message --args-json '{"provider":"telegram","to":"..."}'
 ```
 
+## JSON-only LLM steps (llm-task)
+
+For workflows that need a **structured LLM step**, enable the optional
+`llm-task` plugin tool and call it from Lobster. This keeps the workflow
+deterministic while still letting you classify/summarize/draft with a model.
+
+Enable the tool:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "llm-task": { "enabled": true }
+    }
+  },
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "tools": { "allow": ["llm-task"] }
+      }
+    ]
+  }
+}
+```
+
+Use it in a pipeline:
+
+```lobster
+clawd.invoke --tool llm-task --action json --args-json '{
+  "prompt": "Given the input email, return intent and draft.",
+  "input": { "subject": "Hello", "body": "Can you help?" },
+  "schema": {
+    "type": "object",
+    "properties": {
+      "intent": { "type": "string" },
+      "draft": { "type": "string" }
+    },
+    "required": ["intent", "draft"],
+    "additionalProperties": false
+  }
+}'
+```
+
+See [LLM Task](/tools/llm-task) for details and configuration options.
+
 ## Workflow files (.lobster)
 
 Lobster can run YAML/JSON workflow files with `name`, `args`, `steps`, `env`, `condition`, and `approval` fields. In Clawdbot tool calls, set `pipeline` to the file path.

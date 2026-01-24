@@ -1000,6 +1000,8 @@
         "group": "Tools & Skills",
         "pages": [
           "tools",
+          "tools/lobster",
+          "tools/llm-task",
           "plugin",
           "plugins/voice-call",
           "plugins/zalouser",

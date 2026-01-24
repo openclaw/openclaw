@@ -12,7 +12,7 @@ import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotPluginApi } from "../../../src/plugins/types.js";
 
-type RunEmbeddedPiAgentFn = (params: any) => Promise<any>;
+type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
 
 async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // Source checkout (tests/dev)
@@ -33,7 +33,7 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
-  const m = trimmed.match(/^```(?:json)?s*([sS]*?)s*```$/i);
+  const m = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   if (m) return (m[1] ?? "").trim();
   return trimmed;
 }
@@ -42,7 +42,7 @@ function collectText(payloads: Array<{ text?: string; isError?: boolean }> | und
   const texts = (payloads ?? [])
     .filter((p) => !p.isError && typeof p.text === "string")
     .map((p) => p.text ?? "");
-  return texts.join("n").trim();
+  return texts.join("\n").trim();
 }
 
 function toModelKey(provider?: string, model?: string): string | undefined {
@@ -135,6 +135,12 @@ export function createLlmTaskTool(api: ClawdbotPluginApi) {
       };
 
       const input = (params as any).input as unknown;
+      let inputJson: string;
+      try {
+        inputJson = JSON.stringify(input ?? null, null, 2);
+      } catch {
+        throw new Error("input must be JSON-serializable");
+      }
 
       const system = [
         "You are a JSON-only function.",
@@ -144,57 +150,69 @@ export function createLlmTaskTool(api: ClawdbotPluginApi) {
         "Do not call tools.",
       ].join(" ");
 
-      const fullPrompt = `${system}nnTASK:n${prompt}nnINPUT_JSON:n${JSON.stringify(input ?? null, null, 2)}n`;
+      const fullPrompt = `${system}\n\nTASK:\n${prompt}\n\nINPUT_JSON:\n${inputJson}\n`;
 
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-llm-task-"));
-      const sessionId = `llm-task-${Date.now()}`;
-      const sessionFile = path.join(tmpDir, "session.json");
-
-      const runEmbeddedPiAgent = await loadRunEmbeddedPiAgent();
-
-      const result = await runEmbeddedPiAgent({
-        sessionId,
-        sessionFile,
-        workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
-        config: api.config,
-        prompt: fullPrompt,
-        timeoutMs,
-        runId: `llm-task-${Date.now()}`,
-        provider,
-        model,
-        authProfileId,
-        authProfileIdSource: authProfileId ? "user" : "auto",
-        streamParams,
-      });
-
-      const text = collectText((result as any).payloads);
-      if (!text) throw new Error("LLM returned empty output");
-
-      const raw = stripCodeFences(text);
-      let parsed: unknown;
+      let tmpDir: string | null = null;
       try {
-        parsed = JSON.parse(raw);
-      } catch {
-        throw new Error("LLM returned invalid JSON");
-      }
+        tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-llm-task-"));
+        const sessionId = `llm-task-${Date.now()}`;
+        const sessionFile = path.join(tmpDir, "session.json");
 
-      const schema = (params as any).schema as unknown;
-      if (schema && typeof schema === "object") {
-        const ajv = new Ajv({ allErrors: true, strict: false });
-        const validate = ajv.compile(schema as any);
-        const ok = validate(parsed);
-        if (!ok) {
-          const msg =
-            validate.errors?.map((e) => `${e.instancePath || "<root>"} ${e.message || "invalid"}`).join("; ") ??
-            "invalid";
-          throw new Error(`LLM JSON did not match schema: ${msg}`);
+        const runEmbeddedPiAgent = await loadRunEmbeddedPiAgent();
+
+        const result = await runEmbeddedPiAgent({
+          sessionId,
+          sessionFile,
+          workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
+          config: api.config,
+          prompt: fullPrompt,
+          timeoutMs,
+          runId: `llm-task-${Date.now()}`,
+          provider,
+          model,
+          authProfileId,
+          authProfileIdSource: authProfileId ? "user" : "auto",
+          streamParams,
+          disableTools: true,
+        });
+
+        const text = collectText((result as any).payloads);
+        if (!text) throw new Error("LLM returned empty output");
+
+        const raw = stripCodeFences(text);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          throw new Error("LLM returned invalid JSON");
+        }
+
+        const schema = (params as any).schema as unknown;
+        if (schema && typeof schema === "object" && !Array.isArray(schema)) {
+          const ajv = new Ajv({ allErrors: true, strict: false });
+          const validate = ajv.compile(schema as any);
+          const ok = validate(parsed);
+          if (!ok) {
+            const msg =
+              validate.errors?.map((e) => `${e.instancePath || "<root>"} ${e.message || "invalid"}`).join("; ") ??
+              "invalid";
+            throw new Error(`LLM JSON did not match schema: ${msg}`);
+          }
+        }
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }],
+          details: { json: parsed, provider, model },
+        };
+      } finally {
+        if (tmpDir) {
+          try {
+            await fs.rm(tmpDir, { recursive: true, force: true });
+          } catch {
+            // ignore
+          }
         }
       }
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }],
-        details: { json: parsed, provider, model },
-      };
     },
   };
 }

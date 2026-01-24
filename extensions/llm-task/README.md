@@ -1,8 +1,10 @@
 # LLM Task (plugin)
 
-Adds an **optional** agent tool `llm-task` for running **JSON-only** LLM tasks (drafting, summarizing, classifying) with optional JSON Schema validation.
+Adds an **optional** agent tool `llm-task` for running **JSON-only** LLM tasks
+(drafting, summarizing, classifying) with optional JSON Schema validation.
 
-This is designed to be called from workflow engines (e.g. Lobster via `clawd.invoke --each`) without adding new Clawdbot code per workflow.
+Designed to be called from workflow engines (for example, Lobster via
+`clawd.invoke --each`) without adding new Clawdbot code per workflow.
 
 ## Enable
 
@@ -44,6 +46,7 @@ This is designed to be called from workflow engines (e.g. Lobster via `clawd.inv
         "config": {
           "defaultProvider": "openai-codex",
           "defaultModel": "gpt-5.2",
+          "defaultAuthProfileId": "main",
           "allowedModels": ["openai-codex/gpt-5.2"],
           "maxTokens": 800,
           "timeoutMs": 30000
@@ -54,7 +57,8 @@ This is designed to be called from workflow engines (e.g. Lobster via `clawd.inv
 }
 ```
 
-`allowedModels` is an allowlist of `provider/model` strings. If set, any request outside the list is rejected.
+`allowedModels` is an allowlist of `provider/model` strings. If set, any request
+outside the list is rejected.
 
 ## Tool API
 
@@ -72,15 +76,22 @@ This is designed to be called from workflow engines (e.g. Lobster via `clawd.inv
 
 ### Output
 
-Returns `details.json` containing the parsed JSON (and validates against `schema` when provided).
+Returns `details.json` containing the parsed JSON (and validates against
+`schema` when provided).
 
 ## Notes
 
-- The tool is **JSON-only** and instructs the model to output only JSON (no code fences, no commentary).
-- Side effects should be handled outside this tool (e.g. approvals in Lobster) before calling tools that send messages/emails.
+- The tool is **JSON-only** and instructs the model to output only JSON
+  (no code fences, no commentary).
+- No tools are exposed to the model for this run.
+- Side effects should be handled outside this tool (for example, approvals in
+  Lobster) before calling tools that send messages/emails.
 
 ## Bundled extension note
 
-This extension depends on Clawdbot internal modules (the embedded agent runner). It is intended to ship as a **bundled** Clawdbot extension (like `lobster`) and be enabled via `plugins.entries` + tool allowlists.
+This extension depends on Clawdbot internal modules (the embedded agent runner).
+It is intended to ship as a **bundled** Clawdbot extension (like `lobster`) and
+be enabled via `plugins.entries` + tool allowlists.
 
-It is **not** currently designed to be copied into `~/.clawdbot/extensions` as a standalone plugin directory.
+It is **not** currently designed to be copied into
+`~/.clawdbot/extensions` as a standalone plugin directory.
