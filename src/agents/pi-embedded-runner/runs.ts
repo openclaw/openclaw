@@ -43,7 +43,7 @@ export function abortEmbeddedPiRun(sessionId: string): boolean {
     diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
     return false;
   }
-  diag.info(`aborting run: sessionId=${sessionId}`);
+  diag.debug(`aborting run: sessionId=${sessionId}`);
   handle.abort();
   return true;
 }
@@ -110,7 +110,7 @@ export function setActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueH
     reason: wasActive ? "run_replaced" : "run_started",
   });
   if (!sessionId.startsWith("probe-")) {
-    diag.info(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+    diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
 }
 
@@ -119,7 +119,7 @@ export function clearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueu
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     logSessionStateChange({ sessionId, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
-      diag.info(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+      diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
     notifyEmbeddedRunEnded(sessionId);
   } else {
