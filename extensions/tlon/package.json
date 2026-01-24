@@ -6,11 +6,25 @@
   "clawdbot": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "channel": {
+      "id": "tlon",
+      "label": "Tlon",
+      "selectionLabel": "Tlon (Urbit)",
+      "docsPath": "/channels/tlon",
+      "docsLabel": "tlon",
+      "blurb": "decentralized messaging on Urbit; install the plugin to enable.",
+      "order": 90,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@clawdbot/tlon",
+      "localPath": "extensions/tlon",
+      "defaultChoice": "npm"
+    }
   },
   "dependencies": {
-    "@urbit/http-api": "^3.0.0",
     "@urbit/aura": "^2.0.0",
-    "eventsource": "^2.0.2"
+    "@urbit/http-api": "^3.0.0"
   }
 }
