@@ -90,6 +90,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I run multiple bots or chats at the same time (Slack), and how should I set that up?](#can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up)
 - [Models: defaults, selection, aliases, switching](#models-defaults-selection-aliases-switching)
   - [What is the “default model”?](#what-is-the-default-model)
+  - [What model do you recommend?](#what-model-do-you-recommend)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Why do I see “Model … is not allowed” and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
   - [Why do I see “Unknown model: minimax/MiniMax-M2.1”?](#why-do-i-see-unknown-model-minimaxminimax-m21)
@@ -1152,6 +1153,18 @@ agents.defaults.model.primary
 ```
 
 Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-5`). If you omit the provider, Clawdbot currently assumes `anthropic` as a temporary deprecation fallback — but you should still **explicitly** set `provider/model`.
+
+### What model do you recommend?
+
+**Recommended default:** `anthropic/claude-opus-4-5`.  
+**Good alternative:** `anthropic/claude-sonnet-4-5`.  
+**Budget/reliable:** `openai/gpt-5.2` (very reliable, less personality).
+
+MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
+[Local models](/gateway/local-models).
+
+Strong warning: weaker/over-quantized models are more vulnerable to prompt
+injection and unsafe behavior. See [Security](/gateway/security).
 
 ### How do I switch models on the fly (without restarting)?
 
