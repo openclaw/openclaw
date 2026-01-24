@@ -6,6 +6,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -78,6 +79,56 @@ export async function dispatchReplyFromConfig(params: {
   if (shouldSkipDuplicateInbound(ctx)) {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_received")) {
+    const timestamp =
+      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+        ? ctx.Timestamp
+        : undefined;
+    const messageIdForHook =
+      ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+    const content =
+      typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+    const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+
+    void hookRunner
+      .runMessageReceived(
+        {
+          from: ctx.From ?? "",
+          content,
+          timestamp,
+          metadata: {
+            to: ctx.To,
+            provider: ctx.Provider,
+            surface: ctx.Surface,
+            threadId: ctx.MessageThreadId,
+            originatingChannel: ctx.OriginatingChannel,
+            originatingTo: ctx.OriginatingTo,
+            messageId: messageIdForHook,
+            senderId: ctx.SenderId,
+            senderName: ctx.SenderName,
+            senderUsername: ctx.SenderUsername,
+            senderE164: ctx.SenderE164,
+          },
+        },
+        {
+          channelId,
+          accountId: ctx.AccountId,
+          conversationId,
+        },
+      )
+      .catch((err) => {
+        logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
+      });
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.
