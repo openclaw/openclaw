@@ -382,6 +382,65 @@ export async function resizeToPng(params: {
     .toBuffer();
 }
 
+export async function optimizeImageToPng(
+  buffer: Buffer,
+  maxBytes: number,
+): Promise<{
+  buffer: Buffer;
+  optimizedSize: number;
+  resizeSide: number;
+  compressionLevel: number;
+}> {
+  // Try a grid of sizes/compression levels until under the limit.
+  // PNG uses compression levels 0-9 (higher = smaller but slower).
+  const sides = [2048, 1536, 1280, 1024, 800];
+  const compressionLevels = [6, 7, 8, 9];
+  let smallest: {
+    buffer: Buffer;
+    size: number;
+    resizeSide: number;
+    compressionLevel: number;
+  } | null = null;
+
+  for (const side of sides) {
+    for (const compressionLevel of compressionLevels) {
+      try {
+        const out = await resizeToPng({
+          buffer,
+          maxSide: side,
+          compressionLevel,
+          withoutEnlargement: true,
+        });
+        const size = out.length;
+        if (!smallest || size < smallest.size) {
+          smallest = { buffer: out, size, resizeSide: side, compressionLevel };
+        }
+        if (size <= maxBytes) {
+          return {
+            buffer: out,
+            optimizedSize: size,
+            resizeSide: side,
+            compressionLevel,
+          };
+        }
+      } catch {
+        // Continue trying other size/compression combinations.
+      }
+    }
+  }
+
+  if (smallest) {
+    return {
+      buffer: smallest.buffer,
+      optimizedSize: smallest.size,
+      resizeSide: smallest.resizeSide,
+      compressionLevel: smallest.compressionLevel,
+    };
+  }
+
+  throw new Error("Failed to optimize PNG image");
+}
+
 /**
  * Internal sips-only EXIF normalization (no sharp fallback).
  * Used by resizeToJpeg to normalize before sips resize.
