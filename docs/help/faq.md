@@ -254,7 +254,9 @@ not a hard minimum.
 
 ### Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?
 
-Yes. Copy the **state directory** and **workspace**, then run Doctor once:
+Yes. Copy the **state directory** and **workspace**, then run Doctor once. This
+keeps your bot “exactly the same” (memory, session history, auth, and channel
+state) as long as you copy **both** locations:
 
 1) Install Clawdbot on the new machine.
 2) Copy `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`) from the old machine.
@@ -263,6 +265,10 @@ Yes. Copy the **state directory** and **workspace**, then run Doctor once:
 
 That preserves config, auth profiles, WhatsApp creds, sessions, and memory. If you’re in
 remote mode, remember the gateway host owns the session store and workspace.
+
+**Important:** if you only commit/push your workspace to GitHub, you’re backing
+up **memory + bootstrap files**, but **not** session history or auth. Those live
+under `~/.clawdbot/` (for example `~/.clawdbot/agents/<agentId>/sessions/`).
 
 Related: [Where things live on disk](/help/faq#where-does-clawdbot-store-its-data),
 [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
