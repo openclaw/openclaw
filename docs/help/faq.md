@@ -20,6 +20,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I can't access docs.clawd.bot (SSL error). What now?](#i-cant-access-docsclawdbot-ssl-error-what-now)
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
   - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
+  - [How do I install Clawdbot on Linux?](#how-do-i-install-clawdbot-on-linux)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setup-token-auth-work)
@@ -96,6 +97,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Models: defaults, selection, aliases, switching](#models-defaults-selection-aliases-switching)
   - [What is the “default model”?](#what-is-the-default-model)
   - [What model do you recommend?](#what-model-do-you-recommend)
+  - [What do Clawd, Flawd, and Krill use for models?](#what-do-clawd-flawd-and-krill-use-for-models)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Why do I see “Model … is not allowed” and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
   - [Why do I see “Unknown model: minimax/MiniMax-M2.1”?](#why-do-i-see-unknown-model-minimaxminimax-m21)
@@ -322,6 +324,14 @@ curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git
 ```
 
 More detail: [Install](/install) and [Installer flags](/install/installer).
+
+### How do I install Clawdbot on Linux?
+
+Short answer: follow the Linux guide, then run the onboarding wizard.
+
+- Linux quick path + service install: [Linux](/platforms/linux).
+- Full walkthrough: [Getting Started](/start/getting-started).
+- Installer + updates: [Install & updates](/install/updating).
 
 ### How do I install Clawdbot on a VPS?
 
@@ -1225,6 +1235,11 @@ Strong warning: weaker/over-quantized models are more vulnerable to prompt
 injection and unsafe behavior. See [Security](/gateway/security).
 
 More context: [Models](/concepts/models).
+
+### What do Clawd, Flawd, and Krill use for models?
+
+- **Clawd + Flawd:** Anthropic Opus (`anthropic/claude-opus-4-5`) — see [Anthropic](/providers/anthropic).
+- **Krill:** MiniMax M2.1 (`minimax/MiniMax-M2.1`) — see [MiniMax](/providers/minimax).
 
 ### How do I switch models on the fly (without restarting)?
 
