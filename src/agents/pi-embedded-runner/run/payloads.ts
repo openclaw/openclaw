@@ -169,7 +169,16 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   if (params.lastToolError) {
-    const hasUserFacingReply = replyItems.length > 0;
+    const lastAssistantHasToolCalls =
+      Array.isArray(params.lastAssistant?.content) &&
+      params.lastAssistant?.content.some((block) =>
+        block && typeof block === "object"
+          ? (block as { type?: unknown }).type === "toolCall"
+          : false,
+      );
+    const lastAssistantWasToolUse = params.lastAssistant?.stopReason === "toolUse";
+    const hasUserFacingReply =
+      replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse;
     // Check if this is a recoverable/internal tool error that shouldn't be shown to users
     // when there's already a user-facing reply (the model should have retried).
     const errorLower = (params.lastToolError.error ?? "").toLowerCase();
