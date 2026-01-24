@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   addSubagentRunForTests,
@@ -10,6 +14,17 @@ import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
+
+let testWorkspaceDir = os.tmpdir();
+
+beforeAll(async () => {
+  testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-commands-"));
+  await fs.writeFile(path.join(testWorkspaceDir, "AGENTS.md"), "# Agents\n", "utf-8");
+});
+
+afterAll(async () => {
+  await fs.rm(testWorkspaceDir, { recursive: true, force: true });
+});
 
 function buildParams(commandBody: string, cfg: ClawdbotConfig, ctxOverrides?: Partial<MsgContext>) {
   const ctx = {
@@ -37,7 +52,7 @@ function buildParams(commandBody: string, cfg: ClawdbotConfig, ctxOverrides?: Pa
     directives: parseInlineDirectives(commandBody),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
-    workspaceDir: "/tmp",
+    workspaceDir: testWorkspaceDir,
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off" as const,
     resolvedReasoningLevel: "off" as const,
