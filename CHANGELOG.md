@@ -29,6 +29,7 @@ Docs: https://docs.clawd.bot
 - CLI: prevent ANSI color bleed when table cells wrap.
 - CLI: explain when auth profiles are excluded by auth.order in probe details.
 - CLI: drop the em dash when the banner tagline wraps to a second line.
+- CLI: inline auth probe errors in status rows to reduce wrapping.
 - Linux: include env-configured user bin roots in systemd PATH and align PATH audits. (#1512) Thanks @robbyczgw-cla.
 - TUI: render Gateway slash-command replies as system output (for example, `/context`).
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
