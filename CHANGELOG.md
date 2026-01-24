@@ -2,6 +2,17 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.24
+
+### Changes
+- Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).
+- Docs: add verbose installer troubleshooting guidance.
+- Docs: update Fly.io guide notes.
+
+### Fixes
+- Web UI: hide internal `message_id` hints in chat bubbles.
+- Heartbeat: normalize target identifiers for consistent routing.
+
 ## 2026.1.23-1
 
 ### Fixes
