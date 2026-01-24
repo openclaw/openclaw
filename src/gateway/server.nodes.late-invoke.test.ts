@@ -63,16 +63,21 @@ describe("late-arriving invoke results", () => {
       });
 
       // Send an invoke result with an unknown ID (simulating late arrival after timeout)
-      const result = await rpcReq<{ ok?: boolean }>(nodeWs, "node.invoke.result", {
-        id: "unknown-invoke-id-12345",
-        nodeId,
-        ok: true,
-        payloadJSON: JSON.stringify({ result: "late" }),
-      });
+      const result = await rpcReq<{ ok?: boolean; ignored?: boolean }>(
+        nodeWs,
+        "node.invoke.result",
+        {
+          id: "unknown-invoke-id-12345",
+          nodeId,
+          ok: true,
+          payloadJSON: JSON.stringify({ result: "late" }),
+        },
+      );
 
       // Late-arriving results return success instead of error to reduce log noise
       expect(result.ok).toBe(true);
       expect(result.payload?.ok).toBe(true);
+      expect(result.payload?.ignored).toBe(true);
     } finally {
       nodeWs.close();
     }
@@ -99,15 +104,20 @@ describe("late-arriving invoke results", () => {
       const nodeId = identity.deviceId;
 
       // Late invoke result with error payload - should still return success
-      const result = await rpcReq<{ ok?: boolean }>(nodeWs, "node.invoke.result", {
-        id: "another-unknown-invoke-id",
-        nodeId,
-        ok: false,
-        error: { code: "FAILED", message: "test error" },
-      });
+      const result = await rpcReq<{ ok?: boolean; ignored?: boolean }>(
+        nodeWs,
+        "node.invoke.result",
+        {
+          id: "another-unknown-invoke-id",
+          nodeId,
+          ok: false,
+          error: { code: "FAILED", message: "test error" },
+        },
+      );
 
       expect(result.ok).toBe(true);
       expect(result.payload?.ok).toBe(true);
+      expect(result.payload?.ignored).toBe(true);
     } finally {
       nodeWs.close();
     }

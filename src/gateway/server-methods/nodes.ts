@@ -470,7 +470,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
     if (!ok) {
       // Late-arriving results (after invoke timeout) are expected and harmless.
       // Return success instead of error to reduce log noise; client can discard.
-      respond(true, { ok: true }, undefined);
+      context.logGateway.debug(`late invoke result ignored: id=${p.id} node=${p.nodeId}`);
+      respond(true, { ok: true, ignored: true }, undefined);
       return;
     }
     respond(true, { ok: true }, undefined);
