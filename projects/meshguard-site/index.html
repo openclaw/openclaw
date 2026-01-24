@@ -19,12 +19,7 @@
     <nav class="nav">
         <div class="nav-container">
             <a href="/" class="nav-logo">
-                <svg class="logo-icon" viewBox="0 0 100 100" width="40" height="40">
-                    <path fill="#0A2540" d="M30,25 Q20,25 20,35 L20,40 Q20,50 30,50 L35,50 Q45,50 45,40 L45,35 Q45,25 35,25 Z M25,30 Q25,28 27,28 L38,28 Q40,28 40,30 L40,45 Q40,47 38,47 L27,47 Q25,47 25,45 Z" transform="rotate(-45 50 50)"/>
-                    <path fill="#00D4AA" d="M70,25 Q80,25 80,35 L80,40 Q80,50 70,50 L65,50 Q55,50 55,40 L55,35 Q55,25 65,25 Z M75,30 Q75,28 73,28 L62,28 Q60,28 60,30 L60,45 Q60,47 62,47 L73,47 Q75,47 75,45 Z" transform="rotate(-45 50 50)"/>
-                    <path fill="#0A2540" d="M30,75 Q20,75 20,65 L20,60 Q20,50 30,50 L35,50 Q45,50 45,60 L45,65 Q45,75 35,75 Z M25,70 Q25,72 27,72 L38,72 Q40,72 40,70 L40,55 Q40,53 38,53 L27,53 Q25,53 25,55 Z" transform="rotate(-45 50 50)"/>
-                    <path fill="#00D4AA" d="M70,75 Q80,75 80,65 L80,60 Q80,50 70,50 L65,50 Q55,50 55,60 L55,65 Q55,75 65,75 Z M75,70 Q75,72 73,72 L62,72 Q60,72 60,70 L60,55 Q60,53 62,53 L73,53 Q75,53 75,55 Z" transform="rotate(-45 50 50)"/>
-                </svg>
+                <img src="images/logo.png" alt="MeshGuard" class="logo-icon">
                 <span class="logo-text">MeshGuard</span>
             </a>
             <div class="nav-links">
@@ -52,27 +47,32 @@
                     <a href="#product" class="btn btn-outline btn-lg">Learn More</a>
                 </div>
             </div>
-            <div class="hero-visual">
-                <div class="mesh-visual">
-                    <div class="mesh-node node-1"></div>
-                    <div class="mesh-node node-2"></div>
-                    <div class="mesh-node node-3"></div>
-                    <div class="mesh-node node-4"></div>
-                    <div class="mesh-node node-5"></div>
-                    <svg class="mesh-lines" viewBox="0 0 400 300">
-                        <line x1="100" y1="50" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
-                        <line x1="300" y1="50" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
-                        <line x1="50" y1="200" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
-                        <line x1="350" y1="200" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
-                        <line x1="200" y1="280" x2="200" y2="150" stroke="#00D4AA" stroke-width="2" opacity="0.5"/>
-                    </svg>
-                </div>
-            </div>
+        </div>
+        <div class="hero-mesh">
+            <svg viewBox="0 0 1200 400" preserveAspectRatio="xMidYMid slice">
+                <defs>
+                    <linearGradient id="line-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" stop-color="#00D4AA" stop-opacity="0"/>
+                        <stop offset="50%" stop-color="#00D4AA" stop-opacity="0.6"/>
+                        <stop offset="100%" stop-color="#00D4AA" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+                <line x1="0" y1="100" x2="400" y2="200" stroke="url(#line-gradient)" stroke-width="1"/>
+                <line x1="200" y1="50" x2="600" y2="250" stroke="url(#line-gradient)" stroke-width="1"/>
+                <line x1="400" y1="300" x2="800" y2="100" stroke="url(#line-gradient)" stroke-width="1"/>
+                <line x1="600" y1="150" x2="1000" y2="300" stroke="url(#line-gradient)" stroke-width="1"/>
+                <line x1="800" y1="50" x2="1200" y2="200" stroke="url(#line-gradient)" stroke-width="1"/>
+                <circle cx="200" cy="100" r="4" fill="#00D4AA" opacity="0.8"/>
+                <circle cx="400" cy="200" r="6" fill="#00D4AA" opacity="0.6"/>
+                <circle cx="600" cy="150" r="4" fill="#00D4AA" opacity="0.8"/>
+                <circle cx="800" cy="250" r="5" fill="#00D4AA" opacity="0.7"/>
+                <circle cx="1000" cy="100" r="4" fill="#00D4AA" opacity="0.8"/>
+            </svg>
         </div>
     </section>
 
     <!-- Problem Section -->
-    <section class="section section-gray" id="problem">
+    <section class="section section-navy" id="problem">
         <div class="container">
             <div class="section-header">
                 <h2>The Enterprise is Becoming an Agent Mesh</h2>
@@ -105,19 +105,34 @@
                 <h3>But who governs the mesh?</h3>
                 <div class="questions-grid">
                     <div class="question-card">
-                        <div class="question-icon">🤖</div>
+                        <svg class="question-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="8" r="4"/>
+                            <path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
+                            <circle cx="12" cy="8" r="1" fill="currentColor"/>
+                        </svg>
                         <p>Who is this agent?</p>
                     </div>
                     <div class="question-card">
-                        <div class="question-icon">🔐</div>
+                        <svg class="question-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
                         <p>What can it access?</p>
                     </div>
                     <div class="question-card">
-                        <div class="question-icon">✅</div>
+                        <svg class="question-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                            <polyline points="22 4 12 14.01 9 11.01"/>
+                        </svg>
                         <p>Who approved this chain?</p>
                     </div>
                     <div class="question-card">
-                        <div class="question-icon">📋</div>
+                        <svg class="question-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                        </svg>
                         <p>What actions were taken?</p>
                     </div>
                 </div>
@@ -135,7 +150,7 @@
             <div class="features-grid">
                 <div class="feature-card">
                     <div class="feature-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
                             <circle cx="12" cy="7" r="4"/>
                         </svg>
@@ -145,7 +160,7 @@
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                         </svg>
                     </div>
@@ -154,7 +169,7 @@
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
                             <circle cx="8.5" cy="7" r="4"/>
                             <path d="M20 8v6M23 11h-6"/>
@@ -165,7 +180,7 @@
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" stroke-width="2">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                             <polyline points="14 2 14 8 20 8"/>
                             <line x1="16" y1="13" x2="8" y2="13"/>
@@ -180,7 +195,7 @@
     </section>
 
     <!-- How It Works -->
-    <section class="section section-dark" id="how-it-works">
+    <section class="section section-navy" id="how-it-works">
         <div class="container">
             <div class="section-header">
                 <h2>Simple to Deploy, Powerful to Scale</h2>
@@ -215,9 +230,9 @@
             </div>
             <div class="code-example">
                 <div class="code-header">
-                    <span class="code-dot"></span>
-                    <span class="code-dot"></span>
-                    <span class="code-dot"></span>
+                    <span class="code-dot red"></span>
+                    <span class="code-dot yellow"></span>
+                    <span class="code-dot green"></span>
                     <span class="code-title">policy.yaml</span>
                 </div>
                 <pre><code><span class="code-key">agent</span>: sales-assistant
@@ -300,7 +315,7 @@
     </section>
 
     <!-- About Section -->
-    <section class="section section-gray" id="about">
+    <section class="section section-navy" id="about">
         <div class="container">
             <div class="about-grid">
                 <div class="about-content">
@@ -355,12 +370,7 @@
             <div class="footer-grid">
                 <div class="footer-brand">
                     <a href="/" class="nav-logo">
-                        <svg class="logo-icon" viewBox="0 0 100 100" width="32" height="32">
-                            <path fill="#fff" d="M30,25 Q20,25 20,35 L20,40 Q20,50 30,50 L35,50 Q45,50 45,40 L45,35 Q45,25 35,25 Z" transform="rotate(-45 50 50)" opacity="0.7"/>
-                            <path fill="#00D4AA" d="M70,25 Q80,25 80,35 L80,40 Q80,50 70,50 L65,50 Q55,50 55,40 L55,35 Q55,25 65,25 Z" transform="rotate(-45 50 50)"/>
-                            <path fill="#fff" d="M30,75 Q20,75 20,65 L20,60 Q20,50 30,50 L35,50 Q45,50 45,60 L45,65 Q45,75 35,75 Z" transform="rotate(-45 50 50)" opacity="0.7"/>
-                            <path fill="#00D4AA" d="M70,75 Q80,75 80,65 L80,60 Q80,50 70,50 L65,50 Q55,50 55,60 L55,65 Q55,75 65,75 Z" transform="rotate(-45 50 50)"/>
-                        </svg>
+                        <img src="images/logo.png" alt="MeshGuard" class="logo-icon-sm">
                         <span class="logo-text">MeshGuard</span>
                     </a>
                     <p>The governance control plane for the agent mesh.</p>
