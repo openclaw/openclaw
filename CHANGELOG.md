@@ -20,6 +20,7 @@ Docs: https://docs.clawd.bot
 - Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt.
 
 ### Fixes
+- Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
 - Agents: ignore IDENTITY.md template placeholders when parsing identity to avoid placeholder replies. (#1556)
 - Docker: update gateway command in docker-compose and Hetzner guide. (#1514)
 - Sessions: reject array-backed session stores to prevent silent wipes. (#1469)
