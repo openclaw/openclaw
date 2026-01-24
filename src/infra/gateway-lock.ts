@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -46,6 +47,34 @@ function isAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Check if a PID is actually a clawdbot gateway process.
+ * This handles PID recycling in containers where a different process
+ * might have the same PID after a restart.
+ */
+function isGatewayProcess(pid: number): boolean {
+  if (!isAlive(pid)) return false;
+
+  // On Linux, check /proc/PID/cmdline to verify it's actually clawdbot
+  if (process.platform === "linux") {
+    try {
+      const cmdline = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+      // cmdline uses null bytes as separators
+      const args = cmdline.split("\0").join(" ").toLowerCase();
+      // Check if this is actually a clawdbot gateway process
+      return args.includes("clawdbot") || args.includes("gateway");
+    } catch {
+      // Can't read cmdline - process might have exited or we lack permissions
+      // Fall back to assuming it's not our process (safer in containers)
+      return false;
+    }
+  }
+
+  // On non-Linux (macOS, Windows), trust the PID check
+  // PID recycling is less of an issue outside containers
+  return true;
 }
 
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
@@ -119,7 +148,8 @@ export async function acquireGatewayLock(
 
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
-      const ownerAlive = ownerPid ? isAlive(ownerPid) : false;
+      // Use isGatewayProcess to handle PID recycling in containers
+      const ownerAlive = ownerPid ? isGatewayProcess(ownerPid) : false;
       if (!ownerAlive && ownerPid) {
         await fs.rm(lockPath, { force: true });
         continue;
