@@ -756,8 +756,9 @@ Docs: [Nodes](/nodes), [Gateway protocol](/gateway/protocol), [macOS remote mode
 ### Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?
 
 Yes — nodes are the first‑class way to reach your laptop from a remote Gateway, and they
-unlock more than shell access. The Gateway runs on macOS/Linux (Windows via WSL2), so a common
-setup is an always‑on host (VPS/home box/Pi) plus your laptop as a node.
+unlock more than shell access. The Gateway runs on macOS/Linux (Windows via WSL2) and is
+lightweight (a small VPS or Raspberry Pi-class box is fine; 4 GB RAM is plenty), so a common
+setup is an always‑on host plus your laptop as a node.
 
 - **No inbound SSH required.** Nodes connect out to the Gateway WebSocket and use device pairing.
 - **Safer execution controls.** `system.run` is gated by node allowlists/approvals on that laptop.
