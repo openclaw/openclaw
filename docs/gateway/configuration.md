@@ -1459,13 +1459,28 @@ voice notes; other channels send MP3 audio.
       enabled: true,
       mode: "final", // final | all (include tool/block replies)
       provider: "elevenlabs",
+      summaryModel: "openai/gpt-4.1-mini",
+      modelOverrides: {
+        enabled: true
+      },
       maxTextLength: 4000,
       timeoutMs: 30000,
       prefsPath: "~/.clawdbot/settings/tts.json",
       elevenlabs: {
         apiKey: "elevenlabs_api_key",
+        baseUrl: "https://api.elevenlabs.io",
         voiceId: "voice_id",
-        modelId: "eleven_multilingual_v2"
+        modelId: "eleven_multilingual_v2",
+        seed: 42,
+        applyTextNormalization: "auto",
+        languageCode: "en",
+        voiceSettings: {
+          stability: 0.5,
+          similarityBoost: 0.75,
+          style: 0.0,
+          useSpeakerBoost: true,
+          speed: 1.0
+        }
       },
       openai: {
         apiKey: "openai_api_key",
@@ -1478,11 +1493,17 @@ voice notes; other channels send MP3 audio.
 ```
 
 Notes:
-- `messages.tts.enabled` can be overridden by local user prefs (see `/tts_on`, `/tts_off`).
+- `messages.tts.enabled` can be overridden by local user prefs (see `/tts on`, `/tts off`).
 - `prefsPath` stores local overrides (enabled/provider/limit/summarize).
 - `maxTextLength` is a hard cap for TTS input; summaries are truncated to fit.
-- `/tts_limit` and `/tts_summary` control per-user summarization settings.
+- `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
+  - Accepts `provider/model` or an alias from `agents.defaults.models`.
+- `modelOverrides` enables model-driven overrides like `[[tts:...]]` tags (on by default).
+- `/tts limit` and `/tts summary` control per-user summarization settings.
 - `apiKey` values fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- `elevenlabs.baseUrl` overrides the ElevenLabs API base URL.
+- `elevenlabs.voiceSettings` supports `stability`/`similarityBoost`/`style` (0..1),
+  `useSpeakerBoost`, and `speed` (0.5..2.0).
 
 ### `talk`
 

@@ -4,6 +4,9 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.23 (Unreleased)
 
+### Highlights
+- TTS: allow model-driven TTS tags by default for expressive audio replies (laughter, singing cues, etc.).
+
 ### Changes
 - Gateway: add /tools/invoke HTTP endpoint for direct tool calls and document it. (#1575) Thanks @vignesh07.
 - Agents: keep system prompt time zone-only and move current time to `session_status` for better cache hits.

@@ -170,7 +170,7 @@ export type PluginCommandHandler = (
  * Definition for a plugin-registered command.
  */
 export type ClawdbotPluginCommandDefinition = {
-  /** Command name without leading slash (e.g., "tts_on") */
+  /** Command name without leading slash (e.g., "tts") */
   name: string;
   /** Description shown in /help and command menus */
   description: string;
