@@ -584,7 +584,6 @@ export async function modelsStatusCommand(
       const rows = sorted.map((result) => {
         const status = colorize(rich, statusColor(result.status), result.status);
         const latency = formatProbeLatency(result.latencyMs);
-        const detail = result.error ? colorize(rich, theme.muted, result.error) : "";
         const modelLabel = result.model ?? `${result.provider}/-`;
         const modeLabel = result.mode ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}` : "";
         const profile = `${colorize(rich, theme.accent, result.label)}${modeLabel}`;
@@ -593,7 +592,6 @@ export async function modelsStatusCommand(
           Model: colorize(rich, theme.heading, modelLabel),
           Profile: profile,
           Status: statusLabel,
-          Detail: detail,
         };
       });
       runtime.log(
@@ -603,11 +601,22 @@ export async function modelsStatusCommand(
             { key: "Model", header: "Model", minWidth: 18 },
             { key: "Profile", header: "Profile", minWidth: 24 },
             { key: "Status", header: "Status", minWidth: 12 },
-            { key: "Detail", header: "Detail", minWidth: 16, flex: true },
           ],
           rows,
         }).trimEnd(),
       );
+      const detailRows = sorted.filter((result) => Boolean(result.error?.trim()));
+      if (detailRows.length > 0) {
+        runtime.log("");
+        runtime.log(colorize(rich, theme.muted, "Details"));
+        for (const result of detailRows) {
+          const modelLabel = colorize(rich, theme.heading, result.model ?? `${result.provider}/-`);
+          const profileLabel = colorize(rich, theme.accent, result.label);
+          runtime.log(
+            `- ${modelLabel} ${profileLabel}: ${colorize(rich, theme.muted, result.error ?? "")}`,
+          );
+        }
+      }
       runtime.log(colorize(rich, theme.muted, describeProbeSummary(probeSummary)));
     }
   }
