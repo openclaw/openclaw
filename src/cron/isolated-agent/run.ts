@@ -26,6 +26,11 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
+  formatUserTime,
+  resolveUserTimeFormat,
+  resolveUserTimezone,
+} from "../../agents/date-time.js";
+import {
   formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -226,7 +231,12 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
-  const commandBody = base;
+  const userTimezone = resolveUserTimezone(params.cfg.agents?.defaults?.userTimezone);
+  const userTimeFormat = resolveUserTimeFormat(params.cfg.agents?.defaults?.timeFormat);
+  const formattedTime =
+    formatUserTime(new Date(now), userTimezone, userTimeFormat) ?? new Date(now).toISOString();
+  const timeLine = `Current time: ${formattedTime} (${userTimezone})`;
+  const commandBody = `${base}\n${timeLine}`.trim();
 
   const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
