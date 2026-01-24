@@ -95,7 +95,9 @@ export function createEventHandlers(context: EventHandlerContext) {
   const handleAgentEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") return;
     const evt = payload as AgentEvent;
-    if (!state.currentSessionId || evt.runId !== state.currentSessionId) return;
+    // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
+    // active chat run id, not the session id.
+    if (!state.activeChatRunId || evt.runId !== state.activeChatRunId) return;
     if (evt.stream === "tool") {
       const data = evt.data ?? {};
       const phase = asString(data.phase, "");
