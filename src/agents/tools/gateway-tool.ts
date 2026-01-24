@@ -20,6 +20,7 @@ const GATEWAY_ACTIONS = [
   "config.get",
   "config.schema",
   "config.apply",
+  "config.patch",
   "update.run",
 ] as const;
 
@@ -35,10 +36,10 @@ const GatewayToolSchema = Type.Object({
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
-  // config.apply
+  // config.apply, config.patch
   raw: Type.Optional(Type.String()),
   baseHash: Type.Optional(Type.String()),
-  // config.apply, update.run
+  // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
@@ -56,7 +57,7 @@ export function createGatewayTool(opts?: {
     label: "Gateway",
     name: "gateway",
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.apply/update.run to write config or run updates with validation and restart.",
+      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -187,6 +188,42 @@ export function createGatewayTool(opts?: {
             ? Math.floor(params.restartDelayMs)
             : undefined;
         const result = await callGatewayTool("config.apply", gatewayOpts, {
+          raw,
+          baseHash,
+          sessionKey,
+          note,
+          restartDelayMs,
+        });
+        return jsonResult({ ok: true, result });
+      }
+      if (action === "config.patch") {
+        const raw = readStringParam(params, "raw", { required: true });
+        let baseHash = readStringParam(params, "baseHash");
+        if (!baseHash) {
+          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+          if (snapshot && typeof snapshot === "object") {
+            const hash = (snapshot as { hash?: unknown }).hash;
+            if (typeof hash === "string" && hash.trim()) {
+              baseHash = hash.trim();
+            } else {
+              const rawSnapshot = (snapshot as { raw?: unknown }).raw;
+              if (typeof rawSnapshot === "string") {
+                baseHash = crypto.createHash("sha256").update(rawSnapshot).digest("hex");
+              }
+            }
+          }
+        }
+        const sessionKey =
+          typeof params.sessionKey === "string" && params.sessionKey.trim()
+            ? params.sessionKey.trim()
+            : opts?.agentSessionKey?.trim() || undefined;
+        const note =
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const restartDelayMs =
+          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
+            ? Math.floor(params.restartDelayMs)
+            : undefined;
+        const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
           baseHash,
           sessionKey,
