@@ -10,6 +10,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -72,13 +73,55 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   });
   if (!normalized) return { ok: true };
 
-  const text = normalized.text ?? "";
-  const mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
+  let text = normalized.text ?? "";
+  let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
     ? (normalized.mediaUrls?.filter(Boolean) as string[])
     : normalized.mediaUrl
       ? [normalized.mediaUrl]
       : [];
   const replyToId = normalized.replyToId;
+
+  // Run message_sending hook (allows plugins to modify or cancel)
+  const hookRunner = getGlobalHookRunner();
+  const normalizedChannel = normalizeChannelId(channel);
+  if (hookRunner && text.trim() && normalizedChannel) {
+    try {
+      const hookResult = await hookRunner.runMessageSending(
+        {
+          to,
+          content: text,
+          metadata: { channel, accountId, threadId },
+        },
+        {
+          channelId: normalizedChannel,
+          accountId: accountId ?? undefined,
+          conversationId: to,
+        },
+      );
+
+      // Check if hook wants to cancel the message
+      if (hookResult?.cancel) {
+        return { ok: true }; // Silently cancel
+      }
+
+      // Check if hook modified the content
+      if (hookResult?.content !== undefined) {
+        // Check if the modified content contains MEDIA: directive
+        const mediaMatch = hookResult.content.match(/^MEDIA:(.+)$/m);
+        if (mediaMatch) {
+          // Extract media path and add to mediaUrls
+          const mediaPath = mediaMatch[1].trim();
+          mediaUrls = [mediaPath];
+          // Remove MEDIA: directive from text (send audio only)
+          text = hookResult.content.replace(/^MEDIA:.+$/m, "").trim();
+        } else {
+          text = hookResult.content;
+        }
+      }
+    } catch {
+      // Hook errors shouldn't block message sending
+    }
+  }
 
   // Skip empty replies.
   if (!text.trim() && mediaUrls.length === 0) {
