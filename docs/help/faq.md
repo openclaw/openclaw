@@ -19,6 +19,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
   - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
   - [I can't access docs.clawd.bot (SSL error). What now?](#i-cant-access-docsclawdbot-ssl-error-what-now)
+  - [What’s the difference between stable and beta?](#whats-the-difference-between-stable-and-beta)
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
   - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
   - [How do I install Clawdbot on Linux?](#how-do-i-install-clawdbot-on-linux)
@@ -42,6 +43,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can multiple people use one WhatsApp number with different Clawdbots?](#can-multiple-people-use-one-whatsapp-number-with-different-clawdbots)
   - [Can I run a "fast chat" agent and an "Opus for coding" agent?](#can-i-run-a-fast-chat-agent-and-an-opus-for-coding-agent)
   - [Does Homebrew work on Linux?](#does-homebrew-work-on-linux)
+  - [What’s the difference between the hackable (git) install and npm install?](#whats-the-difference-between-the-hackable-git-install-and-npm-install)
   - [Can I switch between npm and git installs later?](#can-i-switch-between-npm-and-git-installs-later)
   - [Should I run the Gateway on my laptop or a VPS?](#should-i-run-the-gateway-on-my-laptop-or-a-vps)
 - [Skills and automation](#skills-and-automation)
@@ -322,9 +324,22 @@ Please help us unblock it by reporting here: https://spa.xfinity.com/check_url_s
 If you still can't reach the site, the docs are mirrored on GitHub:
 https://github.com/clawdbot/clawdbot/tree/main/docs
 
+### What’s the difference between stable and beta?
+
+**Stable** and **beta** are **npm dist‑tags**, not separate code lines:
+- `latest` = stable
+- `beta` = early build for testing
+
+We ship builds to **beta**, test them, and once a build is solid we **promote
+that same version to `latest`**. That’s why beta and stable can point at the
+**same version**.
+
+See what changed:  
+https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md
+
 ### How do I install the beta version, and what’s the difference between beta and dev?
 
-**Beta** is a prerelease tag (`vYYYY.M.D-beta.N`) published to the npm dist‑tag `beta`.  
+**Beta** is the npm dist‑tag `beta` (may match `latest`).  
 **Dev** is the moving head of `main` (git); when published, it uses the npm dist‑tag `dev`.
 
 One‑liners (macOS/Linux):
@@ -542,6 +557,15 @@ brew install <formula>
 
 If you run Clawdbot via systemd, ensure the service PATH includes `/home/linuxbrew/.linuxbrew/bin` (or your brew prefix) so `brew`-installed tools resolve in non‑login shells.
 Recent builds also prepend common user bin dirs on Linux systemd services (for example `~/.local/bin`, `~/.npm-global/bin`, `~/.local/share/pnpm`, `~/.bun/bin`) and honor `PNPM_HOME`, `NPM_CONFIG_PREFIX`, `BUN_INSTALL`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `NVM_DIR`, and `FNM_DIR` when set.
+
+### What’s the difference between the hackable (git) install and npm install?
+
+- **Hackable (git) install:** full source checkout, editable, best for contributors.
+  You run builds locally and can patch code/docs.
+- **npm install:** global CLI install, no repo, best for “just run it.”
+  Updates come from npm dist‑tags.
+
+Docs: [Getting started](/start/getting-started), [Updating](/install/updating).
 
 ### Can I switch between npm and git installs later?
 
