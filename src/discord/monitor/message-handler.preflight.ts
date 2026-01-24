@@ -6,7 +6,10 @@ import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
-import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
+import {
+  buildMentionRegexes,
+  matchesMentionWithExplicit,
+} from "../../auto-reply/reply/mentions.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -174,10 +177,26 @@ export async function preflightDiscordMessage(
     },
   });
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
+  const explicitlyMentioned = Boolean(
+    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+  );
+  const hasAnyMention = Boolean(
+    !isDirectMessage &&
+    (message.mentionedEveryone ||
+      (message.mentionedUsers?.length ?? 0) > 0 ||
+      (message.mentionedRoles?.length ?? 0) > 0),
+  );
   const wasMentioned =
     !isDirectMessage &&
-    (Boolean(botId && message.mentionedUsers?.some((user: User) => user.id === botId)) ||
-      matchesMentionPatterns(baseText, mentionRegexes));
+    matchesMentionWithExplicit({
+      text: baseText,
+      mentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: explicitlyMentioned,
+        canResolveExplicit: Boolean(botId),
+      },
+    });
   const implicitMention = Boolean(
     !isDirectMessage &&
     botId &&
@@ -341,12 +360,6 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
-  const hasAnyMention = Boolean(
-    !isDirectMessage &&
-    (message.mentionedEveryone ||
-      (message.mentionedUsers?.length ?? 0) > 0 ||
-      (message.mentionedRoles?.length ?? 0) > 0),
-  );
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
     surface: "discord",

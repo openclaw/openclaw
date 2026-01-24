@@ -10,7 +10,7 @@ import {
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
+import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { recordInboundSession } from "../channels/session.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -299,13 +299,20 @@ export const buildTelegramMessageContext = async ({
   if (!bodyText && allMedia.length > 0) {
     bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
   }
-  const computedWasMentioned =
-    (botUsername ? hasBotMention(msg, botUsername) : false) ||
-    matchesMentionPatterns(msg.text ?? msg.caption ?? "", mentionRegexes);
-  const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
+  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+  const computedWasMentioned = matchesMentionWithExplicit({
+    text: msg.text ?? msg.caption ?? "",
+    mentionRegexes,
+    explicit: {
+      hasAnyMention,
+      isExplicitlyMentioned: explicitlyMentioned,
+      canResolveExplicit: Boolean(botUsername),
+    },
+  });
+  const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
   if (isGroup && commandGate.shouldBlock) {
     logInboundDrop({
       log: logVerbose,

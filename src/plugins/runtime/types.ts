@@ -19,6 +19,8 @@ type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
+type MatchesMentionWithExplicit =
+  typeof import("../../auto-reply/reply/mentions.js").matchesMentionWithExplicit;
 type ShouldAckReaction = typeof import("../../channels/ack-reactions.js").shouldAckReaction;
 type RemoveAckReactionAfterReply =
   typeof import("../../channels/ack-reactions.js").removeAckReactionAfterReply;
@@ -215,6 +217,7 @@ export type PluginRuntime = {
     mentions: {
       buildMentionRegexes: BuildMentionRegexes;
       matchesMentionPatterns: MatchesMentionPatterns;
+      matchesMentionWithExplicit: MatchesMentionWithExplicit;
     };
     reactions: {
       shouldAckReaction: ShouldAckReaction;
