@@ -68,6 +68,18 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.sessionKey).toBe("agent:main:dm:alice");
   });
 
+  it("strips chat_* prefixes for BlueBubbles group session keys", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "bluebubbles",
+      agentId: "main",
+      target: "chat_guid:ABC123",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:bluebubbles:group:abc123");
+    expect(route?.from).toBe("group:ABC123");
+  });
+
   it("treats Zalo Personal DM targets as direct sessions", async () => {
     const cfg = { session: { dmScope: "per-channel-peer" } } as ClawdbotConfig;
     const route = await resolveOutboundSessionRoute({

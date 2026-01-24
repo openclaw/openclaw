@@ -545,9 +545,13 @@ function resolveBlueBubblesSession(
     lower.startsWith("chat_guid:") ||
     lower.startsWith("chat_identifier:") ||
     lower.startsWith("group:");
-  const peerId = isGroup
+  const rawPeerId = isGroup
     ? stripKindPrefix(stripped)
     : stripped.replace(/^(imessage|sms|auto):/i, "");
+  // BlueBubbles inbound group ids omit chat_* prefixes; strip them to align sessions.
+  const peerId = isGroup
+    ? rawPeerId.replace(/^(chat_id|chat_guid|chat_identifier):/i, "")
+    : rawPeerId;
   if (!peerId) return null;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "dm",
