@@ -14,6 +14,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
   - [What runtime do I need?](#what-runtime-do-i-need)
+  - [Does it run on Raspberry Pi?](#does-it-run-on-raspberry-pi)
   - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
   - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
@@ -239,6 +240,14 @@ See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth
 ### What runtime do I need?
 
 Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
+
+### Does it run on Raspberry Pi?
+
+Yes. The Gateway is lightweight — docs list **512MB–1GB RAM**, **1 core**, and about **500MB**
+disk as enough for personal use, and note that a **Raspberry Pi 4 can run it**.
+
+If you want extra headroom (logs, media, other services), **2GB is recommended**, but it’s
+not a hard minimum.
 
 ### Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?
 
