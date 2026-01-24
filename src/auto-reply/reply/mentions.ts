@@ -75,6 +75,26 @@ export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): 
   return mentionRegexes.some((re) => re.test(cleaned));
 }
 
+export type ExplicitMentionSignal = {
+  hasAnyMention: boolean;
+  isExplicitlyMentioned: boolean;
+  canResolveExplicit: boolean;
+};
+
+export function matchesMentionWithExplicit(params: {
+  text: string;
+  mentionRegexes: RegExp[];
+  explicit?: ExplicitMentionSignal;
+}): boolean {
+  const cleaned = normalizeMentionText(params.text ?? "");
+  const explicit = params.explicit?.isExplicitlyMentioned === true;
+  const explicitAvailable = params.explicit?.canResolveExplicit === true;
+  const hasAnyMention = params.explicit?.hasAnyMention === true;
+  if (hasAnyMention && explicitAvailable) return explicit;
+  if (!cleaned) return explicit;
+  return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+}
+
 export function stripStructuralPrefixes(text: string): string {
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.

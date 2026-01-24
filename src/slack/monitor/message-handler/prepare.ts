@@ -12,7 +12,10 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "../../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
-import { buildMentionRegexes, matchesMentionPatterns } from "../../../auto-reply/reply/mentions.js";
+import {
+  buildMentionRegexes,
+  matchesMentionWithExplicit,
+} from "../../../auto-reply/reply/mentions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { buildPairingReply } from "../../../pairing/pairing-messages.js";
@@ -204,11 +207,22 @@ export async function prepareSlackMessage(params: {
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
+  const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
+  const explicitlyMentioned = Boolean(
+    ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),
+  );
   const wasMentioned =
     opts.wasMentioned ??
     (!isDirectMessage &&
-      (Boolean(ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`)) ||
-        matchesMentionPatterns(message.text ?? "", mentionRegexes)));
+      matchesMentionWithExplicit({
+        text: message.text ?? "",
+        mentionRegexes,
+        explicit: {
+          hasAnyMention,
+          isExplicitlyMentioned: explicitlyMentioned,
+          canResolveExplicit: Boolean(ctx.botUserId),
+        },
+      }));
   const implicitMention = Boolean(
     !isDirectMessage &&
     ctx.botUserId &&
@@ -232,7 +246,6 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const allowTextCommands = shouldHandleTextCommands({
     cfg,
     surface: "slack",
