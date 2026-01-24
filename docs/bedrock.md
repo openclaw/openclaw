@@ -32,7 +32,9 @@ Config options live under `models.bedrockDiscovery`:
       enabled: true,
       region: "us-east-1",
       providerFilter: ["anthropic", "amazon"],
-      refreshInterval: 3600
+      refreshInterval: 3600,
+      defaultContextWindow: 32000,
+      defaultMaxTokens: 4096
     }
   }
 }
@@ -43,6 +45,8 @@ Notes:
 - `region` defaults to `AWS_REGION` or `AWS_DEFAULT_REGION`, then `us-east-1`.
 - `providerFilter` matches Bedrock provider names (for example `anthropic`).
 - `refreshInterval` is seconds; set to `0` to disable caching.
+- `defaultContextWindow` (default: `32000`) and `defaultMaxTokens` (default: `4096`)
+  are used for discovered models (override if you know your model limits).
 
 ## Setup (manual)
 

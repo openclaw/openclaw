@@ -65,6 +65,8 @@ export const BedrockDiscoverySchema = z
     region: z.string().optional(),
     providerFilter: z.array(z.string()).optional(),
     refreshInterval: z.number().int().nonnegative().optional(),
+    defaultContextWindow: z.number().int().positive().optional(),
+    defaultMaxTokens: z.number().int().positive().optional(),
   })
   .strict()
   .optional();

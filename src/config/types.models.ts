@@ -48,6 +48,8 @@ export type BedrockDiscoveryConfig = {
   region?: string;
   providerFilter?: string[];
   refreshInterval?: number;
+  defaultContextWindow?: number;
+  defaultMaxTokens?: number;
 };
 
 export type ModelsConfig = {
