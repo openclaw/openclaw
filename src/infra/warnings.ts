@@ -10,6 +10,9 @@ function shouldIgnoreWarning(warning: Warning): boolean {
   if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
     return true;
   }
+  if (warning.code === "DEP0060" && warning.message?.includes("util._extend")) {
+    return true;
+  }
   if (
     warning.name === "ExperimentalWarning" &&
     warning.message?.includes("SQLite is an experimental feature")

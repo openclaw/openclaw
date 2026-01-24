@@ -29,12 +29,23 @@ const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelRuns.length));
 const maxWorkers = isCI ? null : resolvedOverride ?? perRunWorkers;
 
+const WARNING_SUPPRESSION_FLAGS = [
+  "--disable-warning=ExperimentalWarning",
+  "--disable-warning=DEP0040",
+  "--disable-warning=DEP0060",
+];
+
 const run = (entry) =>
   new Promise((resolve) => {
     const args = maxWorkers ? [...entry.args, "--maxWorkers", String(maxWorkers)] : entry.args;
+    const nodeOptions = process.env.NODE_OPTIONS ?? "";
+    const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
+      (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
+      nodeOptions,
+    );
     const child = spawn(pnpm, args, {
       stdio: "inherit",
-      env: { ...process.env, VITEST_GROUP: entry.name },
+      env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: nextNodeOptions },
       shell: process.platform === "win32",
     });
     children.add(child);
