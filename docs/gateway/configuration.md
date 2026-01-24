@@ -50,6 +50,7 @@ Params:
 - `raw` (string) — JSON5 payload for the entire config
 - `baseHash` (optional) — config hash from `config.get` (required when a config already exists)
 - `sessionKey` (optional) — last active session key for the wake-up ping
+- `note` (optional) — note to include in the restart sentinel
 - `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example (via `gateway call`):
@@ -71,10 +72,15 @@ unrelated keys. It applies JSON merge patch semantics:
 - objects merge recursively
 - `null` deletes a key
 - arrays replace
+Like `config.apply`, it validates, writes the config, stores a restart sentinel, and schedules
+the Gateway restart (with an optional wake when `sessionKey` is provided).
 
 Params:
 - `raw` (string) — JSON5 payload containing just the keys to change
 - `baseHash` (required) — config hash from `config.get`
+- `sessionKey` (optional) — last active session key for the wake-up ping
+- `note` (optional) — note to include in the restart sentinel
+- `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example:
 
@@ -82,7 +88,9 @@ Example:
 clawdbot gateway call config.get --params '{}' # capture payload.hash
 clawdbot gateway call config.patch --params '{
   "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
-  "baseHash": "<hash-from-config.get>"
+  "baseHash": "<hash-from-config.get>",
+  "sessionKey": "agent:main:whatsapp:dm:+15555550123",
+  "restartDelayMs": 1000
 }'
 ```
 

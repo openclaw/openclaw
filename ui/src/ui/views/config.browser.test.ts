@@ -68,6 +68,34 @@ describe("config view", () => {
     expect(saveButton?.disabled).toBe(true);
   });
 
+  it("disables save and apply when raw is unchanged", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        formMode: "raw",
+        raw: "{\n}\n",
+        originalRaw: "{\n}\n",
+      }),
+      container,
+    );
+
+    const saveButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((btn) => btn.textContent?.trim() === "Save") as
+      | HTMLButtonElement
+      | undefined;
+    const applyButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((btn) => btn.textContent?.trim() === "Apply") as
+      | HTMLButtonElement
+      | undefined;
+    expect(saveButton).not.toBeUndefined();
+    expect(applyButton).not.toBeUndefined();
+    expect(saveButton?.disabled).toBe(true);
+    expect(applyButton?.disabled).toBe(true);
+  });
+
   it("switches mode via the sidebar toggle", () => {
     const container = document.createElement("div");
     const onFormModeChange = vi.fn();
