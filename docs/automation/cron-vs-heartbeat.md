@@ -88,7 +88,7 @@ Cron jobs run at **exact times** and can run in isolated sessions without affect
 - **Exact timing**: 5-field cron expressions with timezone support.
 - **Session isolation**: Runs in `cron:<jobId>` without polluting main history.
 - **Model overrides**: Use a cheaper or more powerful model per job.
-- **Delivery control**: Can deliver directly to a channel without going through main session.
+- **Delivery control**: Can deliver directly to a channel; still posts a summary to main by default (configurable).
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
 
@@ -177,6 +177,35 @@ clawdbot cron add --name "Weekly review" --cron "0 9 * * 1" --session isolated -
 clawdbot cron add --name "Call back" --at "2h" --session main --system-event "Call back the client" --wake now
 ```
 
+
+## Lobster: Deterministic workflows with approvals
+
+Lobster is the workflow runtime for **multi-step tool pipelines** that need deterministic execution and explicit approvals.
+Use it when the task is more than a single agent turn, and you want a resumable workflow with human checkpoints.
+
+### When Lobster fits
+
+- **Multi-step automation**: You need a fixed pipeline of tool calls, not a one-off prompt.
+- **Approval gates**: Side effects should pause until you approve, then resume.
+- **Resumable runs**: Continue a paused workflow without re-running earlier steps.
+
+### How it pairs with heartbeat and cron
+
+- **Heartbeat/cron** decide *when* a run happens.
+- **Lobster** defines *what steps* happen once the run starts.
+
+For scheduled workflows, use cron or heartbeat to trigger an agent turn that calls Lobster.
+For ad-hoc workflows, call Lobster directly.
+
+### Operational notes (from the code)
+
+- Lobster runs as a **local subprocess** (`lobster` CLI) in tool mode and returns a **JSON envelope**.
+- If the tool returns `needs_approval`, you resume with a `resumeToken` and `approve` flag.
+- The tool is an **optional plugin**; you must allowlist `lobster` in `tools.allow`.
+- If you pass `lobsterPath`, it must be an **absolute path**.
+
+See [Lobster](/tools/lobster) for full usage and examples.
+
 ## Main Session vs Isolated Session
 
 Both heartbeat and cron can interact with the main session, but differently:
@@ -210,7 +239,7 @@ clawdbot cron add \
 Use `--session isolated` when you want:
 - A clean slate without prior context
 - Different model or thinking settings
-- Output delivered directly to a channel
+- Output delivered directly to a channel (summary still posts to main by default)
 - History that doesn't clutter main session
 
 ```bash
@@ -229,7 +258,7 @@ clawdbot cron add \
 | Mechanism | Cost Profile |
 |-----------|--------------|
 | Heartbeat | One turn every N minutes; scales with HEARTBEAT.md size |
-| Cron (main) | Adds event to next heartbeat (no extra turn) |
+| Cron (main) | Adds event to next heartbeat (no isolated turn) |
 | Cron (isolated) | Full agent turn per job; can use cheaper model |
 
 **Tips**:
