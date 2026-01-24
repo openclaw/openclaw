@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS.
+- UI: keep the Control UI sidebar visible while scrolling long pages. (#1515) Thanks @pookNast.
 - Tailscale: retry serve/funnel with sudo only for permission errors and keep original failure details. (#1551) Thanks @sweepies.
 - Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.
 - Gateway: accept null optional fields in exec approval requests. (#1511) Thanks @pvoo.
