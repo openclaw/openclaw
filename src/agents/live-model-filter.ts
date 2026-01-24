@@ -69,6 +69,9 @@ export function isModernModelRef(ref: ModelRef): boolean {
   if (provider === "opencode" && id.endsWith("-free")) {
     return false;
   }
+  if (provider === "opencode" && id === "alpha-glm-4.7") {
+    return false;
+  }
 
   if (provider === "openrouter" || provider === "opencode") {
     return matchesAny(id, [
