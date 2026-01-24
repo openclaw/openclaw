@@ -20,7 +20,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { sendMessageTelegram, editMessageTelegram } from "../../telegram/send.js";
+import {
+  sendMessageTelegram,
+  editMessageTelegram,
+  deleteMessageTelegram,
+} from "../../telegram/send.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildBubbleKeyboard } from "./bubble-manager.js";
 import { logDyDoCommand, getLatestDyDoCommand } from "./orchestrator.js";
@@ -779,13 +783,31 @@ export async function recoverOrphanedBubbles(): Promise<void> {
 
         const text = `✓ · ${entry.projectName} · ${runtime}\n\nSession ended\n\n\`claude --resume ${entry.resumeToken}\``;
 
-        await editMessageTelegram(entry.chatId, entry.messageId, text, {
-          accountId: entry.accountId,
-          buttons: [],
-          disableLinkPreview: true,
-        });
-
-        log.info(`[${entry.sessionId}] Bubble recovered (file not found, assumed completed)`);
+        try {
+          await editMessageTelegram(entry.chatId, entry.messageId, text, {
+            accountId: entry.accountId,
+            buttons: [],
+            disableLinkPreview: true,
+          });
+          log.info(`[${entry.sessionId}] Bubble recovered (file not found, assumed completed)`);
+        } catch (editErr: unknown) {
+          const errMsg = editErr instanceof Error ? editErr.message : String(editErr);
+          if (errMsg.includes("can't be edited") || errMsg.includes("message to edit not found")) {
+            // Message too old or deleted - try to delete it
+            log.warn(`[${entry.sessionId}] Cannot edit bubble (${errMsg}) - attempting deletion`);
+            try {
+              await deleteMessageTelegram(entry.chatId, entry.messageId, {
+                accountId: entry.accountId,
+              });
+              log.info(`[${entry.sessionId}] Deleted stale bubble`);
+            } catch (delErr: unknown) {
+              const delErrMsg = delErr instanceof Error ? delErr.message : String(delErr);
+              log.warn(`[${entry.sessionId}] Cannot delete bubble: ${delErrMsg}`);
+            }
+          } else {
+            log.error(`[${entry.sessionId}] Unexpected edit error: ${errMsg}`);
+          }
+        }
         removeFromBubbleRegistry(entry.sessionId);
         continue;
       }
@@ -850,13 +872,31 @@ export async function recoverOrphanedBubbles(): Promise<void> {
       const text = [header, body, resumeLine].join("\n\n");
 
       // Update bubble to final state
-      await editMessageTelegram(entry.chatId, entry.messageId, text, {
-        accountId: entry.accountId,
-        buttons: [], // Clear buttons
-        disableLinkPreview: true,
-      });
-
-      log.info(`[${entry.sessionId}] Bubble recovered: ${finalStatus}`);
+      try {
+        await editMessageTelegram(entry.chatId, entry.messageId, text, {
+          accountId: entry.accountId,
+          buttons: [], // Clear buttons
+          disableLinkPreview: true,
+        });
+        log.info(`[${entry.sessionId}] Bubble recovered: ${finalStatus}`);
+      } catch (editErr: unknown) {
+        const errMsg = editErr instanceof Error ? editErr.message : String(editErr);
+        if (errMsg.includes("can't be edited") || errMsg.includes("message to edit not found")) {
+          // Message too old or deleted - try to delete it
+          log.warn(`[${entry.sessionId}] Cannot edit bubble (${errMsg}) - attempting deletion`);
+          try {
+            await deleteMessageTelegram(entry.chatId, entry.messageId, {
+              accountId: entry.accountId,
+            });
+            log.info(`[${entry.sessionId}] Deleted stale bubble`);
+          } catch (delErr: unknown) {
+            const delErrMsg = delErr instanceof Error ? delErr.message : String(delErr);
+            log.warn(`[${entry.sessionId}] Cannot delete bubble: ${delErrMsg}`);
+          }
+        } else {
+          log.error(`[${entry.sessionId}] Unexpected edit error: ${errMsg}`);
+        }
+      }
       removeFromBubbleRegistry(entry.sessionId);
     } catch (err) {
       log.error(`[${entry.sessionId}] Recovery failed: ${err}`);
