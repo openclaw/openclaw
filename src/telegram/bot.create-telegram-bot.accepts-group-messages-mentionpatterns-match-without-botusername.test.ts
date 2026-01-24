@@ -210,6 +210,47 @@ describe("createTelegramBot", () => {
       new RegExp(`^\\[Telegram Test Group id:7 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
     );
   });
+
+  it("skips group messages when another user is explicitly mentioned", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      identity: { name: "Bert" },
+      messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "bert: hello @alice",
+        entities: [{ type: "mention", offset: 12, length: 6 }],
+        date: 1736380800,
+        message_id: 3,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
   it("keeps group envelope headers stable (sender identity is separate)", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
