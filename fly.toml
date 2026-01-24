@@ -2,7 +2,7 @@
 # See https://fly.io/docs/reference/configuration/
 
 app = "clawdbot"
-primary_region = "lhr"  # London
+primary_region = "iad"  # change to your closest region
 
 [build]
   dockerfile = "Dockerfile"
@@ -11,6 +11,11 @@ primary_region = "lhr"  # London
   NODE_ENV = "production"
   # Fly uses x86, but keep this for consistency
   CLAWDBOT_PREFER_PNPM = "1"
+  CLAWDBOT_STATE_DIR = "/data"
+  NODE_OPTIONS = "--max-old-space-size=1536"
+
+[processes]
+  app = "node dist/index.js gateway --port 3000 --bind lan"
 
 [http_service]
   internal_port = 3000
@@ -18,10 +23,11 @@ primary_region = "lhr"  # London
   auto_stop_machines = false  # Keep running for persistent connections
   auto_start_machines = true
   min_machines_running = 1
+  processes = ["app"]
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = "shared-cpu-2x"
+  memory = "2048mb"
 
 [mounts]
   source = "clawdbot_data"
