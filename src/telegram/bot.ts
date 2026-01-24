@@ -117,8 +117,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const telegramCfg = account.config;
 
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch);
-  const isBun = "Bun" in globalThis || Boolean(process?.versions?.bun);
-  const shouldProvideFetch = Boolean(opts.proxyFetch) || isBun;
+  const shouldProvideFetch = Boolean(fetchImpl);
   const timeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))

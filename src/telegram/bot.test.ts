@@ -309,13 +309,11 @@ describe("createTelegramBot", () => {
     expect(registered.some((command) => reserved.includes(command.command))).toBe(false);
   });
 
-  it("forces native fetch only under Bun", () => {
+  it("uses wrapped fetch when global fetch is available", () => {
     const originalFetch = globalThis.fetch;
-    const originalBun = (globalThis as { Bun?: unknown }).Bun;
     const fetchSpy = vi.fn() as unknown as typeof fetch;
     globalThis.fetch = fetchSpy;
     try {
-      (globalThis as { Bun?: unknown }).Bun = {};
       createTelegramBot({ token: "tok" });
       const fetchImpl = resolveTelegramFetch();
       expect(fetchImpl).toBeTypeOf("function");
@@ -326,34 +324,6 @@ describe("createTelegramBot", () => {
       expect(clientFetch).not.toBe(fetchSpy);
     } finally {
       globalThis.fetch = originalFetch;
-      if (originalBun === undefined) {
-        delete (globalThis as { Bun?: unknown }).Bun;
-      } else {
-        (globalThis as { Bun?: unknown }).Bun = originalBun;
-      }
-    }
-  });
-
-  it("does not force native fetch on Node", () => {
-    const originalFetch = globalThis.fetch;
-    const originalBun = (globalThis as { Bun?: unknown }).Bun;
-    const fetchSpy = vi.fn() as unknown as typeof fetch;
-    globalThis.fetch = fetchSpy;
-    try {
-      if (originalBun !== undefined) {
-        delete (globalThis as { Bun?: unknown }).Bun;
-      }
-      createTelegramBot({ token: "tok" });
-      const fetchImpl = resolveTelegramFetch();
-      expect(fetchImpl).toBeUndefined();
-      expect(botCtorSpy).toHaveBeenCalledWith("tok", undefined);
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (originalBun === undefined) {
-        delete (globalThis as { Bun?: unknown }).Bun;
-      } else {
-        (globalThis as { Bun?: unknown }).Bun = originalBun;
-      }
     }
   });
 

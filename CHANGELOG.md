@@ -14,6 +14,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Heartbeat: normalize target identifiers for consistent routing.
+- Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Exec: keep approvals for elevated ask unless full mode. (#1616) Thanks @ivancasco.
 - Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
 - macOS: default direct-transport `ws://` URLs to port 18789; document `gateway.remote.transport`. (#1603) Thanks @ngutman.
