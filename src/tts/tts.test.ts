@@ -1,6 +1,41 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { _test } from "./tts.js";
+import { completeSimple } from "@mariozechner/pi-ai";
+
+import { getApiKeyForModel } from "../agents/model-auth.js";
+import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { _test, resolveTtsConfig } from "./tts.js";
+
+vi.mock("@mariozechner/pi-ai", () => ({
+  completeSimple: vi.fn(),
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModel: vi.fn((provider: string, modelId: string) => ({
+    model: {
+      provider,
+      id: modelId,
+      name: modelId,
+      api: "openai-completions",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    },
+    authStorage: { profiles: {} },
+    modelRegistry: { find: vi.fn() },
+  })),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  getApiKeyForModel: vi.fn(async () => ({
+    apiKey: "test-api-key",
+    source: "test",
+    mode: "api-key",
+  })),
+  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
+}));
 
 const {
   isValidVoiceId,
@@ -8,11 +43,20 @@ const {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  parseTtsDirectives,
+  resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
 } = _test;
 
 describe("tts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(completeSimple).mockResolvedValue({
+      content: [{ type: "text", text: "Summary" }],
+    });
+  });
+
   describe("isValidVoiceId", () => {
     it("accepts valid ElevenLabs voice IDs", () => {
       expect(isValidVoiceId("pMsXgVXv3BLzUgSXRplE")).toBe(true);
@@ -105,130 +149,169 @@ describe("tts", () => {
     });
   });
 
+  describe("parseTtsDirectives", () => {
+    it("extracts overrides and strips directives when enabled", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input =
+        "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
+        "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.cleanedText).not.toContain("[[tts:");
+      expect(result.ttsText).toBe("(laughs) Read the song once more.");
+      expect(result.overrides.provider).toBe("elevenlabs");
+      expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
+      expect(result.overrides.elevenlabs?.voiceSettings?.stability).toBe(0.4);
+      expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
+    });
+
+    it("keeps text intact when overrides are disabled", () => {
+      const policy = resolveModelOverridePolicy({ enabled: false });
+      const input = "Hello [[tts:voice=alloy]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.cleanedText).toBe(input);
+      expect(result.overrides.provider).toBeUndefined();
+    });
+  });
+
   describe("summarizeText", () => {
-    const mockApiKey = "test-api-key";
-    const originalFetch = globalThis.fetch;
-
-    beforeEach(() => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-    });
-
-    afterEach(() => {
-      globalThis.fetch = originalFetch;
-      vi.useRealTimers();
-    });
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+    const baseConfig = resolveTtsConfig(baseCfg);
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            choices: [{ message: { content: mockSummary } }],
-          }),
+      vi.mocked(completeSimple).mockResolvedValue({
+        content: [{ type: "text", text: mockSummary }],
       });
 
       const longText = "A".repeat(2000);
-      const result = await summarizeText(longText, 1500, mockApiKey, 30_000);
+      const result = await summarizeText({
+        text: longText,
+        targetLength: 1500,
+        cfg: baseCfg,
+        config: baseConfig,
+        timeoutMs: 30_000,
+      });
 
       expect(result.summary).toBe(mockSummary);
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(completeSimple).toHaveBeenCalledTimes(1);
     });
 
-    it("calls OpenAI API with correct parameters", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            choices: [{ message: { content: "Summary" } }],
-          }),
+    it("calls the summary model with the expected parameters", async () => {
+      await summarizeText({
+        text: "Long text to summarize",
+        targetLength: 500,
+        cfg: baseCfg,
+        config: baseConfig,
+        timeoutMs: 30_000,
       });
 
-      await summarizeText("Long text to summarize", 500, mockApiKey, 30_000);
+      const callArgs = vi.mocked(completeSimple).mock.calls[0];
+      expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
+      expect(callArgs?.[2]?.maxTokens).toBe(250);
+      expect(callArgs?.[2]?.temperature).toBe(0.3);
+      expect(getApiKeyForModel).toHaveBeenCalledTimes(1);
+    });
 
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "https://api.openai.com/v1/chat/completions",
-        expect.objectContaining({
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${mockApiKey}`,
-            "Content-Type": "application/json",
-          },
-        }),
-      );
+    it("uses summaryModel override when configured", async () => {
+      const cfg = {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+        messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
+      };
+      const config = resolveTtsConfig(cfg);
+      await summarizeText({
+        text: "Long text to summarize",
+        targetLength: 500,
+        cfg,
+        config,
+        timeoutMs: 30_000,
+      });
 
-      const callArgs = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-      const body = JSON.parse(callArgs[1].body);
-      expect(body.model).toBe("gpt-4o-mini");
-      expect(body.temperature).toBe(0.3);
-      expect(body.max_tokens).toBe(250);
+      expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
     it("rejects targetLength below minimum (100)", async () => {
-      await expect(summarizeText("text", 99, mockApiKey, 30_000)).rejects.toThrow(
-        "Invalid targetLength: 99",
-      );
+      await expect(
+        summarizeText({
+          text: "text",
+          targetLength: 99,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        }),
+      ).rejects.toThrow("Invalid targetLength: 99");
     });
 
     it("rejects targetLength above maximum (10000)", async () => {
-      await expect(summarizeText("text", 10001, mockApiKey, 30_000)).rejects.toThrow(
-        "Invalid targetLength: 10001",
-      );
+      await expect(
+        summarizeText({
+          text: "text",
+          targetLength: 10001,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        }),
+      ).rejects.toThrow("Invalid targetLength: 10001");
     });
 
     it("accepts targetLength at boundaries", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            choices: [{ message: { content: "Summary" } }],
-          }),
-      });
-
-      await expect(summarizeText("text", 100, mockApiKey, 30_000)).resolves.toBeDefined();
-      await expect(summarizeText("text", 10000, mockApiKey, 30_000)).resolves.toBeDefined();
-    });
-
-    it("throws error when API returns non-ok response", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-      });
-
-      await expect(summarizeText("text", 500, mockApiKey, 30_000)).rejects.toThrow(
-        "Summarization service unavailable",
-      );
+      await expect(
+        summarizeText({
+          text: "text",
+          targetLength: 100,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        }),
+      ).resolves.toBeDefined();
+      await expect(
+        summarizeText({
+          text: "text",
+          targetLength: 10000,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        }),
+      ).resolves.toBeDefined();
     });
 
     it("throws error when no summary is returned", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            choices: [],
-          }),
+      vi.mocked(completeSimple).mockResolvedValue({
+        content: [],
       });
 
-      await expect(summarizeText("text", 500, mockApiKey, 30_000)).rejects.toThrow(
-        "No summary returned",
-      );
+      await expect(
+        summarizeText({
+          text: "text",
+          targetLength: 500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        }),
+      ).rejects.toThrow("No summary returned");
     });
 
     it("throws error when summary content is empty", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            choices: [{ message: { content: "   " } }],
-          }),
+      vi.mocked(completeSimple).mockResolvedValue({
+        content: [{ type: "text", text: "   " }],
       });
 
-      await expect(summarizeText("text", 500, mockApiKey, 30_000)).rejects.toThrow(
-        "No summary returned",
-      );
+      await expect(
+        summarizeText({
+          text: "text",
+          targetLength: 500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        }),
+      ).rejects.toThrow("No summary returned");
     });
   });
 });

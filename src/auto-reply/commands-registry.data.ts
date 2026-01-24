@@ -273,79 +273,25 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
-      key: "audio",
-      nativeName: "audio",
-      description: "Convert text to a TTS audio reply.",
-      textAlias: "/audio",
+      key: "tts",
+      nativeName: "tts",
+      description: "Control text-to-speech (TTS).",
+      textAlias: "/tts",
       args: [
         {
-          name: "text",
-          description: "Text to speak",
+          name: "action",
+          description: "on | off | status | provider | limit | summary | audio | help",
+          type: "string",
+          choices: ["on", "off", "status", "provider", "limit", "summary", "audio", "help"],
+        },
+        {
+          name: "value",
+          description: "Provider, limit, or text",
           type: "string",
           captureRemaining: true,
         },
       ],
-    }),
-    defineChatCommand({
-      key: "tts_on",
-      nativeName: "tts_on",
-      description: "Enable text-to-speech for replies.",
-      textAlias: "/tts_on",
-    }),
-    defineChatCommand({
-      key: "tts_off",
-      nativeName: "tts_off",
-      description: "Disable text-to-speech for replies.",
-      textAlias: "/tts_off",
-    }),
-    defineChatCommand({
-      key: "tts_provider",
-      nativeName: "tts_provider",
-      description: "Set or show the TTS provider.",
-      textAlias: "/tts_provider",
-      args: [
-        {
-          name: "provider",
-          description: "openai or elevenlabs",
-          type: "string",
-          choices: ["openai", "elevenlabs"],
-        },
-      ],
       argsMenu: "auto",
-    }),
-    defineChatCommand({
-      key: "tts_limit",
-      nativeName: "tts_limit",
-      description: "Set or show the max TTS text length.",
-      textAlias: "/tts_limit",
-      args: [
-        {
-          name: "maxLength",
-          description: "Max chars before summarizing",
-          type: "number",
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "tts_summary",
-      nativeName: "tts_summary",
-      description: "Enable or disable TTS auto-summary.",
-      textAlias: "/tts_summary",
-      args: [
-        {
-          name: "mode",
-          description: "on or off",
-          type: "string",
-          choices: ["on", "off"],
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
-      key: "tts_status",
-      nativeName: "tts_status",
-      description: "Show TTS status and last attempt.",
-      textAlias: "/tts_status",
     }),
     defineChatCommand({
       key: "stop",

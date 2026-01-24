@@ -18,22 +18,39 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 
-function parseCommandArg(normalized: string, command: string): string | null {
-  if (normalized === command) return "";
-  if (normalized.startsWith(`${command} `)) return normalized.slice(command.length).trim();
-  return null;
+type ParsedTtsCommand = {
+  action: string;
+  args: string;
+};
+
+function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
+  // Accept `/tts` and `/tts <action> [args]` as a single control surface.
+  if (normalized === "/tts") return { action: "status", args: "" };
+  if (!normalized.startsWith("/tts ")) return null;
+  const rest = normalized.slice(5).trim();
+  if (!rest) return { action: "status", args: "" };
+  const [action, ...tail] = rest.split(/\s+/);
+  return { action: action.toLowerCase(), args: tail.join(" ").trim() };
+}
+
+function ttsUsage(): ReplyPayload {
+  // Keep usage in one place so help/validation stays consistent.
+  return {
+    text:
+      "⚙️ Usage: /tts <on|off|status|provider|limit|summary|audio> [value]" +
+      "\nExamples:\n" +
+      "/tts on\n" +
+      "/tts provider openai\n" +
+      "/tts limit 2000\n" +
+      "/tts summary off\n" +
+      "/tts audio Hello from Clawdbot",
+  };
 }
 
 export const handleTtsCommands: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
-  const normalized = params.command.commandBodyNormalized;
-  if (
-    !normalized.startsWith("/tts_") &&
-    normalized !== "/audio" &&
-    !normalized.startsWith("/audio ")
-  ) {
-    return null;
-  }
+  const parsed = parseTtsCommand(params.command.commandBodyNormalized);
+  if (!parsed) return null;
 
   if (!params.command.isAuthorizedSender) {
     logVerbose(
@@ -44,36 +61,42 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
 
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
+  const action = parsed.action;
+  const args = parsed.args;
 
-  if (normalized === "/tts_on") {
+  if (action === "help") {
+    return { shouldContinue: false, reply: ttsUsage() };
+  }
+
+  if (action === "on") {
     setTtsEnabled(prefsPath, true);
     return { shouldContinue: false, reply: { text: "🔊 TTS enabled." } };
   }
 
-  if (normalized === "/tts_off") {
+  if (action === "off") {
     setTtsEnabled(prefsPath, false);
     return { shouldContinue: false, reply: { text: "🔇 TTS disabled." } };
   }
 
-  const audioArg = parseCommandArg(normalized, "/audio");
-  if (audioArg !== null) {
-    if (!audioArg.trim()) {
-      return { shouldContinue: false, reply: { text: "⚙️ Usage: /audio <text>" } };
+  if (action === "audio") {
+    if (!args.trim()) {
+      return { shouldContinue: false, reply: ttsUsage() };
     }
 
     const start = Date.now();
     const result = await textToSpeech({
-      text: audioArg,
+      text: args,
       cfg: params.cfg,
       channel: params.command.channel,
       prefsPath,
     });
 
     if (result.success && result.audioPath) {
+      // Store last attempt for `/tts status`.
       setLastTtsAttempt({
         timestamp: Date.now(),
         success: true,
-        textLength: audioArg.length,
+        textLength: args.length,
         summarized: false,
         provider: result.provider,
         latencyMs: result.latencyMs,
@@ -85,10 +108,11 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       return { shouldContinue: false, reply: payload };
     }
 
+    // Store failure details for `/tts status`.
     setLastTtsAttempt({
       timestamp: Date.now(),
       success: false,
-      textLength: audioArg.length,
+      textLength: args.length,
       summarized: false,
       error: result.error,
       latencyMs: Date.now() - start,
@@ -99,10 +123,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  const providerArg = parseCommandArg(normalized, "/tts_provider");
-  if (providerArg !== null) {
+  if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
-    if (!providerArg.trim()) {
+    if (!args.trim()) {
       const fallback = currentProvider === "openai" ? "elevenlabs" : "openai";
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
@@ -115,17 +138,14 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `Fallback: ${fallback}\n` +
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Usage: /tts_provider openai | elevenlabs`,
+            `Usage: /tts provider openai | elevenlabs`,
         },
       };
     }
 
-    const requested = providerArg.trim().toLowerCase();
+    const requested = args.trim().toLowerCase();
     if (requested !== "openai" && requested !== "elevenlabs") {
-      return {
-        shouldContinue: false,
-        reply: { text: "⚙️ Usage: /tts_provider openai | elevenlabs" },
-      };
+      return { shouldContinue: false, reply: ttsUsage() };
     }
 
     setTtsProvider(prefsPath, requested);
@@ -136,21 +156,17 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  const limitArg = parseCommandArg(normalized, "/tts_limit");
-  if (limitArg !== null) {
-    if (!limitArg.trim()) {
+  if (action === "limit") {
+    if (!args.trim()) {
       const currentLimit = getTtsMaxLength(prefsPath);
       return {
         shouldContinue: false,
         reply: { text: `📏 TTS limit: ${currentLimit} characters.` },
       };
     }
-    const next = Number.parseInt(limitArg.trim(), 10);
+    const next = Number.parseInt(args.trim(), 10);
     if (!Number.isFinite(next) || next < 100 || next > 10_000) {
-      return {
-        shouldContinue: false,
-        reply: { text: "⚙️ Usage: /tts_limit <100-10000>" },
-      };
+      return { shouldContinue: false, reply: ttsUsage() };
     }
     setTtsMaxLength(prefsPath, next);
     return {
@@ -159,18 +175,17 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  const summaryArg = parseCommandArg(normalized, "/tts_summary");
-  if (summaryArg !== null) {
-    if (!summaryArg.trim()) {
+  if (action === "summary") {
+    if (!args.trim()) {
       const enabled = isSummarizationEnabled(prefsPath);
       return {
         shouldContinue: false,
         reply: { text: `📝 TTS auto-summary: ${enabled ? "on" : "off"}.` },
       };
     }
-    const requested = summaryArg.trim().toLowerCase();
+    const requested = args.trim().toLowerCase();
     if (requested !== "on" && requested !== "off") {
-      return { shouldContinue: false, reply: { text: "⚙️ Usage: /tts_summary on|off" } };
+      return { shouldContinue: false, reply: ttsUsage() };
     }
     setSummarizationEnabled(prefsPath, requested === "on");
     return {
@@ -181,7 +196,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  if (normalized === "/tts_status") {
+  if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
     const hasKey = Boolean(resolveTtsApiKey(config, provider));
@@ -210,5 +225,5 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  return null;
+  return { shouldContinue: false, reply: ttsUsage() };
 };
