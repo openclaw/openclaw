@@ -700,8 +700,15 @@ Options:
 - `--json`
 - `--plain`
 - `--check` (exit 1=expired/missing, 2=expiring)
+- `--probe` (live probe of configured auth profiles)
+- `--probe-provider <name>`
+- `--probe-profile <id>` (repeat or comma-separated)
+- `--probe-timeout <ms>`
+- `--probe-concurrency <n>`
+- `--probe-max-tokens <n>`
 
 Always includes the auth overview and OAuth expiry status for profiles in the auth store.
+`--probe` runs live requests (may consume tokens and trigger rate limits).
 
 ### `models set <model>`
 Set `agents.defaults.model.primary`.

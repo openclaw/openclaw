@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
 
+import { removeAckReactionAfterReply, shouldAckReaction } from "clawdbot/plugin-sdk";
 import type { ClawdbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
 import {
   handleBlueBubblesWebhookRequest,
@@ -128,12 +129,17 @@ function createMockRuntime(): PluginRuntime {
       session: {
         resolveStorePath: mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
         readSessionUpdatedAt: mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+        recordInboundSession: vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
         recordSessionMetaFromInbound: vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"],
         updateLastRoute: vi.fn() as unknown as PluginRuntime["channel"]["session"]["updateLastRoute"],
       },
       mentions: {
         buildMentionRegexes: mockBuildMentionRegexes as unknown as PluginRuntime["channel"]["mentions"]["buildMentionRegexes"],
         matchesMentionPatterns: mockMatchesMentionPatterns as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionPatterns"],
+      },
+      reactions: {
+        shouldAckReaction,
+        removeAckReactionAfterReply,
       },
       groups: {
         resolveGroupPolicy: mockResolveGroupPolicy as unknown as PluginRuntime["channel"]["groups"]["resolveGroupPolicy"],

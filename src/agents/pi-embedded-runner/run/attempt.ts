@@ -595,18 +595,23 @@ export async function runEmbeddedAttempt(
       setActiveEmbeddedRun(params.sessionId, queueHandle);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
+      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const abortTimer = setTimeout(
         () => {
-          log.warn(
-            `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-          );
+          if (!isProbeSession) {
+            log.warn(
+              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
+            );
+          }
           abortRun(true);
           if (!abortWarnTimer) {
             abortWarnTimer = setTimeout(() => {
               if (!activeSession.isStreaming) return;
-              log.warn(
-                `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
-              );
+              if (!isProbeSession) {
+                log.warn(
+                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }
             }, 10_000);
           }
         },

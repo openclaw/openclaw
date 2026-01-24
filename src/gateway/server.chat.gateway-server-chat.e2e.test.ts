@@ -6,8 +6,8 @@ import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import {
-  agentCommand,
   connectOk,
+  getReplyFromConfig,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
@@ -71,7 +71,7 @@ describe("gateway server chat", () => {
       webchatWs.close();
       webchatWs = undefined;
 
-      const spy = vi.mocked(agentCommand);
+      const spy = vi.mocked(getReplyFromConfig);
       spy.mockClear();
       testState.agentConfig = { timeoutSeconds: 123 };
       const callsBeforeTimeout = spy.mock.calls.length;
@@ -83,8 +83,8 @@ describe("gateway server chat", () => {
       expect(timeoutRes.ok).toBe(true);
 
       await waitFor(() => spy.mock.calls.length > callsBeforeTimeout);
-      const timeoutCall = spy.mock.calls.at(-1)?.[0] as { timeout?: string } | undefined;
-      expect(timeoutCall?.timeout).toBe("123");
+      const timeoutCall = spy.mock.calls.at(-1)?.[1] as { runId?: string } | undefined;
+      expect(timeoutCall?.runId).toBe("idem-timeout-1");
       testState.agentConfig = undefined;
 
       spy.mockClear();
@@ -97,8 +97,8 @@ describe("gateway server chat", () => {
       expect(sessionRes.ok).toBe(true);
 
       await waitFor(() => spy.mock.calls.length > callsBeforeSession);
-      const sessionCall = spy.mock.calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
-      expect(sessionCall?.sessionKey).toBe("agent:main:subagent:abc");
+      const sessionCall = spy.mock.calls.at(-1)?.[0] as { SessionKey?: string } | undefined;
+      expect(sessionCall?.SessionKey).toBe("agent:main:subagent:abc");
 
       const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
       tempDirs.push(sendPolicyDir);
@@ -203,10 +203,10 @@ describe("gateway server chat", () => {
       expect(imgRes.payload?.runId).toBeDefined();
 
       await waitFor(() => spy.mock.calls.length > callsBeforeImage, 8000);
-      const imgCall = spy.mock.calls.at(-1)?.[0] as
+      const imgOpts = spy.mock.calls.at(-1)?.[1] as
         | { images?: Array<{ type: string; data: string; mimeType: string }> }
         | undefined;
-      expect(imgCall?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
+      expect(imgOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
       tempDirs.push(historyDir);
@@ -256,6 +256,45 @@ describe("gateway server chat", () => {
       testState.sessionConfig = undefined;
       if (webchatWs) webchatWs.close();
       await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
+  test("routes chat.send slash commands without agent runs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const spy = vi.mocked(agentCommand);
+      const callsBefore = spy.mock.calls.length;
+      const eventPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-command-1",
+        8000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/context list",
+        idempotencyKey: "idem-command-1",
+      });
+      expect(res.ok).toBe(true);
+      const evt = await eventPromise;
+      expect(evt.payload?.message?.command).toBe(true);
+      expect(spy.mock.calls.length).toBe(callsBefore);
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 

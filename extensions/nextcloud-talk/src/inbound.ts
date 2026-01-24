@@ -1,4 +1,9 @@
-import type { ClawdbotConfig, RuntimeEnv } from "clawdbot/plugin-sdk";
+import {
+  logInboundDrop,
+  resolveControlCommandGate,
+  type ClawdbotConfig,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
@@ -118,7 +123,11 @@ export async function handleNextcloudTalkInbound(params: {
     senderId,
     senderName,
   }).allowed;
-  const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    rawBody,
+    config as ClawdbotConfig,
+  );
+  const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
       {
@@ -127,7 +136,10 @@ export async function handleNextcloudTalkInbound(params: {
         allowed: senderAllowedForCommands,
       },
     ],
+    allowTextCommands,
+    hasControlCommand,
   });
+  const commandAuthorized = commandGate.commandAuthorized;
 
   if (isGroup) {
     const groupAllow = resolveNextcloudTalkGroupAllow({
@@ -188,15 +200,13 @@ export async function handleNextcloudTalkInbound(params: {
     }
   }
 
-  if (
-    isGroup &&
-    allowTextCommands &&
-    core.channel.text.hasControlCommand(rawBody, config as ClawdbotConfig) &&
-    commandAuthorized !== true
-  ) {
-    runtime.log?.(
-      `nextcloud-talk: drop control command from unauthorized sender ${senderId}`,
-    );
+  if (isGroup && commandGate.shouldBlock) {
+    logInboundDrop({
+      log: (message) => runtime.log?.(message),
+      channel: CHANNEL_ID,
+      reason: "control command (unauthorized)",
+      target: senderId,
+    });
     return;
   }
 
@@ -212,10 +222,6 @@ export async function handleNextcloudTalkInbound(params: {
         wildcardConfig: roomMatch.wildcardConfig,
       })
     : false;
-  const hasControlCommand = core.channel.text.hasControlCommand(
-    rawBody,
-    config as ClawdbotConfig,
-  );
   const mentionGate = resolveNextcloudTalkMentionGate({
     isGroup,
     requireMention: shouldRequireMention,
@@ -287,15 +293,14 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  void core.channel.session
-    .recordSessionMetaFromInbound({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-      ctx: ctxPayload,
-    })
-    .catch((err) => {
+  await core.channel.session.recordInboundSession({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    ctx: ctxPayload,
+    onRecordError: (err) => {
       runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
-    });
+    },
+  });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,

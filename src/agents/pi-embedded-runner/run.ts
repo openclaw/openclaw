@@ -79,6 +79,7 @@ export async function runEmbeddedPiAgent(
         ? "markdown"
         : "plain"
       : "markdown");
+  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
 
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
@@ -455,7 +456,7 @@ export async function runEmbeddedPiAgent(
                 cfg: params.config,
                 agentDir: params.agentDir,
               });
-              if (timedOut) {
+              if (timedOut && !isProbeSession) {
                 log.warn(
                   `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
                 );

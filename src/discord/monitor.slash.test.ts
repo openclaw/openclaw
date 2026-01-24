@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 
 const dispatchMock = vi.fn();
 
@@ -20,15 +21,34 @@ vi.mock("@buape/carbon", () => ({
   },
 }));
 
-vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
-  dispatchReplyFromConfig: (...args: unknown[]) => dispatchMock(...args),
-}));
+vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/dispatch.js")>();
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: unknown[]) => dispatchMock(...args),
+    dispatchInboundMessageWithDispatcher: (...args: unknown[]) => dispatchMock(...args),
+    dispatchInboundMessageWithBufferedDispatcher: (...args: unknown[]) => dispatchMock(...args),
+  };
+});
 
 beforeEach(() => {
-  dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {
-    dispatcher.sendToolResult({ text: "tool update" });
-    dispatcher.sendFinalReply({ text: "final reply" });
-    return { queuedFinal: true, counts: { tool: 1, block: 0, final: 1 } };
+  dispatchMock.mockReset().mockImplementation(async (params) => {
+    if ("dispatcher" in params && params.dispatcher) {
+      params.dispatcher.sendToolResult({ text: "tool update" });
+      params.dispatcher.sendFinalReply({ text: "final reply" });
+      return { queuedFinal: true, counts: { tool: 1, block: 0, final: 1 } };
+    }
+    if ("dispatcherOptions" in params && params.dispatcherOptions) {
+      const { dispatcher, markDispatchIdle } = createReplyDispatcherWithTyping(
+        params.dispatcherOptions,
+      );
+      dispatcher.sendToolResult({ text: "tool update" });
+      dispatcher.sendFinalReply({ text: "final reply" });
+      await dispatcher.waitForIdle();
+      markDispatchIdle();
+      return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+    }
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
 });
 

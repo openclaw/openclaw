@@ -1,7 +1,12 @@
 import type { LocationMessageEventContent, MatrixClient } from "matrix-bot-sdk";
 
 import {
+  createReplyPrefixContext,
+  createTypingCallbacks,
   formatAllowlistMatchMeta,
+  logInboundDrop,
+  logTypingFailure,
+  resolveControlCommandGate,
   type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
@@ -376,21 +381,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               userName: senderName,
             })
           : false;
-      const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+      const hasControlCommandInMessage = core.channel.text.hasControlCommand(bodyText, cfg);
+      const commandGate = resolveControlCommandGate({
         useAccessGroups,
         authorizers: [
           { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
           { configured: roomUsers.length > 0, allowed: senderAllowedForRoomUsers },
           { configured: groupAllowConfigured, allowed: senderAllowedForGroup },
         ],
+        allowTextCommands,
+        hasControlCommand: hasControlCommandInMessage,
       });
-      if (
-        isRoom &&
-        allowTextCommands &&
-        core.channel.text.hasControlCommand(bodyText, cfg) &&
-        !commandAuthorized
-      ) {
-        logVerboseMessage(`matrix: drop control command from unauthorized sender ${senderId}`);
+      const commandAuthorized = commandGate.commandAuthorized;
+      if (isRoom && commandGate.shouldBlock) {
+        logInboundDrop({
+          log: logVerboseMessage,
+          channel: "matrix",
+          reason: "control command (unauthorized)",
+          target: senderId,
+        });
         return;
       }
       const shouldRequireMention = isRoom
@@ -409,7 +418,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         !wasMentioned &&
         !hasExplicitMention &&
         commandAuthorized &&
-        core.channel.text.hasControlCommand(bodyText);
+        hasControlCommandInMessage;
+      const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info({ roomId, reason: "no-mention" }, "skipping room message");
         return;
@@ -486,47 +496,45 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         OriginatingTo: `room:${roomId}`,
       });
 
-      void core.channel.session
-        .recordSessionMetaFromInbound({
-          storePath,
-          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-          ctx: ctxPayload,
-        })
-        .catch((err) => {
+      await core.channel.session.recordInboundSession({
+        storePath,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        ctx: ctxPayload,
+        updateLastRoute: isDirectMessage
+          ? {
+              sessionKey: route.mainSessionKey,
+              channel: "matrix",
+              to: `room:${roomId}`,
+              accountId: route.accountId,
+            }
+          : undefined,
+        onRecordError: (err) => {
           logger.warn(
             { error: String(err), storePath, sessionKey: ctxPayload.SessionKey ?? route.sessionKey },
             "failed updating session meta",
           );
-        });
-
-      if (isDirectMessage) {
-        await core.channel.session.updateLastRoute({
-          storePath,
-          sessionKey: route.mainSessionKey,
-          channel: "matrix",
-          to: `room:${roomId}`,
-          accountId: route.accountId,
-          ctx: ctxPayload,
-        });
-      }
+        },
+      });
 
       const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);
 
       const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
       const ackScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-      const shouldAckReaction = () => {
-        if (!ackReaction) return false;
-        if (ackScope === "all") return true;
-        if (ackScope === "direct") return isDirectMessage;
-        if (ackScope === "group-all") return isRoom;
-        if (ackScope === "group-mentions") {
-          if (!isRoom) return false;
-          if (!shouldRequireMention) return false;
-          return wasMentioned || shouldBypassMention;
-        }
-        return false;
-      };
+      const shouldAckReaction = () =>
+        Boolean(
+          ackReaction &&
+            core.channel.reactions.shouldAckReaction({
+              scope: ackScope,
+              isDirect: isDirectMessage,
+              isGroup: isRoom,
+              isMentionableGroup: isRoom,
+              requireMention: Boolean(shouldRequireMention),
+              canDetectMention,
+              effectiveWasMentioned: wasMentioned || shouldBypassMention,
+              shouldBypassMention,
+            }),
+        );
       if (shouldAckReaction() && messageId) {
         reactMatrixMessage(roomId, messageId, ackReaction, client).catch((err) => {
           logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
@@ -553,10 +561,33 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: route.accountId,
       });
+      const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+      const typingCallbacks = createTypingCallbacks({
+        start: () => sendTypingMatrix(roomId, true, undefined, client),
+        stop: () => sendTypingMatrix(roomId, false, undefined, client),
+        onStartError: (err) => {
+          logTypingFailure({
+            log: logVerboseMessage,
+            channel: "matrix",
+            action: "start",
+            target: roomId,
+            error: err,
+          });
+        },
+        onStopError: (err) => {
+          logTypingFailure({
+            log: logVerboseMessage,
+            channel: "matrix",
+            action: "stop",
+            target: roomId,
+            error: err,
+          });
+        },
+      });
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
-          responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
-            .responsePrefix,
+          responsePrefix: prefixContext.responsePrefix,
+          responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload) => {
             await deliverMatrixReplies({
@@ -575,10 +606,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onError: (err, info) => {
             runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
           },
-          onReplyStart: () =>
-            sendTypingMatrix(roomId, true, undefined, client).catch(() => {}),
-          onIdle: () =>
-            sendTypingMatrix(roomId, false, undefined, client).catch(() => {}),
+          onReplyStart: typingCallbacks.onReplyStart,
+          onIdle: typingCallbacks.onIdle,
         });
 
       const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
@@ -588,6 +617,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         replyOptions: {
           ...replyOptions,
           skillFilter: roomConfig?.skills,
+          onModelSelected: prefixContext.onModelSelected,
         },
       });
       markDispatchIdle();

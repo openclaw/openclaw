@@ -5,7 +5,9 @@ import {
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,
   buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   HISTORY_CONTEXT_MARKER,
+  recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
@@ -104,5 +106,47 @@ describe("history helpers", () => {
     expect(result).toContain("B: two");
     expect(result).toContain(CURRENT_MESSAGE_MARKER);
     expect(result).toContain("current");
+  });
+
+  it("records pending entries only when enabled", () => {
+    const historyMap = new Map<string, { sender: string; body: string }[]>();
+
+    recordPendingHistoryEntryIfEnabled({
+      historyMap,
+      historyKey: "group",
+      limit: 0,
+      entry: { sender: "A", body: "one" },
+    });
+    expect(historyMap.get("group")).toEqual(undefined);
+
+    recordPendingHistoryEntryIfEnabled({
+      historyMap,
+      historyKey: "group",
+      limit: 2,
+      entry: null,
+    });
+    expect(historyMap.get("group")).toEqual(undefined);
+
+    recordPendingHistoryEntryIfEnabled({
+      historyMap,
+      historyKey: "group",
+      limit: 2,
+      entry: { sender: "B", body: "two" },
+    });
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["two"]);
+  });
+
+  it("clears history entries only when enabled", () => {
+    const historyMap = new Map<string, { sender: string; body: string }[]>();
+    historyMap.set("group", [
+      { sender: "A", body: "one" },
+      { sender: "B", body: "two" },
+    ]);
+
+    clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 0 });
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
+
+    clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 2 });
+    expect(historyMap.get("group")).toEqual([]);
   });
 });

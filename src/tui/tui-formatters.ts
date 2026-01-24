@@ -140,6 +140,11 @@ export function extractTextFromMessage(
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
+export function isCommandMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  return (message as Record<string, unknown>).command === true;
+}
+
 export function formatTokens(total?: number | null, context?: number | null) {
   if (total == null && context == null) return "tokens ?";
   const totalLabel = total == null ? "?" : formatTokenCount(total);

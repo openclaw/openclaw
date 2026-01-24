@@ -108,8 +108,10 @@ export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 export {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
@@ -117,9 +119,23 @@ export {
   resolveMentionGating,
   resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
+export type {
+  AckReactionGateParams,
+  AckReactionScope,
+  WhatsAppAckReactionMode,
+} from "../channels/ack-reactions.js";
+export {
+  removeAckReactionAfterReply,
+  shouldAckReaction,
+  shouldAckReactionForWhatsApp,
+} from "../channels/ack-reactions.js";
+export { createTypingCallbacks } from "../channels/typing.js";
+export { createReplyPrefixContext } from "../channels/reply-prefix.js";
+export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
+export { resolveControlCommandGate } from "../channels/command-gating.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveDiscordGroupRequireMention,
@@ -128,6 +144,7 @@ export {
   resolveTelegramGroupRequireMention,
   resolveWhatsAppGroupRequireMention,
 } from "../channels/plugins/group-mentions.js";
+export { recordInboundSession } from "../channels/session.js";
 export {
   buildChannelKeyCandidates,
   normalizeChannelSlug,

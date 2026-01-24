@@ -7,6 +7,7 @@
 - Tests: colocated `*.test.ts`.
 - Docs: `docs/` (images, queue, Pi config). Built output lives in `dist/`.
 - Plugins/extensions: live under `extensions/*` (workspace packages). Keep plugin-only deps in the extension `package.json`; do not add them to the root `package.json` unless core uses them.
+- Plugins: install runs `npm install --omit=dev` in plugin dir; runtime deps must live in `dependencies`. Avoid `workspace:*` in `dependencies` (npm install breaks); put `clawdbot` in `devDependencies` or `peerDependencies` instead (runtime resolves `clawdbot/plugin-sdk` via jiti alias).
 - Installers served from `https://clawd.bot/*`: live in the sibling repo `../clawd.bot` (`public/install.sh`, `public/install-cli.sh`, `public/install.ps1`).
 - Messaging channels: always consider **all** built-in + extension channels when refactoring shared logic (routing, allowlists, pairing, command gating, onboarding, docs).
   - Core channel docs: `docs/channels/`
@@ -23,13 +24,14 @@
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
 ## exe.dev VM ops (general)
-- Access: SSH to the VM directly: `ssh vm-name.exe.xyz` (or use exe.dev web terminal).
-- Updates: `sudo npm i -g clawdbot@latest` (global install needs root on `/usr/lib/node_modules`).
-- Config: use `clawdbot config set ...`; set `gateway.mode=local` if unset.
-- Restart: exe.dev often lacks systemd user bus; stop old gateway and run:
+- Access: stable path is `ssh exe.dev` then `ssh vm-name` (assume SSH key already set).
+- SSH flaky: use exe.dev web terminal or Shelley (web agent); keep a tmux session for long ops.
+- Update: `sudo npm i -g clawdbot@latest` (global install needs root on `/usr/lib/node_modules`).
+- Config: use `clawdbot config set ...`; ensure `gateway.mode=local` is set.
+- Discord: store raw token only (no `DISCORD_BOT_TOKEN=` prefix).
+- Restart: stop old gateway and run:
   `pkill -9 -f clawdbot-gateway || true; nohup clawdbot gateway run --bind loopback --port 18789 --force > /tmp/clawdbot-gateway.log 2>&1 &`
-- Verify: `clawdbot --version`, `clawdbot health`, `ss -ltnp | rg 18789`.
-- SSH flaky: use exe.dev web terminal or Shelley (web agent) instead of CLI SSH.
+- Verify: `clawdbot channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/clawdbot-gateway.log`.
 
 ## Build, Test, and Development Commands
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
@@ -128,6 +130,10 @@
 - **Multi-agent safety:** do **not** switch branches / check out a different branch unless explicitly requested.
 - **Multi-agent safety:** running multiple agents is OK as long as each agent has its own session.
 - **Multi-agent safety:** when you see unrecognized files, keep going; focus on your changes and commit only those.
+- Lint/format churn:
+  - If staged+unstaged diffs are formatting-only, auto-resolve without asking.
+  - If commit/push already requested, auto-stage and include formatting-only follow-ups in the same commit (or a tiny follow-up commit if needed), no extra confirmation.
+  - Only ask when changes are semantic (logic/data/behavior).
 - Lobster seam: use the shared CLI palette in `src/terminal/palette.ts` (no hardcoded colors); apply palette to onboarding/config prompts and other TTY UI output as needed.
 - **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief “other files present” note only if relevant.
 - Bug investigations: read source code of relevant npm dependencies and all related local code before concluding; aim for high-confidence root cause.

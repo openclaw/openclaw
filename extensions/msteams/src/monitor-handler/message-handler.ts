@@ -1,8 +1,10 @@
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntry,
+  logInboundDrop,
+  recordPendingHistoryEntryIfEnabled,
+  resolveControlCommandGate,
   resolveMentionGating,
   formatAllowlistMatchMeta,
   type HistoryEntry,
@@ -251,15 +253,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderId,
       senderName,
     });
-    const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+    const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
+    const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
         { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
       ],
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
     });
-    if (core.channel.text.hasControlCommand(text, cfg) && !commandAuthorized) {
-      logVerboseMessage(`msteams: drop control command from unauthorized sender ${senderId}`);
+    const commandAuthorized = commandGate.commandAuthorized;
+    if (commandGate.shouldBlock) {
+      logInboundDrop({
+        log: logVerboseMessage,
+        channel: "msteams",
+        reason: "control command (unauthorized)",
+        target: senderId,
+      });
       return;
     }
 
@@ -371,19 +382,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
-        if (historyLimit > 0) {
-          recordPendingHistoryEntry({
-            historyMap: conversationHistories,
-            historyKey: conversationId,
-            limit: historyLimit,
-            entry: {
-              sender: senderName,
-              body: rawBody,
-              timestamp: timestamp?.getTime(),
-              messageId: activity.id ?? undefined,
-            },
-          });
-        }
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: conversationHistories,
+          historyKey: conversationId,
+          limit: historyLimit,
+          entry: {
+            sender: senderName,
+            body: rawBody,
+            timestamp: timestamp?.getTime(),
+            messageId: activity.id ?? undefined,
+          },
+        });
         return;
       }
     }
@@ -426,7 +435,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
-    if (isRoomish && historyKey && historyLimit > 0) {
+    if (isRoomish && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: conversationHistories,
         historyKey,
@@ -467,12 +476,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 	      ...mediaPayload,
 	    });
 
-	    void core.channel.session.recordSessionMetaFromInbound({
-	      storePath,
+    await core.channel.session.recordInboundSession({
+      storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
-    }).catch((err) => {
-      logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
+      onRecordError: (err) => {
+        logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
+      },
     });
 
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
@@ -512,10 +522,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
       const didSendReply = counts.final + counts.tool + counts.block > 0;
       if (!queuedFinal) {
-        if (isRoomish && historyKey && historyLimit > 0) {
-          clearHistoryEntries({
+        if (isRoomish && historyKey) {
+          clearHistoryEntriesIfEnabled({
             historyMap: conversationHistories,
             historyKey,
+            limit: historyLimit,
           });
         }
         return;
@@ -524,8 +535,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       logVerboseMessage(
         `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
       );
-      if (isRoomish && historyKey && historyLimit > 0) {
-        clearHistoryEntries({ historyMap: conversationHistories, historyKey });
+      if (isRoomish && historyKey) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: conversationHistories,
+          historyKey,
+          limit: historyLimit,
+        });
       }
     } catch (err) {
       log.error("dispatch failed", { error: String(err) });

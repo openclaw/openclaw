@@ -25,7 +25,9 @@ import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../a
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
+import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { recordInboundSession } from "../../channels/session.js";
 import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
@@ -192,11 +194,16 @@ export function createPluginRuntime(): PluginRuntime {
         resolveStorePath,
         readSessionUpdatedAt,
         recordSessionMetaFromInbound,
+        recordInboundSession,
         updateLastRoute,
       },
       mentions: {
         buildMentionRegexes,
         matchesMentionPatterns,
+      },
+      reactions: {
+        shouldAckReaction,
+        removeAckReactionAfterReply,
       },
       groups: {
         resolveGroupPolicy: resolveChannelGroupPolicy,

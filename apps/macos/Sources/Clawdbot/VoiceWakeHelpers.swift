@@ -4,6 +4,8 @@ func sanitizeVoiceWakeTriggers(_ words: [String]) -> [String] {
     let cleaned = words
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }
+        .prefix(voiceWakeMaxWords)
+        .map { String($0.prefix(voiceWakeMaxWordLength)) }
     return cleaned.isEmpty ? defaultVoiceWakeTriggers : cleaned
 }
 

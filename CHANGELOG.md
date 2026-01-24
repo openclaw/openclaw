@@ -6,16 +6,27 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
+- CLI: add live auth probes to `clawdbot models status` for per-profile verification.
 - Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
 - Tlon: add Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a.
 
 ### Fixes
+- Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS.
+- Tailscale: retry serve/funnel with sudo only for permission errors and keep original failure details. (#1551) Thanks @sweepies.
+- Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.
+- Gateway: accept null optional fields in exec approval requests. (#1511) Thanks @pvoo.
 - TUI: forward unknown slash commands (for example, `/context`) to the Gateway.
 - TUI: include Gateway slash commands in autocomplete and `/help`.
+- CLI: skip usage lines in `clawdbot models status` when provider usage is unavailable.
+- CLI: suppress diagnostic session/run noise during auth probes.
+- CLI: hide auth probe timeout warnings from embedded runs.
+- CLI: render auth probe results as a table in `clawdbot models status`.
 - Linux: include env-configured user bin roots in systemd PATH and align PATH audits. (#1512) Thanks @robbyczgw-cla.
+- TUI: render Gateway slash-command replies as system output (for example, `/context`).
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
 - Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)
 - Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.
+- MS Teams (plugin): remove `.default` suffix from Graph scopes to avoid double-appending. (#1507) Thanks @Evizero.
 
 ## 2026.1.22
 

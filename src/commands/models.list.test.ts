@@ -17,6 +17,7 @@ const discoverModels = vi.fn();
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH_CLAWDBOT: "/tmp/clawdbot.json",
+  STATE_DIR_CLAWDBOT: "/tmp/clawdbot-state",
   loadConfig,
 }));
 

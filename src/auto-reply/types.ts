@@ -1,3 +1,4 @@
+import type { ImageContent } from "@mariozechner/pi-ai";
 import type { TypingController } from "./reply/typing.js";
 
 export type BlockReplyContext = {
@@ -13,6 +14,14 @@ export type ModelSelectedContext = {
 };
 
 export type GetReplyOptions = {
+  /** Override run id for agent events (defaults to random UUID). */
+  runId?: string;
+  /** Abort signal for the underlying agent run. */
+  abortSignal?: AbortSignal;
+  /** Optional inbound images (used for webchat attachments). */
+  images?: ImageContent[];
+  /** Notifies when an agent run actually starts (useful for webchat command handling). */
+  onAgentRunStart?: (runId: string) => void;
   onReplyStart?: () => Promise<void> | void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;

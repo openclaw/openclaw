@@ -6,26 +6,24 @@ import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import { recordInboundSession } from "../channels/session.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../config/sessions.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { logInboundDrop } from "../channels/logging.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -159,11 +157,7 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
-    try {
-      await bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId));
-    } catch (err) {
-      logVerbose(`telegram typing cue failed for chat ${chatId}: ${String(err)}`);
-    }
+    await bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId));
   };
 
   const sendRecordVoice = async () => {
@@ -313,7 +307,12 @@ export const buildTelegramMessageContext = async ({
     (ent) => ent.type === "mention",
   );
   if (isGroup && commandGate.shouldBlock) {
-    logVerbose(`telegram: drop control command from unauthorized sender ${senderId ?? "unknown"}`);
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "control command (unauthorized)",
+      target: senderId ?? "unknown",
+    });
     return null;
   }
   const activationOverride = resolveGroupActivation({
@@ -349,19 +348,19 @@ export const buildTelegramMessageContext = async ({
   if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-      if (historyKey && historyLimit > 0) {
-        recordPendingHistoryEntry({
-          historyMap: groupHistories,
-          historyKey,
-          limit: historyLimit,
-          entry: {
-            sender: buildSenderLabel(msg, senderId || chatId),
-            body: rawBody,
-            timestamp: msg.date ? msg.date * 1000 : undefined,
-            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-          },
-        });
-      }
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: groupHistories,
+        historyKey: historyKey ?? "",
+        limit: historyLimit,
+        entry: historyKey
+          ? {
+              sender: buildSenderLabel(msg, senderId || chatId),
+              body: rawBody,
+              timestamp: msg.date ? msg.date * 1000 : undefined,
+              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+            }
+          : null,
+      });
       return null;
     }
   }
@@ -369,19 +368,20 @@ export const buildTelegramMessageContext = async ({
   // ACK reactions
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const shouldAckReaction = () => {
-    if (!ackReaction) return false;
-    if (ackReactionScope === "all") return true;
-    if (ackReactionScope === "direct") return !isGroup;
-    if (ackReactionScope === "group-all") return isGroup;
-    if (ackReactionScope === "group-mentions") {
-      if (!isGroup) return false;
-      if (!requireMention) return false;
-      if (!canDetectMention) return false;
-      return effectiveWasMentioned;
-    }
-    return false;
-  };
+  const shouldAckReaction = () =>
+    Boolean(
+      ackReaction &&
+      shouldAckReactionGate({
+        scope: ackReactionScope,
+        isDirect: !isGroup,
+        isGroup,
+        isMentionableGroup: isGroup,
+        requireMention: Boolean(requireMention),
+        canDetectMention,
+        effectiveWasMentioned,
+        shouldBypassMention: mentionGate.shouldBypassMention,
+      }),
+    );
   const api = bot.api as unknown as {
     setMessageReaction?: (
       chatId: number | string,
@@ -517,12 +517,21 @@ export const buildTelegramMessageContext = async ({
     OriginatingTo: `telegram:${chatId}`,
   });
 
-  void recordSessionMetaFromInbound({
+  await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    logVerbose(`telegram: failed updating session meta: ${String(err)}`);
+    updateLastRoute: !isGroup
+      ? {
+          sessionKey: route.mainSessionKey,
+          channel: "telegram",
+          to: String(chatId),
+          accountId: route.accountId,
+        }
+      : undefined,
+    onRecordError: (err) => {
+      logVerbose(`telegram: failed updating session meta: ${String(err)}`);
+    },
   });
 
   if (replyTarget && shouldLogVerbose()) {
@@ -536,19 +545,6 @@ export const buildTelegramMessageContext = async ({
     logVerbose(
       `telegram forward-context: forwardedFrom="${forwardOrigin.from}" type=${forwardOrigin.fromType}`,
     );
-  }
-
-  if (!isGroup) {
-    await updateLastRoute({
-      storePath,
-      sessionKey: route.mainSessionKey,
-      deliveryContext: {
-        channel: "telegram",
-        to: String(chatId),
-        accountId: route.accountId,
-      },
-      ctx: ctxPayload,
-    });
   }
 
   if (shouldLogVerbose()) {

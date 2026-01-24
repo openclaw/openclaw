@@ -1,4 +1,7 @@
 import {
+  createReplyPrefixContext,
+  createTypingCallbacks,
+  logTypingFailure,
   resolveChannelMediaMaxBytes,
   type ClawdbotConfig,
   type MSTeamsReplyStyle,
@@ -39,23 +42,33 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
   const sendTypingIndicator = async () => {
-    try {
-      await params.context.sendActivities([{ type: "typing" }]);
-    } catch {
-      // Typing indicator is best-effort.
-    }
+    await params.context.sendActivities([{ type: "typing" }]);
   };
-
-  return core.channel.reply.createReplyDispatcherWithTyping({
-    responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(
-      params.cfg,
-      params.agentId,
-    ).responsePrefix,
-    humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
-    deliver: async (payload) => {
-      const tableMode = core.channel.text.resolveMarkdownTableMode({
-        cfg: params.cfg,
+  const typingCallbacks = createTypingCallbacks({
+    start: sendTypingIndicator,
+    onStartError: (err) => {
+      logTypingFailure({
+        log: (message) => params.log.debug(message),
         channel: "msteams",
+        action: "start",
+        error: err,
+      });
+    },
+  });
+  const prefixContext = createReplyPrefixContext({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+
+  const { dispatcher, replyOptions, markDispatchIdle } =
+    core.channel.reply.createReplyDispatcherWithTyping({
+      responsePrefix: prefixContext.responsePrefix,
+      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+      deliver: async (payload) => {
+        const tableMode = core.channel.text.resolveMarkdownTableMode({
+          cfg: params.cfg,
+          channel: "msteams",
       });
       const messages = renderReplyPayloadsToMessages([payload], {
         textChunkLimit: params.textLimit,
@@ -87,21 +100,27 @@ export function createMSTeamsReplyDispatcher(params: {
         mediaMaxBytes,
       });
       if (ids.length > 0) params.onSentMessageIds?.(ids);
-    },
-    onError: (err, info) => {
-      const errMsg = formatUnknownError(err);
-      const classification = classifyMSTeamsSendError(err);
-      const hint = formatMSTeamsSendErrorHint(classification);
-      params.runtime.error?.(
-        `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
-      );
-      params.log.error("reply failed", {
-        kind: info.kind,
-        error: errMsg,
-        classification,
-        hint,
-      });
-    },
-    onReplyStart: sendTypingIndicator,
-  });
+      },
+      onError: (err, info) => {
+        const errMsg = formatUnknownError(err);
+        const classification = classifyMSTeamsSendError(err);
+        const hint = formatMSTeamsSendErrorHint(classification);
+        params.runtime.error?.(
+          `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
+        );
+        params.log.error("reply failed", {
+          kind: info.kind,
+          error: errMsg,
+          classification,
+          hint,
+        });
+      },
+      onReplyStart: typingCallbacks.onReplyStart,
+    });
+
+  return {
+    dispatcher,
+    replyOptions: { ...replyOptions, onModelSelected: prefixContext.onModelSelected },
+    markDispatchIdle,
+  };
 }

@@ -1,8 +1,10 @@
 import SwiftUI
+import Combine
 
 struct VoiceWakeWordsSettingsView: View {
     @Environment(NodeAppModel.self) private var appModel
     @State private var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
+    @FocusState private var focusedTriggerIndex: Int?
     @State private var syncTask: Task<Void, Never>?
 
     var body: some View {
@@ -12,6 +14,10 @@ struct VoiceWakeWordsSettingsView: View {
                     TextField("Wake word", text: self.binding(for: index))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .focused(self.$focusedTriggerIndex, equals: index)
+                        .onSubmit {
+                            self.commitTriggerWords()
+                        }
                 }
                 .onDelete(perform: self.removeWords)
 
@@ -39,17 +45,18 @@ struct VoiceWakeWordsSettingsView: View {
         .onAppear {
             if self.triggerWords.isEmpty {
                 self.triggerWords = VoiceWakePreferences.defaultTriggerWords
+                self.commitTriggerWords()
             }
         }
-        .onChange(of: self.triggerWords) { _, newValue in
-            // Keep local voice wake responsive even if the gateway isn't connected yet.
-            VoiceWakePreferences.saveTriggerWords(newValue)
-
-            let snapshot = VoiceWakePreferences.sanitizeTriggerWords(newValue)
-            self.syncTask?.cancel()
-            self.syncTask = Task { [snapshot, weak appModel = self.appModel] in
-                try? await Task.sleep(nanoseconds: 650_000_000)
-                await appModel?.setGlobalWakeWords(snapshot)
+        .onChange(of: self.focusedTriggerIndex) { oldValue, newValue in
+            guard oldValue != nil, oldValue != newValue else { return }
+            self.commitTriggerWords()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            guard self.focusedTriggerIndex == nil else { return }
+            let updated = VoiceWakePreferences.loadTriggerWords()
+            if updated != self.triggerWords {
+                self.triggerWords = updated
             }
         }
     }
@@ -63,6 +70,7 @@ struct VoiceWakeWordsSettingsView: View {
         if self.triggerWords.isEmpty {
             self.triggerWords = VoiceWakePreferences.defaultTriggerWords
         }
+        self.commitTriggerWords()
     }
 
     private func binding(for index: Int) -> Binding<String> {
@@ -75,5 +83,16 @@ struct VoiceWakeWordsSettingsView: View {
                 guard self.triggerWords.indices.contains(index) else { return }
                 self.triggerWords[index] = newValue
             })
+    }
+
+    private func commitTriggerWords() {
+        VoiceWakePreferences.saveTriggerWords(self.triggerWords)
+
+        let snapshot = VoiceWakePreferences.sanitizeTriggerWords(self.triggerWords)
+        self.syncTask?.cancel()
+        self.syncTask = Task { [snapshot, weak appModel = self.appModel] in
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            await appModel?.setGlobalWakeWords(snapshot)
+        }
     }
 }

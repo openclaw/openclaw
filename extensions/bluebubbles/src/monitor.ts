@@ -1,7 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
-import { resolveAckReaction } from "clawdbot/plugin-sdk";
+import {
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  resolveAckReaction,
+  resolveControlCommandGate,
+} from "clawdbot/plugin-sdk";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
@@ -1346,23 +1352,25 @@ async function processMessage(
         })
       : false;
   const dmAuthorized = dmPolicy === "open" || ownerAllowedForCommands;
-  const commandAuthorized = isGroup
-    ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups,
-        authorizers: [
-          { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-          { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
-        ],
-      })
-    : dmAuthorized;
+  const commandGate = resolveControlCommandGate({
+    useAccessGroups,
+    authorizers: [
+      { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+    ],
+    allowTextCommands: true,
+    hasControlCommand: hasControlCmd,
+  });
+  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
 
   // Block control commands from unauthorized senders in groups
-  if (isGroup && hasControlCmd && !commandAuthorized) {
-    logVerbose(
-      core,
-      runtime,
-      `bluebubbles: drop control command from unauthorized sender ${message.senderId}`,
-    );
+  if (isGroup && commandGate.shouldBlock) {
+    logInboundDrop({
+      log: (msg) => logVerbose(core, runtime, msg),
+      channel: "bluebubbles",
+      reason: "control command (unauthorized)",
+      target: message.senderId,
+    });
     return;
   }
 
@@ -1521,19 +1529,20 @@ async function processMessage(
     core,
     runtime,
   });
-  const shouldAckReaction = () => {
-    if (!ackReactionValue) return false;
-    if (ackReactionScope === "all") return true;
-    if (ackReactionScope === "direct") return !isGroup;
-    if (ackReactionScope === "group-all") return isGroup;
-    if (ackReactionScope === "group-mentions") {
-      if (!isGroup) return false;
-      if (!requireMention) return false;
-      if (!canDetectMention) return false;
-      return effectiveWasMentioned;
-    }
-    return false;
-  };
+  const shouldAckReaction = () =>
+    Boolean(
+      ackReactionValue &&
+        core.channel.reactions.shouldAckReaction({
+          scope: ackReactionScope,
+          isDirect: !isGroup,
+          isGroup,
+          isMentionableGroup: isGroup,
+          requireMention: Boolean(requireMention),
+          canDetectMention,
+          effectiveWasMentioned,
+          shouldBypassMention,
+        }),
+    );
   const ackMessageId = message.messageId?.trim() || "";
   const ackReactionPromise =
     shouldAckReaction() && ackMessageId && chatGuidForActions && ackReactionValue
@@ -1749,29 +1758,27 @@ async function processMessage(
       },
     });
   } finally {
-    if (
-      removeAckAfterReply &&
-      sentMessage &&
-      ackReactionPromise &&
-      ackReactionValue &&
-      chatGuidForActions &&
-      ackMessageId
-    ) {
-      void ackReactionPromise.then((didAck) => {
-        if (!didAck) return;
-        sendBlueBubblesReaction({
-          chatGuid: chatGuidForActions,
-          messageGuid: ackMessageId,
-          emoji: ackReactionValue,
-          remove: true,
-          opts: { cfg: config, accountId: account.accountId },
-        }).catch((err) => {
-          logVerbose(
-            core,
-            runtime,
-            `ack reaction removal failed chatGuid=${chatGuidForActions} msg=${ackMessageId}: ${String(err)}`,
-          );
-        });
+    if (sentMessage && chatGuidForActions && ackMessageId) {
+      core.channel.reactions.removeAckReactionAfterReply({
+        removeAfterReply: removeAckAfterReply,
+        ackReactionPromise,
+        ackReactionValue: ackReactionValue ?? null,
+        remove: () =>
+          sendBlueBubblesReaction({
+            chatGuid: chatGuidForActions,
+            messageGuid: ackMessageId,
+            emoji: ackReactionValue ?? "",
+            remove: true,
+            opts: { cfg: config, accountId: account.accountId },
+          }),
+        onError: (err) => {
+          logAckFailure({
+            log: (msg) => logVerbose(core, runtime, msg),
+            channel: "bluebubbles",
+            target: `${chatGuidForActions}/${ackMessageId}`,
+            error: err,
+          });
+        },
       });
     }
     if (chatGuidForActions && baseUrl && password && !sentMessage) {
@@ -1780,7 +1787,13 @@ async function processMessage(
         cfg: config,
         accountId: account.accountId,
       }).catch((err) => {
-        logVerbose(core, runtime, `typing stop (no reply) failed: ${String(err)}`);
+        logTypingFailure({
+          log: (msg) => logVerbose(core, runtime, msg),
+          channel: "bluebubbles",
+          action: "stop",
+          target: chatGuidForActions,
+          error: err,
+        });
       });
     }
   }

@@ -570,12 +570,13 @@ async function processMessageWithPipeline(params: {
     OriginatingTo: `zalo:${chatId}`,
   });
 
-  void core.channel.session.recordSessionMetaFromInbound({
+  await core.channel.session.recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+    onRecordError: (err) => {
+      runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+    },
   });
 
   const tableMode = core.channel.text.resolveMarkdownTableMode({

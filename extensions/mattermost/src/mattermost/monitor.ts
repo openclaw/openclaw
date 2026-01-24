@@ -7,10 +7,15 @@ import type {
   RuntimeEnv,
 } from "clawdbot/plugin-sdk";
 import {
+  createReplyPrefixContext,
+  createTypingCallbacks,
+  logInboundDrop,
+  logTypingFailure,
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
+  resolveControlCommandGate,
   resolveChannelMediaMaxBytes,
   type HistoryEntry,
 } from "clawdbot/plugin-sdk";
@@ -30,12 +35,9 @@ import {
 } from "./client.js";
 import {
   createDedupeCache,
-  extractShortModelName,
   formatInboundFromLabel,
   rawDataToString,
-  resolveIdentityName,
   resolveThreadSessionKeys,
-  type ResponsePrefixContext,
 } from "./monitor-helpers.js";
 import { sendMessageMattermost } from "./send.js";
 
@@ -307,11 +309,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   };
 
   const sendTypingIndicator = async (channelId: string, parentId?: string) => {
-    try {
-      await sendMattermostTyping(client, { channelId, parentId });
-    } catch (err) {
-      logger.debug?.(`mattermost typing cue failed for channel ${channelId}: ${String(err)}`);
-    }
+    await sendMattermostTyping(client, { channelId, parentId });
   };
 
   const resolveChannelInfo = async (channelId: string): Promise<MattermostChannel | null> => {
@@ -403,7 +401,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       cfg,
       surface: "mattermost",
     });
-    const isControlCommand = allowTextCommands && core.channel.text.hasControlCommand(rawText, cfg);
+    const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
+    const isControlCommand = allowTextCommands && hasControlCommand;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
     const senderAllowedForCommands = isSenderAllowed({
       senderId,
@@ -415,19 +414,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderName,
       allowFrom: effectiveGroupAllowFrom,
     });
+    const commandGate = resolveControlCommandGate({
+      useAccessGroups,
+      authorizers: [
+        { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        {
+          configured: effectiveGroupAllowFrom.length > 0,
+          allowed: groupAllowedForCommands,
+        },
+      ],
+      allowTextCommands,
+      hasControlCommand,
+    });
     const commandAuthorized =
-      kind === "dm"
-        ? dmPolicy === "open" || senderAllowedForCommands
-        : core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-            useAccessGroups,
-            authorizers: [
-              { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
-              {
-                configured: effectiveGroupAllowFrom.length > 0,
-                allowed: groupAllowedForCommands,
-              },
-            ],
-          });
+      kind === "dm" ? dmPolicy === "open" || senderAllowedForCommands : commandGate.commandAuthorized;
 
     if (kind === "dm") {
       if (dmPolicy === "disabled") {
@@ -488,10 +488,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       }
     }
 
-    if (kind !== "dm" && isControlCommand && !commandAuthorized) {
-      logVerboseMessage(
-        `mattermost: drop control command from unauthorized sender ${senderId}`,
-      );
+    if (kind !== "dm" && commandGate.shouldBlock) {
+      logInboundDrop({
+        log: logVerboseMessage,
+        channel: "mattermost",
+        reason: "control command (unauthorized)",
+        target: senderId,
+      });
       return;
     }
 
@@ -534,19 +537,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         : "");
     const pendingSender = senderName;
     const recordPendingHistory = () => {
-      if (!historyKey || historyLimit <= 0) return;
       const trimmed = pendingBody.trim();
-      if (!trimmed) return;
-      recordPendingHistoryEntry({
+      recordPendingHistoryEntryIfEnabled({
         historyMap: channelHistories,
-        historyKey,
         limit: historyLimit,
-        entry: {
-          sender: pendingSender,
-          body: trimmed,
-          timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
-          messageId: post.id ?? undefined,
-        },
+        historyKey: historyKey ?? "",
+        entry: historyKey && trimmed
+          ? {
+              sender: pendingSender,
+              body: trimmed,
+              timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+              messageId: post.id ?? undefined,
+            }
+          : null,
       });
     };
 
@@ -623,7 +626,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       sender: { name: senderName, id: senderId },
     });
     let combinedBody = body;
-    if (historyKey && historyLimit > 0) {
+    if (historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: channelHistories,
         historyKey,
@@ -713,15 +716,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
     });
 
-    let prefixContext: ResponsePrefixContext = {
-      identityName: resolveIdentityName(cfg, route.agentId),
-    };
+    const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
 
+    const typingCallbacks = createTypingCallbacks({
+      start: () => sendTypingIndicator(channelId, threadRootId),
+      onStartError: (err) => {
+        logTypingFailure({
+          log: (message) => logger.debug?.(message),
+          channel: "mattermost",
+          target: channelId,
+          error: err,
+        });
+      },
+    });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
-          .responsePrefix,
-        responsePrefixContextProvider: () => prefixContext,
+        responsePrefix: prefixContext.responsePrefix,
+        responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -752,7 +763,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         onError: (err, info) => {
           runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
         },
-        onReplyStart: () => sendTypingIndicator(channelId, threadRootId),
+        onReplyStart: typingCallbacks.onReplyStart,
       });
 
     await core.channel.reply.dispatchReplyFromConfig({
@@ -763,17 +774,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         ...replyOptions,
         disableBlockStreaming:
           typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-        onModelSelected: (ctx) => {
-          prefixContext.provider = ctx.provider;
-          prefixContext.model = extractShortModelName(ctx.model);
-          prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-          prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
-        },
+        onModelSelected: prefixContext.onModelSelected,
       },
     });
     markDispatchIdle();
-    if (historyKey && historyLimit > 0) {
-      clearHistoryEntries({ historyMap: channelHistories, historyKey });
+    if (historyKey) {
+      clearHistoryEntriesIfEnabled({ historyMap: channelHistories, historyKey, limit: historyLimit });
     }
   };
 

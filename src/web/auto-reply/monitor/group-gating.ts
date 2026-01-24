@@ -6,7 +6,7 @@ import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
-import { recordPendingHistoryEntry } from "../../../auto-reply/reply/history.js";
+import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
@@ -66,24 +66,22 @@ export function applyGroupGating(params: {
 
   if (activationCommand.hasCommand && !owner) {
     params.logVerbose(`Ignoring /activation from non-owner in group ${params.conversationId}`);
-    if (params.groupHistoryLimit > 0) {
-      const sender =
-        params.msg.senderName && params.msg.senderE164
-          ? `${params.msg.senderName} (${params.msg.senderE164})`
-          : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
-      recordPendingHistoryEntry({
-        historyMap: params.groupHistories,
-        historyKey: params.groupHistoryKey,
-        limit: params.groupHistoryLimit,
-        entry: {
-          sender,
-          body: params.msg.body,
-          timestamp: params.msg.timestamp,
-          id: params.msg.id,
-          senderJid: params.msg.senderJid,
-        },
-      });
-    }
+    const sender =
+      params.msg.senderName && params.msg.senderE164
+        ? `${params.msg.senderName} (${params.msg.senderE164})`
+        : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.groupHistories,
+      historyKey: params.groupHistoryKey,
+      limit: params.groupHistoryLimit,
+      entry: {
+        sender,
+        body: params.msg.body,
+        timestamp: params.msg.timestamp,
+        id: params.msg.id,
+        senderJid: params.msg.senderJid,
+      },
+    });
     return { shouldProcess: false };
   }
 
@@ -126,24 +124,22 @@ export function applyGroupGating(params: {
     params.logVerbose(
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
     );
-    if (params.groupHistoryLimit > 0) {
-      const sender =
-        params.msg.senderName && params.msg.senderE164
-          ? `${params.msg.senderName} (${params.msg.senderE164})`
-          : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
-      recordPendingHistoryEntry({
-        historyMap: params.groupHistories,
-        historyKey: params.groupHistoryKey,
-        limit: params.groupHistoryLimit,
-        entry: {
-          sender,
-          body: params.msg.body,
-          timestamp: params.msg.timestamp,
-          id: params.msg.id,
-          senderJid: params.msg.senderJid,
-        },
-      });
-    }
+    const sender =
+      params.msg.senderName && params.msg.senderE164
+        ? `${params.msg.senderName} (${params.msg.senderE164})`
+        : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.groupHistories,
+      historyKey: params.groupHistoryKey,
+      limit: params.groupHistoryLimit,
+      entry: {
+        sender,
+        body: params.msg.body,
+        timestamp: params.msg.timestamp,
+        id: params.msg.id,
+        senderJid: params.msg.senderJid,
+      },
+    });
     return { shouldProcess: false };
   }
 

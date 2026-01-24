@@ -1,32 +1,26 @@
+import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
-  resolveAckReaction,
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-  resolveIdentityName,
-} from "../../agents/identity.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../../auto-reply/reply/response-prefix-template.js";
+  removeAckReactionAfterReply,
+  shouldAckReaction as shouldAckReactionGate,
+} from "../../channels/ack-reactions.js";
+import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
+import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
   resolveEnvelopeFormatOptions,
 } from "../../auto-reply/envelope.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
+import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
+  clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../config/sessions.js";
+import { recordInboundSession } from "../../channels/session.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
@@ -73,6 +67,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     shouldRequireMention,
     canDetectMention,
     effectiveWasMentioned,
+    shouldBypassMention,
     threadChannel,
     threadParentId,
     threadParentName,
@@ -95,20 +90,20 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const shouldAckReaction = () => {
-    if (!ackReaction) return false;
-    if (ackReactionScope === "all") return true;
-    if (ackReactionScope === "direct") return isDirectMessage;
-    const isGroupChat = isGuildMessage || isGroupDm;
-    if (ackReactionScope === "group-all") return isGroupChat;
-    if (ackReactionScope === "group-mentions") {
-      if (!isGuildMessage) return false;
-      if (!shouldRequireMention) return false;
-      if (!canDetectMention) return false;
-      return effectiveWasMentioned;
-    }
-    return false;
-  };
+  const shouldAckReaction = () =>
+    Boolean(
+      ackReaction &&
+      shouldAckReactionGate({
+        scope: ackReactionScope,
+        isDirect: isDirectMessage,
+        isGroup: isGuildMessage || isGroupDm,
+        isMentionableGroup: isGuildMessage,
+        requireMention: Boolean(shouldRequireMention),
+        canDetectMention,
+        effectiveWasMentioned,
+        shouldBypassMention,
+      }),
+    );
   const ackReactionPromise = shouldAckReaction()
     ? reactMessageDiscord(message.channelId, message.id, ackReaction, {
         rest: client.rest,
@@ -288,26 +283,22 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
 
-  void recordSessionMetaFromInbound({
+  await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    logVerbose(`discord: failed updating session meta: ${String(err)}`);
+    updateLastRoute: isDirectMessage
+      ? {
+          sessionKey: route.mainSessionKey,
+          channel: "discord",
+          to: `user:${author.id}`,
+          accountId: route.accountId,
+        }
+      : undefined,
+    onRecordError: (err) => {
+      logVerbose(`discord: failed updating session meta: ${String(err)}`);
+    },
   });
-
-  if (isDirectMessage) {
-    await updateLastRoute({
-      storePath,
-      sessionKey: route.mainSessionKey,
-      deliveryContext: {
-        channel: "discord",
-        to: `user:${author.id}`,
-        accountId: route.accountId,
-      },
-      ctx: ctxPayload,
-    });
-  }
 
   if (shouldLogVerbose()) {
     const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
@@ -320,10 +311,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? deliverTarget.slice("channel:".length)
     : message.channelId;
 
-  // Create mutable context for response prefix template interpolation
-  let prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, route.agentId),
-  };
+  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "discord",
@@ -331,8 +319,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-    responsePrefixContextProvider: () => prefixContext,
+    responsePrefix: prefixContext.responsePrefix,
+    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
@@ -353,10 +341,20 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     onError: (err, info) => {
       runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
     },
-    onReplyStart: () => sendTyping({ client, channelId: typingChannelId }),
+    onReplyStart: createTypingCallbacks({
+      start: () => sendTyping({ client, channelId: typingChannelId }),
+      onStartError: (err) => {
+        logTypingFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: typingChannelId,
+          error: err,
+        });
+      },
+    }).onReplyStart,
   });
 
-  const { queuedFinal, counts } = await dispatchReplyFromConfig({
+  const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: ctxPayload,
     cfg,
     dispatcher,
@@ -368,20 +366,17 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           ? !discordConfig.blockStreaming
           : undefined,
       onModelSelected: (ctx) => {
-        // Mutate the object directly instead of reassigning to ensure the closure sees updates
-        prefixContext.provider = ctx.provider;
-        prefixContext.model = extractShortModelName(ctx.model);
-        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        prefixContext.onModelSelected(ctx);
       },
     },
   });
   markDispatchIdle();
   if (!queuedFinal) {
-    if (isGuildMessage && historyLimit > 0) {
-      clearHistoryEntries({
+    if (isGuildMessage) {
+      clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,
         historyKey: message.channelId,
+        limit: historyLimit,
       });
     }
     return;
@@ -392,23 +387,29 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );
   }
-  if (removeAckAfterReply && ackReactionPromise && ackReaction) {
-    const ackReactionValue = ackReaction;
-    void ackReactionPromise.then((didAck) => {
-      if (!didAck) return;
-      removeReactionDiscord(message.channelId, message.id, ackReactionValue, {
+  removeAckReactionAfterReply({
+    removeAfterReply: removeAckAfterReply,
+    ackReactionPromise,
+    ackReactionValue: ackReaction,
+    remove: async () => {
+      await removeReactionDiscord(message.channelId, message.id, ackReaction, {
         rest: client.rest,
-      }).catch((err) => {
-        logVerbose(
-          `discord: failed to remove ack reaction from ${message.channelId}/${message.id}: ${String(err)}`,
-        );
       });
-    });
-  }
-  if (isGuildMessage && historyLimit > 0) {
-    clearHistoryEntries({
+    },
+    onError: (err) => {
+      logAckFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: `${message.channelId}/${message.id}`,
+        error: err,
+      });
+    },
+  });
+  if (isGuildMessage) {
+    clearHistoryEntriesIfEnabled({
       historyMap: guildHistories,
       historyKey: message.channelId,
+      limit: historyLimit,
     });
   }
 }

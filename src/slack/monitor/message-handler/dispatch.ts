@@ -1,14 +1,10 @@
-import {
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-  resolveIdentityName,
-} from "../../../agents/identity.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../../../auto-reply/reply/response-prefix-template.js";
-import { dispatchReplyFromConfig } from "../../../auto-reply/reply/dispatch-from-config.js";
-import { clearHistoryEntries } from "../../../auto-reply/reply/history.js";
+import { resolveHumanDelayConfig } from "../../../agents/identity.js";
+import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
+import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
+import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
+import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
+import { createReplyPrefixContext } from "../../../channels/reply-prefix.js";
+import { createTypingCallbacks } from "../../../channels/typing.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
@@ -60,23 +56,50 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     hasRepliedRef,
   });
 
-  const onReplyStart = async () => {
-    didSetStatus = true;
-    await ctx.setSlackThreadStatus({
-      channelId: message.channel,
-      threadTs: statusThreadTs,
-      status: "is typing...",
-    });
-  };
+  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
+  const typingCallbacks = createTypingCallbacks({
+    start: async () => {
+      didSetStatus = true;
+      await ctx.setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "is typing...",
+      });
+    },
+    stop: async () => {
+      if (!didSetStatus) return;
+      didSetStatus = false;
+      await ctx.setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "",
+      });
+    },
+    onStartError: (err) => {
+      logTypingFailure({
+        log: (message) => runtime.error?.(danger(message)),
+        channel: "slack",
+        action: "start",
+        target: typingTarget,
+        error: err,
+      });
+    },
+    onStopError: (err) => {
+      logTypingFailure({
+        log: (message) => runtime.error?.(danger(message)),
+        channel: "slack",
+        action: "stop",
+        target: typingTarget,
+        error: err,
+      });
+    },
+  });
 
-  // Create mutable context for response prefix template interpolation
-  let prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, route.agentId),
-  };
+  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-    responsePrefixContextProvider: () => prefixContext,
+    responsePrefix: prefixContext.responsePrefix,
+    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload) => {
       const replyThreadTs = replyPlan.nextThreadTs();
@@ -93,18 +116,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
-      if (didSetStatus) {
-        void ctx.setSlackThreadStatus({
-          channelId: message.channel,
-          threadTs: statusThreadTs,
-          status: "",
-        });
-      }
+      typingCallbacks.onIdle?.();
     },
-    onReplyStart,
+    onReplyStart: typingCallbacks.onReplyStart,
+    onIdle: typingCallbacks.onIdle,
   });
 
-  const { queuedFinal, counts } = await dispatchReplyFromConfig({
+  const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
     cfg,
     dispatcher,
@@ -117,29 +135,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           ? !account.config.blockStreaming
           : undefined,
       onModelSelected: (ctx) => {
-        // Mutate the object directly instead of reassigning to ensure the closure sees updates
-        prefixContext.provider = ctx.provider;
-        prefixContext.model = extractShortModelName(ctx.model);
-        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        prefixContext.onModelSelected(ctx);
       },
     },
   });
   markDispatchIdle();
 
-  if (didSetStatus) {
-    await ctx.setSlackThreadStatus({
-      channelId: message.channel,
-      threadTs: statusThreadTs,
-      status: "",
-    });
-  }
-
   if (!queuedFinal) {
-    if (prepared.isRoomish && ctx.historyLimit > 0) {
-      clearHistoryEntries({
+    if (prepared.isRoomish) {
+      clearHistoryEntriesIfEnabled({
         historyMap: ctx.channelHistories,
         historyKey: prepared.historyKey,
+        limit: ctx.historyLimit,
       });
     }
     return;
@@ -152,26 +159,35 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     );
   }
 
-  if (ctx.removeAckAfterReply && prepared.ackReactionPromise && prepared.ackReactionMessageTs) {
-    const messageTs = prepared.ackReactionMessageTs;
-    const ackValue = prepared.ackReactionValue;
-    void prepared.ackReactionPromise.then((didAck) => {
-      if (!didAck) return;
-      removeSlackReaction(message.channel, messageTs, ackValue, {
-        token: ctx.botToken,
-        client: ctx.app.client,
-      }).catch((err) => {
-        logVerbose(
-          `slack: failed to remove ack reaction from ${message.channel}/${message.ts}: ${String(err)}`,
-        );
+  removeAckReactionAfterReply({
+    removeAfterReply: ctx.removeAckAfterReply,
+    ackReactionPromise: prepared.ackReactionPromise,
+    ackReactionValue: prepared.ackReactionValue,
+    remove: () =>
+      removeSlackReaction(
+        message.channel,
+        prepared.ackReactionMessageTs ?? "",
+        prepared.ackReactionValue,
+        {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        },
+      ),
+    onError: (err) => {
+      logAckFailure({
+        log: logVerbose,
+        channel: "slack",
+        target: `${message.channel}/${message.ts}`,
+        error: err,
       });
-    });
-  }
+    },
+  });
 
-  if (prepared.isRoomish && ctx.historyLimit > 0) {
-    clearHistoryEntries({
+  if (prepared.isRoomish) {
+    clearHistoryEntriesIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey: prepared.historyKey,
+      limit: ctx.historyLimit,
     });
   }
 }

@@ -198,7 +198,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   const messageUrl = params.messageUrl;
   let accessToken: string;
   try {
-    accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com/.default");
+    accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com");
   } catch {
     return { media: [], messageUrl, tokenError: true };
   }
