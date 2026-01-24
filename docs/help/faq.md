@@ -290,10 +290,11 @@ Pick region-pinned endpoints. OpenRouter exposes US-hosted options for MiniMax, 
 No. Clawdbot runs on macOS or Linux (Windows via WSL2). A Mac mini is optional — some people
 buy one as an always‑on host, but a small VPS, home server, or Raspberry Pi‑class box works too.
 
-The only reason you’d **need** a Mac is if you want macOS‑only tools (like iMessage or Apple Notes).
-In that case, run the Gateway on a Mac, or keep the Gateway on Linux and pair a macOS node.
+You only need a Mac **for macOS‑only tools**. For iMessage, you can keep the Gateway on Linux
+and run `imsg` on any Mac over SSH by pointing `channels.imessage.cliPath` at an SSH wrapper.
+If you want other macOS‑only tools, run the Gateway on a Mac or pair a macOS node.
 
-Docs: [Nodes](/nodes), [iMessage](/channels/imessage), [Mac remote mode](/platforms/mac/remote).
+Docs: [iMessage](/channels/imessage), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
 
 ### Can I use Bun?
 
