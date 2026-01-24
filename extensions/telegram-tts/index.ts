@@ -47,6 +47,7 @@ interface TtsConfig {
 interface UserPreferences {
   tts?: {
     enabled?: boolean;
+    provider?: "openai" | "elevenlabs";
   };
 }
 
@@ -72,8 +73,24 @@ function isValidVoiceId(voiceId: string): boolean {
  * Validates OpenAI voice name.
  */
 function isValidOpenAIVoice(voice: string): boolean {
-  const validVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+  const validVoices = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"];
   return validVoices.includes(voice);
+}
+
+/**
+ * Available OpenAI TTS models.
+ */
+const OPENAI_TTS_MODELS = [
+  "gpt-4o-mini-tts",
+  "tts-1",
+  "tts-1-hd",
+];
+
+/**
+ * Validates OpenAI TTS model name.
+ */
+function isValidOpenAIModel(model: string): boolean {
+  return OPENAI_TTS_MODELS.includes(model) || model.startsWith("gpt-4o-mini-tts-");
 }
 
 // =============================================================================
@@ -107,7 +124,30 @@ function setTtsEnabled(prefsPath: string, enabled: boolean): void {
   } catch {
     // ignore
   }
-  prefs.tts = { enabled };
+  prefs.tts = { ...prefs.tts, enabled };
+  writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+}
+
+function getTtsProvider(prefsPath: string): "openai" | "elevenlabs" | undefined {
+  try {
+    if (!existsSync(prefsPath)) return undefined;
+    const prefs: UserPreferences = JSON.parse(readFileSync(prefsPath, "utf8"));
+    return prefs?.tts?.provider;
+  } catch {
+    return undefined;
+  }
+}
+
+function setTtsProvider(prefsPath: string, provider: "openai" | "elevenlabs"): void {
+  let prefs: UserPreferences = {};
+  try {
+    if (existsSync(prefsPath)) {
+      prefs = JSON.parse(readFileSync(prefsPath, "utf8"));
+    }
+  } catch {
+    // ignore
+  }
+  prefs.tts = { ...prefs.tts, provider };
   writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
 }
 
@@ -200,10 +240,14 @@ async function elevenLabsTTS(
 async function openaiTTS(
   text: string,
   apiKey: string,
-  model: string = "tts-1",
+  model: string = "gpt-4o-mini-tts",
   voice: string = "alloy",
   timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<Buffer> {
+  // Validate model
+  if (!isValidOpenAIModel(model)) {
+    throw new Error(`Invalid model: ${model}`);
+  }
   // Validate voice
   if (!isValidOpenAIVoice(voice)) {
     throw new Error(`Invalid voice: ${voice}`);
@@ -243,17 +287,12 @@ async function openaiTTS(
 // Core TTS Function
 // =============================================================================
 
-async function textToSpeech(text: string, config: TtsConfig): Promise<TtsResult> {
-  const provider = config.provider || "elevenlabs";
-  const apiKey = getApiKey(config, provider);
+async function textToSpeech(text: string, config: TtsConfig, prefsPath?: string): Promise<TtsResult> {
+  // Get user's preferred provider (from prefs) or fall back to config
+  const userProvider = prefsPath ? getTtsProvider(prefsPath) : undefined;
+  const primaryProvider = userProvider || config.provider || "openai";
+  const fallbackProvider = primaryProvider === "openai" ? "elevenlabs" : "openai";
   const timeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
-
-  if (!apiKey) {
-    return {
-      success: false,
-      error: `No API key configured for ${provider}`,
-    };
-  }
 
   const maxLen = config.maxTextLength || 4000;
   if (text.length > maxLen) {
@@ -263,48 +302,65 @@ async function textToSpeech(text: string, config: TtsConfig): Promise<TtsResult>
     };
   }
 
-  try {
-    let audioBuffer: Buffer;
+  // Try primary provider first, then fallback
+  const providers = [primaryProvider, fallbackProvider];
+  let lastError: string | undefined;
 
-    if (provider === "elevenlabs") {
-      audioBuffer = await elevenLabsTTS(
-        text,
-        apiKey,
-        config.elevenlabs?.voiceId,
-        config.elevenlabs?.modelId,
-        timeoutMs
-      );
-    } else if (provider === "openai") {
-      audioBuffer = await openaiTTS(
-        text,
-        apiKey,
-        config.openai?.model,
-        config.openai?.voice,
-        timeoutMs
-      );
-    } else {
-      return { success: false, error: `Unknown provider: ${provider}` };
+  for (const provider of providers) {
+    const apiKey = getApiKey(config, provider);
+    if (!apiKey) {
+      lastError = `No API key for ${provider}`;
+      continue;
     }
 
-    // Save to temp file
-    const tempDir = mkdtempSync(join(tmpdir(), "tts-"));
-    const audioPath = join(tempDir, `voice-${Date.now()}.mp3`);
-    writeFileSync(audioPath, audioBuffer);
+    try {
+      let audioBuffer: Buffer;
 
-    // Schedule cleanup after delay (file should be consumed by then)
-    scheduleCleanup(tempDir);
+      if (provider === "elevenlabs") {
+        audioBuffer = await elevenLabsTTS(
+          text,
+          apiKey,
+          config.elevenlabs?.voiceId,
+          config.elevenlabs?.modelId,
+          timeoutMs
+        );
+      } else if (provider === "openai") {
+        audioBuffer = await openaiTTS(
+          text,
+          apiKey,
+          config.openai?.model || "gpt-4o-mini-tts",
+          config.openai?.voice,
+          timeoutMs
+        );
+      } else {
+        lastError = `Unknown provider: ${provider}`;
+        continue;
+      }
 
-    return { success: true, audioPath };
-  } catch (err) {
-    const error = err as Error;
-    if (error.name === "AbortError") {
-      return { success: false, error: "TTS request timed out" };
+      // Save to temp file
+      const tempDir = mkdtempSync(join(tmpdir(), "tts-"));
+      const audioPath = join(tempDir, `voice-${Date.now()}.mp3`);
+      writeFileSync(audioPath, audioBuffer);
+
+      // Schedule cleanup after delay (file should be consumed by then)
+      scheduleCleanup(tempDir);
+
+      return { success: true, audioPath };
+    } catch (err) {
+      const error = err as Error;
+      if (error.name === "AbortError") {
+        lastError = `${provider}: request timed out`;
+      } else {
+        lastError = `${provider}: ${error.message}`;
+      }
+      // Continue to try fallback provider
     }
-    return {
-      success: false,
-      error: `TTS conversion failed: ${error.message}`,
-    };
   }
+
+  return {
+    success: false,
+    error: `TTS conversion failed: ${lastError || "no providers available"}`,
+  };
 }
 
 // =============================================================================
@@ -364,7 +420,7 @@ Do NOT add extra text around the MEDIA directive.`,
       const text = params.text;
       log.info(`[${PLUGIN_ID}] speak() called, length: ${text.length}`);
 
-      const result = await textToSpeech(text, config);
+      const result = await textToSpeech(text, config, prefsPath);
 
       if (result.success && result.audioPath) {
         log.info(`[${PLUGIN_ID}] Audio generated: ${result.audioPath}`);
@@ -396,12 +452,18 @@ Do NOT add extra text around the MEDIA directive.`,
   // ===========================================================================
 
   // tts.status - Check if TTS is enabled
-  api.registerGatewayMethod("tts.status", async () => ({
-    enabled: isTtsEnabled(prefsPath),
-    provider: config.provider,
-    prefsPath,
-    hasApiKey: !!getApiKey(config, config.provider || "elevenlabs"),
-  }));
+  api.registerGatewayMethod("tts.status", async () => {
+    const userProvider = getTtsProvider(prefsPath);
+    const activeProvider = userProvider || config.provider || "openai";
+    return {
+      enabled: isTtsEnabled(prefsPath),
+      provider: activeProvider,
+      fallbackProvider: activeProvider === "openai" ? "elevenlabs" : "openai",
+      prefsPath,
+      hasOpenAIKey: !!getApiKey(config, "openai"),
+      hasElevenLabsKey: !!getApiKey(config, "elevenlabs"),
+    };
+  });
 
   // tts.enable - Enable TTS mode
   api.registerGatewayMethod("tts.enable", async () => {
@@ -423,41 +485,196 @@ Do NOT add extra text around the MEDIA directive.`,
     if (typeof params?.text !== "string" || params.text.length === 0) {
       return { ok: false, error: "Invalid or missing 'text' parameter" };
     }
-    const result = await textToSpeech(params.text, config);
+    const result = await textToSpeech(params.text, config, prefsPath);
     if (result.success) {
       return { ok: true, audioPath: result.audioPath };
     }
     return { ok: false, error: result.error };
   });
 
+  // tts.setProvider - Set primary TTS provider
+  api.registerGatewayMethod("tts.setProvider", async (params: { provider?: unknown }) => {
+    if (params?.provider !== "openai" && params?.provider !== "elevenlabs") {
+      return { ok: false, error: "Invalid provider. Use 'openai' or 'elevenlabs'" };
+    }
+    setTtsProvider(prefsPath, params.provider);
+    log.info(`[${PLUGIN_ID}] Provider set to ${params.provider} via RPC`);
+    return { ok: true, provider: params.provider };
+  });
+
   // tts.providers - List available providers and their status
-  api.registerGatewayMethod("tts.providers", async () => ({
-    providers: [
-      {
-        id: "elevenlabs",
-        name: "ElevenLabs",
-        configured: !!getApiKey(config, "elevenlabs"),
-        models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
-      },
-      {
-        id: "openai",
-        name: "OpenAI",
-        configured: !!getApiKey(config, "openai"),
-        models: ["tts-1", "tts-1-hd"],
-        voices: ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
-      },
-    ],
-    active: config.provider,
-  }));
+  api.registerGatewayMethod("tts.providers", async () => {
+    const userProvider = getTtsProvider(prefsPath);
+    return {
+      providers: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          configured: !!getApiKey(config, "openai"),
+          models: ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"],
+          voices: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
+        },
+        {
+          id: "elevenlabs",
+          name: "ElevenLabs",
+          configured: !!getApiKey(config, "elevenlabs"),
+          models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+        },
+      ],
+      active: userProvider || config.provider || "openai",
+    };
+  });
+
+  // ===========================================================================
+  // Plugin Commands (LLM-free, intercepted automatically)
+  // ===========================================================================
+
+  // /tts_on - Enable TTS mode
+  api.registerCommand({
+    name: "tts_on",
+    description: "Enable text-to-speech for responses",
+    handler: () => {
+      setTtsEnabled(prefsPath, true);
+      log.info(`[${PLUGIN_ID}] TTS enabled via /tts_on command`);
+      return { text: "🔊 TTS ativado! Agora vou responder em áudio." };
+    },
+  });
+
+  // /tts_off - Disable TTS mode
+  api.registerCommand({
+    name: "tts_off",
+    description: "Disable text-to-speech for responses",
+    handler: () => {
+      setTtsEnabled(prefsPath, false);
+      log.info(`[${PLUGIN_ID}] TTS disabled via /tts_off command`);
+      return { text: "🔇 TTS desativado. Voltando ao modo texto." };
+    },
+  });
+
+  // /audio <text> - Convert text to audio immediately
+  api.registerCommand({
+    name: "audio",
+    description: "Convert text to audio message",
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const text = ctx.args?.trim();
+      if (!text) {
+        return { text: "❌ Uso: /audio <texto para converter em áudio>" };
+      }
+
+      log.info(`[${PLUGIN_ID}] /audio command, text length: ${text.length}`);
+      const result = await textToSpeech(text, config, prefsPath);
+
+      if (result.success && result.audioPath) {
+        log.info(`[${PLUGIN_ID}] Audio generated: ${result.audioPath}`);
+        return { text: `MEDIA:${result.audioPath}` };
+      }
+
+      log.error(`[${PLUGIN_ID}] /audio failed: ${result.error}`);
+      return { text: `❌ Erro ao gerar áudio: ${result.error}` };
+    },
+  });
+
+  // /tts_provider [openai|elevenlabs] - Set or show TTS provider
+  api.registerCommand({
+    name: "tts_provider",
+    description: "Set or show TTS provider (openai or elevenlabs)",
+    acceptsArgs: true,
+    handler: (ctx) => {
+      const arg = ctx.args?.trim().toLowerCase();
+      const currentProvider = getTtsProvider(prefsPath) || config.provider || "openai";
+
+      if (!arg) {
+        // Show current provider
+        const fallback = currentProvider === "openai" ? "elevenlabs" : "openai";
+        const hasOpenAI = !!getApiKey(config, "openai");
+        const hasElevenLabs = !!getApiKey(config, "elevenlabs");
+        return {
+          text: `🎙️ **TTS Provider**\n\n` +
+            `Primário: **${currentProvider}** ${currentProvider === "openai" ? "(gpt-4o-mini-tts)" : "(eleven_multilingual_v2)"}\n` +
+            `Fallback: ${fallback}\n\n` +
+            `OpenAI: ${hasOpenAI ? "✅ configurado" : "❌ sem API key"}\n` +
+            `ElevenLabs: ${hasElevenLabs ? "✅ configurado" : "❌ sem API key"}\n\n` +
+            `Uso: /tts_provider openai ou /tts_provider elevenlabs`,
+        };
+      }
+
+      if (arg !== "openai" && arg !== "elevenlabs") {
+        return { text: "❌ Provedor inválido. Use: /tts_provider openai ou /tts_provider elevenlabs" };
+      }
+
+      setTtsProvider(prefsPath, arg);
+      const fallback = arg === "openai" ? "elevenlabs" : "openai";
+      log.info(`[${PLUGIN_ID}] Provider set to ${arg} via /tts_provider command`);
+      return {
+        text: `✅ Provedor TTS alterado!\n\n` +
+          `Primário: **${arg}** ${arg === "openai" ? "(gpt-4o-mini-tts)" : "(eleven_multilingual_v2)"}\n` +
+          `Fallback: ${fallback}`,
+      };
+    },
+  });
+
+  // ===========================================================================
+  // Auto-TTS Hook (message_sending)
+  // ===========================================================================
+
+  // Automatically convert text responses to audio when TTS is enabled
+  api.on("message_sending", async (event) => {
+    // Check if TTS is enabled
+    if (!isTtsEnabled(prefsPath)) {
+      return; // TTS disabled, don't modify message
+    }
+
+    const content = event.content?.trim();
+    if (!content) {
+      return; // Empty content, skip
+    }
+
+    // Skip if already contains MEDIA directive (avoid double conversion)
+    if (content.includes("MEDIA:")) {
+      return;
+    }
+
+    // Skip very short messages (likely errors or status)
+    if (content.length < 10) {
+      return;
+    }
+
+    log.info(`[${PLUGIN_ID}] Auto-TTS: Converting ${content.length} chars`);
+
+    try {
+      const result = await textToSpeech(content, config, prefsPath);
+
+      if (result.success && result.audioPath) {
+        log.info(`[${PLUGIN_ID}] Auto-TTS: Audio generated: ${result.audioPath}`);
+        // Return modified content with MEDIA directive
+        // The text is kept for accessibility, audio is appended
+        return {
+          content: `MEDIA:${result.audioPath}`,
+        };
+      } else {
+        log.warn(`[${PLUGIN_ID}] Auto-TTS: Failed - ${result.error}`);
+        // On failure, send original text without audio
+        return;
+      }
+    } catch (err) {
+      const error = err as Error;
+      log.error(`[${PLUGIN_ID}] Auto-TTS error: ${error.message}`);
+      // On error, send original text
+      return;
+    }
+  });
 
   // ===========================================================================
   // Startup
   // ===========================================================================
 
   const ttsEnabled = isTtsEnabled(prefsPath);
-  const hasKey = !!getApiKey(config, config.provider || "elevenlabs");
+  const userProvider = getTtsProvider(prefsPath);
+  const activeProvider = userProvider || config.provider || "openai";
+  const hasKey = !!getApiKey(config, activeProvider);
 
-  log.info(`[${PLUGIN_ID}] Ready. TTS: ${ttsEnabled ? "ON" : "OFF"}, API Key: ${hasKey ? "OK" : "MISSING"}`);
+  log.info(`[${PLUGIN_ID}] Ready. TTS: ${ttsEnabled ? "ON" : "OFF"}, Provider: ${activeProvider}, API Key: ${hasKey ? "OK" : "MISSING"}`);
 
   if (!hasKey) {
     log.warn(
