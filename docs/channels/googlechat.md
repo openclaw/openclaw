@@ -60,7 +60,7 @@ Once the gateway is running and your email is added to the visibility list:
 Google Chat webhooks require a public HTTPS endpoint. For security, **only expose the `/googlechat` path** to the internet. Keep the Clawdbot dashboard and other sensitive endpoints on your private network.
 
 ### Option A: Tailscale Funnel (Recommended)
-If you use Tailscale, you can expose **only** the webhook path using Tailscale Funnel. This keeps your dashboard private while allowing Google Chat to reach your gateway.
+Use Tailscale Serve for the private dashboard and Funnel for the public webhook path. This keeps `/` private while exposing only `/googlechat`.
 
 1. **Check what address your gateway is bound to:**
    ```bash
@@ -68,7 +68,16 @@ If you use Tailscale, you can expose **only** the webhook path using Tailscale F
    ```
    Note the IP address (e.g., `127.0.0.1`, `0.0.0.0`, or your Tailscale IP like `100.x.x.x`).
 
-2. **Configure the path mapping** (use the IP from step 1):
+2. **Expose the dashboard to the tailnet only (port 8443):**
+   ```bash
+   # If bound to localhost (127.0.0.1 or 0.0.0.0):
+   tailscale serve --bg --https 8443 http://127.0.0.1:18789
+
+   # If bound to Tailscale IP only (e.g., 100.106.161.80):
+   tailscale serve --bg --https 8443 http://100.106.161.80:18789
+   ```
+
+3. **Expose only the webhook path publicly:**
    ```bash
    # If bound to localhost (127.0.0.1 or 0.0.0.0):
    tailscale funnel --bg --set-path /googlechat http://127.0.0.1:18789/googlechat
@@ -77,20 +86,24 @@ If you use Tailscale, you can expose **only** the webhook path using Tailscale F
    tailscale funnel --bg --set-path /googlechat http://100.106.161.80:18789/googlechat
    ```
 
-3. **Authorize the node for Funnel access:**
+4. **Authorize the node for Funnel access:**
    If prompted, visit the authorization URL shown in the output to enable Funnel for this node in your tailnet policy.
 
-4. **Verify the configuration:**
+5. **Verify the configuration:**
    ```bash
+   tailscale serve status
    tailscale funnel status
    ```
 
 Your public webhook URL will be:
 `https://<node-name>.<tailnet>.ts.net/googlechat`
 
-The rest of your gateway (like the dashboard at `/`) remains inaccessible from the public web unless you explicitly add it.
+Your private dashboard stays tailnet-only:
+`https://<node-name>.<tailnet>.ts.net:8443/`
 
-> Note: This configuration persists across reboots. To remove it later, run `tailscale funnel reset`.
+Use the public URL (without `:8443`) in the Google Chat app config.
+
+> Note: This configuration persists across reboots. To remove it later, run `tailscale funnel reset` and `tailscale serve reset`.
 
 ### Option B: Reverse Proxy (Caddy)
 If you use a reverse proxy like Caddy, only proxy the specific path:
