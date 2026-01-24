@@ -30,12 +30,6 @@
       "title": "Exec",
       "detailKeys": ["command"]
     },
-    "bash": {
-      "emoji": "🛠️",
-      "title": "Exec",
-      "label": "exec",
-      "detailKeys": ["command"]
-    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
