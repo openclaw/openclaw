@@ -48,8 +48,11 @@ interface UserPreferences {
   tts?: {
     enabled?: boolean;
     provider?: "openai" | "elevenlabs";
+    maxLength?: number; // Max chars before summarizing (default 1500)
   };
 }
+
+const DEFAULT_TTS_MAX_LENGTH = 1500;
 
 interface TtsResult {
   success: boolean;
@@ -149,6 +152,91 @@ function setTtsProvider(prefsPath: string, provider: "openai" | "elevenlabs"): v
   }
   prefs.tts = { ...prefs.tts, provider };
   writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+}
+
+function getTtsMaxLength(prefsPath: string): number {
+  try {
+    if (!existsSync(prefsPath)) return DEFAULT_TTS_MAX_LENGTH;
+    const prefs: UserPreferences = JSON.parse(readFileSync(prefsPath, "utf8"));
+    return prefs?.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH;
+  } catch {
+    return DEFAULT_TTS_MAX_LENGTH;
+  }
+}
+
+function setTtsMaxLength(prefsPath: string, maxLength: number): void {
+  let prefs: UserPreferences = {};
+  try {
+    if (existsSync(prefsPath)) {
+      prefs = JSON.parse(readFileSync(prefsPath, "utf8"));
+    }
+  } catch {
+    // ignore
+  }
+  prefs.tts = { ...prefs.tts, maxLength };
+  writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+}
+
+// =============================================================================
+// Text Summarization (for long texts)
+// =============================================================================
+
+async function summarizeText(
+  text: string,
+  targetLength: number,
+  apiKey: string,
+  timeoutMs: number = 30000
+): Promise<string> {
+  // Validate targetLength
+  if (targetLength < 100 || targetLength > 10000) {
+    throw new Error(`Invalid targetLength: ${targetLength}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `Você é um assistente que resume textos de forma concisa mantendo as informações mais importantes. Resuma o texto para aproximadamente ${targetLength} caracteres. Mantenha o tom e estilo original. Responda apenas com o resumo, sem explicações adicionais.`,
+          },
+          {
+            role: "user",
+            content: `<text_to_summarize>\n${text}\n</text_to_summarize>`,
+          },
+        ],
+        max_tokens: Math.ceil(targetLength / 2), // Conservative estimate for multilingual text
+        temperature: 0.3,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error("Summarization service unavailable");
+    }
+
+    const data = await response.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const summary = data.choices?.[0]?.message?.content?.trim();
+
+    if (!summary) {
+      throw new Error("No summary returned");
+    }
+
+    return summary;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function getApiKey(config: TtsConfig, provider: string): string | undefined {
@@ -614,6 +702,39 @@ Do NOT add extra text around the MEDIA directive.`,
     },
   });
 
+  // /tts_limit [number] - Set or show max text length before summarizing
+  api.registerCommand({
+    name: "tts_limit",
+    description: "Set or show max text length for TTS (longer texts are summarized)",
+    acceptsArgs: true,
+    handler: (ctx) => {
+      const arg = ctx.args?.trim();
+      const currentLimit = getTtsMaxLength(prefsPath);
+
+      if (!arg) {
+        // Show current limit
+        return {
+          text: `📏 **Limite TTS**\n\n` +
+            `Limite atual: **${currentLimit}** caracteres\n\n` +
+            `Textos maiores que ${currentLimit} chars serão resumidos automaticamente com gpt-4o-mini antes de converter em áudio.\n\n` +
+            `Uso: /tts_limit 2000 (define novo limite)`,
+        };
+      }
+
+      const newLimit = parseInt(arg, 10);
+      if (isNaN(newLimit) || newLimit < 100 || newLimit > 10000) {
+        return { text: "❌ Limite inválido. Use um número entre 100 e 10000." };
+      }
+
+      setTtsMaxLength(prefsPath, newLimit);
+      log.info(`[${PLUGIN_ID}] Max length set to ${newLimit} via /tts_limit command`);
+      return {
+        text: `✅ Limite TTS alterado para **${newLimit}** caracteres!\n\n` +
+          `Textos maiores serão resumidos automaticamente antes de virar áudio.`,
+      };
+    },
+  });
+
   // ===========================================================================
   // Auto-TTS Hook (message_sending)
   // ===========================================================================
@@ -640,10 +761,40 @@ Do NOT add extra text around the MEDIA directive.`,
       return;
     }
 
-    log.info(`[${PLUGIN_ID}] Auto-TTS: Converting ${content.length} chars`);
+    const maxLength = getTtsMaxLength(prefsPath);
+    let textForAudio = content;
+
+    // If text exceeds limit, summarize it first
+    if (content.length > maxLength) {
+      log.info(`[${PLUGIN_ID}] Auto-TTS: Text too long (${content.length} > ${maxLength}), summarizing...`);
+
+      const openaiKey = getApiKey(config, "openai");
+      if (!openaiKey) {
+        log.warn(`[${PLUGIN_ID}] Auto-TTS: No OpenAI key for summarization, skipping audio`);
+        return; // Can't summarize without OpenAI key
+      }
+
+      try {
+        textForAudio = await summarizeText(content, maxLength, openaiKey, config.timeoutMs);
+        log.info(`[${PLUGIN_ID}] Auto-TTS: Summarized to ${textForAudio.length} chars`);
+
+        // Safeguard: if summary still exceeds hard limit, truncate
+        const hardLimit = config.maxTextLength || 4000;
+        if (textForAudio.length > hardLimit) {
+          log.warn(`[${PLUGIN_ID}] Auto-TTS: Summary exceeded hard limit (${textForAudio.length} > ${hardLimit}), truncating`);
+          textForAudio = textForAudio.slice(0, hardLimit - 3) + "...";
+        }
+      } catch (err) {
+        const error = err as Error;
+        log.error(`[${PLUGIN_ID}] Auto-TTS: Summarization failed: ${error.message}`);
+        return; // On summarization failure, skip audio
+      }
+    } else {
+      log.info(`[${PLUGIN_ID}] Auto-TTS: Converting ${content.length} chars`);
+    }
 
     try {
-      const result = await textToSpeech(content, config, prefsPath);
+      const result = await textToSpeech(textForAudio, config, prefsPath);
 
       if (result.success && result.audioPath) {
         log.info(`[${PLUGIN_ID}] Auto-TTS: Audio generated: ${result.audioPath}`);
