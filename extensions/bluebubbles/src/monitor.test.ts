@@ -1193,6 +1193,51 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
     });
 
+    it("preserves part index prefixes in reply tags when short IDs are unavailable", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          replyTo: {
+            guid: "p:1/msg-0",
+            text: "original message",
+            handle: { address: "+15550000000", displayName: "Alice" },
+          },
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.ReplyToId).toBe("p:1/msg-0");
+      expect(callArgs.ctx.ReplyToIdFull).toBe("p:1/msg-0");
+      expect(callArgs.ctx.Body).toContain("[[reply_to:p:1/msg-0]]");
+    });
+
     it("hydrates missing reply sender/body from the recent-message cache", async () => {
       const account = createMockAccount({ dmPolicy: "open", groupPolicy: "open" });
       const config: ClawdbotConfig = {};

@@ -70,33 +70,23 @@ function generateShortId(): string {
   return String(blueBubblesShortIdCounter);
 }
 
-// Normalize message ID by stripping "p:N/" prefix for consistent cache keys
-function normalizeMessageIdForCache(messageId: string): string {
-  const trimmed = messageId.trim();
-  // Strip "p:N/" prefix if present (e.g., "p:0/UUID" -> "UUID")
-  const match = trimmed.match(/^p:\d+\/(.+)$/);
-  return match ? match[1] : trimmed;
-}
-
 function rememberBlueBubblesReplyCache(
   entry: Omit<BlueBubblesReplyCacheEntry, "shortId">,
 ): BlueBubblesReplyCacheEntry {
-  const rawMessageId = entry.messageId.trim();
-  if (!rawMessageId) {
+  const messageId = entry.messageId.trim();
+  if (!messageId) {
     return { ...entry, shortId: "" };
   }
-  // Normalize to strip "p:N/" prefix for consistent cache lookups
-  const messageId = normalizeMessageIdForCache(rawMessageId);
 
-  // Check if we already have a short ID for this GUID (keep "p:N/" prefix)
-  let shortId = blueBubblesUuidToShortId.get(rawMessageId);
+  // Check if we already have a short ID for this GUID
+  let shortId = blueBubblesUuidToShortId.get(messageId);
   if (!shortId) {
     shortId = generateShortId();
-    blueBubblesShortIdToUuid.set(shortId, rawMessageId);
-    blueBubblesUuidToShortId.set(rawMessageId, shortId);
+    blueBubblesShortIdToUuid.set(shortId, messageId);
+    blueBubblesUuidToShortId.set(messageId, shortId);
   }
 
-  const fullEntry: BlueBubblesReplyCacheEntry = { ...entry, messageId: rawMessageId, shortId };
+  const fullEntry: BlueBubblesReplyCacheEntry = { ...entry, messageId, shortId };
 
   // Refresh insertion order.
   blueBubblesReplyCacheByMessageId.delete(messageId);
@@ -110,7 +100,7 @@ function rememberBlueBubblesReplyCache(
       // Clean up short ID mappings for expired entries
       if (value.shortId) {
         blueBubblesShortIdToUuid.delete(value.shortId);
-        blueBubblesUuidToShortId.delete(value.messageId.trim());
+        blueBubblesUuidToShortId.delete(key);
       }
       continue;
     }
@@ -124,7 +114,7 @@ function rememberBlueBubblesReplyCache(
     // Clean up short ID mappings for evicted entries
     if (oldEntry?.shortId) {
       blueBubblesShortIdToUuid.delete(oldEntry.shortId);
-      blueBubblesUuidToShortId.delete(oldEntry.messageId.trim());
+      blueBubblesUuidToShortId.delete(oldest);
     }
   }
 
@@ -172,12 +162,7 @@ export function _resetBlueBubblesShortIdState(): void {
  * Gets the short ID for a message GUID, if one exists.
  */
 function getShortIdForUuid(uuid: string): string | undefined {
-  const trimmed = uuid.trim();
-  if (!trimmed) return undefined;
-  const direct = blueBubblesUuidToShortId.get(trimmed);
-  if (direct) return direct;
-  const normalized = normalizeMessageIdForCache(trimmed);
-  return normalized === trimmed ? undefined : blueBubblesUuidToShortId.get(normalized);
+  return blueBubblesUuidToShortId.get(uuid.trim());
 }
 
 function resolveReplyContextFromCache(params: {
@@ -187,10 +172,8 @@ function resolveReplyContextFromCache(params: {
   chatIdentifier?: string;
   chatId?: number;
 }): BlueBubblesReplyCacheEntry | null {
-  const rawReplyToId = params.replyToId.trim();
-  if (!rawReplyToId) return null;
-  // Normalize to strip "p:N/" prefix for consistent lookups
-  const replyToId = normalizeMessageIdForCache(rawReplyToId);
+  const replyToId = params.replyToId.trim();
+  if (!replyToId) return null;
 
   const cached = blueBubblesReplyCacheByMessageId.get(replyToId);
   if (!cached) return null;
@@ -407,18 +390,15 @@ function buildMessagePlaceholder(message: NormalizedWebhookMessage): string {
   return "";
 }
 
-const REPLY_BODY_TRUNCATE_LENGTH = 60;
-
 // Returns inline reply tag like "[[reply_to:4]]" for prepending to message body
 function formatReplyTag(message: {
   replyToId?: string;
   replyToShortId?: string;
 }): string | null {
-  // Prefer short ID, strip "p:N/" part index prefix from full UUIDs
+  // Prefer short ID
   const rawId = message.replyToShortId || message.replyToId;
   if (!rawId) return null;
-  const displayId = stripPartIndexPrefix(rawId);
-  return `[[reply_to:${displayId}]]`;
+  return `[[reply_to:${rawId}]]`;
 }
 
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
@@ -780,13 +760,6 @@ function parseTapbackText(params: {
     return { emoji, action: params.actionHint ?? "removed", quotedText: quotedText ?? fallback };
   }
   return null;
-}
-
-// Strips the "p:N/" part index prefix from BlueBubbles message GUIDs
-function stripPartIndexPrefix(guid: string): string {
-  // Format: "p:0/UUID" -> "UUID"
-  const match = guid.match(/^p:\d+\/(.+)$/);
-  return match ? match[1] : guid;
 }
 
 function maskSecret(value: string): string {
@@ -2046,9 +2019,8 @@ async function processReaction(
 
   const senderLabel = reaction.senderName || reaction.senderId;
   const chatLabel = reaction.isGroup ? ` in group:${peerId}` : "";
-  // Use short ID for token savings, strip "p:N/" prefix
-  const rawMessageId = getShortIdForUuid(reaction.messageId) || reaction.messageId;
-  const messageDisplayId = stripPartIndexPrefix(rawMessageId);
+  // Use short ID for token savings
+  const messageDisplayId = getShortIdForUuid(reaction.messageId) || reaction.messageId;
   // Format: "Tyler reacted with ❤️ [[reply_to:5]]" or "Tyler removed ❤️ reaction [[reply_to:5]]"
   const text =
     reaction.action === "removed"
