@@ -162,6 +162,10 @@ If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the
 agent to read it. Think of it as your “heartbeat checklist”: small, stable, and
 safe to include every 30 minutes.
 
+If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
+headers like `# Heading`), Clawdbot skips the heartbeat run to save API calls.
+If the file is missing, the heartbeat still runs and the model decides what to do.
+
 Keep it tiny (short checklist or reminders) to avoid prompt bloat.
 
 Example `HEARTBEAT.md`:

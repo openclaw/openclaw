@@ -5,4 +5,5 @@ read_when:
 ---
 # HEARTBEAT.md
 
-Keep this file empty unless you want a tiny checklist. Keep it small.
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Add tasks below when you want the agent to check something periodically.
