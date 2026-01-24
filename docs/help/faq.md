@@ -1166,6 +1166,8 @@ MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
 Strong warning: weaker/over-quantized models are more vulnerable to prompt
 injection and unsafe behavior. See [Security](/gateway/security).
 
+More context: [Models](/concepts/models).
+
 ### How do I switch models on the fly (without restarting)?
 
 Use the `/model` command as a standalone message:
