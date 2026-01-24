@@ -256,6 +256,22 @@ describe("sessions", () => {
     expect(store["agent:main:two"]?.sessionId).toBe("sess-2");
   });
 
+  it("recovers from array-backed session stores", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "[]", "utf-8");
+
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:main"] = { sessionId: "sess-1", updatedAt: 1 };
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store["agent:main:main"]?.sessionId).toBe("sess-1");
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    expect(raw.trim().startsWith("{")).toBe(true);
+  });
+
   it("normalizes last route fields on write", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
