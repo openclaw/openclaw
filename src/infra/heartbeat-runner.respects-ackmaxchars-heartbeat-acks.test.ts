@@ -38,6 +38,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: {
               every: "5m",
               target: "whatsapp",
@@ -99,6 +100,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: {
               every: "5m",
               target: "whatsapp",
@@ -161,6 +163,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: {
               every: "5m",
               target: "whatsapp",
@@ -231,6 +234,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: { every: "5m", target: "whatsapp" },
           },
         },
@@ -292,6 +296,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: { every: "5m", target: "telegram" },
           },
         },
@@ -359,6 +364,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: { every: "5m", target: "telegram" },
           },
         },
