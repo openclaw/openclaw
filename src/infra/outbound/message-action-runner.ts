@@ -665,7 +665,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
           threadId: threadId ?? slackAutoThreadId,
         })
       : null;
-  if (outboundRoute && !dryRun && agentId) {
+  if (outboundRoute && agentId && !dryRun) {
     await ensureOutboundSessionEntry({
       cfg,
       agentId,
