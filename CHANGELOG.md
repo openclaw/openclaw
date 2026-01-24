@@ -26,6 +26,7 @@ Docs: https://docs.clawd.bot
 - Agents: add CLI log hint to "agent failed before reply" messages. (#1550) Thanks @sweepies.
 - Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.
 - Gateway: accept null optional fields in exec approval requests. (#1511) Thanks @pvoo.
+- Exec: honor tools.exec ask/security defaults for elevated approvals (avoid unwanted prompts).
 - TUI: forward unknown slash commands (for example, `/context`) to the Gateway.
 - TUI: include Gateway slash commands in autocomplete and `/help`.
 - CLI: skip usage lines in `clawdbot models status` when provider usage is unavailable.

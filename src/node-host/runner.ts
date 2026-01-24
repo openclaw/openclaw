@@ -18,6 +18,8 @@ import {
   readExecApprovalsSnapshot,
   resolveExecApprovalsSocketPath,
   saveExecApprovals,
+  type ExecAsk,
+  type ExecSecurity,
   type ExecApprovalsFile,
   type ExecAllowlistEntry,
   type ExecCommandSegment,
@@ -109,6 +111,14 @@ type RunResult = {
   error?: string | null;
   truncated: boolean;
 };
+
+function resolveExecSecurity(value?: string): ExecSecurity {
+  return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+}
+
+function resolveExecAsk(value?: string): ExecAsk {
+  return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
+}
 
 type ExecEventPayload = {
   sessionKey: string;
@@ -794,15 +804,20 @@ async function handleInvoke(
   const rawCommand = typeof params.rawCommand === "string" ? params.rawCommand.trim() : "";
   const cmdText = rawCommand || formatCommand(argv);
   const agentId = params.agentId?.trim() || undefined;
-  const approvals = resolveExecApprovals(agentId, { security: "allowlist" });
+  const cfg = loadConfig();
+  const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
+  const configuredSecurity = resolveExecSecurity(agentExec?.security ?? cfg.tools?.exec?.security);
+  const configuredAsk = resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
+  const approvals = resolveExecApprovals(agentId, {
+    security: configuredSecurity,
+    ask: configuredAsk,
+  });
   const security = approvals.agent.security;
   const ask = approvals.agent.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const sessionKey = params.sessionKey?.trim() || "node";
   const runId = params.runId?.trim() || crypto.randomUUID();
   const env = sanitizeEnv(params.env ?? undefined);
-  const cfg = loadConfig();
-  const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
   let analysisOk = false;

@@ -248,7 +248,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
           const approvals = resolveExecApprovalsFromFile({
             file: approvalsFile as ExecApprovalsFile,
             agentId,
-            overrides: { security: "allowlist" },
+            overrides: { security, ask },
           });
           const hostSecurity = minSecurity(security, approvals.agent.security);
           const hostAsk = maxAsk(ask, approvals.agent.ask);
