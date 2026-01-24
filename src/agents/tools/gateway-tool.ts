@@ -1,9 +1,7 @@
-import crypto from "node:crypto";
-
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/io.js";
+import { loadConfig, resolveConfigSnapshotHash } from "../../config/io.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
@@ -14,6 +12,17 @@ import {
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
+
+function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
+  if (!snapshot || typeof snapshot !== "object") return undefined;
+  const hashValue = (snapshot as { hash?: unknown }).hash;
+  const rawValue = (snapshot as { raw?: unknown }).raw;
+  const hash = resolveConfigSnapshotHash({
+    hash: typeof hashValue === "string" ? hashValue : undefined,
+    raw: typeof rawValue === "string" ? rawValue : undefined,
+  });
+  return hash ?? undefined;
+}
 
 const GATEWAY_ACTIONS = [
   "restart",
@@ -165,17 +174,7 @@ export function createGatewayTool(opts?: {
         let baseHash = readStringParam(params, "baseHash");
         if (!baseHash) {
           const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
-          if (snapshot && typeof snapshot === "object") {
-            const hash = (snapshot as { hash?: unknown }).hash;
-            if (typeof hash === "string" && hash.trim()) {
-              baseHash = hash.trim();
-            } else {
-              const rawSnapshot = (snapshot as { raw?: unknown }).raw;
-              if (typeof rawSnapshot === "string") {
-                baseHash = crypto.createHash("sha256").update(rawSnapshot).digest("hex");
-              }
-            }
-          }
+          baseHash = resolveBaseHashFromSnapshot(snapshot);
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
@@ -201,17 +200,7 @@ export function createGatewayTool(opts?: {
         let baseHash = readStringParam(params, "baseHash");
         if (!baseHash) {
           const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
-          if (snapshot && typeof snapshot === "object") {
-            const hash = (snapshot as { hash?: unknown }).hash;
-            if (typeof hash === "string" && hash.trim()) {
-              baseHash = hash.trim();
-            } else {
-              const rawSnapshot = (snapshot as { raw?: unknown }).raw;
-              if (typeof rawSnapshot === "string") {
-                baseHash = crypto.createHash("sha256").update(rawSnapshot).digest("hex");
-              }
-            }
-          }
+          baseHash = resolveBaseHashFromSnapshot(snapshot);
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()

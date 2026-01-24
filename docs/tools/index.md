@@ -368,6 +368,7 @@ Core actions:
 - `restart` (authorizes + sends `SIGUSR1` for in-process restart; `clawdbot gateway` restart in-place)
 - `config.get` / `config.schema`
 - `config.apply` (validate + write config + restart + wake)
+- `config.patch` (merge partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Notes:

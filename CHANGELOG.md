@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 - Docs: update Fly.io guide notes.
 - Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.clawd.bot/bedrock
 - Exec approvals: forward approval prompts to chat with `/approve` for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands
+- Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.
 
 ### Fixes
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.

@@ -666,7 +666,7 @@ Subcommands:
 
 Common RPCs:
 - `config.apply` (validate + write config + restart + wake)
-- `config.patch` (merge a partial update without clobbering unrelated keys)
+- `config.patch` (merge a partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
