@@ -450,10 +450,6 @@
       "destination": "/nodes/location-command"
     },
     {
-      "source": "/logging",
-      "destination": "/gateway/logging"
-    },
-    {
       "source": "/lore",
       "destination": "/start/lore"
     },
@@ -760,14 +756,6 @@
     {
       "source": "/wizard",
       "destination": "/start/wizard"
-    },
-    {
-      "source": "/install/node",
-      "destination": "/install#nodejs--npm-path-sanity"
-    },
-    {
-      "source": "/install/node/",
-      "destination": "/install#nodejs--npm-path-sanity"
     },
     {
       "source": "/start/faq",
