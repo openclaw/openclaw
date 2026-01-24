@@ -132,4 +132,10 @@ describe("docker-setup.sh", () => {
     const log = await readFile(logPath, "utf8");
     expect(log).toContain("--build-arg CLAWDBOT_DOCKER_APT_PACKAGES=ffmpeg build-essential");
   });
+
+  it("keeps docker-compose gateway command in sync", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).not.toContain("gateway-daemon");
+    expect(compose).toContain('"gateway"');
+  });
 });

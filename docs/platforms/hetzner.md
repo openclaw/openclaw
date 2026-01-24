@@ -184,7 +184,7 @@ services:
       [
         "node",
         "dist/index.js",
-        "gateway-daemon",
+        "gateway",
         "--bind",
         "${CLAWDBOT_GATEWAY_BIND}",
         "--port",
