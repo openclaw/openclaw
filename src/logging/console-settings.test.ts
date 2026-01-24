@@ -18,8 +18,7 @@ vi.mock("./logger.js", () => ({
 let loadConfigCalls = 0;
 vi.mock("node:module", async () => {
   const actual = await vi.importActual<typeof import("node:module")>("node:module");
-  return {
-    ...actual,
+  return Object.assign({}, actual, {
     createRequire: (url: string | URL) => {
       const realRequire = actual.createRequire(url);
       return (specifier: string) => {
@@ -38,18 +37,42 @@ vi.mock("node:module", async () => {
         return realRequire(specifier);
       };
     },
-  };
+  });
 });
+type ConsoleSnapshot = {
+  log: typeof console.log;
+  info: typeof console.info;
+  warn: typeof console.warn;
+  error: typeof console.error;
+  debug: typeof console.debug;
+  trace: typeof console.trace;
+};
+
 let originalIsTty: boolean | undefined;
+let snapshot: ConsoleSnapshot;
 
 beforeEach(() => {
   loadConfigCalls = 0;
   vi.resetModules();
+  snapshot = {
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+    error: console.error,
+    debug: console.debug,
+    trace: console.trace,
+  };
   originalIsTty = process.stdout.isTTY;
   Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
 });
 
 afterEach(() => {
+  console.log = snapshot.log;
+  console.info = snapshot.info;
+  console.warn = snapshot.warn;
+  console.error = snapshot.error;
+  console.debug = snapshot.debug;
+  console.trace = snapshot.trace;
   Object.defineProperty(process.stdout, "isTTY", { value: originalIsTty, configurable: true });
   vi.restoreAllMocks();
 });

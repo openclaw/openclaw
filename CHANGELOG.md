@@ -14,7 +14,7 @@ Docs: https://docs.clawd.bot
 - Tlon: add Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a.
 
 ### Fixes
-- Plugins: honor `plugins.slots.memory = "none"` when normalizing config. (#1554) Thanks @andreabadesso.
+- Logging: guard console settings resolution to avoid recursion on config warnings. (#1555) Thanks @travisp.
 - Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS.
 - UI: keep the Control UI sidebar visible while scrolling long pages. (#1515) Thanks @pookNast.
 - Tailscale: retry serve/funnel with sudo only for permission errors and keep original failure details. (#1551) Thanks @sweepies.
