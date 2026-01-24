@@ -184,4 +184,33 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
     expect(tui.requestRender).not.toHaveBeenCalled();
   });
+
+  it("ignores lifecycle updates for non-active runs in the same session", () => {
+    const state = makeState({ activeChatRunId: "run-active" });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const { handleChatEvent, handleAgentEvent } = createEventHandlers({
+      chatLog: chatLog as any,
+      tui: tui as any,
+      state,
+      setActivityStatus,
+    });
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    });
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-other",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
 });

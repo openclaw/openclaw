@@ -125,7 +125,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     syncSessionKey();
     // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
     // active chat run id, not the session id.
-    if (evt.runId !== state.activeChatRunId && !sessionRuns.has(evt.runId)) return;
+    const isActiveRun = evt.runId === state.activeChatRunId;
+    if (!isActiveRun && !sessionRuns.has(evt.runId)) return;
     if (evt.stream === "tool") {
       const data = evt.data ?? {};
       const phase = asString(data.phase, "");
@@ -147,6 +148,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "lifecycle") {
+      if (!isActiveRun) return;
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       if (phase === "start") setActivityStatus("running");
       if (phase === "end") setActivityStatus("idle");
