@@ -154,32 +154,24 @@ export function renderConfigForm(props: ConfigFormProps) {
   const activeSection = props.activeSection;
   const activeSubsection = props.activeSubsection ?? null;
 
-  // Filter and sort entries
-  let entries = Object.entries(properties);
-  
-  // Filter by active section
-  if (activeSection) {
-    entries = entries.filter(([key]) => key === activeSection);
-  }
-  
-  // Filter by search
-  if (searchQuery) {
-    entries = entries.filter(([key, node]) => matchesSearch(key, node, searchQuery));
-  }
-  
-  // Sort by hint order, then alphabetically
-  entries.sort((a, b) => {
+  const entries = Object.entries(properties).sort((a, b) => {
     const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
     const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
     if (orderA !== orderB) return orderA - orderB;
     return a[0].localeCompare(b[0]);
   });
 
+  const filteredEntries = entries.filter(([key, node]) => {
+    if (activeSection && key !== activeSection) return false;
+    if (searchQuery && !matchesSearch(key, node, searchQuery)) return false;
+    return true;
+  });
+
   let subsectionContext:
     | { sectionKey: string; subsectionKey: string; schema: JsonSchema }
     | null = null;
-  if (activeSection && activeSubsection && entries.length === 1) {
-    const sectionSchema = entries[0]?.[1];
+  if (activeSection && activeSubsection && filteredEntries.length === 1) {
+    const sectionSchema = filteredEntries[0]?.[1];
     if (
       sectionSchema &&
       schemaType(sectionSchema) === "object" &&
@@ -194,7 +186,7 @@ export function renderConfigForm(props: ConfigFormProps) {
     }
   }
 
-  if (entries.length === 0) {
+  if (filteredEntries.length === 0) {
     return html`
       <div class="config-empty">
         <div class="config-empty__icon">🔍</div>
@@ -247,7 +239,7 @@ export function renderConfigForm(props: ConfigFormProps) {
               </section>
             `;
           })()
-        : entries.map(([key, node]) => {
+        : filteredEntries.map(([key, node]) => {
             const meta = SECTION_META[key] ?? {
               label: key.charAt(0).toUpperCase() + key.slice(1),
               description: node.description ?? "",

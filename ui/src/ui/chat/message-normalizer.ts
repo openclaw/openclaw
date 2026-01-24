@@ -26,17 +26,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     contentItems.some((item) => {
       const x = item as Record<string, unknown>;
       const t = String(x.type ?? "").toLowerCase();
-      return (
-        t === "toolcall" ||
-        t === "tool_call" ||
-        t === "tooluse" ||
-        t === "tool_use" ||
-        t === "toolresult" ||
-        t === "tool_result" ||
-        t === "tool_call" ||
-        t === "tool_result" ||
-        (typeof x.name === "string" && x.arguments != null)
-      );
+      return t === "toolresult" || t === "tool_result";
     });
 
   const hasToolName =
@@ -74,19 +64,19 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
  */
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
+  // Preserve original casing when it's already a core role.
+  if (role === "user" || role === "User") return role;
+  if (role === "assistant") return "assistant";
+  if (role === "system") return "system";
   // Keep tool-related roles distinct so the UI can style/toggle them.
   if (
     lower === "toolresult" ||
     lower === "tool_result" ||
     lower === "tool" ||
-    lower === "function" ||
-    lower === "toolresult"
+    lower === "function"
   ) {
     return "tool";
   }
-  if (lower === "assistant") return "assistant";
-  if (lower === "user") return "user";
-  if (lower === "system") return "system";
   return role;
 }
 
