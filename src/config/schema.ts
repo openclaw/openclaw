@@ -50,6 +50,7 @@ const GROUP_LABELS: Record<string, string> = {
   diagnostics: "Diagnostics",
   logging: "Logging",
   gateway: "Gateway",
+  nodeHost: "Node Host",
   agents: "Agents",
   tools: "Tools",
   bindings: "Bindings",
@@ -76,6 +77,7 @@ const GROUP_ORDER: Record<string, number> = {
   update: 25,
   diagnostics: 27,
   gateway: 30,
+  nodeHost: 35,
   agents: 40,
   tools: 50,
   bindings: 55,
@@ -193,8 +195,12 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
+  "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
+  "gateway.nodes.browser.node": "Gateway Node Browser Pin",
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
+  "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
+  "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "agents.defaults.workspace": "Workspace",
@@ -366,10 +372,16 @@ const FIELD_HELP: Record<string, string> = {
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode": 'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
+  "gateway.nodes.browser.mode":
+    'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
+  "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
+  "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
+  "nodeHost.browserProxy.allowProfiles":
+    "Optional allowlist of browser profile names exposed via the node proxy.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":

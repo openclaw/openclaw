@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -30,6 +31,8 @@ import {
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadConfig } from "../config/config.js";
+import { resolveBrowserConfig, shouldStartLocalBrowserServer } from "../browser/config.js";
+import { detectMime } from "../media/mime.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
@@ -63,6 +66,26 @@ type SystemRunParams = {
 
 type SystemWhichParams = {
   bins: string[];
+};
+
+type BrowserProxyParams = {
+  method?: string;
+  path?: string;
+  query?: Record<string, string | number | boolean | null | undefined>;
+  body?: unknown;
+  timeoutMs?: number;
+  profile?: string;
+};
+
+type BrowserProxyFile = {
+  path: string;
+  base64: string;
+  mimeType?: string;
+};
+
+type BrowserProxyResult = {
+  result: unknown;
+  files?: BrowserProxyFile[];
 };
 
 type SystemExecApprovalsSetParams = {
@@ -111,6 +134,7 @@ type NodeInvokeRequestPayload = {
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 const execHostEnforced = process.env.CLAWDBOT_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
@@ -185,6 +209,72 @@ function sanitizeEnv(
     merged[key] = value;
   }
   return merged;
+}
+
+function normalizeProfileAllowlist(raw?: string[]): string[] {
+  return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
+}
+
+function resolveBrowserProxyConfig() {
+  const cfg = loadConfig();
+  const proxy = cfg.nodeHost?.browserProxy;
+  const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
+  const enabled = proxy?.enabled !== false;
+  return { enabled, allowProfiles };
+}
+
+let browserControlReady: Promise<void> | null = null;
+
+async function ensureBrowserControlServer(): Promise<void> {
+  if (browserControlReady) return browserControlReady;
+  browserControlReady = (async () => {
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser);
+    if (!resolved.enabled) {
+      throw new Error("browser control disabled");
+    }
+    if (!shouldStartLocalBrowserServer(resolved)) {
+      throw new Error("browser control URL is non-loopback");
+    }
+    const mod = await import("../browser/server.js");
+    await mod.startBrowserControlServerFromConfig();
+  })();
+  return browserControlReady;
+}
+
+function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
+  const { allowProfiles, profile } = params;
+  if (!allowProfiles.length) return true;
+  if (!profile) return false;
+  return allowProfiles.includes(profile.trim());
+}
+
+function collectBrowserProxyPaths(payload: unknown): string[] {
+  const paths = new Set<string>();
+  const obj =
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : null;
+  if (!obj) return [];
+  if (typeof obj.path === "string" && obj.path.trim()) paths.add(obj.path.trim());
+  if (typeof obj.imagePath === "string" && obj.imagePath.trim()) paths.add(obj.imagePath.trim());
+  const download = obj.download;
+  if (download && typeof download === "object") {
+    const dlPath = (download as Record<string, unknown>).path;
+    if (typeof dlPath === "string" && dlPath.trim()) paths.add(dlPath.trim());
+  }
+  return [...paths];
+}
+
+async function readBrowserProxyFile(filePath: string): Promise<BrowserProxyFile | null> {
+  const stat = await fsPromises.stat(filePath).catch(() => null);
+  if (!stat || !stat.isFile()) return null;
+  if (stat.size > BROWSER_PROXY_MAX_FILE_BYTES) {
+    throw new Error(
+      `browser proxy file exceeds ${Math.round(BROWSER_PROXY_MAX_FILE_BYTES / (1024 * 1024))}MB`,
+    );
+  }
+  const buffer = await fsPromises.readFile(filePath);
+  const mimeType = await detectMime({ buffer, filePath });
+  return { path: filePath, base64: buffer.toString("base64"), mimeType };
 }
 
 function formatCommand(argv: string[]): string {
@@ -387,6 +477,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   await saveNodeHostConfig(config);
 
   const cfg = loadConfig();
+  const browserProxy = resolveBrowserProxyConfig();
+  const resolvedBrowser = resolveBrowserConfig(cfg.browser);
+  const browserProxyEnabled =
+    browserProxy.enabled &&
+    resolvedBrowser.enabled &&
+    shouldStartLocalBrowserServer(resolvedBrowser);
   const isRemoteMode = cfg.gateway?.mode === "remote";
   const token =
     process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
@@ -415,12 +511,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system"],
+    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
     commands: [
       "system.run",
       "system.which",
       "system.execApprovals.get",
       "system.execApprovals.set",
+      ...(browserProxyEnabled ? ["browser.proxy"] : []),
     ],
     pathEnv,
     permissions: undefined,
@@ -536,6 +633,123 @@ async function handleInvoke(
       }
       const env = sanitizeEnv(undefined);
       const payload = await handleSystemWhich(params, env);
+      await sendInvokeResult(client, frame, {
+        ok: true,
+        payloadJSON: JSON.stringify(payload),
+      });
+    } catch (err) {
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: String(err) },
+      });
+    }
+    return;
+  }
+
+  if (command === "browser.proxy") {
+    try {
+      const params = decodeParams<BrowserProxyParams>(frame.paramsJSON);
+      const pathValue = typeof params.path === "string" ? params.path.trim() : "";
+      if (!pathValue) {
+        throw new Error("INVALID_REQUEST: path required");
+      }
+      const proxyConfig = resolveBrowserProxyConfig();
+      if (!proxyConfig.enabled) {
+        throw new Error("UNAVAILABLE: node browser proxy disabled");
+      }
+      await ensureBrowserControlServer();
+      const resolved = resolveBrowserConfig(loadConfig().browser);
+      const requestedProfile = typeof params.profile === "string" ? params.profile.trim() : "";
+      const allowedProfiles = proxyConfig.allowProfiles;
+      if (allowedProfiles.length > 0) {
+        if (pathValue !== "/profiles") {
+          const profileToCheck = requestedProfile || resolved.defaultProfile;
+          if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {
+            throw new Error("INVALID_REQUEST: browser profile not allowed");
+          }
+        } else if (requestedProfile) {
+          if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: requestedProfile })) {
+            throw new Error("INVALID_REQUEST: browser profile not allowed");
+          }
+        }
+      }
+
+      const url = new URL(
+        pathValue.startsWith("/") ? pathValue : `/${pathValue}`,
+        resolved.controlUrl,
+      );
+      if (requestedProfile) {
+        url.searchParams.set("profile", requestedProfile);
+      }
+      const query = params.query ?? {};
+      for (const [key, value] of Object.entries(query)) {
+        if (value === undefined || value === null) continue;
+        url.searchParams.set(key, String(value));
+      }
+      const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
+      const body = params.body;
+      const ctrl = new AbortController();
+      const timeoutMs =
+        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+          ? Math.max(1, Math.floor(params.timeoutMs))
+          : 20_000;
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      const headers = new Headers();
+      let bodyJson: string | undefined;
+      if (body !== undefined) {
+        headers.set("Content-Type", "application/json");
+        bodyJson = JSON.stringify(body);
+      }
+      const token =
+        process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim() || resolved.controlToken?.trim();
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+      let res: Response;
+      try {
+        res = await fetch(url.toString(), {
+          method,
+          headers,
+          body: bodyJson,
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text ? `${res.status}: ${text}` : `HTTP ${res.status}`);
+      }
+      const result = (await res.json()) as unknown;
+      if (allowedProfiles.length > 0 && url.pathname === "/profiles") {
+        const obj =
+          typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
+        const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];
+        obj.profiles = profiles.filter((entry) => {
+          if (!entry || typeof entry !== "object") return false;
+          const name = (entry as Record<string, unknown>).name;
+          return typeof name === "string" && allowedProfiles.includes(name);
+        });
+      }
+      let files: BrowserProxyFile[] | undefined;
+      const paths = collectBrowserProxyPaths(result);
+      if (paths.length > 0) {
+        const loaded = await Promise.all(
+          paths.map(async (p) => {
+            try {
+              const file = await readBrowserProxyFile(p);
+              if (!file) {
+                throw new Error("file not found");
+              }
+              return file;
+            } catch (err) {
+              throw new Error(`browser proxy file read failed for ${p}: ${String(err)}`);
+            }
+          }),
+        );
+        if (loaded.length > 0) files = loaded;
+      }
+      const payload: BrowserProxyResult = files ? { result, files } : { result };
       await sendInvokeResult(client, frame, {
         ok: true,
         payloadJSON: JSON.stringify(payload),

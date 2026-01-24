@@ -26,6 +26,7 @@ const SYSTEM_COMMANDS = [
   "system.notify",
   "system.execApprovals.get",
   "system.execApprovals.set",
+  "browser.proxy",
 ];
 
 const PLATFORM_DEFAULTS: Record<string, string[]> = {

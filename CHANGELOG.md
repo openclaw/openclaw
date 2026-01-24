@@ -5,6 +5,7 @@ Docs: https://docs.clawd.bot
 ## 2026.1.23 (Unreleased)
 
 ### Changes
+- Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node).
 - Plugins: add optional llm-task JSON-only tool for workflows. (#1498) Thanks @vignesh07.
 - CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
 - CLI: add live auth probes to `clawdbot models status` for per-profile verification.
