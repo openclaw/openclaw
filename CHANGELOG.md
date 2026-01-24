@@ -43,6 +43,7 @@ Docs: https://docs.clawd.bot
 - CLI: inline auth probe errors in status rows to reduce wrapping.
 - Telegram: render markdown in media captions. (#1478)
 - Agents: honor enqueue overrides for embedded runs to avoid queue deadlocks in tests.
+- Agents: trigger model fallback when auth profiles are all in cooldown or unavailable. (#1522)
 - Daemon: use platform PATH delimiters when building minimal service paths.
 - Tests: skip embedded runner ordering assertion on Windows to avoid CI timeouts.
 - Linux: include env-configured user bin roots in systemd PATH and align PATH audits. (#1512) Thanks @robbyczgw-cla.
