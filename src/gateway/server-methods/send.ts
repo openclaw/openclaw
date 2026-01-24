@@ -4,6 +4,7 @@ import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { loadConfig } from "../../config/config.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
@@ -57,6 +58,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       to: string;
       message: string;
       mediaUrl?: string;
+      mediaUrls?: string[];
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
@@ -82,6 +84,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const message = request.message.trim();
+    const mediaUrls = Array.isArray(request.mediaUrls) ? request.mediaUrls : undefined;
     const channelInput = typeof request.channel === "string" ? request.channel : undefined;
     const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
     if (channelInput && !normalizedChannel) {
@@ -126,12 +129,22 @@ export const sendHandlers: GatewayRequestHandlers = {
           };
         }
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+        const mirrorPayloads = normalizeReplyPayloadsForDelivery([
+          { text: message, mediaUrl: request.mediaUrl, mediaUrls },
+        ]);
+        const mirrorText = mirrorPayloads
+          .map((payload) => payload.text)
+          .filter(Boolean)
+          .join("\n");
+        const mirrorMediaUrls = mirrorPayloads.flatMap(
+          (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+        );
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
           to: resolved.to,
           accountId,
-          payloads: [{ text: message, mediaUrl: request.mediaUrl }],
+          payloads: [{ text: message, mediaUrl: request.mediaUrl, mediaUrls }],
           gifPlayback: request.gifPlayback,
           deps: outboundDeps,
           mirror:
@@ -142,8 +155,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                     sessionKey: request.sessionKey.trim(),
                     config: cfg,
                   }),
-                  text: message,
-                  mediaUrls: request.mediaUrl ? [request.mediaUrl] : undefined,
+                  text: mirrorText || message,
+                  mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 }
               : undefined,
         });

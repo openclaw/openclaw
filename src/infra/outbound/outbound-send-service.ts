@@ -58,6 +58,7 @@ export async function executeSendAction(params: {
   to: string;
   message: string;
   mediaUrl?: string;
+  mediaUrls?: string[];
   gifPlayback?: boolean;
   bestEffort?: boolean;
 }): Promise<{
@@ -91,6 +92,7 @@ export async function executeSendAction(params: {
     to: params.to,
     content: params.message,
     mediaUrl: params.mediaUrl || undefined,
+    mediaUrls: params.mediaUrls,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
     gifPlayback: params.gifPlayback,

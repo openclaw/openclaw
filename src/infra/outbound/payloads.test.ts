@@ -24,6 +24,22 @@ describe("normalizeOutboundPayloadsForJson", () => {
       },
     ]);
   });
+
+  it("keeps mediaUrl null for multi MEDIA tags", () => {
+    expect(
+      normalizeOutboundPayloadsForJson([
+        {
+          text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "",
+        mediaUrl: null,
+        mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+      },
+    ]);
+  });
 });
 
 describe("formatOutboundPayloadLog", () => {

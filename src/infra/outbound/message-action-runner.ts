@@ -586,12 +586,24 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }) ?? "";
 
   const parsed = parseReplyDirectives(message);
+  const mergedMediaUrls: string[] = [];
+  const seenMedia = new Set<string>();
+  const pushMedia = (value?: string | null) => {
+    const trimmed = value?.trim();
+    if (!trimmed) return;
+    if (seenMedia.has(trimmed)) return;
+    seenMedia.add(trimmed);
+    mergedMediaUrls.push(trimmed);
+  };
+  pushMedia(mediaHint);
+  for (const url of parsed.mediaUrls ?? []) pushMedia(url);
+  pushMedia(parsed.mediaUrl);
   message = parsed.text;
   params.message = message;
   if (!params.replyTo && parsed.replyToId) params.replyTo = parsed.replyToId;
   if (!params.media) {
     // Use path/filePath if media not set, then fall back to parsed directives
-    params.media = mediaHint || parsed.mediaUrls?.[0] || parsed.mediaUrl || undefined;
+    params.media = mergedMediaUrls[0] || undefined;
   }
 
   message = await maybeApplyCrossContextMarker({
@@ -630,6 +642,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     to,
     message,
     mediaUrl: mediaUrl || undefined,
+    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
     gifPlayback,
     bestEffort: bestEffort ?? undefined,
   });

@@ -104,4 +104,34 @@ describe("gateway send mirroring", () => {
       }),
     );
   });
+
+  it("mirrors MEDIA tags as attachments", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m2", channel: "slack" }]);
+
+    const respond = vi.fn();
+    await sendHandlers.send({
+      params: {
+        to: "channel:C1",
+        message: "Here\nMEDIA:https://example.com/image.png",
+        channel: "slack",
+        idempotencyKey: "idem-3",
+        sessionKey: "agent:main:main",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "1", method: "send" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          text: "Here",
+          mediaUrls: ["https://example.com/image.png"],
+        }),
+      }),
+    );
+  });
 });
