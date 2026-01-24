@@ -97,7 +97,7 @@ afterEach(() => {
 describe("trigger handling", () => {
   it("includes the error cause when the embedded agent throws", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(new Error("sandbox is not defined"));
+      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(new Error("sandbox is not defined."));
 
       const res = await getReplyFromConfig(
         {
@@ -111,7 +111,7 @@ describe("trigger handling", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe(
-        "⚠️ Agent failed before reply: sandbox is not defined. Check gateway logs for details.",
+        "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: clawdbot logs --follow",
       );
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
     });
