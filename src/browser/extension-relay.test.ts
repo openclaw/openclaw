@@ -247,4 +247,71 @@ describe("chrome extension relay server", () => {
     cdp.close();
     ext.close();
   }, 15_000);
+
+  it("rebroadcasts attach when a session id is reused for a new target", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`);
+    await waitForOpen(ext);
+
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`);
+    await waitForOpen(cdp);
+    const q = createMessageQueue(cdp);
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "shared-session",
+            targetInfo: {
+              targetId: "t1",
+              type: "page",
+              title: "First",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    const first = JSON.parse(await q.next()) as { method?: string; params?: unknown };
+    expect(first.method).toBe("Target.attachedToTarget");
+    expect(JSON.stringify(first.params ?? {})).toContain("t1");
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "shared-session",
+            targetInfo: {
+              targetId: "t2",
+              type: "page",
+              title: "Second",
+              url: "https://example.org",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    const received: Array<{ method?: string; params?: unknown }> = [];
+    received.push(JSON.parse(await q.next()) as never);
+    received.push(JSON.parse(await q.next()) as never);
+
+    const detached = received.find((m) => m.method === "Target.detachedFromTarget");
+    const attached = received.find((m) => m.method === "Target.attachedToTarget");
+    expect(JSON.stringify(detached?.params ?? {})).toContain("t1");
+    expect(JSON.stringify(attached?.params ?? {})).toContain("t2");
+
+    cdp.close();
+    ext.close();
+  });
 });
