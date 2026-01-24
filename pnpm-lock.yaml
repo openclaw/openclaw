@@ -300,7 +300,9 @@ importers:
 
   extensions/google-antigravity-auth: {}
 
-  extensions/google-chat:
+  extensions/google-gemini-cli-auth: {}
+
+  extensions/googlechat:
     dependencies:
       clawdbot:
         specifier: workspace:*
@@ -308,8 +310,6 @@ importers:
       google-auth-library:
         specifier: ^10.5.0
         version: 10.5.0
-
-  extensions/google-gemini-cli-auth: {}
 
   extensions/imessage: {}
 

@@ -162,9 +162,42 @@ Notes:
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
 
 ## Troubleshooting
+
+### 405 Method Not Allowed
+If Google Cloud Logs Explorer shows errors like:
+```
+status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
+```
+
+This means the webhook handler isn't registered. Common causes:
+1. **Channel not configured**: The `channels.googlechat` section is missing from your config. Verify with:
+   ```bash
+   clawdbot config get channels.googlechat
+   ```
+   If it returns "Config path not found", add the configuration (see [Config highlights](#config-highlights)).
+
+2. **Plugin not enabled**: Check plugin status:
+   ```bash
+   clawdbot plugins list | grep googlechat
+   ```
+   If it shows "disabled", add `plugins.entries.googlechat.enabled: true` to your config.
+
+3. **Gateway not restarted**: After adding config, restart the gateway:
+   ```bash
+   clawdbot gateway restart
+   ```
+
+Verify the channel is running:
+```bash
+clawdbot channels status
+# Should show: Google Chat default: enabled, configured, ...
+```
+
+### Other issues
 - Check `clawdbot channels status --probe` for auth errors or missing audience config.
-- If no messages arrive, confirm the Chat app’s webhook URL + event subscriptions.
-- If mention gating blocks replies, set `botUser` to the app’s user resource name and verify `requireMention`.
+- If no messages arrive, confirm the Chat app's webhook URL + event subscriptions.
+- If mention gating blocks replies, set `botUser` to the app's user resource name and verify `requireMention`.
+- Use `clawdbot logs --follow` while sending a test message to see if requests reach the gateway.
 
 Related docs:
 - [Gateway configuration](/gateway/configuration)

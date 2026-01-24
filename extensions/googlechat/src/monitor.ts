@@ -12,7 +12,14 @@ import {
 } from "./api.js";
 import { verifyGoogleChatRequest, type GoogleChatAudienceType } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
-import type { GoogleChatAnnotation, GoogleChatAttachment, GoogleChatEvent } from "./types.js";
+import type {
+  GoogleChatAnnotation,
+  GoogleChatAttachment,
+  GoogleChatEvent,
+  GoogleChatSpace,
+  GoogleChatMessage,
+  GoogleChatUser,
+} from "./types.js";
 
 export type GoogleChatRuntimeEnv = {
   log?: (message: string) => void;
@@ -168,44 +175,76 @@ export async function handleGoogleChatWebhookRequest(
     return true;
   }
 
-  const raw = body.value;
+  let raw = body.value;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     res.statusCode = 400;
     res.end("invalid payload");
     return true;
   }
 
-  const eventType = (raw as { type?: string; eventType?: string }).type ??
-    (raw as { type?: string; eventType?: string }).eventType;
+  // Transform Google Workspace Add-on format to standard Chat API format
+  const rawObj = raw as {
+    commonEventObject?: { hostApp?: string };
+    chat?: {
+      messagePayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
+      user?: GoogleChatUser;
+      eventTime?: string;
+    };
+    authorizationEventObject?: { systemIdToken?: string };
+  };
+
+  if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.messagePayload) {
+    const chat = rawObj.chat;
+    const messagePayload = chat.messagePayload;
+    raw = {
+      type: "MESSAGE",
+      space: messagePayload?.space,
+      message: messagePayload?.message,
+      user: chat.user,
+      eventTime: chat.eventTime,
+    };
+    
+    // For Add-ons, the bearer token may be in authorizationEventObject.systemIdToken
+    const systemIdToken = rawObj.authorizationEventObject?.systemIdToken;
+    if (!bearer && systemIdToken) {
+      Object.assign(req.headers, { authorization: `Bearer ${systemIdToken}` });
+    }
+  }
+
+  const event = raw as GoogleChatEvent;
+  const eventType = event.type ?? (raw as { eventType?: string }).eventType;
   if (typeof eventType !== "string") {
     res.statusCode = 400;
     res.end("invalid payload");
     return true;
   }
 
-  const rawObj = raw as Record<string, unknown>;
-  if (!rawObj.space || typeof rawObj.space !== "object" || Array.isArray(rawObj.space)) {
+  if (!event.space || typeof event.space !== "object" || Array.isArray(event.space)) {
     res.statusCode = 400;
     res.end("invalid payload");
     return true;
   }
 
   if (eventType === "MESSAGE") {
-    if (!rawObj.message || typeof rawObj.message !== "object" || Array.isArray(rawObj.message)) {
+    if (!event.message || typeof event.message !== "object" || Array.isArray(event.message)) {
       res.statusCode = 400;
       res.end("invalid payload");
       return true;
     }
   }
 
-  const event = raw as GoogleChatEvent;
+  // Re-extract bearer in case it was updated from Add-on format
+  const authHeaderNow = String(req.headers.authorization ?? "");
+  const effectiveBearer = authHeaderNow.toLowerCase().startsWith("bearer ")
+    ? authHeaderNow.slice("bearer ".length)
+    : bearer;
 
   let selected: WebhookTarget | undefined;
   for (const target of targets) {
     const audienceType = target.audienceType;
     const audience = target.audience;
     const verification = await verifyGoogleChatRequest({
-      bearer,
+      bearer: effectiveBearer,
       audienceType,
       audience,
     });
