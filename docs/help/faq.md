@@ -22,6 +22,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
   - [How do I install Clawdbot on Linux?](#how-do-i-install-clawdbot-on-linux)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
+  - [Can I ask Clawd to update itself?](#can-i-ask-clawd-to-update-itself)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setup-token-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setup-token)
@@ -339,6 +340,31 @@ Any Linux VPS works. Install on the server, then use SSH/Tailscale to reach the 
 
 Guides: [exe.dev](/platforms/exe-dev), [Hetzner](/platforms/hetzner), [Fly.io](/platforms/fly).  
 Remote access: [Gateway remote](/gateway/remote).
+
+### Can I ask Clawd to update itself?
+
+Short answer: **possible, not recommended**. The update flow can restart the
+Gateway (which drops the active session), may need a clean git checkout, and
+can prompt for confirmation. Safer: run updates from a shell as the operator.
+
+Use the CLI:
+
+```bash
+clawdbot update
+clawdbot update status
+clawdbot update --channel stable|beta|dev
+clawdbot update --tag <dist-tag|version>
+clawdbot update --no-restart
+```
+
+If you must automate from an agent:
+
+```bash
+clawdbot update --yes --no-restart
+clawdbot gateway restart
+```
+
+Docs: [Update](/cli/update), [Updating](/install/updating).
 
 ### What does the onboarding wizard actually do?
 
