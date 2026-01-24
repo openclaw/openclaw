@@ -1,11 +1,17 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
-import { writeConfigFile } from "../../config/config.js";
+import { writeConfigFile, type ClawdbotConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { setupChannels } from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
+import {
+  ensureOnboardingPluginInstalled,
+  reloadOnboardingPluginRegistry,
+} from "../onboarding/plugin-install.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
@@ -34,7 +40,32 @@ export type ChannelsAddOptions = {
   password?: string;
   deviceName?: string;
   initialSyncLimit?: number | string;
+  ship?: string;
+  url?: string;
+  code?: string;
+  groupChannels?: string;
+  dmAllowlist?: string;
+  autoDiscoverChannels?: boolean;
 };
+
+function parseList(value: string | undefined): string[] | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed = value
+    .split(/[\n,;]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function resolveCatalogChannelEntry(raw: string, cfg: ClawdbotConfig | null) {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
+  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
+    if (entry.id.toLowerCase() === trimmed) return true;
+    return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+  });
+}
 
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
@@ -43,6 +74,7 @@ export async function channelsAddCommand(
 ) {
   const cfg = await requireValidConfig(runtime);
   if (!cfg) return;
+  let nextConfig = cfg;
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
@@ -99,9 +131,31 @@ export async function channelsAddCommand(
     return;
   }
 
-  const channel = normalizeChannelId(opts.channel);
+  const rawChannel = String(opts.channel ?? "");
+  let channel = normalizeChannelId(rawChannel);
+  let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
+
+  if (!channel && catalogEntry) {
+    const prompter = createClackPrompter();
+    const workspaceDir = resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: nextConfig,
+      entry: catalogEntry,
+      prompter,
+      runtime,
+      workspaceDir,
+    });
+    nextConfig = result.cfg;
+    if (!result.installed) return;
+    reloadOnboardingPluginRegistry({ cfg: nextConfig, runtime, workspaceDir });
+    channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
+  }
+
   if (!channel) {
-    runtime.error(`Unknown channel: ${String(opts.channel ?? "")}`);
+    const hint = catalogEntry
+      ? `Plugin ${catalogEntry.meta.label} could not be loaded after install.`
+      : `Unknown channel: ${String(opts.channel ?? "")}`;
+    runtime.error(hint);
     runtime.exit(1);
     return;
   }
@@ -113,7 +167,7 @@ export async function channelsAddCommand(
     return;
   }
   const accountId =
-    plugin.setup.resolveAccountId?.({ cfg, accountId: opts.account }) ??
+    plugin.setup.resolveAccountId?.({ cfg: nextConfig, accountId: opts.account }) ??
     normalizeAccountId(opts.account);
   const useEnv = opts.useEnv === true;
   const initialSyncLimit =
@@ -122,8 +176,11 @@ export async function channelsAddCommand(
       : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
         ? Number.parseInt(opts.initialSyncLimit, 10)
         : undefined;
+  const groupChannels = parseList(opts.groupChannels);
+  const dmAllowlist = parseList(opts.dmAllowlist);
+
   const validationError = plugin.setup.validateInput?.({
-    cfg,
+    cfg: nextConfig,
     accountId,
     input: {
       name: opts.name,
@@ -148,6 +205,12 @@ export async function channelsAddCommand(
       deviceName: opts.deviceName,
       initialSyncLimit,
       useEnv,
+      ship: opts.ship,
+      url: opts.url,
+      code: opts.code,
+      groupChannels,
+      dmAllowlist,
+      autoDiscoverChannels: opts.autoDiscoverChannels,
     },
   });
   if (validationError) {
@@ -156,8 +219,8 @@ export async function channelsAddCommand(
     return;
   }
 
-  const nextConfig = applyChannelAccountConfig({
-    cfg,
+  nextConfig = applyChannelAccountConfig({
+    cfg: nextConfig,
     channel,
     accountId,
     name: opts.name,
@@ -182,6 +245,12 @@ export async function channelsAddCommand(
     deviceName: opts.deviceName,
     initialSyncLimit,
     useEnv,
+    ship: opts.ship,
+    url: opts.url,
+    code: opts.code,
+    groupChannels,
+    dmAllowlist,
+    autoDiscoverChannels: opts.autoDiscoverChannels,
   });
 
   await writeConfigFile(nextConfig);

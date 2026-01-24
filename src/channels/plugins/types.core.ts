@@ -39,6 +39,12 @@ export type ChannelSetupInput = {
   password?: string;
   deviceName?: string;
   initialSyncLimit?: number;
+  ship?: string;
+  url?: string;
+  code?: string;
+  groupChannels?: string[];
+  dmAllowlist?: string[];
+  autoDiscoverChannels?: boolean;
 };
 
 export type ChannelStatusIssue = {

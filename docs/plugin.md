@@ -145,6 +145,16 @@ Example:
 }
 ```
 
+Clawdbot can also merge **external channel catalogs** (for example, an MPM
+registry export). Drop a JSON file at one of:
+- `~/.clawdbot/mpm/plugins.json`
+- `~/.clawdbot/mpm/catalog.json`
+- `~/.clawdbot/plugins/catalog.json`
+
+Or point `CLAWDBOT_PLUGIN_CATALOG_PATHS` (or `CLAWDBOT_MPM_CATALOG_PATHS`) at
+one or more JSON files (comma/semicolon/`PATH`-delimited). Each file should
+contain `{ "entries": [ { "name": "@scope/pkg", "clawdbot": { "channel": {...}, "install": {...} } } ] }`.
+
 ## Plugin IDs
 
 Default plugin ids:
