@@ -43,6 +43,7 @@ import {
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
@@ -396,7 +397,10 @@ export async function startGatewayServer(
   void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
 
   const execApprovalManager = new ExecApprovalManager();
-  const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager);
+  const execApprovalForwarder = createExecApprovalForwarder();
+  const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
+    forwarder: execApprovalForwarder,
+  });
 
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
