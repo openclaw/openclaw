@@ -61,6 +61,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Where things live on disk](#where-things-live-on-disk)
   - [Where does Clawdbot store its data?](#where-does-clawdbot-store-its-data)
   - [Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?](#where-should-agentsmd--soulmd--usermd--memorymd-live)
+  - [What’s the recommended backup strategy?](#whats-the-recommended-backup-strategy)
   - [How do I completely uninstall Clawdbot?](#how-do-i-completely-uninstall-clawdbot)
   - [Can agents work outside the workspace?](#can-agents-work-outside-the-workspace)
   - [I’m in remote mode — where is the session store?](#im-in-remote-mode-where-is-the-session-store)
@@ -796,6 +797,18 @@ workspace on every launch (and remember: remote mode uses the **gateway host’s
 workspace, not your local laptop).
 
 See [Agent workspace](/concepts/agent-workspace) and [Memory](/concepts/memory).
+
+### What’s the recommended backup strategy?
+
+Put your **agent workspace** in a **private** git repo and back it up somewhere
+private (for example GitHub private). This captures memory + AGENTS/SOUL/USER
+files, and lets you restore the assistant’s “mind” later.
+
+Do **not** commit anything under `~/.clawdbot` (credentials, sessions, tokens).
+If you need a full restore, back up both the workspace and the state directory
+separately (see the migration question above).
+
+Docs: [Agent workspace](/concepts/agent-workspace).
 
 ### How do I completely uninstall Clawdbot?
 
