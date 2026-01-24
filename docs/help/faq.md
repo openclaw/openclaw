@@ -21,6 +21,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I can't access docs.clawd.bot (SSL error). What now?](#i-cant-access-docsclawdbot-ssl-error-what-now)
   - [What’s the difference between stable and beta?](#whats-the-difference-between-stable-and-beta)
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
+  - [How do I try the latest bits?](#how-do-i-try-the-latest-bits)
+  - [Installer stuck? How do I get more feedback?](#installer-stuck-how-do-i-get-more-feedback)
   - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
   - [How do I install Clawdbot on Linux?](#how-do-i-install-clawdbot-on-linux)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
@@ -356,6 +358,55 @@ Windows installer (PowerShell):
 https://clawd.bot/install.ps1
 
 More detail: [Development channels](/install/development-channels) and [Installer flags](/install/installer).
+
+### How do I try the latest bits?
+
+Two options:
+
+1) **Dev channel (git checkout):**
+```bash
+clawdbot update --channel dev
+```
+This switches to the `main` branch and updates from source.
+
+2) **Hackable install (from the installer site):**
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git
+```
+That gives you a local repo you can edit, then update via git.
+
+If you prefer a clean clone manually, use:
+```bash
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot
+pnpm install
+pnpm build
+```
+
+Docs: [Update](/cli/update), [Development channels](/install/development-channels),
+[Install](/install).
+
+### Installer stuck? How do I get more feedback?
+
+Re-run the installer with **verbose output**:
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --verbose
+```
+
+Beta install with verbose:
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --beta --verbose
+```
+
+For a hackable (git) install:
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git --verbose
+```
+
+More options: [Installer flags](/install/installer).
 
 ### The docs didn’t answer my question — how do I get a better answer?
 
