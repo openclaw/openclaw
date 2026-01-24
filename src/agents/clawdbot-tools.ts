@@ -31,6 +31,12 @@ export function createClawdbotTools(options?: {
   agentTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   agentThreadId?: string | number;
+  /** Group id for channel-level tool policy inheritance. */
+  agentGroupId?: string | null;
+  /** Group channel label for channel-level tool policy inheritance. */
+  agentGroupChannel?: string | null;
+  /** Group space label for channel-level tool policy inheritance. */
+  agentGroupSpace?: string | null;
   agentDir?: string;
   sandboxRoot?: string;
   workspaceDir?: string;
@@ -114,6 +120,9 @@ export function createClawdbotTools(options?: {
       agentAccountId: options?.agentAccountId,
       agentTo: options?.agentTo,
       agentThreadId: options?.agentThreadId,
+      agentGroupId: options?.agentGroupId,
+      agentGroupChannel: options?.agentGroupChannel,
+      agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
     }),
     createSessionStatusTool({

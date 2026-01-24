@@ -295,6 +295,31 @@ describe("Agent-specific tool filtering", () => {
     expect(names).not.toContain("exec");
   });
 
+  it("should inherit group tool policy for subagents from spawnedBy session keys", () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            trusted: {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:subagent:test",
+      spawnedBy: "agent:main:whatsapp:group:trusted",
+      workspaceDir: "/tmp/test-subagent-group",
+      agentDir: "/tmp/agent-subagent",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+  });
+
   it("should apply global tool policy before agent-specific policy", () => {
     const cfg: ClawdbotConfig = {
       tools: {

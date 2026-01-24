@@ -120,7 +120,10 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!raw) return {};
   const base = resolveThreadParentSessionKey(raw) ?? raw;
   const parts = base.split(":").filter(Boolean);
-  const body = parts[0] === "agent" ? parts.slice(2) : parts;
+  let body = parts[0] === "agent" ? parts.slice(2) : parts;
+  if (body[0] === "subagent") {
+    body = body.slice(1);
+  }
   if (body.length < 3) return {};
   const [channel, kind, ...rest] = body;
   if (kind !== "group" && kind !== "channel") return {};
@@ -198,6 +201,7 @@ export function resolveEffectiveToolPolicy(params: {
 export function resolveGroupToolPolicy(params: {
   config?: ClawdbotConfig;
   sessionKey?: string;
+  spawnedBy?: string | null;
   messageProvider?: string;
   groupId?: string | null;
   groupChannel?: string | null;
@@ -206,9 +210,10 @@ export function resolveGroupToolPolicy(params: {
 }): SandboxToolPolicy | undefined {
   if (!params.config) return undefined;
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
-  const groupId = params.groupId ?? sessionContext.groupId;
+  const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
+  const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
   if (!groupId) return undefined;
-  const channelRaw = params.messageProvider ?? sessionContext.channel;
+  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) return undefined;
   let dock;

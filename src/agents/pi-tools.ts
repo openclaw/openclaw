@@ -135,6 +135,8 @@ export function createClawdbotCodingTools(options?: {
   groupChannel?: string | null;
   /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
   groupSpace?: string | null;
+  /** Parent session key for subagent group policy inheritance. */
+  spawnedBy?: string | null;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -161,6 +163,7 @@ export function createClawdbotCodingTools(options?: {
   const groupPolicy = resolveGroupToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
+    spawnedBy: options?.spawnedBy,
     messageProvider: options?.messageProvider,
     groupId: options?.groupId,
     groupChannel: options?.groupChannel,
@@ -290,6 +293,9 @@ export function createClawdbotCodingTools(options?: {
       agentAccountId: options?.agentAccountId,
       agentTo: options?.messageTo,
       agentThreadId: options?.messageThreadId,
+      agentGroupId: options?.groupId ?? null,
+      agentGroupChannel: options?.groupChannel ?? null,
+      agentGroupSpace: options?.groupSpace ?? null,
       agentDir: options?.agentDir,
       sandboxRoot,
       workspaceDir: options?.workspaceDir,

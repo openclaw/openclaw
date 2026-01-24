@@ -76,6 +76,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       accountId?: string;
       replyAccountId?: string;
       threadId?: string;
+      groupId?: string;
+      groupChannel?: string;
+      groupSpace?: string;
       lane?: string;
       extraSystemPrompt?: string;
       idempotencyKey: string;
@@ -85,6 +88,15 @@ export const agentHandlers: GatewayRequestHandlers = {
     };
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
+    const groupIdRaw = typeof request.groupId === "string" ? request.groupId.trim() : "";
+    const groupChannelRaw =
+      typeof request.groupChannel === "string" ? request.groupChannel.trim() : "";
+    const groupSpaceRaw = typeof request.groupSpace === "string" ? request.groupSpace.trim() : "";
+    let resolvedGroupId: string | undefined = groupIdRaw || undefined;
+    let resolvedGroupChannel: string | undefined = groupChannelRaw || undefined;
+    let resolvedGroupSpace: string | undefined = groupSpaceRaw || undefined;
+    let spawnedByValue =
+      typeof request.spawnedBy === "string" ? request.spawnedBy.trim() : undefined;
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
@@ -198,7 +210,25 @@ export const agentHandlers: GatewayRequestHandlers = {
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
-      const spawnedByValue = request.spawnedBy?.trim() || entry?.spawnedBy;
+      spawnedByValue = spawnedByValue || entry?.spawnedBy;
+      let inheritedGroup:
+        | { groupId?: string; groupChannel?: string; groupSpace?: string }
+        | undefined;
+      if (spawnedByValue && (!resolvedGroupId || !resolvedGroupChannel || !resolvedGroupSpace)) {
+        try {
+          const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
+          inheritedGroup = {
+            groupId: parentEntry?.groupId,
+            groupChannel: parentEntry?.groupChannel,
+            groupSpace: parentEntry?.space,
+          };
+        } catch {
+          inheritedGroup = undefined;
+        }
+      }
+      resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
+      resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
+      resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       const nextEntry: SessionEntry = {
         sessionId,
@@ -217,6 +247,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
+        channel: entry?.channel ?? request.channel?.trim(),
+        groupId: resolvedGroupId ?? entry?.groupId,
+        groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
+        space: resolvedGroupSpace ?? entry?.space,
       };
       sessionEntry = nextEntry;
       const sendPolicy = resolveSendPolicy({
@@ -326,8 +360,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         runContext: {
           messageChannel: resolvedChannel,
           accountId: resolvedAccountId,
+          groupId: resolvedGroupId,
+          groupChannel: resolvedGroupChannel,
+          groupSpace: resolvedGroupSpace,
           currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
         },
+        groupId: resolvedGroupId,
+        groupChannel: resolvedGroupChannel,
+        groupSpace: resolvedGroupSpace,
+        spawnedBy: spawnedByValue,
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
         messageChannel: resolvedChannel,

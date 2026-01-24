@@ -73,6 +73,14 @@ export async function compactEmbeddedPiSession(params: {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  /** Group id for channel-level tool policy resolution. */
+  groupId?: string | null;
+  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
+  groupChannel?: string | null;
+  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
+  groupSpace?: string | null;
+  /** Parent session key for subagent policy inheritance. */
+  spawnedBy?: string | null;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -207,6 +215,10 @@ export async function compactEmbeddedPiSession(params: {
           messageProvider: params.messageChannel ?? params.messageProvider,
           agentAccountId: params.agentAccountId,
           sessionKey: params.sessionKey ?? params.sessionId,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          spawnedBy: params.spawnedBy,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,

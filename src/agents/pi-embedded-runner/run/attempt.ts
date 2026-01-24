@@ -211,6 +211,7 @@ export async function runEmbeddedAttempt(
           groupId: params.groupId,
           groupChannel: params.groupChannel,
           groupSpace: params.groupSpace,
+          spawnedBy: params.spawnedBy,
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           workspaceDir: effectiveWorkspace,
