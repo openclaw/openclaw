@@ -140,11 +140,8 @@ cat > /data/.clawdbot/clawdbot.json << 'EOF'
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-opus-4-5"
-      },
-      "models": {
-        "anthropic/claude-opus-4-5": {},
-        "anthropic/claude-sonnet-4-5": {}
+        "primary": "anthropic/claude-opus-4-5",
+        "failover": ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]
       },
       "maxConcurrent": 4
     },
@@ -155,14 +152,46 @@ cat > /data/.clawdbot/clawdbot.json << 'EOF'
       }
     ]
   },
+  "auth": {
+    "profiles": {
+      "anthropic:default": { "mode": "token", "provider": "anthropic" },
+      "openai:default": { "mode": "token", "provider": "openai" }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": { "channel": "discord" }
+    }
+  ],
   "channels": {
     "discord": {
-      "enabled": true
+      "enabled": true,
+      "groupPolicy": "allowlist",
+      "guilds": {
+        "YOUR_GUILD_ID": {
+          "channels": { "general": { "allow": true } },
+          "requireMention": false
+        }
+      }
     }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "auto"
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.1.23"
   }
 }
 EOF
 ```
+
+**Note:** The Discord token can come from either:
+- Environment variable: `DISCORD_BOT_TOKEN` (recommended for secrets)
+- Config file: `channels.discord.token`
+
+If using env var, no need to add token to config. The gateway reads `DISCORD_BOT_TOKEN` automatically.
 
 Restart to apply:
 ```bash
@@ -206,13 +235,20 @@ The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
 
 ### OOM / Memory Issues
 
-Container keeps restarting or getting killed.
+Container keeps restarting or getting killed. Signs: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, or silent restarts.
 
 **Fix:** Increase memory in `fly.toml`:
 ```toml
 [[vm]]
   memory = "2048mb"
 ```
+
+Or update an existing machine:
+```bash
+fly machine update <machine-id> --vm-memory 2048 -y
+```
+
+**Note:** 512MB is too small. 1GB may work but can OOM under load or with verbose logging. **2GB is recommended.**
 
 ### Gateway Lock Issues
 
@@ -222,11 +258,11 @@ This happens when the container restarts but the PID lock file persists on the v
 
 **Fix:** Delete the lock file:
 ```bash
-fly ssh console
-rm /data/.clawdbot/run/gateway.*.lock
-exit
+fly ssh console --command "rm -f /data/gateway.*.lock"
 fly machine restart <machine-id>
 ```
+
+The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
 ### Config Not Being Read
 
@@ -235,6 +271,24 @@ If using `--allow-unconfigured`, the gateway creates a minimal config. Your cust
 Verify the config exists:
 ```bash
 fly ssh console --command "cat /data/.clawdbot/clawdbot.json"
+```
+
+### Writing Config via SSH
+
+The `fly ssh console -C` command doesn't support shell redirection. To write a config file:
+
+```bash
+# Use echo + tee (pipe from local to remote)
+echo '{"your":"config"}' | fly ssh console -C "tee /data/.clawdbot/clawdbot.json"
+
+# Or use sftp
+fly sftp shell
+> put /local/path/config.json /data/.clawdbot/clawdbot.json
+```
+
+**Note:** `fly sftp` may fail if the file already exists. Delete first:
+```bash
+fly ssh console --command "rm /data/.clawdbot/clawdbot.json"
 ```
 
 ## Updates
@@ -250,6 +304,23 @@ fly deploy
 fly status
 fly logs
 ```
+
+### Updating Machine Command
+
+If you need to change the startup command without a full redeploy:
+
+```bash
+# Get machine ID
+fly machines list
+
+# Update command
+fly machine update <machine-id> --command "node dist/index.js gateway --port 3000 --bind lan" -y
+
+# Or with memory increase
+fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
+```
+
+**Note:** After `fly deploy`, the machine command may reset to what's in `fly.toml`. If you made manual changes, re-apply them after deploy.
 
 ## Notes
 
