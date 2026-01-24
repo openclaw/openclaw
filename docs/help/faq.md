@@ -24,6 +24,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Do you support Claude subscription auth (Claude Code OAuth)?](#do-you-support-claude-subscription-auth-claude-code-oauth)
   - [Is AWS Bedrock supported?](#is-aws-bedrock-supported)
   - [How does Codex auth work?](#how-does-codex-auth-work)
+  - [Do you support OpenAI subscription auth (Codex OAuth)?](#do-you-support-openai-subscription-auth-codex-oauth)
   - [Is a local model OK for casual chats?](#is-a-local-model-ok-for-casual-chats)
   - [How do I keep hosted model traffic in a specific region?](#how-do-i-keep-hosted-model-traffic-in-a-specific-region)
   - [Do I have to buy a Mac Mini to install this?](#do-i-have-to-buy-a-mac-mini-to-install-this)
@@ -335,6 +336,14 @@ Yes — via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual con
 ### How does Codex auth work?
 
 Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI login (`~/.codex/auth.json`). The wizard can import the CLI login or run the OAuth flow and will set the default model to `openai-codex/gpt-5.2` when appropriate. See [Model providers](/concepts/model-providers) and [Wizard](/start/wizard).
+
+### Do you support OpenAI subscription auth (Codex OAuth)?
+
+Yes. Clawdbot fully supports **OpenAI Code (Codex) subscription OAuth** and can also reuse an
+existing Codex CLI login (`~/.codex/auth.json`) on the gateway host. The onboarding wizard
+can import the CLI login or run the OAuth flow for you.
+
+See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
 
 ### Is a local model OK for casual chats?
 
