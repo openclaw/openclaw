@@ -14,6 +14,7 @@ Docs: https://docs.clawd.bot
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Heartbeat: normalize target identifiers for consistent routing.
 - Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
+- Tlon: fix Zod v4 record keys + aura v3 DM ids. (#1631) Thanks @arthyn.
 
 ## 2026.1.23-1
 

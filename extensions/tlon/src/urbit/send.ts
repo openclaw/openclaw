@@ -1,4 +1,4 @@
-import { unixToDa, formatUd } from "@urbit/aura";
+import { scot, da } from "@urbit/aura";
 
 export type TlonPokeApi = {
   poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
@@ -14,7 +14,7 @@ type SendTextParams = {
 export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
   const story = [{ inline: [text] }];
   const sentAt = Date.now();
-  const idUd = formatUd(unixToDa(sentAt));
+  const idUd = scot('ud', da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
 
   const delta = {
