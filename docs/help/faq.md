@@ -17,6 +17,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Does it run on Raspberry Pi?](#does-it-run-on-raspberry-pi)
   - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
   - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
+  - [I can't access docs.clawd.bot (SSL error). What now?](#i-cant-access-docsclawdbot-ssl-error-what-now)
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
@@ -273,6 +274,15 @@ https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md
 Newest entries are at the top. If the top section is marked **Unreleased**, the next dated
 section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
 **Fixes** (plus docs/other sections when needed).
+
+### I can't access docs.clawd.bot (SSL error). What now?
+
+Some Comcast/Xfinity connections incorrectly block `docs.clawd.bot` via Xfinity
+Advanced Security. Disable it or allowlist `docs.clawd.bot`, then retry. More
+detail: [Troubleshooting](/help/troubleshooting#docsclawdbot-shows-an-ssl-error-comcastxfinity).
+
+If you still can't reach the site, the docs are mirrored on GitHub:
+https://github.com/clawdbot/clawdbot/tree/main/docs
 
 ### How do I install the beta version, and what’s the difference between beta and dev?
 
