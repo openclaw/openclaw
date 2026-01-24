@@ -193,6 +193,7 @@ describe("buildMinimalServicePath", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       extraDirs: ["/custom/tools"],
+      env: {},
     });
     expect(splitPath(result, "linux")).toContain("/custom/tools");
   });
@@ -201,6 +202,7 @@ describe("buildMinimalServicePath", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       extraDirs: ["/usr/bin"],
+      env: {},
     });
     const parts = splitPath(result, "linux");
     const unique = [...new Set(parts)];
