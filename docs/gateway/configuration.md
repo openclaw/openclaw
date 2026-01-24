@@ -1145,6 +1145,7 @@ Multi-account support lives under `channels.googlechat.accounts` (see the multi-
         "spaces/AAAA": { allow: true, requireMention: true }
       },
       actions: { reactions: true },
+      typingIndicator: "message",
       mediaMaxMb: 20
     }
   }
@@ -1155,7 +1156,7 @@ Notes:
 - Service account JSON can be inline (`serviceAccount`) or file-based (`serviceAccountFile`).
 - Env fallbacks for the default account: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
 - `audienceType` + `audience` must match the Chat app’s webhook auth config.
-- Use `spaces/<spaceId>` or `users/<userId>` when setting delivery targets.
+- Use `spaces/<spaceId>` or `users/<userId|email>` when setting delivery targets.
 
 ### `channels.slack` (socket mode)
 

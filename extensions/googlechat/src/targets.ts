@@ -4,10 +4,16 @@ import { findGoogleChatDirectMessage } from "./api.js";
 export function normalizeGoogleChatTarget(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) return undefined;
-  const withoutPrefix = trimmed.replace(/^(googlechat|gchat):/i, "");
+  const withoutPrefix = trimmed.replace(/^(googlechat|google-chat|gchat):/i, "");
   const normalized = withoutPrefix
     .replace(/^user:/i, "users/")
     .replace(/^space:/i, "spaces/");
+  if (isGoogleChatUserTarget(normalized)) {
+    const suffix = normalized.slice("users/".length);
+    return suffix.includes("@") ? `users/${suffix.toLowerCase()}` : normalized;
+  }
+  if (isGoogleChatSpaceTarget(normalized)) return normalized;
+  if (normalized.includes("@")) return `users/${normalized.toLowerCase()}`;
   return normalized;
 }
 

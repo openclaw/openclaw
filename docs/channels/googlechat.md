@@ -134,7 +134,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
 
 ## Targets
 Use these identifiers for delivery and allowlists:
-- Direct messages: `users/<userId>` (Clawdbot resolves to a DM space automatically).
+- Direct messages: `users/<userId>` or `users/<email>` (email addresses are accepted).
 - Spaces: `spaces/<spaceId>`.
 
 ## Config highlights
@@ -162,6 +162,7 @@ Use these identifiers for delivery and allowlists:
         }
       },
       actions: { reactions: true },
+      typingIndicator: "message",
       mediaMaxMb: 20
     }
   }
@@ -172,6 +173,7 @@ Notes:
 - Service account credentials can also be passed inline with `serviceAccount` (JSON string).
 - Default webhook path is `/googlechat` if `webhookPath` isn’t set.
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
+- `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
 
 ## Troubleshooting

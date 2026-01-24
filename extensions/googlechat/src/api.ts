@@ -51,6 +51,7 @@ async function fetchBuffer(
   account: ResolvedGoogleChatAccount,
   url: string,
   init?: RequestInit,
+  options?: { maxBytes?: number },
 ): Promise<{ buffer: Buffer; contentType?: string }> {
   const token = await getGoogleChatAccessToken(account);
   const res = await fetch(url, {
@@ -64,7 +65,34 @@ async function fetchBuffer(
     const text = await res.text().catch(() => "");
     throw new Error(`Google Chat API ${res.status}: ${text || res.statusText}`);
   }
-  const buffer = Buffer.from(await res.arrayBuffer());
+  const maxBytes = options?.maxBytes;
+  const lengthHeader = res.headers.get("content-length");
+  if (maxBytes && lengthHeader) {
+    const length = Number(lengthHeader);
+    if (Number.isFinite(length) && length > maxBytes) {
+      throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
+    }
+  }
+  if (!maxBytes || !res.body) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const contentType = res.headers.get("content-type") ?? undefined;
+    return { buffer, contentType };
+  }
+  const reader = res.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  const buffer = Buffer.concat(chunks, total);
   const contentType = res.headers.get("content-type") ?? undefined;
   return { buffer, contentType };
 }
@@ -106,6 +134,15 @@ export async function updateGoogleChatMessage(params: {
     body: JSON.stringify({ text }),
   });
   return { messageName: result.name };
+}
+
+export async function deleteGoogleChatMessage(params: {
+  account: ResolvedGoogleChatAccount;
+  messageName: string;
+}): Promise<void> {
+  const { account, messageName } = params;
+  const url = `${CHAT_API_BASE}/${messageName}`;
+  await fetchOk(account, url, { method: "DELETE" });
 }
 
 export async function uploadGoogleChatAttachment(params: {
@@ -151,10 +188,11 @@ export async function uploadGoogleChatAttachment(params: {
 export async function downloadGoogleChatMedia(params: {
   account: ResolvedGoogleChatAccount;
   resourceName: string;
+  maxBytes?: number;
 }): Promise<{ buffer: Buffer; contentType?: string }> {
-  const { account, resourceName } = params;
+  const { account, resourceName, maxBytes } = params;
   const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
-  return await fetchBuffer(account, url);
+  return await fetchBuffer(account, url, undefined, { maxBytes });
 }
 
 export async function createGoogleChatReaction(params: {

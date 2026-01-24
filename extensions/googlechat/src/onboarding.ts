@@ -136,7 +136,9 @@ async function promptCredentials(params: {
 }): Promise<ClawdbotConfig> {
   const { cfg, prompter, accountId } = params;
   const envReady =
-    Boolean(process.env[ENV_SERVICE_ACCOUNT]) || Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]);
+    accountId === DEFAULT_ACCOUNT_ID &&
+    (Boolean(process.env[ENV_SERVICE_ACCOUNT]) ||
+      Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
   if (envReady) {
     const useEnv = await prompter.confirm({
       message: "Use GOOGLE_CHAT_SERVICE_ACCOUNT env vars?",

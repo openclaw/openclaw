@@ -42,7 +42,8 @@ const meta = getChatChannelMeta("googlechat");
 const formatAllowFromEntry = (entry: string) =>
   entry
     .trim()
-    .replace(/^(googlechat|gchat):/i, "")
+    .replace(/^(googlechat|google-chat|gchat):/i, "")
+    .replace(/^user:/i, "")
     .replace(/^users\//i, "")
     .toLowerCase();
 

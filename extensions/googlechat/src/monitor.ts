@@ -8,6 +8,7 @@ import {
 } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
+  deleteGoogleChatMessage,
   sendGoogleChatMessage,
   updateGoogleChatMessage,
 } from "./api.js";
@@ -296,7 +297,11 @@ function normalizeUserId(raw?: string | null): string {
   return trimmed.replace(/^users\//i, "").toLowerCase();
 }
 
-function isSenderAllowed(senderId: string, senderEmail: string | undefined, allowFrom: string[]) {
+export function isSenderAllowed(
+  senderId: string,
+  senderEmail: string | undefined,
+  allowFrom: string[],
+) {
   if (allowFrom.includes("*")) return true;
   const normalizedSenderId = normalizeUserId(senderId);
   const normalizedEmail = senderEmail?.trim().toLowerCase() ?? "";
@@ -305,8 +310,11 @@ function isSenderAllowed(senderId: string, senderEmail: string | undefined, allo
     if (!normalized) return false;
     if (normalized === normalizedSenderId) return true;
     if (normalizedEmail && normalized === normalizedEmail) return true;
+    if (normalizedEmail && normalized.replace(/^users\//i, "") === normalizedEmail) return true;
     if (normalized.replace(/^users\//i, "") === normalizedSenderId) return true;
-    if (normalized.replace(/^(googlechat|gchat):/i, "") === normalizedSenderId) return true;
+    if (normalized.replace(/^(googlechat|google-chat|gchat):/i, "") === normalizedSenderId) {
+      return true;
+    }
     return false;
   });
 }
@@ -700,7 +708,7 @@ async function downloadAttachment(
   const resourceName = attachment.attachmentDataRef?.resourceName;
   if (!resourceName) return null;
   const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
-  const downloaded = await downloadGoogleChatMedia({ account, resourceName });
+  const downloaded = await downloadGoogleChatMedia({ account, resourceName, maxBytes });
   const saved = await core.channel.media.saveMediaBuffer(
     downloaded.buffer,
     downloaded.contentType ?? attachment.contentType,
@@ -728,9 +736,35 @@ async function deliverGoogleChatReply(params: {
       : [];
 
   if (mediaList.length > 0) {
+    let suppressCaption = false;
+    if (typingMessageName) {
+      try {
+        await deleteGoogleChatMessage({
+          account,
+          messageName: typingMessageName,
+        });
+      } catch (err) {
+        runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+        const fallbackText = payload.text?.trim()
+          ? payload.text
+          : mediaList.length > 1
+            ? "Sent attachments."
+            : "Sent attachment.";
+        try {
+          await updateGoogleChatMessage({
+            account,
+            messageName: typingMessageName,
+            text: fallbackText,
+          });
+          suppressCaption = Boolean(payload.text?.trim());
+        } catch (updateErr) {
+          runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
+        }
+      }
+    }
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first ? payload.text : undefined;
+      const caption = first && !suppressCaption ? payload.text : undefined;
       first = false;
       try {
         const loaded = await core.channel.media.fetchRemoteMedia(mediaUrl, {
