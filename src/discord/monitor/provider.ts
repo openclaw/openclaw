@@ -96,7 +96,8 @@ function formatDiscordDeployErrorDetails(err: unknown): string {
     try {
       bodyText = JSON.stringify(rawBody);
     } catch {
-      bodyText = inspect(rawBody, { depth: 3 });
+      bodyText =
+        typeof rawBody === "string" ? rawBody : inspect(rawBody, { depth: 3, breakLength: 120 });
     }
     if (bodyText) {
       const maxLen = 800;

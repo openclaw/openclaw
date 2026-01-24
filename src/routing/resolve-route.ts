@@ -96,9 +96,9 @@ function pickFirstExistingAgentId(cfg: ClawdbotConfig, agentId: string): string 
   if (!trimmed) return normalizeAgentId(resolveDefaultAgentId(cfg));
   const normalized = normalizeAgentId(trimmed);
   const agents = listAgents(cfg);
-  if (agents.length === 0) return trimmed;
+  if (agents.length === 0) return normalized;
   const match = agents.find((agent) => normalizeAgentId(agent.id) === normalized);
-  if (match?.id?.trim()) return match.id.trim();
+  if (match?.id?.trim()) return normalizeAgentId(match.id.trim());
   return normalizeAgentId(resolveDefaultAgentId(cfg));
 }
 
