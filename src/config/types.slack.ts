@@ -6,6 +6,7 @@ import type {
   ReplyToMode,
 } from "./types.base.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
@@ -29,6 +30,8 @@ export type SlackChannelConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** Optional tool policy overrides for this channel. */
+  tools?: GroupToolPolicyConfig;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /** Allowlist of users that can invoke the bot in this channel. */

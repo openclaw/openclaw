@@ -2,8 +2,10 @@ import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
   ChannelDock,
+  ChannelGroupContext,
   ChannelPlugin,
   ClawdbotConfig,
+  GroupToolPolicyConfig,
 } from "clawdbot/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -79,6 +81,26 @@ function mapGroup(params: {
   };
 }
 
+function resolveZalouserGroupToolPolicy(
+  params: ChannelGroupContext,
+): GroupToolPolicyConfig | undefined {
+  const account = resolveZalouserAccountSync({
+    cfg: params.cfg as ClawdbotConfig,
+    accountId: params.accountId ?? undefined,
+  });
+  const groups = account.config.groups ?? {};
+  const groupId = params.groupId?.trim();
+  const groupChannel = params.groupChannel?.trim();
+  const candidates = [groupId, groupChannel, "*"].filter(
+    (value): value is string => Boolean(value),
+  );
+  for (const key of candidates) {
+    const entry = groups[key];
+    if (entry?.tools) return entry.tools;
+  }
+  return undefined;
+}
+
 export const zalouserDock: ChannelDock = {
   id: "zalouser",
   capabilities: {
@@ -101,6 +123,7 @@ export const zalouserDock: ChannelDock = {
   },
   groups: {
     resolveRequireMention: () => true,
+    resolveToolPolicy: resolveZalouserGroupToolPolicy,
   },
   threading: {
     resolveReplyToMode: () => "off",
@@ -188,6 +211,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   },
   groups: {
     resolveRequireMention: () => true,
+    resolveToolPolicy: resolveZalouserGroupToolPolicy,
   },
   threading: {
     resolveReplyToMode: () => "off",

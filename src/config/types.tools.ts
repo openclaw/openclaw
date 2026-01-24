@@ -120,6 +120,11 @@ export type ToolPolicyConfig = {
   profile?: ToolProfileId;
 };
 
+export type GroupToolPolicyConfig = {
+  allow?: string[];
+  deny?: string[];
+};
+
 export type ExecToolConfig = {
   /** Exec host routing (default: sandbox). */
   host?: "sandbox" | "gateway" | "node";

@@ -7,6 +7,7 @@ import type {
   ReplyToMode,
 } from "./types.base.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -24,6 +25,8 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /** Optional tool policy overrides for this channel. */
+  tools?: GroupToolPolicyConfig;
   /** If specified, only load these skills for this channel. Omit = all skills; empty = no skills. */
   skills?: string[];
   /** If false, disable the bot for this channel. */
@@ -39,6 +42,8 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** Optional tool policy overrides for this guild (used when channel override is missing). */
+  tools?: GroupToolPolicyConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
   users?: Array<string | number>;

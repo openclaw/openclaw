@@ -9,6 +9,7 @@ import {
 import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";
 import { probeMSTeams } from "./probe.js";
+import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import {
   normalizeMSTeamsMessagingTarget,
   normalizeMSTeamsUserInput,
@@ -76,6 +77,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       currentThreadTs: context.ReplyToId,
       hasRepliedRef,
     }),
+  },
+  groups: {
+    resolveToolPolicy: resolveMSTeamsGroupToolPolicy,
   },
   reload: { configPrefixes: ["channels.msteams"] },
   configSchema: buildChannelConfigSchema(MSTeamsConfigSchema),

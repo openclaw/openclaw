@@ -21,6 +21,7 @@ import {
   resolveSlackAccount,
   resolveSlackReplyToMode,
   resolveSlackGroupRequireMention,
+  resolveSlackGroupToolPolicy,
   buildSlackThreadingToolContext,
   setAccountEnabledInConfigSection,
   slackOnboardingAdapter,
@@ -161,6 +162,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   groups: {
     resolveRequireMention: resolveSlackGroupRequireMention,
+    resolveToolPolicy: resolveSlackGroupToolPolicy,
   },
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) =>

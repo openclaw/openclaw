@@ -231,6 +231,70 @@ describe("Agent-specific tool filtering", () => {
     expect(familyToolNames).not.toContain("apply_patch");
   });
 
+  it("should apply group tool policy overrides (group-specific beats wildcard)", () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            trusted: {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    };
+
+    const trustedTools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:trusted",
+      messageProvider: "whatsapp",
+      workspaceDir: "/tmp/test-group-trusted",
+      agentDir: "/tmp/agent-group",
+    });
+    const trustedNames = trustedTools.map((t) => t.name);
+    expect(trustedNames).toContain("read");
+    expect(trustedNames).toContain("exec");
+
+    const defaultTools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:unknown",
+      messageProvider: "whatsapp",
+      workspaceDir: "/tmp/test-group-default",
+      agentDir: "/tmp/agent-group",
+    });
+    const defaultNames = defaultTools.map((t) => t.name);
+    expect(defaultNames).toContain("read");
+    expect(defaultNames).not.toContain("exec");
+  });
+
+  it("should resolve telegram group tool policy for topic session keys", () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        telegram: {
+          groups: {
+            "123": {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:telegram:group:123:topic:456",
+      messageProvider: "telegram",
+      workspaceDir: "/tmp/test-telegram-topic",
+      agentDir: "/tmp/agent-telegram",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+  });
+
   it("should apply global tool policy before agent-specific policy", () => {
     const cfg: ClawdbotConfig = {
       tools: {

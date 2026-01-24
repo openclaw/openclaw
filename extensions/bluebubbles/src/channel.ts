@@ -10,6 +10,7 @@ import {
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   resolveBlueBubblesGroupRequireMention,
+  resolveBlueBubblesGroupToolPolicy,
   setAccountEnabledInConfigSection,
 } from "clawdbot/plugin-sdk";
 
@@ -62,6 +63,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   },
   groups: {
     resolveRequireMention: resolveBlueBubblesGroupRequireMention,
+    resolveToolPolicy: resolveBlueBubblesGroupToolPolicy,
   },
   threading: {
     buildToolContext: ({ context, hasRepliedRef }) => ({

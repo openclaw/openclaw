@@ -1,6 +1,8 @@
 import type {
   AllowlistMatch,
+  ChannelGroupContext,
   GroupPolicy,
+  GroupToolPolicyConfig,
   MSTeamsChannelConfig,
   MSTeamsConfig,
   MSTeamsReplyStyle,
@@ -84,6 +86,50 @@ export function resolveMSTeamsRouteConfig(params: {
         ? channelMatch.matchSource
         : undefined,
   };
+}
+
+export function resolveMSTeamsGroupToolPolicy(
+  params: ChannelGroupContext,
+): GroupToolPolicyConfig | undefined {
+  const cfg = params.cfg.channels?.msteams;
+  if (!cfg) return undefined;
+  const groupId = params.groupId?.trim();
+  const groupChannel = params.groupChannel?.trim();
+  const groupSpace = params.groupSpace?.trim();
+
+  const resolved = resolveMSTeamsRouteConfig({
+    cfg,
+    teamId: groupSpace,
+    teamName: groupSpace,
+    conversationId: groupId,
+    channelName: groupChannel,
+  });
+
+  if (resolved.channelConfig) {
+    return resolved.channelConfig.tools ?? resolved.teamConfig?.tools;
+  }
+  if (resolved.teamConfig?.tools) return resolved.teamConfig.tools;
+
+  if (!groupId) return undefined;
+
+  const channelCandidates = buildChannelKeyCandidates(
+    groupId,
+    groupChannel,
+    groupChannel ? normalizeChannelSlug(groupChannel) : undefined,
+  );
+  for (const teamConfig of Object.values(cfg.teams ?? {})) {
+    const match = resolveChannelEntryMatchWithFallback({
+      entries: teamConfig?.channels ?? {},
+      keys: channelCandidates,
+      wildcardKey: "*",
+      normalizeKey: normalizeChannelSlug,
+    });
+    if (match.entry) {
+      return match.entry.tools ?? teamConfig?.tools;
+    }
+  }
+
+  return undefined;
 }
 
 export type MSTeamsReplyPolicy = {

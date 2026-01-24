@@ -1,4 +1,4 @@
-import { MarkdownConfigSchema } from "clawdbot/plugin-sdk";
+import { MarkdownConfigSchema, ToolPolicySchema } from "clawdbot/plugin-sdk";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
@@ -6,6 +6,7 @@ const allowFromEntry = z.union([z.string(), z.number()]);
 const groupConfigSchema = z.object({
   allow: z.boolean().optional(),
   enabled: z.boolean().optional(),
+  tools: ToolPolicySchema,
 });
 
 const zalouserAccountSchema = z.object({

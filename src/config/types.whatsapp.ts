@@ -5,6 +5,7 @@ import type {
   MarkdownConfig,
 } from "./types.base.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
   reactions?: boolean;
@@ -65,6 +66,7 @@ export type WhatsAppConfig = {
     string,
     {
       requireMention?: boolean;
+      tools?: GroupToolPolicyConfig;
     }
   >;
   /** Acknowledgment reaction sent immediately upon message receipt. */
@@ -125,6 +127,7 @@ export type WhatsAppAccountConfig = {
     string,
     {
       requireMention?: boolean;
+      tools?: GroupToolPolicyConfig;
     }
   >;
   /** Acknowledgment reaction sent immediately upon message receipt. */

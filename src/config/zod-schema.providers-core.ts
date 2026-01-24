@@ -14,6 +14,7 @@ import {
   RetryConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
+import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -44,6 +45,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -173,6 +175,7 @@ export const DiscordGuildChannelSchema = z
   .object({
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
@@ -185,6 +188,7 @@ export const DiscordGuildSchema = z
   .object({
     slug: z.string().optional(),
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
@@ -270,6 +274,7 @@ export const SlackChannelSchema = z
     enabled: z.boolean().optional(),
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     allowBots: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
@@ -466,6 +471,7 @@ export const IMessageAccountSchemaBase = z
         z
           .object({
             requireMention: z.boolean().optional(),
+            tools: ToolPolicySchema,
           })
           .strict()
           .optional(),
@@ -520,6 +526,7 @@ const BlueBubblesActionSchema = z
 const BlueBubblesGroupConfigSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
   })
   .strict();
 
@@ -576,6 +583,7 @@ export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
 export const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
   })
   .strict();
@@ -583,6 +591,7 @@ export const MSTeamsChannelSchema = z
 export const MSTeamsTeamSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
   })

@@ -15,6 +15,7 @@ import {
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
   resolveIMessageGroupRequireMention,
+  resolveIMessageGroupToolPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
   type ResolvedIMessageAccount,
@@ -106,6 +107,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   },
   groups: {
     resolveRequireMention: resolveIMessageGroupRequireMention,
+    resolveToolPolicy: resolveIMessageGroupToolPolicy,
   },
   messaging: {
     targetResolver: {

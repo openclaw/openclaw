@@ -20,6 +20,7 @@ import {
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
   resolveDiscordGroupRequireMention,
+  resolveDiscordGroupToolPolicy,
   setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -144,6 +145,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   groups: {
     resolveRequireMention: resolveDiscordGroupRequireMention,
+    resolveToolPolicy: resolveDiscordGroupToolPolicy,
   },
   mentions: {
     stripPatterns: () => ["<@!?\\d+>"],

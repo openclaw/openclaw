@@ -15,6 +15,7 @@ Docs: https://docs.clawd.bot
 - Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc.
 - Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
 - Tlon: add Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a.
+- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt.
 
 ### Fixes
 - Agents: ignore IDENTITY.md template placeholders when parsing identity to avoid placeholder replies. (#1556)
