@@ -5,60 +5,76 @@ Docs: https://docs.clawd.bot
 ## 2026.1.23 (Unreleased)
 
 ### Highlights
-- TTS: move Telegram TTS into core + enable model-driven TTS tags by default for expressive audio replies. (#1559) Thanks @Glucksberg. https://docs.clawd.bot/tts
-- Gateway: add `/tools/invoke` HTTP endpoint for direct tool calls (auth + tool policy enforced). (#1575) Thanks @vignesh07. https://docs.clawd.bot/gateway/tools-invoke-http-api
-- Heartbeat: per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer. https://docs.clawd.bot/gateway/heartbeat
-- Deploy: add Fly.io deployment support + guide. (#1570) https://docs.clawd.bot/platforms/fly
-- Channels: add Tlon/Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a. https://docs.clawd.bot/channels/tlon
+- TTS: allow model-driven TTS tags by default for expressive audio replies (laughter, singing cues, etc.).
 
 ### Changes
-- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt. https://docs.clawd.bot/multi-agent-sandbox-tools
-- Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3. https://docs.clawd.bot/bedrock
-- CLI: add `clawdbot system` for system events + heartbeat controls; remove standalone `wake`. (commit 71203829d) https://docs.clawd.bot/cli/system
-- CLI: add live auth probes to `clawdbot models status` for per-profile verification. (commit 40181afde) https://docs.clawd.bot/cli/models
-- CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it. (commit 2c85b1b40)
-- Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node). (commit c3cb26f7c)
-- Plugins: add optional `llm-task` JSON-only tool for workflows. (#1498) Thanks @vignesh07. https://docs.clawd.bot/tools/llm-task
-- Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
-- Agents: keep system prompt time zone-only and move current time to `session_status` for better cache hits. (commit 66eec295b)
+- Gateway: add /tools/invoke HTTP endpoint for direct tool calls and document it. (#1575) Thanks @vignesh07.
+- Agents: keep system prompt time zone-only and move current time to `session_status` for better cache hits.
 - Agents: remove redundant bash tool alias from tool registration/display. (#1571) Thanks @Takhoffman.
-- Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc. https://docs.clawd.bot/automation/cron-vs-heartbeat
-- Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc. https://docs.clawd.bot/gateway/heartbeat
+- Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node).
+- Heartbeat: add per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer.
+- Plugins: add optional llm-task JSON-only tool for workflows. (#1498) Thanks @vignesh07.
+- CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
+- CLI: add live auth probes to `clawdbot models status` for per-profile verification.
+- CLI: add `clawdbot system` for system events + heartbeat controls; remove standalone `wake`.
+- Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3.
+- Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc.
+- Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc.
+- Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
+- Tlon: add Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a.
+- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt.
+- TTS: move Telegram TTS into core with auto-replies, commands, and gateway methods. (#1559) Thanks @Glucksberg.
 
 ### Fixes
 - Sessions: accept non-UUID sessionIds for history/send/status while preserving agent scoping. (#1518)
-- Messaging/Sessions: mirror outbound sends into target session keys (threads + dmScope), create session entries on send, and normalize session key casing. (#1520, commit 4b6cdd1d3)
-- Sessions: reject array-backed session stores to prevent silent wipes. (#1469)
 - Gateway: compare Linux process start time to avoid PID recycling lock loops; keep locks unless stale. (#1572) Thanks @steipete.
-- Gateway: accept null optional fields in exec approval requests. (#1511) Thanks @pvoo.
-- Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.
-- Exec: honor tools.exec ask/security defaults for elevated approvals (avoid unwanted prompts). (commit 5662a9cdf)
-- Daemon: use platform PATH delimiters when building minimal service paths. (commit a4e57d3ac)
-- Linux: include env-configured user bin roots in systemd PATH and align PATH audits. (#1512) Thanks @robbyczgw-cla.
-- Tailscale: retry serve/funnel with sudo only for permission errors and keep original failure details. (#1551) Thanks @sweepies.
-- Docker: update gateway command in docker-compose and Hetzner guide. (#1514)
-- Agents: show tool error fallback when the last assistant turn only invoked tools (prevents silent stops). (commit 8ea8801d0)
-- Agents: ignore IDENTITY.md template placeholders when parsing identity. (#1556)
-- Agents: drop orphaned OpenAI Responses reasoning blocks on model switches. (#1562) Thanks @roshanasingh4.
-- Agents: add CLI log hint to "agent failed before reply" messages. (#1550) Thanks @sweepies.
-- Agents: warn and ignore tool allowlists that only reference unknown or unloaded plugin tools. (#1566)
-- Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)
-- Agents: honor enqueue overrides for embedded runs to avoid queue deadlocks in tests. (commit 084002998)
+- Messaging: mirror outbound sends into target session keys (threads + dmScope) and create session entries on send. (#1520)
+- Sessions: normalize session key casing to lowercase for consistent routing.
+- BlueBubbles: normalize group session keys for outbound mirroring. (#1520)
+- Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
 - Slack: honor open groupPolicy for unlisted channels in message + slash gating. (#1563) Thanks @itsjaydesu.
-- Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.
-- Discord: retry rate-limited allowlist resolution + command deploy to avoid gateway crashes. (commit f70ac0c7c)
-- Mentions: ignore mentionPattern matches when another explicit mention is present in group chats (Slack/Discord/Telegram/WhatsApp). (commit d905ca0e0)
-- Telegram: render markdown in media captions. (#1478)
-- MS Teams: remove `.default` suffix from Graph scopes and Bot Framework probe scopes. (#1507, #1574) Thanks @Evizero.
-- Browser: keep extension relay tabs controllable when the extension reuses a session id after switching tabs. (#1160)
-- Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS. (commit 69f645c66)
+- Agents: show tool error fallback when the last assistant turn only invoked tools (prevents silent stops).
+- Agents: ignore IDENTITY.md template placeholders when parsing identity to avoid placeholder replies. (#1556)
+- Agents: drop orphaned OpenAI Responses reasoning blocks on model switches. (#1562) Thanks @roshanasingh4.
+- Docker: update gateway command in docker-compose and Hetzner guide. (#1514)
+- Sessions: reject array-backed session stores to prevent silent wipes. (#1469)
+- Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS.
 - UI: keep the Control UI sidebar visible while scrolling long pages. (#1515) Thanks @pookNast.
-- UI: cache Control UI markdown rendering + memoize chat text extraction to reduce Safari typing jank. (commit d57cb2e1a)
-- TUI: forward unknown slash commands, include Gateway commands in autocomplete, and render slash replies as system output. (commit 1af227b61, commit 8195497ce, commit 6fba598ea)
-- CLI: auth probe output polish (table output, inline errors, reduced noise, and wrap fixes in `clawdbot models status`). (commit da3f2b489, commit 00ae21bed, commit 31e59cd58, commit f7dc27f2d, commit 438e782f8, commit 886752217, commit aabe0bed3, commit 81535d512, commit c63144ab1)
+- UI: cache Control UI markdown rendering + memoize chat text extraction to reduce Safari typing jank.
+- Tailscale: retry serve/funnel with sudo only for permission errors and keep original failure details. (#1551) Thanks @sweepies.
+- Agents: add CLI log hint to "agent failed before reply" messages. (#1550) Thanks @sweepies.
+- Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.
+- Discord: retry rate-limited allowlist resolution + command deploy to avoid gateway crashes.
+- Mentions: ignore mentionPattern matches when another explicit mention is present in group chats (Slack/Discord/Telegram/WhatsApp).
+- Gateway: accept null optional fields in exec approval requests. (#1511) Thanks @pvoo.
+- Exec: honor tools.exec ask/security defaults for elevated approvals (avoid unwanted prompts).
+- TUI: forward unknown slash commands (for example, `/context`) to the Gateway.
+- TUI: include Gateway slash commands in autocomplete and `/help`.
+- CLI: skip usage lines in `clawdbot models status` when provider usage is unavailable.
+- CLI: suppress diagnostic session/run noise during auth probes.
+- CLI: hide auth probe timeout warnings from embedded runs.
+- CLI: render auth probe results as a table in `clawdbot models status`.
+- CLI: suppress probe-only embedded logs unless `--verbose` is set.
+- CLI: move auth probe errors below the table to reduce wrapping.
+- CLI: prevent ANSI color bleed when table cells wrap.
+- CLI: explain when auth profiles are excluded by auth.order in probe details.
+- CLI: drop the em dash when the banner tagline wraps to a second line.
+- CLI: inline auth probe errors in status rows to reduce wrapping.
+- Telegram: render markdown in media captions. (#1478)
+- Agents: honor enqueue overrides for embedded runs to avoid queue deadlocks in tests.
+- Agents: trigger model fallback when auth profiles are all in cooldown or unavailable. (#1522)
+- Daemon: use platform PATH delimiters when building minimal service paths.
+- Tests: skip embedded runner ordering assertion on Windows to avoid CI timeouts.
+- Linux: include env-configured user bin roots in systemd PATH and align PATH audits. (#1512) Thanks @robbyczgw-cla.
+- TUI: render Gateway slash-command replies as system output (for example, `/context`).
 - Media: only parse `MEDIA:` tags when they start the line to avoid stripping prose mentions. (#1206)
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
-- Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
+- Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)
+- Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.
+- MS Teams (plugin): remove `.default` suffix from Graph scopes to avoid double-appending. (#1507) Thanks @Evizero.
+- MS Teams (plugin): remove `.default` suffix from Bot Framework probe scope to avoid double-appending. (#1574) Thanks @Evizero.
+- Browser: keep extension relay tabs controllable when the extension reuses a session id after switching tabs. (#1160)
+- Agents: warn and ignore tool allowlists that only reference unknown or unloaded plugin tools. (#1566)
 
 ## 2026.1.22
 
