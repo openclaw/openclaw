@@ -130,7 +130,7 @@ const makeOpenAiConfig = (modelIds: string[]) =>
     },
   }) satisfies ClawdbotConfig;
 
-const ensureModels = (cfg: ClawdbotConfig) => ensureClawdbotModelsJson(cfg, agentDir);
+const ensureModels = (cfg: ClawdbotConfig) => ensureClawdbotModelsJson(cfg, agentDir) as unknown;
 
 const nextSessionFile = () => {
   sessionCounter += 1;
