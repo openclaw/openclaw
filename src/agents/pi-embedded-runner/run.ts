@@ -373,6 +373,7 @@ export async function runEmbeddedPiAgent(
                   messageChannel: params.messageChannel,
                   messageProvider: params.messageProvider,
                   agentAccountId: params.agentAccountId,
+                  authProfileId: lastProfileId,
                   sessionFile: params.sessionFile,
                   workspaceDir: params.workspaceDir,
                   agentDir,

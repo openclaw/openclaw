@@ -74,6 +74,7 @@ export type CompactEmbeddedPiSessionParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  authProfileId?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -130,6 +131,7 @@ export async function compactEmbeddedPiSessionDirect(
     const apiKeyInfo = await getApiKeyForModel({
       model,
       cfg: params.config,
+      profileId: params.authProfileId,
       agentDir,
     });
 

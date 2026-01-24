@@ -28,6 +28,7 @@ vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore: vi.fn(() => ({})),
   getApiKeyForModel: vi.fn(async () => ({
     apiKey: "test-key",
+    profileId: "test-profile",
     source: "test",
   })),
   resolveAuthProfileOrder: vi.fn(() => []),
@@ -207,6 +208,9 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: "test-profile" }),
+    );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("context overflow detected; attempting auto-compaction"),

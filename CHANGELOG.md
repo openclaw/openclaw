@@ -17,6 +17,7 @@ Docs: https://docs.clawd.bot
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Exec: keep approvals for elevated ask unless full mode. (#1616) Thanks @ivancasco.
 - Agents: auto-compact on context overflow prompt errors before failing. (#1627) Thanks @rodrigouroz.
+- Agents: use the active auth profile for auto-compaction recovery.
 - Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
 - macOS: default direct-transport `ws://` URLs to port 18789; document `gateway.remote.transport`. (#1603) Thanks @ngutman.
 
