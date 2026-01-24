@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "clawdbot": "workspace:*",
-    "nostr-tools": "^2.19.4",
-    "zod": "^4.3.5"
+    "nostr-tools": "^2.20.0",
+    "zod": "^4.3.6"
   }
 }

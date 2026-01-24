@@ -146,7 +146,7 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.13.0",
+    "@agentclientprotocol/sdk": "0.13.1",
     "@aws-sdk/client-bedrock": "^3.975.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^0.11.0",
@@ -186,7 +186,7 @@
     "markdown-it": "^14.1.0",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.4.530",
-    "playwright-core": "1.57.0",
+    "playwright-core": "1.58.0",
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
@@ -196,7 +196,7 @@
     "undici": "^7.19.0",
     "ws": "^8.19.0",
     "yaml": "^2.8.2",
-    "zod": "^4.3.5"
+    "zod": "^4.3.6"
   },
   "optionalDependencies": {
     "@napi-rs/canvas": "^0.1.88",
@@ -214,21 +214,21 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260120.1",
-    "@vitest/coverage-v8": "^4.0.17",
+    "@typescript/native-preview": "7.0.0-dev.20260124.1",
+    "@vitest/coverage-v8": "^4.0.18",
     "docx-preview": "^0.3.7",
     "lit": "^3.3.2",
-    "lucide": "^0.562.0",
+    "lucide": "^0.563.0",
     "ollama": "^0.6.3",
     "oxfmt": "0.26.0",
     "oxlint": "^1.41.0",
     "oxlint-tsgolint": "^0.11.1",
     "quicktype-core": "^23.2.6",
-    "rolldown": "1.0.0-beta.60",
+    "rolldown": "1.0.0-rc.1",
     "signal-utils": "^0.21.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.17",
+    "vitest": "^4.0.18",
     "wireit": "^0.14.12"
   },
   "pnpm": {
