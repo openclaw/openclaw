@@ -5,6 +5,10 @@ import { loadConfig } from "../../config/config.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import {
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "../../infra/outbound/outbound-session.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
@@ -139,6 +143,30 @@ export const sendHandlers: GatewayRequestHandlers = {
         const mirrorMediaUrls = mirrorPayloads.flatMap(
           (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
         );
+        const providedSessionKey =
+          typeof request.sessionKey === "string" && request.sessionKey.trim()
+            ? request.sessionKey.trim()
+            : undefined;
+        const derivedAgentId = resolveSessionAgentId({ config: cfg });
+        // If callers omit sessionKey, derive a target session key from the outbound route.
+        const derivedRoute = !providedSessionKey
+          ? await resolveOutboundSessionRoute({
+              cfg,
+              channel,
+              agentId: derivedAgentId,
+              accountId,
+              target: resolved.to,
+            })
+          : null;
+        if (derivedRoute) {
+          await ensureOutboundSessionEntry({
+            cfg,
+            agentId: derivedAgentId,
+            channel,
+            accountId,
+            route: derivedRoute,
+          });
+        }
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
@@ -147,14 +175,17 @@ export const sendHandlers: GatewayRequestHandlers = {
           payloads: [{ text: message, mediaUrl: request.mediaUrl, mediaUrls }],
           gifPlayback: request.gifPlayback,
           deps: outboundDeps,
-          mirror:
-            typeof request.sessionKey === "string" && request.sessionKey.trim()
+          mirror: providedSessionKey
+            ? {
+                sessionKey: providedSessionKey,
+                agentId: resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg }),
+                text: mirrorText || message,
+                mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+              }
+            : derivedRoute
               ? {
-                  sessionKey: request.sessionKey.trim(),
-                  agentId: resolveSessionAgentId({
-                    sessionKey: request.sessionKey.trim(),
-                    config: cfg,
-                  }),
+                  sessionKey: derivedRoute.sessionKey,
+                  agentId: derivedAgentId,
                   text: mirrorText || message,
                   mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 }

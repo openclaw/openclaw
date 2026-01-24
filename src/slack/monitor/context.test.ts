@@ -56,7 +56,7 @@ describe("resolveSlackSystemEventSessionKey", () => {
   it("defaults missing channel_type to channel sessions", () => {
     const ctx = createSlackMonitorContext(baseParams());
     expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
-      "agent:main:slack:channel:C123",
+      "agent:main:slack:channel:c123",
     );
   });
 });

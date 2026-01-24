@@ -408,7 +408,8 @@ export function registerSlackMonitorSlashCommands(params: {
         WasMentioned: true,
         MessageSid: command.trigger_id,
         Timestamp: Date.now(),
-        SessionKey: `agent:${route.agentId}:${slashCommand.sessionPrefix}:${command.user_id}`,
+        SessionKey:
+          `agent:${route.agentId}:${slashCommand.sessionPrefix}:${command.user_id}`.toLowerCase(),
         CommandTargetSessionKey: route.sessionKey,
         AccountId: route.accountId,
         CommandSource: "native" as const,

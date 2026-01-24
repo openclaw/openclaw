@@ -47,6 +47,8 @@ type MessageSendParams = {
   mirror?: {
     sessionKey: string;
     agentId?: string;
+    text?: string;
+    mediaUrls?: string[];
   };
 };
 

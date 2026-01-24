@@ -70,7 +70,8 @@ export function resolveSessionAgentIds(params: { sessionKey?: string; config?: C
 } {
   const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
   const sessionKey = params.sessionKey?.trim();
-  const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
+  const normalizedSessionKey = sessionKey ? sessionKey.toLowerCase() : undefined;
+  const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
   const sessionAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId;
   return { defaultAgentId, sessionAgentId };
 }

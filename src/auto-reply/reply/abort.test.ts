@@ -37,7 +37,7 @@ describe("abort detection", () => {
       Body: `[Context]\nJake: /stop\n[from: Jake]`,
       RawBody: "/stop",
       ChatType: "group",
-      SessionKey: "agent:main:whatsapp:group:G1",
+      SessionKey: "agent:main:whatsapp:group:g1",
     };
 
     const result = await initSessionState({

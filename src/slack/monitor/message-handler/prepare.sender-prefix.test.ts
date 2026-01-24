@@ -48,7 +48,7 @@ describe("prepareSlackMessage sender prefix", () => {
       logger: { info: vi.fn() },
       markMessageSeen: () => false,
       shouldDropMismatchedSlackEvent: () => false,
-      resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:C1",
+      resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({
         name: "general",

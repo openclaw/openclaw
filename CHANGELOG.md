@@ -28,6 +28,8 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Sessions: accept non-UUID sessionIds for history/send/status while preserving agent scoping. (#1518)
 - Gateway: compare Linux process start time to avoid PID recycling lock loops; keep locks unless stale. (#1572) Thanks @steipete.
+- Messaging: mirror outbound sends into target session keys (threads + dmScope) and create session entries on send. (#1520)
+- Sessions: normalize session key casing to lowercase for consistent routing.
 - Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
 - Slack: honor open groupPolicy for unlisted channels in message + slash gating. (#1563) Thanks @itsjaydesu.
 - Agents: show tool error fallback when the last assistant turn only invoked tools (prevents silent stops).

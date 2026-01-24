@@ -11,10 +11,6 @@ import {
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  resolveMirroredTranscriptText,
-} from "../../config/sessions.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
@@ -377,35 +373,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         defaultAccountId: accountId ?? undefined,
         gateway,
         toolContext,
-        sessionKey: options?.agentSessionKey,
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,
       });
-
-      if (
-        action === "send" &&
-        options?.agentSessionKey &&
-        !result.dryRun &&
-        result.handledBy === "plugin"
-      ) {
-        const mediaUrl = typeof params.media === "string" ? params.media : undefined;
-        const mirrorText = resolveMirroredTranscriptText({
-          text: typeof params.message === "string" ? params.message : undefined,
-          mediaUrls: mediaUrl ? [mediaUrl] : undefined,
-        });
-        if (mirrorText) {
-          const agentId = resolveSessionAgentId({
-            sessionKey: options.agentSessionKey,
-            config: cfg,
-          });
-          await appendAssistantMessageToSessionTranscript({
-            agentId,
-            sessionKey: options.agentSessionKey,
-            text: mirrorText,
-          });
-        }
-      }
 
       const toolResult = getToolResult(result);
       if (toolResult) return toolResult;

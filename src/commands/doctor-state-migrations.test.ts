@@ -72,7 +72,7 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:+1666"]?.sessionId).toBe("b");
     expect(store["+1555"]).toBeUndefined();
     expect(store["+1666"]).toBeUndefined();
-    expect(store["agent:main:slack:channel:C123"]?.sessionId).toBe("c");
+    expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("c");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
@@ -276,6 +276,27 @@ describe("doctor legacy state migrations", () => {
     ) as Record<string, { sessionId: string }>;
     expect(store["agent:main:work"]?.sessionId).toBe("legacy");
     expect(store["agent:main:main"]).toBeUndefined();
+  });
+
+  it("lowercases agent session keys during canonicalization", async () => {
+    const root = await makeTempRoot();
+    const cfg: ClawdbotConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    writeJson5(path.join(targetDir, "sessions.json"), {
+      "agent:main:slack:channel:C123": { sessionId: "legacy", updatedAt: 10 },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { CLAWDBOT_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    await runLegacyStateMigrations({ detected, now: () => 123 });
+
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionId: string }>;
+    expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("legacy");
+    expect(store["agent:main:slack:channel:C123"]).toBeUndefined();
   });
 
   it("auto-migrates when only target sessions contain legacy keys", async () => {

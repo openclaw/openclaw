@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
@@ -28,6 +29,8 @@ export type OutboundSendContext = {
   mirror?: {
     sessionKey: string;
     agentId?: string;
+    text?: string;
+    mediaUrls?: string[];
   };
 };
 
@@ -79,6 +82,19 @@ export async function executeSendAction(params: {
       dryRun: params.ctx.dryRun,
     });
     if (handled) {
+      if (params.ctx.mirror) {
+        const mirrorText = params.ctx.mirror.text ?? params.message;
+        const mirrorMediaUrls =
+          params.ctx.mirror.mediaUrls ??
+          params.mediaUrls ??
+          (params.mediaUrl ? [params.mediaUrl] : undefined);
+        await appendAssistantMessageToSessionTranscript({
+          agentId: params.ctx.mirror.agentId,
+          sessionKey: params.ctx.mirror.sessionKey,
+          text: mirrorText,
+          mediaUrls: mirrorMediaUrls,
+        });
+      }
       return {
         handledBy: "plugin",
         payload: extractToolPayload(handled),

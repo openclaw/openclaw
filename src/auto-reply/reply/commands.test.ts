@@ -235,8 +235,8 @@ describe("handleCommands subagents", () => {
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:abc",
-      requesterSessionKey: "agent:main:slack:slash:U1",
-      requesterDisplayKey: "agent:main:slack:slash:U1",
+      requesterSessionKey: "agent:main:slack:slash:u1",
+      requesterDisplayKey: "agent:main:slack:slash:u1",
       task: "do thing",
       cleanup: "keep",
       createdAt: 1000,
@@ -250,7 +250,7 @@ describe("handleCommands subagents", () => {
       CommandSource: "native",
       CommandTargetSessionKey: "agent:main:main",
     });
-    params.sessionKey = "agent:main:slack:slash:U1";
+    params.sessionKey = "agent:main:slack:slash:u1";
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Subagents (current session)");

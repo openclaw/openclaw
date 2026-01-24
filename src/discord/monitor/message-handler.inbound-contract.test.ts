@@ -80,12 +80,12 @@ describe("discord processDiscordMessage inbound contract", () => {
       guildInfo: null,
       guildSlug: "",
       channelConfig: null,
-      baseSessionKey: "agent:main:discord:dm:U1",
+      baseSessionKey: "agent:main:discord:dm:u1",
       route: {
         agentId: "main",
         channel: "discord",
         accountId: "default",
-        sessionKey: "agent:main:discord:dm:U1",
+        sessionKey: "agent:main:discord:dm:u1",
         mainSessionKey: "agent:main:main",
       } as any,
     } as any);

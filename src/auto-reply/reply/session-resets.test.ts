@@ -136,7 +136,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
 
   it("Reset trigger works when RawBody is clean but Body has wrapped context", async () => {
     const storePath = await createStorePath("clawdbot-group-rawbody-");
-    const sessionKey = "agent:main:whatsapp:group:G1";
+    const sessionKey = "agent:main:whatsapp:group:g1";
     const existingSessionId = "existing-session-123";
     await seedSessionStore({
       storePath,

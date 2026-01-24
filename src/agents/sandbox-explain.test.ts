@@ -106,7 +106,7 @@ describe("sandbox explain helpers", () => {
 
     const msg = formatSandboxToolPolicyBlockedMessage({
       cfg,
-      sessionKey: "agent:main:whatsapp:group:G1",
+      sessionKey: "agent:main:whatsapp:group:g1",
       toolName: "browser",
     });
     expect(msg).toBeTruthy();
