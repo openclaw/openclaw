@@ -1,6 +1,7 @@
 import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
 
 const TIMEOUT_HINT_RE = /timeout|timed out|deadline exceeded|context deadline exceeded/i;
+const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -104,6 +105,8 @@ export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) return true;
   if (!err || typeof err !== "object") return false;
   if (getErrorName(err) !== "AbortError") return false;
+  const message = getErrorMessage(err);
+  if (message && ABORT_TIMEOUT_RE.test(message)) return true;
   const cause = "cause" in err ? (err as { cause?: unknown }).cause : undefined;
   const reason = "reason" in err ? (err as { reason?: unknown }).reason : undefined;
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
