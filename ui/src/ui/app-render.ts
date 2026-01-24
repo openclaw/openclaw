@@ -493,6 +493,7 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "config"
           ? renderConfig({
               raw: state.configRaw,
+              originalRaw: state.configRawOriginal,
               valid: state.configValid,
               issues: state.configIssues,
               loading: state.configLoading,
@@ -509,7 +510,10 @@ export function renderApp(state: AppViewState) {
               searchQuery: state.configSearchQuery,
               activeSection: state.configActiveSection,
               activeSubsection: state.configActiveSubsection,
-              onRawChange: (next) => (state.configRaw = next),
+              onRawChange: (next) => {
+                state.configRaw = next;
+                state.configFormDirty = true;
+              },
               onFormModeChange: (mode) => (state.configFormMode = mode),
               onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
               onSearchChange: (query) => (state.configSearchQuery = query),

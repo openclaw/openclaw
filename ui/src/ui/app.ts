@@ -154,6 +154,7 @@ export class ClawdbotApp extends LitElement {
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
+  @state() configRawOriginal = "";
   @state() configValid: boolean | null = null;
   @state() configIssues: unknown[] = [];
   @state() configSaving = false;

@@ -6,6 +6,7 @@ import { renderConfig } from "./config";
 describe("config view", () => {
   const baseProps = () => ({
     raw: "{\n}\n",
+    originalRaw: "{\n}\n",
     valid: true,
     issues: [],
     loading: false,
