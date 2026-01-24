@@ -195,7 +195,13 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   }
 
   // Remove control characters (except newlines and tabs which may be intentional)
-  return args.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  let sanitized = "";
+  for (const char of args) {
+    const code = char.charCodeAt(0);
+    const isControl = (code <= 0x1f && code !== 0x09 && code !== 0x0a) || code === 0x7f;
+    if (!isControl) sanitized += char;
+  }
+  return sanitized;
 }
 
 /**
