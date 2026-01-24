@@ -44,10 +44,12 @@ import {
   buildPluginToolGroups,
   collectExplicitAllowlist,
   expandPolicyWithPluginGroups,
+  normalizeToolName,
   resolveToolProfilePolicy,
   stripPluginOnlyAllowlist,
 } from "./tool-policy.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { logWarn } from "../logger.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -319,38 +321,46 @@ export function createClawdbotCodingTools(options?: {
       modelHasVision: options?.modelHasVision,
     }),
   ];
+  const coreToolNames = new Set(
+    tools
+      .filter((tool) => !getPluginToolMeta(tool as AnyAgentTool))
+      .map((tool) => normalizeToolName(tool.name))
+      .filter(Boolean),
+  );
   const pluginGroups = buildPluginToolGroups({
     tools,
     toolMeta: (tool) => getPluginToolMeta(tool as AnyAgentTool),
   });
-  const profilePolicyExpanded = expandPolicyWithPluginGroups(
-    stripPluginOnlyAllowlist(profilePolicy, pluginGroups),
-    pluginGroups,
+  const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
+    const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
+    if (resolved.unknownAllowlist.length > 0) {
+      const entries = resolved.unknownAllowlist.join(", ");
+      const suffix = resolved.strippedAllowlist
+        ? "Ignoring allowlist so core tools remain available."
+        : "These entries won't match any tool unless the plugin is enabled.";
+      logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
+    }
+    return expandPolicyWithPluginGroups(resolved.policy, pluginGroups);
+  };
+  const profilePolicyExpanded = resolvePolicy(
+    profilePolicy,
+    profile ? `tools.profile (${profile})` : "tools.profile",
   );
-  const providerProfileExpanded = expandPolicyWithPluginGroups(
-    stripPluginOnlyAllowlist(providerProfilePolicy, pluginGroups),
-    pluginGroups,
+  const providerProfileExpanded = resolvePolicy(
+    providerProfilePolicy,
+    providerProfile ? `tools.byProvider.profile (${providerProfile})` : "tools.byProvider.profile",
   );
-  const globalPolicyExpanded = expandPolicyWithPluginGroups(
-    stripPluginOnlyAllowlist(globalPolicy, pluginGroups),
-    pluginGroups,
+  const globalPolicyExpanded = resolvePolicy(globalPolicy, "tools.allow");
+  const globalProviderExpanded = resolvePolicy(globalProviderPolicy, "tools.byProvider.allow");
+  const agentPolicyExpanded = resolvePolicy(
+    agentPolicy,
+    agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
   );
-  const globalProviderExpanded = expandPolicyWithPluginGroups(
-    stripPluginOnlyAllowlist(globalProviderPolicy, pluginGroups),
-    pluginGroups,
+  const agentProviderExpanded = resolvePolicy(
+    agentProviderPolicy,
+    agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
   );
-  const agentPolicyExpanded = expandPolicyWithPluginGroups(
-    stripPluginOnlyAllowlist(agentPolicy, pluginGroups),
-    pluginGroups,
-  );
-  const agentProviderExpanded = expandPolicyWithPluginGroups(
-    stripPluginOnlyAllowlist(agentProviderPolicy, pluginGroups),
-    pluginGroups,
-  );
-  const groupPolicyExpanded = expandPolicyWithPluginGroups(
-    stripPluginOnlyAllowlist(groupPolicy, pluginGroups),
-    pluginGroups,
-  );
+  const groupPolicyExpanded = resolvePolicy(groupPolicy, "group tools.allow");
   const sandboxPolicyExpanded = expandPolicyWithPluginGroups(sandbox?.tools, pluginGroups);
   const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
 

@@ -95,6 +95,12 @@ export type PluginToolGroups = {
   byPlugin: Map<string, string[]>;
 };
 
+export type AllowlistResolution = {
+  policy: ToolPolicyLike | undefined;
+  unknownAllowlist: string[];
+  strippedAllowlist: boolean;
+};
+
 export function expandToolGroups(list?: string[]) {
   const normalized = normalizeToolList(list);
   const expanded: string[] = [];
@@ -181,17 +187,33 @@ export function expandPolicyWithPluginGroups(
 export function stripPluginOnlyAllowlist(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
-): ToolPolicyLike | undefined {
-  if (!policy?.allow || policy.allow.length === 0) return policy;
+  coreTools: Set<string>,
+): AllowlistResolution {
+  if (!policy?.allow || policy.allow.length === 0) {
+    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+  }
   const normalized = normalizeToolList(policy.allow);
-  if (normalized.length === 0) return policy;
+  if (normalized.length === 0) {
+    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+  }
   const pluginIds = new Set(groups.byPlugin.keys());
   const pluginTools = new Set(groups.all);
-  const isPluginEntry = (entry: string) =>
-    entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
-  const isPluginOnly = normalized.every((entry) => isPluginEntry(entry));
-  if (!isPluginOnly) return policy;
-  return { ...policy, allow: undefined };
+  const unknownAllowlist: string[] = [];
+  let hasCoreEntry = false;
+  for (const entry of normalized) {
+    const isPluginEntry =
+      entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
+    const expanded = expandToolGroups([entry]);
+    const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
+    if (isCoreEntry) hasCoreEntry = true;
+    if (!isCoreEntry && !isPluginEntry) unknownAllowlist.push(entry);
+  }
+  const strippedAllowlist = !hasCoreEntry;
+  return {
+    policy: strippedAllowlist ? { ...policy, allow: undefined } : policy,
+    unknownAllowlist: Array.from(new Set(unknownAllowlist)),
+    strippedAllowlist,
+  };
 }
 
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {

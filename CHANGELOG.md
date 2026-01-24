@@ -6,7 +6,6 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Agents: keep system prompt time zone-only and move current time to `session_status` for better cache hits.
-- Cron: append current time to isolated agent prompt context for scheduled runs.
 - Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node).
 - Plugins: add optional llm-task JSON-only tool for workflows. (#1498) Thanks @vignesh07.
 - CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
@@ -20,7 +19,6 @@ Docs: https://docs.clawd.bot
 - Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt.
 
 ### Fixes
-- Slack: honor open groupPolicy for unlisted channels in message + slash gating. (#1563) Thanks @itsjaydesu.
 - Agents: ignore IDENTITY.md template placeholders when parsing identity to avoid placeholder replies. (#1556)
 - Docker: update gateway command in docker-compose and Hetzner guide. (#1514)
 - Sessions: reject array-backed session stores to prevent silent wipes. (#1469)
@@ -57,8 +55,7 @@ Docs: https://docs.clawd.bot
 - Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.
 - MS Teams (plugin): remove `.default` suffix from Graph scopes to avoid double-appending. (#1507) Thanks @Evizero.
 - Browser: keep extension relay tabs controllable when the extension reuses a session id after switching tabs. (#1160)
-- TUI: track active run ids from chat events so tool/lifecycle updates show for non-TUI runs. (#1567) Thanks @vignesh07.
-- TUI: ignore lifecycle updates from non-active runs to keep status accurate. (#1567) Thanks @vignesh07.
+- Agents: warn and ignore tool allowlists that only reference unknown or unloaded plugin tools. (#1566)
 
 ## 2026.1.22
 

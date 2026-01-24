@@ -25,6 +25,7 @@ You can globally allow/deny tools via `tools.allow` / `tools.deny` in `clawdbot.
 Notes:
 - Matching is case-insensitive.
 - `*` wildcards are supported (`"*"` means all tools).
+- If `tools.allow` only references unknown or unloaded plugin tool names, Clawdbot logs a warning and ignores the allowlist so core tools stay available.
 
 ## Tool profiles (base allowlist)
 
