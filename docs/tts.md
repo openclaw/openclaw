@@ -260,6 +260,9 @@ Reply -> TTS enabled?
 There is a single command: `/tts`.
 See [Slash commands](/tools/slash-commands) for enablement details.
 
+Discord note: `/tts` is a built-in Discord command, so Clawdbot registers
+`/voice` as the native command there. Text `/tts ...` still works.
+
 ```
 /tts on
 /tts off

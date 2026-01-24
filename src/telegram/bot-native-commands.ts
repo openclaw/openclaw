@@ -85,7 +85,7 @@ export const registerTelegramNativeCommands = ({
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
   const nativeCommands = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, { skillCommands })
+    ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "telegram" })
     : [];
   const reservedCommands = new Set(
     listNativeCommandSpecs().map((command) => command.name.toLowerCase()),
@@ -216,7 +216,7 @@ export const registerTelegramNativeCommands = ({
             return;
           }
 
-          const commandDefinition = findCommandByNativeName(command.name);
+          const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
           const commandArgs = commandDefinition
             ? parseCommandArgs(commandDefinition, rawText)

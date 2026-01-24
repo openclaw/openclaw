@@ -105,13 +105,29 @@ export function listChatCommandsForConfig(
   return [...base, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
 
+const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
+  discord: {
+    tts: "voice",
+  },
+};
+
+function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
+  if (!command.nativeName) return undefined;
+  if (provider) {
+    const override = NATIVE_NAME_OVERRIDES[provider]?.[command.key];
+    if (override) return override;
+  }
+  return command.nativeName;
+}
+
 export function listNativeCommandSpecs(params?: {
   skillCommands?: SkillCommandSpec[];
+  provider?: string;
 }): NativeCommandSpec[] {
   return listChatCommands({ skillCommands: params?.skillCommands })
     .filter((command) => command.scope !== "text" && command.nativeName)
     .map((command) => ({
-      name: command.nativeName ?? command.key,
+      name: resolveNativeName(command, params?.provider) ?? command.key,
       description: command.description,
       acceptsArgs: Boolean(command.acceptsArgs),
       args: command.args,
@@ -120,22 +136,27 @@ export function listNativeCommandSpecs(params?: {
 
 export function listNativeCommandSpecsForConfig(
   cfg: ClawdbotConfig,
-  params?: { skillCommands?: SkillCommandSpec[] },
+  params?: { skillCommands?: SkillCommandSpec[]; provider?: string },
 ): NativeCommandSpec[] {
   return listChatCommandsForConfig(cfg, params)
     .filter((command) => command.scope !== "text" && command.nativeName)
     .map((command) => ({
-      name: command.nativeName ?? command.key,
+      name: resolveNativeName(command, params?.provider) ?? command.key,
       description: command.description,
       acceptsArgs: Boolean(command.acceptsArgs),
       args: command.args,
     }));
 }
 
-export function findCommandByNativeName(name: string): ChatCommandDefinition | undefined {
+export function findCommandByNativeName(
+  name: string,
+  provider?: string,
+): ChatCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase();
   return getChatCommands().find(
-    (command) => command.scope !== "text" && command.nativeName?.toLowerCase() === normalized,
+    (command) =>
+      command.scope !== "text" &&
+      resolveNativeName(command, provider)?.toLowerCase() === normalized,
   );
 }
 

@@ -254,7 +254,7 @@ async function handleDiscordCommandArgInteraction(
     return;
   }
   const commandDefinition =
-    findCommandByNativeName(parsed.command) ??
+    findCommandByNativeName(parsed.command, "discord") ??
     listChatCommands().find((entry) => entry.key === parsed.command);
   if (!commandDefinition) {
     await safeDiscordInteractionCall("command arg update", () =>
@@ -395,7 +395,7 @@ export function createDiscordNativeCommand(params: {
 }) {
   const { command, cfg, discordConfig, accountId, sessionPrefix, ephemeralDefault } = params;
   const commandDefinition =
-    findCommandByNativeName(command.name) ??
+    findCommandByNativeName(command.name, "discord") ??
     ({
       key: command.name,
       nativeName: command.name,

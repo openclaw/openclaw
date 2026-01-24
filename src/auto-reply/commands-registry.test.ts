@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildCommandText,
   buildCommandTextFromArgs,
+  findCommandByNativeName,
   getCommandDetection,
   listChatCommands,
   listChatCommandsForConfig,
@@ -83,6 +84,16 @@ describe("commands registry", () => {
       { skillCommands },
     );
     expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
+  });
+
+  it("applies provider-specific native names", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "discord" },
+    );
+    expect(native.find((spec) => spec.name === "voice")).toBeTruthy();
+    expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
+    expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
   it("detects known text commands", () => {

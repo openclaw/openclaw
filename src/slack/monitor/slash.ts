@@ -476,14 +476,14 @@ export function registerSlackMonitorSlashCommands(params: {
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
   const nativeCommands = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, { skillCommands })
+    ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "slack" })
     : [];
   if (nativeCommands.length > 0) {
     for (const command of nativeCommands) {
       ctx.app.command(
         `/${command.name}`,
         async ({ command: cmd, ack, respond }: SlackCommandMiddlewareArgs) => {
-          const commandDefinition = findCommandByNativeName(command.name);
+          const commandDefinition = findCommandByNativeName(command.name, "slack");
           const rawText = cmd.text?.trim() ?? "";
           const commandArgs = commandDefinition
             ? parseCommandArgs(commandDefinition, rawText)
@@ -557,7 +557,7 @@ export function registerSlackMonitorSlashCommands(params: {
       });
       return;
     }
-    const commandDefinition = findCommandByNativeName(parsed.command);
+    const commandDefinition = findCommandByNativeName(parsed.command, "slack");
     const commandArgs: CommandArgs = {
       values: { [parsed.arg]: parsed.value },
     };

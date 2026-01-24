@@ -346,11 +346,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const maxDiscordCommands = 100;
   let skillCommands =
     nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
-  let commandSpecs = nativeEnabled ? listNativeCommandSpecsForConfig(cfg, { skillCommands }) : [];
+  let commandSpecs = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
+    : [];
   const initialCommandCount = commandSpecs.length;
   if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
     skillCommands = [];
-    commandSpecs = listNativeCommandSpecsForConfig(cfg, { skillCommands: [] });
+    commandSpecs = listNativeCommandSpecsForConfig(cfg, { skillCommands: [], provider: "discord" });
     runtime.log?.(
       warn(
         `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
