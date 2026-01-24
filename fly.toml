@@ -15,7 +15,7 @@ primary_region = "iad"  # change to your closest region
   NODE_OPTIONS = "--max-old-space-size=1536"
 
 [processes]
-  app = "node dist/index.js gateway --port 3000 --bind lan"
+  app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
 
 [http_service]
   internal_port = 3000

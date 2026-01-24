@@ -32,7 +32,7 @@ cd clawdbot
 fly apps create my-clawdbot
 
 # Create a persistent volume (1GB is usually enough)
-fly volumes create clawdbot_data --size 1 --region lhr
+fly volumes create clawdbot_data --size 1 --region iad
 ```
 
 **Tip:** Choose a region close to you. Common options: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
@@ -43,7 +43,7 @@ Edit `fly.toml` to match your app name and requirements:
 
 ```toml
 app = "my-clawdbot"  # Your app name
-primary_region = "lhr"
+primary_region = "iad"
 
 [build]
   dockerfile = "Dockerfile"
@@ -134,14 +134,14 @@ fly ssh console
 
 Create the config directory and file:
 ```bash
-mkdir -p /data/.clawdbot
-cat > /data/.clawdbot/clawdbot.json << 'EOF'
+mkdir -p /data
+cat > /data/clawdbot.json << 'EOF'
 {
   "agents": {
     "defaults": {
       "model": {
         "primary": "anthropic/claude-opus-4-5",
-        "failover": ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]
+        "fallbacks": ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]
       },
       "maxConcurrent": 4
     },
@@ -186,6 +186,8 @@ cat > /data/.clawdbot/clawdbot.json << 'EOF'
 }
 EOF
 ```
+
+**Note:** With `CLAWDBOT_STATE_DIR=/data`, the config path is `/data/clawdbot.json`.
 
 **Note:** The Discord token can come from either:
 - Environment variable: `DISCORD_BOT_TOKEN` (recommended for secrets)
