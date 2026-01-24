@@ -28,6 +28,7 @@ import {
 } from "../../infra/provider-usage.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, theme } from "../../terminal/theme.js";
+import { renderTable } from "../../terminal/table.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
@@ -35,7 +36,6 @@ import { isRich } from "./list.format.js";
 import {
   describeProbeSummary,
   formatProbeLatency,
-  groupProbeResults,
   runAuthProbes,
   sortProbeResults,
   type AuthProbeSummary,
@@ -571,7 +571,8 @@ export async function modelsStatusCommand(
     if (probeSummary.results.length === 0) {
       runtime.log(colorize(rich, theme.muted, "- none"));
     } else {
-      const grouped = groupProbeResults(sortProbeResults(probeSummary.results));
+      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      const sorted = sortProbeResults(probeSummary.results);
       const statusColor = (status: string) => {
         if (status === "ok") return theme.success;
         if (status === "rate_limit") return theme.warn;
@@ -580,29 +581,33 @@ export async function modelsStatusCommand(
         if (status === "no_model") return theme.muted;
         return theme.muted;
       };
-      for (const [provider, results] of grouped) {
-        const modelLabel = results.find((r) => r.model)?.model ?? "-";
-        runtime.log(
-          `- ${theme.heading(provider)}${colorize(
-            rich,
-            theme.muted,
-            modelLabel ? ` (model: ${modelLabel})` : "",
-          )}`,
-        );
-        for (const result of results) {
-          const status = colorize(rich, statusColor(result.status), result.status);
-          const latency = formatProbeLatency(result.latencyMs);
-          const mode = result.mode ? ` (${result.mode})` : "";
-          const detail = result.error ? colorize(rich, theme.muted, ` - ${result.error}`) : "";
-          runtime.log(
-            `  - ${colorize(rich, theme.accent, result.label)}${mode} ${status} ${colorize(
-              rich,
-              theme.muted,
-              latency,
-            )}${detail}`,
-          );
-        }
-      }
+      const rows = sorted.map((result) => {
+        const status = colorize(rich, statusColor(result.status), result.status);
+        const latency = formatProbeLatency(result.latencyMs);
+        const detail = result.error ? colorize(rich, theme.muted, result.error) : "";
+        const modelLabel = result.model ?? `${result.provider}/-`;
+        const modeLabel = result.mode ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}` : "";
+        const profile = `${colorize(rich, theme.accent, result.label)}${modeLabel}`;
+        const statusLabel = `${status}${colorize(rich, theme.muted, ` · ${latency}`)}`;
+        return {
+          Model: colorize(rich, theme.heading, modelLabel),
+          Profile: profile,
+          Status: statusLabel,
+          Detail: detail,
+        };
+      });
+      runtime.log(
+        renderTable({
+          width: tableWidth,
+          columns: [
+            { key: "Model", header: "Model", minWidth: 18 },
+            { key: "Profile", header: "Profile", minWidth: 24 },
+            { key: "Status", header: "Status", minWidth: 12 },
+            { key: "Detail", header: "Detail", minWidth: 16, flex: true },
+          ],
+          rows,
+        }).trimEnd(),
+      );
       runtime.log(colorize(rich, theme.muted, describeProbeSummary(probeSummary)));
     }
   }
