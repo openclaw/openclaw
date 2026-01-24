@@ -59,6 +59,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I use Brave for browser control?](#how-do-i-use-brave-for-browser-control)
 - [Remote gateways + nodes](#remote-gateways-nodes)
   - [How do commands propagate between Telegram, the gateway, and nodes?](#how-do-commands-propagate-between-telegram-the-gateway-and-nodes)
+  - [How can my agent access my computer if the Gateway is hosted remotely?](#how-can-my-agent-access-my-computer-if-the-gateway-is-hosted-remotely)
+  - [Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?](#is-there-a-benefit-to-using-a-node-on-my-personal-laptop-instead-of-ssh-from-a-vps)
   - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
   - [What’s a minimal “sane” config for a first install?](#whats-a-minimal-sane-config-for-a-first-install)
@@ -750,6 +752,23 @@ Security reminder: pairing a macOS node allows `system.run` on that machine. Onl
 pair devices you trust, and review [Security](/gateway/security).
 
 Docs: [Nodes](/nodes), [Gateway protocol](/gateway/protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
+
+### Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?
+
+Yes — nodes are the first‑class way to reach your laptop from a remote Gateway, and they
+unlock more than shell access. The Gateway runs on macOS/Linux (Windows via WSL2), so a common
+setup is an always‑on host (VPS/home box/Pi) plus your laptop as a node.
+
+- **No inbound SSH required.** Nodes connect out to the Gateway WebSocket and use device pairing.
+- **Safer execution controls.** `system.run` is gated by node allowlists/approvals on that laptop.
+- **More device tools.** Nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
+- **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally and relay control
+  with the Chrome extension + `clawdbot browser serve`.
+
+SSH is fine for ad‑hoc shell access, but nodes are simpler for ongoing agent workflows and
+device automation.
+
+Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Chrome extension](/tools/chrome-extension).
 
 ### Do nodes run a gateway service?
 
