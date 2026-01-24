@@ -12,7 +12,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Heartbeat: normalize target identifiers for consistent routing.
-- TUI: unify reasoning tag stripping so `<final>` wrappers stay hidden. (#1613) Thanks @kyleok.
+- Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
 
 ## 2026.1.23-1
 

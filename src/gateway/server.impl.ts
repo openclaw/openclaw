@@ -344,9 +344,19 @@ export async function startGatewayServer(
 
   setSkillsRemoteRegistry(nodeRegistry);
   void primeRemoteSkillsCache();
-  registerSkillsChangeListener(() => {
-    const latest = loadConfig();
-    void refreshRemoteBinsForConnectedNodes(latest);
+  // Debounce skills-triggered node probes to avoid feedback loops and rapid-fire invokes.
+  // Skills changes can happen in bursts (e.g., file watcher events), and each probe
+  // takes time to complete. A 30-second delay ensures we batch changes together.
+  let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const skillsRefreshDelayMs = 30_000;
+  const skillsChangeUnsub = registerSkillsChangeListener((event) => {
+    if (event.reason === "remote-node") return;
+    if (skillsRefreshTimer) clearTimeout(skillsRefreshTimer);
+    skillsRefreshTimer = setTimeout(() => {
+      skillsRefreshTimer = null;
+      const latest = loadConfig();
+      void refreshRemoteBinsForConnectedNodes(latest);
+    }, skillsRefreshDelayMs);
   });
 
   const { tickInterval, healthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
@@ -544,6 +554,11 @@ export async function startGatewayServer(
       if (diagnosticsEnabled) {
         stopDiagnosticHeartbeat();
       }
+      if (skillsRefreshTimer) {
+        clearTimeout(skillsRefreshTimer);
+        skillsRefreshTimer = null;
+      }
+      skillsChangeUnsub();
       await close(opts);
     },
   };
