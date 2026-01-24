@@ -22,6 +22,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How does Codex auth work?](#how-does-codex-auth-work)
   - [Is a local model OK for casual chats?](#is-a-local-model-ok-for-casual-chats)
   - [How do I keep hosted model traffic in a specific region?](#how-do-i-keep-hosted-model-traffic-in-a-specific-region)
+  - [Do I have to buy a Mac Mini to install this?](#do-i-have-to-buy-a-mac-mini-to-install-this)
   - [Can I use Bun?](#can-i-use-bun)
   - [Telegram: what goes in `allowFrom`?](#telegram-what-goes-in-allowfrom)
   - [Can multiple people use one WhatsApp number with different Clawdbots?](#can-multiple-people-use-one-whatsapp-number-with-different-clawdbots)
@@ -283,6 +284,16 @@ Usually no. Clawdbot needs large context + strong safety; small cards truncate a
 ### How do I keep hosted model traffic in a specific region?
 
 Pick region-pinned endpoints. OpenRouter exposes US-hosted options for MiniMax, Kimi, and GLM; choose the US-hosted variant to keep data in-region. You can still list Anthropic/OpenAI alongside these by using `models.mode: "merge"` so fallbacks stay available while respecting the regioned provider you select.
+
+### Do I have to buy a Mac Mini to install this?
+
+No. Clawdbot runs on macOS or Linux (Windows via WSL2). A Mac mini is optional — some people
+buy one as an always‑on host, but a small VPS, home server, or Raspberry Pi‑class box works too.
+
+The only reason you’d **need** a Mac is if you want macOS‑only tools (like iMessage or Apple Notes).
+In that case, run the Gateway on a Mac, or keep the Gateway on Linux and pair a macOS node.
+
+Docs: [Nodes](/nodes), [iMessage](/channels/imessage), [Mac remote mode](/platforms/mac/remote).
 
 ### Can I use Bun?
 
