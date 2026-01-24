@@ -263,15 +263,15 @@ Run history:
 clawdbot cron runs --id <jobId> --limit 50
 ```
 
-Immediate wake without creating a job:
+Immediate system event without creating a job:
 ```bash
-clawdbot wake --mode now --text "Next heartbeat: check battery."
+clawdbot system event --mode now --text "Next heartbeat: check battery."
 ```
 
 ## Gateway API surface
 - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
 - `cron.run` (force or due), `cron.runs`
-- `wake` (enqueue system event + optional heartbeat)
+For immediate system events without a job, use [`clawdbot system event`](/cli/system).
 
 ## Troubleshooting
 

@@ -29,6 +29,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`sessions`](/cli/sessions)
 - [`gateway`](/cli/gateway)
 - [`logs`](/cli/logs)
+- [`system`](/cli/system)
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
 - [`nodes`](/cli/nodes)
@@ -38,7 +39,6 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`sandbox`](/cli/sandbox)
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
-- [`wake`](/cli/wake)
 - [`cron`](/cli/cron)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
@@ -145,6 +145,10 @@ clawdbot [--dev] [--profile <name>] <command>
     restart
     run
   logs
+  system
+    event
+    heartbeat last|enable|disable
+    presence
   models
     list
     status
@@ -160,7 +164,6 @@ clawdbot [--dev] [--profile <name>] <command>
     list
     recreate
     explain
-  wake
   cron
     status
     list
@@ -763,9 +766,9 @@ Options:
 - `set`: `--provider <name>`, `--agent <id>`, `<profileIds...>`
 - `clear`: `--provider <name>`, `--agent <id>`
 
-## Cron + wake
+## System
 
-### `wake`
+### `system event`
 Enqueue a system event and optionally trigger a heartbeat (Gateway RPC).
 
 Required:
@@ -776,7 +779,21 @@ Options:
 - `--json`
 - `--url`, `--token`, `--timeout`, `--expect-final`
 
-### `cron`
+### `system heartbeat last|enable|disable`
+Heartbeat controls (Gateway RPC).
+
+Options:
+- `--json`
+- `--url`, `--token`, `--timeout`, `--expect-final`
+
+### `system presence`
+List system presence entries (Gateway RPC).
+
+Options:
+- `--json`
+- `--url`, `--token`, `--timeout`, `--expect-final`
+
+## Cron
 Manage scheduled jobs (Gateway RPC). See [/automation/cron-jobs](/automation/cron-jobs).
 
 Subcommands:
