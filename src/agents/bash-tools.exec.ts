@@ -838,10 +838,7 @@ export function createExecTool(
       applyPathPrepend(env, defaultPathPrepend);
 
       if (host === "node") {
-        const approvals = resolveExecApprovals(
-          agentId,
-          host === "node" ? { security: "allowlist" } : undefined,
-        );
+        const approvals = resolveExecApprovals(agentId, { security, ask });
         const hostSecurity = minSecurity(security, approvals.agent.security);
         const hostAsk = maxAsk(ask, approvals.agent.ask);
         const askFallback = approvals.agent.askFallback;
@@ -1112,7 +1109,7 @@ export function createExecTool(
       }
 
       if (host === "gateway" && !bypassApprovals) {
-        const approvals = resolveExecApprovals(agentId, { security: "allowlist" });
+        const approvals = resolveExecApprovals(agentId, { security, ask });
         const hostSecurity = minSecurity(security, approvals.agent.security);
         const hostAsk = maxAsk(ask, approvals.agent.ask);
         const askFallback = approvals.agent.askFallback;
