@@ -16,7 +16,7 @@ import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { markdownToTelegramHtml } from "./format.js";
+import { renderTelegramHtmlText } from "./format.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { splitTelegramCaption } from "./caption.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -190,6 +190,55 @@ export async function sendMessageTelegram(
     );
   };
 
+  const textMode = opts.textMode ?? "markdown";
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "telegram",
+    accountId: account.accountId,
+  });
+  const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
+
+  const sendTelegramText = async (
+    rawText: string,
+    params?: Record<string, unknown>,
+    fallbackText?: string,
+  ) => {
+    const htmlText = renderHtmlText(rawText);
+    const sendParams = params
+      ? {
+          parse_mode: "HTML" as const,
+          ...params,
+        }
+      : {
+          parse_mode: "HTML" as const,
+        };
+    const res = await request(() => api.sendMessage(chatId, htmlText, sendParams), "message").catch(
+      async (err) => {
+        // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
+        // When that happens, fall back to plain text so the message still delivers.
+        const errText = formatErrorMessage(err);
+        if (PARSE_ERR_RE.test(errText)) {
+          if (opts.verbose) {
+            console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+          }
+          const fallback = fallbackText ?? rawText;
+          const plainParams = params && Object.keys(params).length > 0 ? { ...params } : undefined;
+          return await request(
+            () =>
+              plainParams
+                ? api.sendMessage(chatId, fallback, plainParams)
+                : api.sendMessage(chatId, fallback),
+            "message-plain",
+          ).catch((err2) => {
+            throw wrapChatNotFound(err2);
+          });
+        }
+        throw wrapChatNotFound(err);
+      },
+    );
+    return res;
+  };
+
   if (mediaUrl) {
     const media = await loadWebMedia(mediaUrl, opts.maxBytes);
     const kind = mediaKindFromMime(media.contentType ?? undefined);
@@ -200,21 +249,21 @@ export async function sendMessageTelegram(
     const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
     const file = new InputFile(media.buffer, fileName);
     const { caption, followUpText } = splitTelegramCaption(text);
+    const htmlCaption = caption ? renderHtmlText(caption) : undefined;
     // If text exceeds Telegram's caption limit, send media without caption
     // then send text as a separate follow-up message.
     const needsSeparateText = Boolean(followUpText);
     // When splitting, put reply_markup only on the follow-up text (the "main" content),
     // not on the media message.
-    const mediaParams = hasThreadParams
-      ? {
-          caption,
-          ...threadParams,
-          ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }
-      : {
-          caption,
-          ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
-        };
+    const baseMediaParams = {
+      ...(hasThreadParams ? threadParams : {}),
+      ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
+    };
+    const mediaParams = {
+      caption: htmlCaption,
+      ...(htmlCaption ? { parse_mode: "HTML" as const } : {}),
+      ...baseMediaParams,
+    };
     let result:
       | Awaited<ReturnType<typeof api.sendPhoto>>
       | Awaited<ReturnType<typeof api.sendVideo>>
@@ -279,7 +328,7 @@ export async function sendMessageTelegram(
     });
 
     // If text was too long for a caption, send it as a separate follow-up message.
-    // Use plain text to match caption behavior (captions don't use HTML conversion).
+    // Use HTML conversion so markdown renders like captions.
     if (needsSeparateText && followUpText) {
       const textParams =
         hasThreadParams || replyMarkup
@@ -288,15 +337,7 @@ export async function sendMessageTelegram(
               ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
             }
           : undefined;
-      const textRes = await request(
-        () =>
-          textParams
-            ? api.sendMessage(chatId, followUpText, textParams)
-            : api.sendMessage(chatId, followUpText),
-        "message",
-      ).catch((err) => {
-        throw wrapChatNotFound(err);
-      });
+      const textRes = await sendTelegramText(followUpText, textParams);
       // Return the text message ID as the "main" message (it's the actual content).
       return {
         messageId: String(textRes?.message_id ?? mediaMessageId),
@@ -310,53 +351,14 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const textMode = opts.textMode ?? "markdown";
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "telegram",
-    accountId: account.accountId,
-  });
-  const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text, { tableMode });
-  const textParams = hasThreadParams
-    ? {
-        parse_mode: "HTML" as const,
-        ...threadParams,
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-      }
-    : {
-        parse_mode: "HTML" as const,
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-      };
-  const res = await request(() => api.sendMessage(chatId, htmlText, textParams), "message").catch(
-    async (err) => {
-      // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
-      // When that happens, fall back to plain text so the message still delivers.
-      const errText = formatErrorMessage(err);
-      if (PARSE_ERR_RE.test(errText)) {
-        if (opts.verbose) {
-          console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+  const textParams =
+    hasThreadParams || replyMarkup
+      ? {
+          ...threadParams,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }
-        const plainParams =
-          hasThreadParams || replyMarkup
-            ? {
-                ...threadParams,
-                ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-              }
-            : undefined;
-        const fallbackText = opts.plainText ?? text;
-        return await request(
-          () =>
-            plainParams
-              ? api.sendMessage(chatId, fallbackText, plainParams)
-              : api.sendMessage(chatId, fallbackText),
-          "message-plain",
-        ).catch((err2) => {
-          throw wrapChatNotFound(err2);
-        });
-      }
-      throw wrapChatNotFound(err);
-    },
-  );
+      : undefined;
+  const res = await sendTelegramText(text, textParams, opts.plainText);
   const messageId = String(res?.message_id ?? "unknown");
   if (res?.message_id) {
     recordSentMessage(chatId, res.message_id);

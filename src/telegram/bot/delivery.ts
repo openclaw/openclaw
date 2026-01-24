@@ -1,5 +1,9 @@
 import { type Bot, InputFile } from "grammy";
-import { markdownToTelegramChunks, markdownToTelegramHtml } from "../format.js";
+import {
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  renderTelegramHtmlText,
+} from "../format.js";
 import { splitTelegramCaption } from "../caption.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
@@ -87,6 +91,9 @@ export async function deliverReplies(params: {
       const { caption, followUpText } = splitTelegramCaption(
         isFirstMedia ? (reply.text ?? undefined) : undefined,
       );
+      const htmlCaption = caption
+        ? renderTelegramHtmlText(caption, { tableMode: params.tableMode })
+        : undefined;
       if (followUpText) {
         pendingFollowUpText = followUpText;
       }
@@ -94,8 +101,9 @@ export async function deliverReplies(params: {
       const replyToMessageId =
         replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
       const mediaParams: Record<string, unknown> = {
-        caption,
+        caption: htmlCaption,
         reply_to_message_id: replyToMessageId,
+        ...(htmlCaption ? { parse_mode: "HTML" } : {}),
       };
       if (threadParams) {
         mediaParams.message_thread_id = threadParams.message_thread_id;
@@ -149,14 +157,12 @@ export async function deliverReplies(params: {
         for (const chunk of chunks) {
           const replyToMessageIdFollowup =
             replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
-          await bot.api.sendMessage(
-            chatId,
-            chunk.text,
-            buildTelegramSendParams({
-              replyToMessageId: replyToMessageIdFollowup,
-              messageThreadId,
-            }),
-          );
+          await sendTelegramText(bot, chatId, chunk.html, runtime, {
+            replyToMessageId: replyToMessageIdFollowup,
+            messageThreadId,
+            textMode: "html",
+            plainText: chunk.text,
+          });
           if (replyToId && !hasReplied) {
             hasReplied = true;
           }

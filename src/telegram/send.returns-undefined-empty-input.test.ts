@@ -285,6 +285,7 @@ describe("sendMessageTelegram", () => {
     expect(sendAnimation).toHaveBeenCalledTimes(1);
     expect(sendAnimation).toHaveBeenCalledWith(chatId, expect.anything(), {
       caption: "caption",
+      parse_mode: "HTML",
     });
     expect(res.messageId).toBe("9");
   });
@@ -318,6 +319,7 @@ describe("sendMessageTelegram", () => {
 
     expect(sendAudio).toHaveBeenCalledWith(chatId, expect.anything(), {
       caption: "caption",
+      parse_mode: "HTML",
     });
     expect(sendVoice).not.toHaveBeenCalled();
   });
@@ -354,6 +356,7 @@ describe("sendMessageTelegram", () => {
 
     expect(sendVoice).toHaveBeenCalledWith(chatId, expect.anything(), {
       caption: "voice note",
+      parse_mode: "HTML",
       message_thread_id: 271,
       reply_to_message_id: 500,
     });
@@ -390,6 +393,7 @@ describe("sendMessageTelegram", () => {
 
     expect(sendAudio).toHaveBeenCalledWith(chatId, expect.anything(), {
       caption: "caption",
+      parse_mode: "HTML",
     });
     expect(sendVoice).not.toHaveBeenCalled();
   });

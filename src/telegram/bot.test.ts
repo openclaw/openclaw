@@ -1392,6 +1392,7 @@ describe("createTelegramBot", () => {
     expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
     expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
       caption: "caption",
+      parse_mode: "HTML",
       reply_to_message_id: undefined,
     });
     expect(sendPhotoSpy).not.toHaveBeenCalled();

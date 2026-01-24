@@ -74,4 +74,38 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["recordVoice", "sendVoice"]);
   });
+
+  it("renders markdown in media captions", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 2,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendPhoto } } as unknown as Bot;
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await deliverReplies({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "hi **boss**" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.objectContaining({
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+      }),
+    );
+  });
 });

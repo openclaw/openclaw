@@ -60,6 +60,15 @@ export function markdownToTelegramHtml(
   return renderTelegramHtml(ir);
 }
 
+export function renderTelegramHtmlText(
+  text: string,
+  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
+): string {
+  const textMode = options.textMode ?? "markdown";
+  if (textMode === "html") return text;
+  return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+}
+
 export function markdownToTelegramChunks(
   markdown: string,
   limit: number,

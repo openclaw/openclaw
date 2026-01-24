@@ -34,6 +34,7 @@ Docs: https://docs.clawd.bot
 - CLI: explain when auth profiles are excluded by auth.order in probe details.
 - CLI: drop the em dash when the banner tagline wraps to a second line.
 - CLI: inline auth probe errors in status rows to reduce wrapping.
+- Telegram: render markdown in media captions. (#1478)
 - Agents: honor enqueue overrides for embedded runs to avoid queue deadlocks in tests.
 - Daemon: use platform PATH delimiters when building minimal service paths.
 - Tests: skip embedded runner ordering assertion on Windows to avoid CI timeouts.
