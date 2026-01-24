@@ -161,4 +161,92 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.role).toBe("assistant");
   });
+
+  it("does not downgrade openai reasoning when the model has not changed", async () => {
+    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
+      {
+        type: "custom",
+        customType: "model-snapshot",
+        data: {
+          timestamp: Date.now(),
+          provider: "openai",
+          modelApi: "openai-responses",
+          modelId: "gpt-5.2-codex",
+        },
+      },
+    ];
+    const sessionManager = {
+      getEntries: vi.fn(() => sessionEntries),
+      appendCustomEntry: vi.fn((customType: string, data: unknown) => {
+        sessionEntries.push({ type: "custom", customType, data });
+      }),
+    } as unknown as SessionManager;
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_test", type: "reasoning" }),
+          },
+        ],
+      },
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "gpt-5.2-codex",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toEqual(messages);
+  });
+
+  it("downgrades openai reasoning only when the model changes", async () => {
+    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
+      {
+        type: "custom",
+        customType: "model-snapshot",
+        data: {
+          timestamp: Date.now(),
+          provider: "anthropic",
+          modelApi: "anthropic-messages",
+          modelId: "claude-3-7",
+        },
+      },
+    ];
+    const sessionManager = {
+      getEntries: vi.fn(() => sessionEntries),
+      appendCustomEntry: vi.fn((customType: string, data: unknown) => {
+        sessionEntries.push({ type: "custom", customType, data });
+      }),
+    } as unknown as SessionManager;
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: { id: "rs_test", type: "reasoning" },
+          },
+        ],
+      },
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "gpt-5.2-codex",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toEqual([]);
+  });
 });

@@ -212,7 +212,50 @@ registerUnhandledRejectionHandler((reason) => {
   return true;
 });
 
-type CustomEntryLike = { type?: unknown; customType?: unknown };
+type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
+
+type ModelSnapshotEntry = {
+  timestamp: number;
+  provider?: string;
+  modelApi?: string | null;
+  modelId?: string;
+};
+
+const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
+
+function readLastModelSnapshot(sessionManager: SessionManager): ModelSnapshotEntry | null {
+  try {
+    const entries = sessionManager.getEntries();
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i] as CustomEntryLike;
+      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) continue;
+      const data = entry?.data as ModelSnapshotEntry | undefined;
+      if (data && typeof data === "object") {
+        return data;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function appendModelSnapshot(sessionManager: SessionManager, data: ModelSnapshotEntry): void {
+  try {
+    sessionManager.appendCustomEntry(MODEL_SNAPSHOT_CUSTOM_TYPE, data);
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): boolean {
+  const normalize = (value?: string | null) => value ?? "";
+  return (
+    normalize(a.provider) === normalize(b.provider) &&
+    normalize(a.modelApi) === normalize(b.modelApi) &&
+    normalize(a.modelId) === normalize(b.modelId)
+  );
+}
 
 function hasGoogleTurnOrderingMarker(sessionManager: SessionManager): boolean {
   try {
@@ -295,7 +338,29 @@ export async function sanitizeSessionHistory(params: {
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
-  const sanitizedOpenAI = isOpenAIResponsesApi ? downgradeOpenAIReasoningBlocks(repairedTools) : repairedTools;
+  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
+  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
+  const modelChanged = priorSnapshot
+    ? !isSameModelSnapshot(priorSnapshot, {
+        timestamp: 0,
+        provider: params.provider,
+        modelApi: params.modelApi,
+        modelId: params.modelId,
+      })
+    : false;
+  const sanitizedOpenAI =
+    isOpenAIResponsesApi && modelChanged
+      ? downgradeOpenAIReasoningBlocks(repairedTools)
+      : repairedTools;
+
+  if (hasSnapshot && (!priorSnapshot || modelChanged)) {
+    appendModelSnapshot(params.sessionManager, {
+      timestamp: Date.now(),
+      provider: params.provider,
+      modelApi: params.modelApi,
+      modelId: params.modelId,
+    });
+  }
 
   if (!policy.applyGoogleTurnOrdering) {
     return sanitizedOpenAI;

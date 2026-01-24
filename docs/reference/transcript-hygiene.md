@@ -48,6 +48,7 @@ Implementation:
 
 **OpenAI / OpenAI Codex**
 - Image sanitization only.
+- On model switch into OpenAI Responses/Codex, drop orphaned reasoning signatures (standalone reasoning items without a following content block).
 - No tool call id sanitization.
 - No tool result pairing repair.
 - No turn validation or reordering.
