@@ -94,6 +94,20 @@ export async function sendGoogleChatMessage(params: {
   return result ? { messageName: result.name } : null;
 }
 
+export async function updateGoogleChatMessage(params: {
+  account: ResolvedGoogleChatAccount;
+  messageName: string;
+  text: string;
+}): Promise<{ messageName?: string }> {
+  const { account, messageName, text } = params;
+  const url = `${CHAT_API_BASE}/${messageName}?updateMask=text`;
+  const result = await fetchJson<{ name?: string }>(account, url, {
+    method: "PATCH",
+    body: JSON.stringify({ text }),
+  });
+  return { messageName: result.name };
+}
+
 export async function uploadGoogleChatAttachment(params: {
   account: ResolvedGoogleChatAccount;
   space: string;
