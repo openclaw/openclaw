@@ -2,11 +2,12 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.23
+## 2026.1.23 (Unreleased)
 
 ### Changes
 - CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
 - Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
+- Tlon: add Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a.
 
 ### Fixes
 - TUI: forward unknown slash commands (for example, `/context`) to the Gateway.
