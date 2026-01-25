@@ -344,6 +344,11 @@ describe("chunkMarkdownTextWithMode", () => {
     expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([text]);
   });
 
+  it("defers long markdown paragraphs to markdown chunking in newline mode", () => {
+    const text = `\`\`\`js\n${"const a = 1;\n".repeat(20)}\`\`\``;
+    expect(chunkMarkdownTextWithMode(text, 40, "newline")).toEqual(chunkMarkdownText(text, 40));
+  });
+
   it("does not split on blank lines inside a fenced code block", () => {
     const text = "```python\ndef my_function():\n    x = 1\n\n    y = 2\n    return x + y\n```";
     expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([text]);

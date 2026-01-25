@@ -58,7 +58,7 @@ describe("chunkDiscordText", () => {
       maxLines: 50,
       chunkMode: "newline",
     });
-    expect(chunks).toEqual(["```js\nconst a = 1;\nconst b = 2;\n```", "After"]);
+    expect(chunks).toEqual([text]);
   });
 
   it("reserves space for closing fences when chunking", () => {
