@@ -1,7 +1,10 @@
 import {
   buildChannelConfigSchema,
+  createReplyPrefixContext,
+  createTypingCallbacks,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  logTypingFailure,
   type ChannelPlugin,
 } from "clawdbot/plugin-sdk";
 
@@ -199,10 +202,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
-        publicKey: account.publicKey,
-      });
       ctx.log?.info(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);
 
       if (!account.configured) {
@@ -218,21 +217,130 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        onMessage: async (senderPubkey, text, reply) => {
+        onMessage: async (senderPubkey, text, reply, eventId) => {
           ctx.log?.debug(`[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
 
-          // Forward to clawdbot's message pipeline
-          await runtime.channel.reply.handleInboundMessage({
+          const cfg = runtime.config.loadConfig();
+
+          // Resolve agent route for this DM
+          const route = runtime.channel.routing.resolveAgentRoute({
+            cfg,
             channel: "nostr",
             accountId: account.accountId,
-            senderId: senderPubkey,
-            chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
+            peer: { kind: "dm", id: senderPubkey },
+          });
+
+          ctx.log?.debug(`[${account.accountId}] Route resolved: sessionKey=${route.sessionKey}, agentId=${route.agentId}`);
+
+          // Create typing callbacks for this conversation
+          // Note: busHandle is checked at invocation time (not creation time)
+          // to handle the race condition during startup
+          const typingCallbacks = createTypingCallbacks({
+            start: async () => {
+              if (!busHandle) {
+                ctx.log?.debug(`[${account.accountId}] Skipping typing START (bus not ready)`);
+                return;
+              }
+              ctx.log?.debug(`[${account.accountId}] Sending typing START to ${senderPubkey.slice(0, 8)}`);
+              return busHandle.sendTypingStart(senderPubkey);
+            },
+            stop: async () => {
+              if (!busHandle) {
+                ctx.log?.debug(`[${account.accountId}] Skipping typing STOP (bus not ready)`);
+                return;
+              }
+              ctx.log?.debug(`[${account.accountId}] Sending typing STOP to ${senderPubkey.slice(0, 8)}`);
+              return busHandle.sendTypingStop(senderPubkey);
+            },
+            onStartError: (err) =>
+              logTypingFailure({
+                log: (msg) => ctx.log?.warn(msg),
+                channel: "nostr",
+                target: senderPubkey,
+                action: "start",
+                error: err,
+              }),
+            onStopError: (err) =>
+              logTypingFailure({
+                log: (msg) => ctx.log?.warn(msg),
+                channel: "nostr",
+                target: senderPubkey,
+                action: "stop",
+                error: err,
+              }),
+          });
+
+          // Build the inbound message context
+          const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+            Body: text,
+            RawBody: text,
+            CommandBody: text,
+            From: `nostr:${senderPubkey}`,
+            To: `nostr:${account.publicKey}`,
+            SessionKey: route.sessionKey,
+            AccountId: account.accountId,
+            ChatType: "direct",
+            SenderName: senderPubkey.slice(0, 8),
+            SenderId: senderPubkey,
+            Provider: "nostr" as const,
+            Surface: "nostr" as const,
+            Timestamp: Date.now(),
+            MessageSid: eventId, // Nostr event ID for deduplication
+            CommandAuthorized: true, // TODO: implement proper authorization
+            CommandSource: "text" as const,
+            OriginatingChannel: "nostr" as const,
+            OriginatingTo: `nostr:${senderPubkey}`,
+          });
+
+          // Get table mode for formatting
+          const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+            cfg,
+            channel: "nostr",
+            accountId: account.accountId,
+          });
+
+          // Create reply prefix context
+          const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+
+          // Create the reply dispatcher
+          const { dispatcher, replyOptions, markDispatchIdle } =
+            runtime.channel.reply.createReplyDispatcherWithTyping({
+              responsePrefix: prefixContext.responsePrefix,
+              responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+              humanDelay: runtime.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+              deliver: async (payload) => {
+                const message = runtime.channel.text.convertMarkdownTables(
+                  payload.text ?? "",
+                  tableMode
+                );
+                ctx.log?.debug(`[${account.accountId}] Delivering reply to ${senderPubkey.slice(0, 8)}: ${message.slice(0, 50)}...`);
+                await reply(message);
+                ctx.log?.info(`[${account.accountId}] Reply delivered to ${senderPubkey.slice(0, 8)}`);
+              },
+              onError: (err, info) => {
+                ctx.log?.error(`[${account.accountId}] nostr ${info.kind} reply failed: ${String(err)}`);
+              },
+              onReplyStart: typingCallbacks?.onReplyStart,
+              onIdle: typingCallbacks?.onIdle,
+            });
+
+          // Dispatch the reply
+          const { queuedFinal, counts } = await runtime.channel.reply.dispatchReplyFromConfig({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyOptions: {
+              ...replyOptions,
+              onModelSelected: prefixContext.onModelSelected,
             },
           });
+          markDispatchIdle();
+
+          if (queuedFinal) {
+            ctx.log?.info(`[${account.accountId}] Sent ${counts.final} reply(s) to ${senderPubkey.slice(0, 8)}`);
+          } else {
+            ctx.log?.debug(`[${account.accountId}] No reply generated for ${senderPubkey.slice(0, 8)}`);
+          }
         },
         onError: (error, context) => {
           ctx.log?.error(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
@@ -271,15 +379,20 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
 
       ctx.log?.info(`[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`);
 
-      // Return cleanup function
-      return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
-      };
+      // Wait for abort signal (keeps the provider running until stopped)
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal?.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      // Cleanup when stopped
+      bus.close();
+      activeBuses.delete(account.accountId);
+      metricsSnapshots.delete(account.accountId);
+      ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
     },
   },
 };
