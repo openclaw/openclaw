@@ -96,6 +96,34 @@ describe("config view", () => {
     expect(applyButton?.disabled).toBe(true);
   });
 
+  it("enables save and apply when raw changes", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        formMode: "raw",
+        raw: "{\n  gateway: { mode: \"local\" }\n}\n",
+        originalRaw: "{\n}\n",
+      }),
+      container,
+    );
+
+    const saveButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((btn) => btn.textContent?.trim() === "Save") as
+      | HTMLButtonElement
+      | undefined;
+    const applyButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((btn) => btn.textContent?.trim() === "Apply") as
+      | HTMLButtonElement
+      | undefined;
+    expect(saveButton).not.toBeUndefined();
+    expect(applyButton).not.toBeUndefined();
+    expect(saveButton?.disabled).toBe(false);
+    expect(applyButton?.disabled).toBe(false);
+  });
+
   it("switches mode via the sidebar toggle", () => {
     const container = document.createElement("div");
     const onFormModeChange = vi.fn();
