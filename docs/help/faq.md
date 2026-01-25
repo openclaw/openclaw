@@ -843,6 +843,7 @@ Baseline guidance:
 
 If you are on Windows, **WSL2 is the easiest VM style setup** and has the best tooling
 compatibility. See [Windows](/platforms/windows), [VPS hosting](/vps).
+If you are running macOS in a VM, see [macOS VM](/platforms/macos-vm).
 
 ## What is Clawdbot?
 
