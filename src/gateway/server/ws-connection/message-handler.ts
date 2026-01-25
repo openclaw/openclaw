@@ -318,13 +318,13 @@ export function attachGatewayWsMessageHandler(params: {
         let devicePublicKey: string | null = null;
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
+        const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+        const allowInsecureControlUi =
+          isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
 
         if (!device) {
-          const allowInsecureControlUi =
-            isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
-          const canSkipDevice =
-            isControlUi && allowInsecureControlUi ? hasTokenAuth || hasPasswordAuth : hasTokenAuth;
+          const canSkipDevice = allowInsecureControlUi ? hasSharedAuth : hasTokenAuth;
 
           if (isControlUi && !allowInsecureControlUi) {
             const errorMessage = "control ui requires HTTPS or localhost (secure context)";
@@ -569,7 +569,8 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        if (device && devicePublicKey) {
+        const skipPairing = allowInsecureControlUi && hasSharedAuth;
+        if (device && devicePublicKey && !skipPairing) {
           const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
             const pairing = await requestDevicePairing({
               deviceId: device.id,

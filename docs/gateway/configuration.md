@@ -2847,8 +2847,9 @@ Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
 - Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
 - Default: root (`/`) (unchanged).
-- `gateway.controlUi.allowInsecureAuth` allows token-only auth over **HTTP** (no device identity).
-  Default: `false`. Prefer HTTPS (Tailscale Serve) or `127.0.0.1`.
+- `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI and skips
+  device identity + pairing (even on HTTPS). Default: `false`. Prefer HTTPS
+  (Tailscale Serve) or `127.0.0.1`.
 
 Related docs:
 - [Control UI](/web/control-ui)

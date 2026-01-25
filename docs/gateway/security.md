@@ -58,7 +58,7 @@ When the audit prints findings, treat this as a priority order:
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
 identity. If you enable `gateway.controlUi.allowInsecureAuth`, the UI falls back
-to **token-only auth** on plain HTTP and skips device pairing. This is a security
+to **token-only auth** and skips device pairing (even on HTTPS). This is a security
 downgrade—prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 
 `clawdbot security audit` warns when this setting is enabled.
