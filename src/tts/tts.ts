@@ -76,6 +76,11 @@ const DEFAULT_OUTPUT = {
   voiceCompatible: false,
 };
 
+const TELEPHONY_OUTPUT = {
+  openai: { format: "pcm" as const, sampleRate: 24000 },
+  elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+};
+
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 
 export type ResolvedTtsConfig = {
@@ -178,6 +183,16 @@ export type TtsResult = {
   provider?: string;
   outputFormat?: string;
   voiceCompatible?: boolean;
+};
+
+export type TtsTelephonyResult = {
+  success: boolean;
+  audioBuffer?: Buffer;
+  error?: string;
+  latencyMs?: number;
+  provider?: string;
+  outputFormat?: string;
+  sampleRate?: number;
 };
 
 type TtsStatusEntry = {
@@ -980,7 +995,7 @@ async function openaiTTS(params: {
   apiKey: string;
   model: string;
   voice: string;
-  responseFormat: "mp3" | "opus";
+  responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
 }): Promise<Buffer> {
   const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
@@ -1207,6 +1222,100 @@ export async function textToSpeech(params: {
         provider,
         outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
         voiceCompatible: output.voiceCompatible,
+      };
+    } catch (err) {
+      const error = err as Error;
+      if (error.name === "AbortError") {
+        lastError = `${provider}: request timed out`;
+      } else {
+        lastError = `${provider}: ${error.message}`;
+      }
+    }
+  }
+
+  return {
+    success: false,
+    error: `TTS conversion failed: ${lastError || "no providers available"}`,
+  };
+}
+
+export async function textToSpeechTelephony(params: {
+  text: string;
+  cfg: ClawdbotConfig;
+  prefsPath?: string;
+}): Promise<TtsTelephonyResult> {
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+
+  if (params.text.length > config.maxTextLength) {
+    return {
+      success: false,
+      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+    };
+  }
+
+  const userProvider = getTtsProvider(config, prefsPath);
+  const providers = resolveTtsProviderOrder(userProvider);
+
+  let lastError: string | undefined;
+
+  for (const provider of providers) {
+    const providerStart = Date.now();
+    try {
+      if (provider === "edge") {
+        lastError = "edge: unsupported for telephony";
+        continue;
+      }
+
+      const apiKey = resolveTtsApiKey(config, provider);
+      if (!apiKey) {
+        lastError = `No API key for ${provider}`;
+        continue;
+      }
+
+      if (provider === "elevenlabs") {
+        const output = TELEPHONY_OUTPUT.elevenlabs;
+        const audioBuffer = await elevenLabsTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.elevenlabs.baseUrl,
+          voiceId: config.elevenlabs.voiceId,
+          modelId: config.elevenlabs.modelId,
+          outputFormat: output.format,
+          seed: config.elevenlabs.seed,
+          applyTextNormalization: config.elevenlabs.applyTextNormalization,
+          languageCode: config.elevenlabs.languageCode,
+          voiceSettings: config.elevenlabs.voiceSettings,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      const output = TELEPHONY_OUTPUT.openai;
+      const audioBuffer = await openaiTTS({
+        text: params.text,
+        apiKey,
+        model: config.openai.model,
+        voice: config.openai.voice,
+        responseFormat: output.format,
+        timeoutMs: config.timeoutMs,
+      });
+
+      return {
+        success: true,
+        audioBuffer,
+        latencyMs: Date.now() - providerStart,
+        provider,
+        outputFormat: output.format,
+        sampleRate: output.sampleRate,
       };
     } catch (err) {
       const error = err as Error;
