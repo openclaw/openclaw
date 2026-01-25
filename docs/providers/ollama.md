@@ -215,5 +215,5 @@ ollama serve
 ## See Also
 
 - [Model Providers](/concepts/model-providers) - Overview of all providers
-- [Model Selection](/agents/model-selection) - How to choose models
-- [Configuration](/configuration) - Full config reference
+- [Model Selection](/concepts/models) - How to choose models
+- [Configuration](/gateway/configuration) - Full config reference
