@@ -1,5 +1,5 @@
 import {
-  chunkByNewline,
+  chunkByParagraph,
   chunkMarkdownTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
@@ -239,14 +239,15 @@ export async function deliverOutboundPayloads(params: {
     }
     if (chunkMode === "newline") {
       const mode = handler.chunkerMode ?? "text";
-      const lineChunks =
+      const blockChunks =
         mode === "markdown"
           ? chunkMarkdownTextWithMode(text, textLimit, "newline")
-          : chunkByNewline(text, textLimit, { splitLongLines: false });
-      if (!lineChunks.length && text) lineChunks.push(text);
-      for (const lineChunk of lineChunks) {
-        const chunks = handler.chunker(lineChunk, textLimit);
-        if (!chunks.length && lineChunk) chunks.push(lineChunk);
+          : chunkByParagraph(text, textLimit);
+
+      if (!blockChunks.length && text) blockChunks.push(text);
+      for (const blockChunk of blockChunks) {
+        const chunks = handler.chunker(blockChunk, textLimit);
+        if (!chunks.length && blockChunk) chunks.push(blockChunk);
         for (const chunk of chunks) {
           throwIfAborted(abortSignal);
           results.push(await handler.sendText(chunk));

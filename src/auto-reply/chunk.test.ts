@@ -310,10 +310,16 @@ describe("chunkTextWithMode", () => {
     expect(chunks).toEqual(["Line one\nLine two"]);
   });
 
-  it("uses newline-based chunking for newline mode", () => {
+  it("uses paragraph-based chunking for newline mode", () => {
     const text = "Line one\nLine two";
     const chunks = chunkTextWithMode(text, 1000, "newline");
-    expect(chunks).toEqual(["Line one", "Line two"]);
+    expect(chunks).toEqual(["Line one\nLine two"]);
+  });
+
+  it("splits on blank lines for newline mode", () => {
+    const text = "Para one\n\nPara two";
+    const chunks = chunkTextWithMode(text, 1000, "newline");
+    expect(chunks).toEqual(["Para one", "Para two"]);
   });
 });
 
@@ -323,17 +329,19 @@ describe("chunkMarkdownTextWithMode", () => {
     expect(chunkMarkdownTextWithMode(text, 1000, "length")).toEqual(chunkMarkdownText(text, 1000));
   });
 
-  it("uses newline-based chunking for newline mode", () => {
+  it("uses paragraph-based chunking for newline mode", () => {
     const text = "Line one\nLine two";
-    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual(["Line one", "Line two"]);
+    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual(["Line one\nLine two"]);
   });
 
-  it("does not split inside code fences for newline mode", () => {
+  it("splits on blank lines for newline mode", () => {
+    const text = "Para one\n\nPara two";
+    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual(["Para one", "Para two"]);
+  });
+
+  it("does not split single-newline code fences in newline mode", () => {
     const text = "```js\nconst a = 1;\nconst b = 2;\n```\nAfter";
-    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([
-      "```js\nconst a = 1;\nconst b = 2;\n```",
-      "After",
-    ]);
+    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([text]);
   });
 });
 
