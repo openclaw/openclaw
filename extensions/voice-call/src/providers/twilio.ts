@@ -15,9 +15,9 @@ import type {
   WebhookVerificationResult,
 } from "../types.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
+import { chunkAudio } from "../telephony-audio.js";
+import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type { VoiceCallProvider } from "./base.js";
-import type { OpenAITTSProvider } from "./tts-openai.js";
-import { chunkAudio } from "./tts-openai.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
@@ -53,8 +53,8 @@ export class TwilioProvider implements VoiceCallProvider {
   /** Current public webhook URL (set when tunnel starts or from config) */
   private currentPublicUrl: string | null = null;
 
-  /** Optional OpenAI TTS provider for streaming TTS */
-  private ttsProvider: OpenAITTSProvider | null = null;
+  /** Optional telephony TTS provider for streaming TTS */
+  private ttsProvider: TelephonyTtsProvider | null = null;
 
   /** Optional media stream handler for sending audio */
   private mediaStreamHandler: MediaStreamHandler | null = null;
@@ -119,7 +119,7 @@ export class TwilioProvider implements VoiceCallProvider {
     return this.currentPublicUrl;
   }
 
-  setTTSProvider(provider: OpenAITTSProvider): void {
+  setTTSProvider(provider: TelephonyTtsProvider): void {
     this.ttsProvider = provider;
   }
 
@@ -454,13 +454,13 @@ export class TwilioProvider implements VoiceCallProvider {
    * Play TTS audio via Twilio.
    *
    * Two modes:
-   * 1. OpenAI TTS + Media Streams: If TTS provider and media stream are available,
-   *    generates audio via OpenAI and streams it through WebSocket (preferred).
+   * 1. Core TTS + Media Streams: If TTS provider and media stream are available,
+   *    generates audio via core TTS and streams it through WebSocket (preferred).
    * 2. TwiML <Say>: Falls back to Twilio's native TTS with Polly voices.
    *    Note: This may not work on all Twilio accounts.
    */
   async playTts(input: PlayTtsInput): Promise<void> {
-    // Try OpenAI TTS via media stream first (if configured)
+    // Try telephony TTS via media stream first (if configured)
     const streamSid = this.callStreamMap.get(input.providerCallId);
     if (this.ttsProvider && this.mediaStreamHandler && streamSid) {
       try {
@@ -468,7 +468,7 @@ export class TwilioProvider implements VoiceCallProvider {
         return;
       } catch (err) {
         console.warn(
-          `[voice-call] OpenAI TTS failed, falling back to Twilio <Say>:`,
+          `[voice-call] Telephony TTS failed, falling back to Twilio <Say>:`,
           err instanceof Error ? err.message : err,
         );
         // Fall through to TwiML <Say> fallback
@@ -484,7 +484,7 @@ export class TwilioProvider implements VoiceCallProvider {
     }
 
     console.warn(
-      "[voice-call] Using TwiML <Say> fallback - OpenAI TTS not configured or media stream not active",
+      "[voice-call] Using TwiML <Say> fallback - telephony TTS not configured or media stream not active",
     );
 
     const pollyVoice = mapVoiceToPolly(input.voice);
@@ -502,8 +502,8 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   /**
-   * Play TTS via OpenAI and Twilio Media Streams.
-   * Generates audio with OpenAI TTS, converts to mu-law, and streams via WebSocket.
+   * Play TTS via core TTS and Twilio Media Streams.
+   * Generates audio with core TTS, converts to mu-law, and streams via WebSocket.
    * Uses a jitter buffer to smooth out timing variations.
    */
   private async playTtsViaStream(
@@ -514,8 +514,8 @@ export class TwilioProvider implements VoiceCallProvider {
       throw new Error("TTS provider and media stream handler required");
     }
 
-    // Generate audio with OpenAI TTS (returns mu-law at 8kHz)
-    const muLawAudio = await this.ttsProvider.synthesizeForTwilio(text);
+    // Generate audio with core TTS (returns mu-law at 8kHz)
+    const muLawAudio = await this.ttsProvider.synthesizeForTelephony(text);
 
     // Stream audio in 20ms chunks (160 bytes at 8kHz mu-law)
     const CHUNK_SIZE = 160;
