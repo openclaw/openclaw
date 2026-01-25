@@ -8,12 +8,14 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Quick start and first-run setup](#quick-start-and-first-run-setup)
-  - [I'm stuck — what's the fastest way to get unstuck?](#im-stuck--whats-the-fastest-way-to-get-unstuck)
+  - [I'm stuck - what's the fastest way to get unstuck?](#im-stuck--whats-the-fastest-way-to-get-unstuck)
   - [What’s the recommended way to install and set up Clawdbot?](#whats-the-recommended-way-to-install-and-set-up-clawdbot)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
   - [What runtime do I need?](#what-runtime-do-i-need)
   - [Does it run on Raspberry Pi?](#does-it-run-on-raspberry-pi)
+  - [Any tips for Raspberry Pi installs?](#any-tips-for-raspberry-pi-installs)
+  - [It is stuck on "wake up my friend" / onboarding will not hatch. What now?](#it-is-stuck-on-wake-up-my-friend--onboarding-will-not-hatch-what-now)
   - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
   - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
   - [I can't access docs.clawd.bot (SSL error). What now?](#i-cant-access-docsclawdbot-ssl-error-what-now)
@@ -21,7 +23,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
   - [How do I try the latest bits?](#how-do-i-try-the-latest-bits)
   - [Installer stuck? How do I get more feedback?](#installer-stuck-how-do-i-get-more-feedback)
-  - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
+  - [The docs didn’t answer my question - how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
   - [How do I install Clawdbot on Linux?](#how-do-i-install-clawdbot-on-linux)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
   - [Where are the cloud/VPS install guides?](#where-are-the-cloudvps-install-guides)
@@ -56,6 +58,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I customize skills without keeping the repo dirty?](#how-do-i-customize-skills-without-keeping-the-repo-dirty)
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
+  - [The bot freezes while doing heavy work. How do I offload that?](#the-bot-freezes-while-doing-heavy-work-how-do-i-offload-that)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
   - [Can Clawdbot run tasks on a schedule or continuously in the background?](#can-clawdbot-run-tasks-on-a-schedule-or-continuously-in-the-background)
   - [Can I run Apple/macOS-only skills from Linux?](#can-i-run-applemacos-only-skills-from-linux)
@@ -73,7 +76,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What’s the recommended backup strategy?](#whats-the-recommended-backup-strategy)
   - [How do I completely uninstall Clawdbot?](#how-do-i-completely-uninstall-clawdbot)
   - [Can agents work outside the workspace?](#can-agents-work-outside-the-workspace)
-  - [I’m in remote mode — where is the session store?](#im-in-remote-mode-where-is-the-session-store)
+  - [I’m in remote mode - where is the session store?](#im-in-remote-mode-where-is-the-session-store)
 - [Config basics](#config-basics)
   - [What format is the config? Where is it?](#what-format-is-the-config-where-is-it)
   - [I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
@@ -101,7 +104,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I start a fresh conversation?](#how-do-i-start-a-fresh-conversation)
   - [Do sessions reset automatically if I never send `/new`?](#do-sessions-reset-automatically-if-i-never-send-new)
   - [How do I completely reset Clawdbot but keep it installed?](#how-do-i-completely-reset-clawdbot-but-keep-it-installed)
-  - [I’m getting “context too large” errors — how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
+  - [I’m getting “context too large” errors - how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
   - [Why am I seeing “LLM request rejected: messages.N.content.X.tool_use.input: Field required”?](#why-am-i-seeing-llm-request-rejected-messagesncontentxtool_useinput-field-required)
   - [Why am I getting heartbeat messages every 30 minutes?](#why-am-i-getting-heartbeat-messages-every-30-minutes)
   - [Do I need to add a “bot account” to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
@@ -113,6 +116,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Models: defaults, selection, aliases, switching](#models-defaults-selection-aliases-switching)
   - [What is the “default model”?](#what-is-the-default-model)
   - [What model do you recommend?](#what-model-do-you-recommend)
+  - [Can I use self-hosted models (llama.cpp, vLLM, Ollama)?](#can-i-use-self-hosted-models-llamacpp-vllm-ollama)
   - [What do Clawd, Flawd, and Krill use for models?](#what-do-clawd-flawd-and-krill-use-for-models)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Why do I see “Model … is not allowed” and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
@@ -144,7 +148,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Logging and debugging](#logging-and-debugging)
   - [Where are logs?](#where-are-logs)
   - [How do I start/stop/restart the Gateway service?](#how-do-i-startstoprestart-the-gateway-service)
-  - [I closed my terminal on Windows — how do I restart Clawdbot?](#i-closed-my-terminal-on-windows--how-do-i-restart-clawdbot)
+  - [I closed my terminal on Windows - how do I restart Clawdbot?](#i-closed-my-terminal-on-windows--how-do-i-restart-clawdbot)
+  - [The Gateway is up but replies never arrive. What should I check?](#the-gateway-is-up-but-replies-never-arrive-what-should-i-check)
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `clawdbot gateway restart` vs `clawdbot gateway`](#eli5-clawdbot-gateway-restart-vs-clawdbot-gateway)
   - [What’s the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
@@ -212,7 +217,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-### I'm stuck — what's the fastest way to get unstuck?
+### I'm stuck - what's the fastest way to get unstuck?
 
 Use a local AI agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
@@ -285,7 +290,7 @@ If you don’t have a global install yet, run it via `pnpm clawdbot onboard`.
 
 ### How do I open the dashboard after onboarding?
 
-The wizard now opens your browser with a tokenized dashboard URL right after onboarding and also prints the full link (with token) in the summary. Keep that tab open; if it didn’t launch, copy/paste the printed URL on the same machine. Tokens stay local to your host—nothing is fetched from the browser.
+The wizard now opens your browser with a tokenized dashboard URL right after onboarding and also prints the full link (with token) in the summary. Keep that tab open; if it didn’t launch, copy/paste the printed URL on the same machine. Tokens stay local to your host-nothing is fetched from the browser.
 
 ### How do I authenticate the dashboard (token) on localhost vs remote?
 
@@ -307,7 +312,7 @@ Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** fo
 
 ### Does it run on Raspberry Pi?
 
-Yes. The Gateway is lightweight — docs list **512MB–1GB RAM**, **1 core**, and about **500MB**
+Yes. The Gateway is lightweight - docs list **512MB–1GB RAM**, **1 core**, and about **500MB**
 disk as enough for personal use, and note that a **Raspberry Pi 4 can run it**.
 
 If you want extra headroom (logs, media, other services), **2GB is recommended**, but it’s
@@ -315,6 +320,37 @@ not a hard minimum.
 
 Tip: a small Pi/VPS can host the Gateway, and you can pair **nodes** on your laptop/phone for
 local screen/camera/canvas or command execution. See [Nodes](/nodes).
+
+### Any tips for Raspberry Pi installs?
+
+Short version: it works, but expect rough edges.
+
+- Use a **64-bit** OS and keep Node >= 22.
+- Prefer the **hackable (git) install** so you can see logs and update fast.
+- Start without channels/skills, then add them one by one.
+- If you hit weird binary issues, it is usually an **ARM compatibility** problem.
+
+Docs: [Linux](/platforms/linux), [Install](/install).
+
+### It is stuck on "wake up my friend" / onboarding will not hatch. What now?
+
+That screen depends on the Gateway being reachable and authenticated.
+
+1) Restart the Gateway:
+```bash
+clawdbot gateway restart
+```
+2) Check status + logs:
+```bash
+clawdbot status
+clawdbot logs --follow
+```
+3) If it still hangs, run:
+```bash
+clawdbot doctor
+```
+
+If the Gateway is remote, ensure the tunnel/Tailscale connection is up. See [Remote access](/gateway/remote).
 
 ### Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?
 
@@ -439,7 +475,7 @@ curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git --verb
 
 More options: [Installer flags](/install/installer).
 
-### The docs didn’t answer my question — how do I get a better answer?
+### The docs didn’t answer my question - how do I get a better answer?
 
 Use the **hackable (git) install** so you have the full source and docs locally, then ask
 your bot (or Claude/Codex) *from that folder* so it can read the repo and answer precisely.
@@ -569,7 +605,7 @@ See [Models](/cli/models) and [OAuth](/concepts/oauth).
 
 ### Is AWS Bedrock supported?
 
-Yes — via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI‑compatible proxy in front of Bedrock is still a valid option.
+Yes - via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI‑compatible proxy in front of Bedrock is still a valid option.
 
 ### How does Codex auth work?
 
@@ -585,7 +621,7 @@ See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and 
 
 ### Is a local model OK for casual chats?
 
-Usually no. Clawdbot needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.1 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk — see [Security](/gateway/security).
+Usually no. Clawdbot needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.1 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
 
 ### How do I keep hosted model traffic in a specific region?
 
@@ -593,7 +629,7 @@ Pick region-pinned endpoints. OpenRouter exposes US-hosted options for MiniMax, 
 
 ### Do I have to buy a Mac Mini to install this?
 
-No. Clawdbot runs on macOS or Linux (Windows via WSL2). A Mac mini is optional — some people
+No. Clawdbot runs on macOS or Linux (Windows via WSL2). A Mac mini is optional - some people
 buy one as an always‑on host, but a small VPS, home server, or Raspberry Pi‑class box works too.
 
 You only need a Mac **for macOS‑only tools**. For iMessage, you can keep the Gateway on Linux
@@ -604,7 +640,7 @@ Docs: [iMessage](/channels/imessage), [Nodes](/nodes), [Mac remote mode](/platfo
 
 ### Do I need a Mac mini for iMessage support?
 
-You need **some macOS device** signed into Messages. It does **not** have to be a Mac mini —
+You need **some macOS device** signed into Messages. It does **not** have to be a Mac mini -
 any Mac works. Clawdbot’s iMessage integrations run on macOS (BlueBubbles or `imsg`), while
 the Gateway can run elsewhere.
 
@@ -619,7 +655,7 @@ Docs: [iMessage](/channels/imessage), [BlueBubbles](/channels/bluebubbles),
 ### If I buy a Mac mini to run Clawdbot, can I connect it to my MacBook Pro?
 
 Yes. The **Mac mini can run the Gateway**, and your MacBook Pro can connect as a
-**node** (companion device). Nodes don’t run the Gateway — they provide extra
+**node** (companion device). Nodes don’t run the Gateway - they provide extra
 capabilities like screen/camera/canvas and `system.run` on that device.
 
 Common pattern:
@@ -686,7 +722,7 @@ Docs: [Getting started](/start/getting-started), [Updating](/install/updating).
 ### Can I switch between npm and git installs later?
 
 Yes. Install the other flavor, then run Doctor so the gateway service points at the new entrypoint.
-This **does not delete your data** — it only changes the Clawdbot code install. Your state
+This **does not delete your data** - it only changes the Clawdbot code install. Your state
 (`~/.clawdbot`) and workspace (`~/clawd`) stay untouched.
 
 From npm → git:
@@ -737,6 +773,7 @@ Not required, but **recommended for reliability and isolation**.
 - **Shared laptop/desktop:** totally fine for testing and active use, but expect pauses when the machine sleeps or updates.
 
 If you want the best of both worlds, keep the Gateway on a dedicated host and pair your laptop as a **node** for local screen/camera/exec tools. See [Nodes](/nodes).
+For security guidance, read [Security](/gateway/security).
 
 ## What is Clawdbot?
 
@@ -748,7 +785,7 @@ Clawdbot is a personal AI assistant you run on your own devices. It replies on t
 
 Clawdbot is not “just a Claude wrapper.” It’s a **local-first control plane** that lets you run a
 capable assistant on **your own hardware**, reachable from the chat apps you already use, with
-stateful sessions, memory, and tools — without handing control of your workflows to a hosted
+stateful sessions, memory, and tools - without handing control of your workflows to a hosted
 SaaS.
 
 Highlights:
@@ -784,6 +821,19 @@ Today the supported patterns are:
 - **On-demand switch**: use `/model` to switch the current session model at any time.
 
 See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), and [Slash commands](/tools/slash-commands).
+
+### The bot freezes while doing heavy work. How do I offload that?
+
+Use **sub-agents** for long or parallel tasks. Sub-agents run in their own session,
+return a summary, and keep your main chat responsive.
+
+Ask your bot to "spawn a sub-agent for this task" or use `/subagents`.
+Use `/status` in chat to see what the Gateway is doing right now (and whether it is busy).
+
+Token tip: long tasks and sub-agents both consume tokens. If cost is a concern, set a
+cheaper model for sub-agents via `agents.defaults.subagents.model`.
+
+Docs: [Sub-agents](/tools/subagents).
 
 ### How do I install skills on Linux?
 
@@ -893,7 +943,7 @@ Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gate
 
 ### Can I keep DMs “personal” but make groups “public/sandboxed” with one agent?
 
-Yes — if your private traffic is **DMs** and your public traffic is **groups**.
+Yes - if your private traffic is **DMs** and your public traffic is **groups**.
 
 Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in Docker, while the main DM session stays on-host. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
 
@@ -933,13 +983,13 @@ If you’d rather stay local, set `memorySearch.provider = "local"` (and optiona
 `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
 `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
 `memorySearch.remote.apiKey`). We support **OpenAI, Gemini, or local** embedding
-models — see [Memory](/concepts/memory) for the setup details.
+models - see [Memory](/concepts/memory) for the setup details.
 
 ## Where things live on disk
 
 ### Is all data used with Clawdbot saved locally?
 
-No — **Clawdbot’s state is local**, but **external services still see what you send them**.
+No - **Clawdbot’s state is local**, but **external services still see what you send them**.
 
 - **Local by default:** sessions, memory files, config, and workspace live on the Gateway host
   (`~/.clawdbot` + your workspace directory).
@@ -1034,7 +1084,7 @@ Example (repo as default cwd):
 }
 ```
 
-### I’m in remote mode — where is the session store?
+### I’m in remote mode - where is the session store?
 
 Session state is owned by the **gateway host**. If you’re in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
 
@@ -1213,7 +1263,7 @@ Docs: [Remote access](/gateway/remote), [Agent CLI](/cli/agent), [Agent send](/t
 
 ### Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?
 
-Yes — nodes are the first‑class way to reach your laptop from a remote Gateway, and they
+Yes - nodes are the first‑class way to reach your laptop from a remote Gateway, and they
 unlock more than shell access. The Gateway runs on macOS/Linux (Windows via WSL2) and is
 lightweight (a small VPS or Raspberry Pi-class box is fine; 4 GB RAM is plenty), so a common
 setup is an always‑on host plus your laptop as a node.
@@ -1339,7 +1389,7 @@ This runs your login shell and imports only missing expected keys (never overrid
 ### I set `COPILOT_GITHUB_TOKEN`, but models status shows “Shell env: off.” Why?
 
 `clawdbot models status` reports whether **shell env import** is enabled. “Shell env: off”
-does **not** mean your env vars are missing — it just means Clawdbot won’t load
+does **not** mean your env vars are missing - it just means Clawdbot won’t load
 your login shell automatically.
 
 If the Gateway runs as a service (launchd/systemd), it won’t inherit your shell
@@ -1370,7 +1420,7 @@ Send `/new` or `/reset` as a standalone message. See [Session management](/conce
 
 Yes. Sessions expire after `session.idleMinutes` (default **60**). The **next**
 message starts a fresh session id for that chat key. This does not delete
-transcripts — it just starts a new session.
+transcripts - it just starts a new session.
 
 ```json5
 {
@@ -1405,7 +1455,7 @@ Notes:
 - If you used profiles (`--profile` / `CLAWDBOT_PROFILE`), reset each state dir (defaults are `~/.clawdbot-<profile>`).
 - Dev reset: `clawdbot gateway --dev --reset` (dev-only; wipes dev config + credentials + sessions + workspace).
 
-### I’m getting “context too large” errors — how do I reset or compact?
+### I’m getting “context too large” errors - how do I reset or compact?
 
 Use one of these:
 
@@ -1524,7 +1574,7 @@ Tips:
 Yes. Use **Multi‑Agent Routing** to run multiple isolated agents and route inbound messages by
 channel/account/peer. Slack is supported as a channel and can be bound to specific agents.
 
-Browser access is powerful but not “do anything a human can” — anti‑bot, CAPTCHAs, and MFA can
+Browser access is powerful but not “do anything a human can” - anti‑bot, CAPTCHAs, and MFA can
 still block automation. For the most reliable browser control, use the Chrome extension relay
 on the machine that runs the browser (and keep the Gateway anywhere).
 
@@ -1547,13 +1597,13 @@ Clawdbot’s default model is whatever you set as:
 agents.defaults.model.primary
 ```
 
-Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-5`). If you omit the provider, Clawdbot currently assumes `anthropic` as a temporary deprecation fallback — but you should still **explicitly** set `provider/model`.
+Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-5`). If you omit the provider, Clawdbot currently assumes `anthropic` as a temporary deprecation fallback - but you should still **explicitly** set `provider/model`.
 
 ### What model do you recommend?
 
 **Recommended default:** `anthropic/claude-opus-4-5`.  
 **Good alternative:** `anthropic/claude-sonnet-4-5`.  
-**Reliable (less character):** `openai/gpt-5.2` — nearly as good as Opus, just less personality.  
+**Reliable (less character):** `openai/gpt-5.2` - nearly as good as Opus, just less personality.  
 **Budget:** `zai/glm-4.7`.
 
 MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
@@ -1569,10 +1619,23 @@ injection and unsafe behavior. See [Security](/gateway/security).
 
 More context: [Models](/concepts/models).
 
+### Can I use self-hosted models (llama.cpp, vLLM, Ollama)?
+
+Yes. If your local server exposes an OpenAI-compatible API, you can point a
+custom provider at it. Ollama is supported directly and is the easiest path.
+
+Security note: smaller or heavily quantized models are more vulnerable to prompt
+injection. We strongly recommend **large models** for any bot that can use tools.
+If you still want small models, enable sandboxing and strict tool allowlists.
+
+Docs: [Ollama](/providers/ollama), [Local models](/gateway/local-models),
+[Model providers](/concepts/model-providers), [Security](/gateway/security),
+[Sandboxing](/gateway/sandboxing).
+
 ### What do Clawd, Flawd, and Krill use for models?
 
-- **Clawd + Flawd:** Anthropic Opus (`anthropic/claude-opus-4-5`) — see [Anthropic](/providers/anthropic).
-- **Krill:** MiniMax M2.1 (`minimax/MiniMax-M2.1`) — see [MiniMax](/providers/minimax).
+- **Clawd + Flawd:** Anthropic Opus (`anthropic/claude-opus-4-5`) - see [Anthropic](/providers/anthropic).
+- **Krill:** MiniMax M2.1 (`minimax/MiniMax-M2.1`) - see [MiniMax](/providers/minimax).
 
 ### How do I switch models on the fly (without restarting)?
 
@@ -1971,7 +2034,7 @@ Note: `tailnet` is explicit. `auto` prefers loopback; use `gateway.bind: "tailne
 
 ### Can I run multiple Gateways on the same host?
 
-Usually no — one Gateway can run multiple messaging channels and agents. Use multiple Gateways only when you need redundancy (ex: rescue bot) or hard isolation.
+Usually no - one Gateway can run multiple messaging channels and agents. Use multiple Gateways only when you need redundancy (ex: rescue bot) or hard isolation.
 
 Yes, but you must isolate:
 
@@ -2047,7 +2110,7 @@ clawdbot gateway restart
 
 If you run the gateway manually, `clawdbot gateway --force` can reclaim the port. See [Gateway](/gateway).
 
-### I closed my terminal on Windows — how do I restart Clawdbot?
+### I closed my terminal on Windows - how do I restart Clawdbot?
 
 There are **two Windows install modes**:
 
@@ -2083,6 +2146,27 @@ clawdbot gateway run
 ```
 
 Docs: [Windows (WSL2)](/platforms/windows), [Gateway service runbook](/gateway).
+
+### The Gateway is up but replies never arrive. What should I check?
+
+Start with a quick health sweep:
+
+```bash
+clawdbot status
+clawdbot models status
+clawdbot channels status
+clawdbot logs --follow
+```
+
+Common causes:
+- Model auth not loaded on the **gateway host** (check `models status`).
+- Channel pairing/allowlist blocking replies (check channel config + logs).
+- WebChat/Dashboard is open without the right token.
+
+If you are remote, confirm the tunnel/Tailscale connection is up and that the
+Gateway WebSocket is reachable.
+
+Docs: [Channels](/channels), [Troubleshooting](/gateway/troubleshooting), [Remote access](/gateway/remote).
 
 ### How do I completely stop then start the Gateway?
 
@@ -2259,11 +2343,11 @@ agent, set it under `agents.list[].tools.message` instead.
 
 Queue mode controls how new messages interact with an in‑flight run. Use `/queue` to change modes:
 
-- `steer` — new messages redirect the current task
-- `followup` — run messages one at a time
-- `collect` — batch messages and reply once (default)
-- `steer-backlog` — steer now, then process backlog
-- `interrupt` — abort current run and start fresh
+- `steer` - new messages redirect the current task
+- `followup` - run messages one at a time
+- `collect` - batch messages and reply once (default)
+- `steer-backlog` - steer now, then process backlog
+- `interrupt` - abort current run and start fresh
 
 You can add options like `debounce:2s cap:25 drop:summarize` for followup modes.
 
