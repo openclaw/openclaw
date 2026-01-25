@@ -18,6 +18,7 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import type {
@@ -271,6 +272,13 @@ export const registerTelegramNativeCommands = ({
               id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
             },
           });
+          const baseSessionKey = route.sessionKey;
+          const dmThreadId = !isGroup ? resolvedThreadId : undefined;
+          const threadKeys =
+            dmThreadId != null
+              ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
+              : null;
+          const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
           const tableMode = resolveMarkdownTableMode({
             cfg,
             channel: "telegram",
@@ -309,7 +317,7 @@ export const registerTelegramNativeCommands = ({
             CommandAuthorized: commandAuthorized,
             CommandSource: "native" as const,
             SessionKey: `telegram:slash:${senderId || chatId}`,
-            CommandTargetSessionKey: route.sessionKey,
+            CommandTargetSessionKey: sessionKey,
             MessageThreadId: resolvedThreadId,
             IsForum: isForum,
             // Originating context for sub-agent announce routing
