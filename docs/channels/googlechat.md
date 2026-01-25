@@ -32,7 +32,7 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
    - Under **Connection settings**, select **HTTP endpoint URL**.
    - Under **Triggers**, select **Use a common HTTP endpoint URL for all triggers** and set it to your gateway's public URL followed by `/googlechat`.
      - *Tip: Run `clawdbot status` to find your gateway's public URL.*
-   - Under **Visibility**, check **Make this Chat app available to specific people and groups in <Your Domain>**.
+   - Under **Visibility**, check **Make this Chat app available to specific people and groups in &lt;Your Domain&gt;**.
    - Enter your email address (e.g. `user@example.com`) in the text box.
    - Click **Save** at the bottom.
 6) **Enable the app status**:

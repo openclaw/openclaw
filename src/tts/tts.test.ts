@@ -4,7 +4,7 @@ import { completeSimple } from "@mariozechner/pi-ai";
 
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
-import { _test, resolveTtsConfig } from "./tts.js";
+import { _test, getTtsProvider, resolveTtsConfig } from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", () => ({
   completeSimple: vi.fn(),
@@ -47,6 +47,7 @@ const {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  resolveEdgeOutputFormat,
 } = _test;
 
 describe("tts", () => {
@@ -149,6 +150,30 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveEdgeOutputFormat", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("uses default output format when edge output format is not configured", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(resolveEdgeOutputFormat(config)).toBe("audio-24khz-48kbitrate-mono-mp3");
+    });
+
+    it("uses configured output format when provided", () => {
+      const config = resolveTtsConfig({
+        ...baseCfg,
+        messages: {
+          tts: {
+            edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
+          },
+        },
+      });
+      expect(resolveEdgeOutputFormat(config)).toBe("audio-24khz-96kbitrate-mono-mp3");
+    });
+  });
+
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
@@ -163,6 +188,14 @@ describe("tts", () => {
       expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
       expect(result.overrides.elevenlabs?.voiceSettings?.stability).toBe(0.4);
       expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
+    });
+
+    it("accepts edge as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=edge]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("edge");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -312,6 +345,90 @@ describe("tts", () => {
           timeoutMs: 30_000,
         }),
       ).rejects.toThrow("No summary returned");
+    });
+  });
+
+  describe("getTtsProvider", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    const restoreEnv = (snapshot: Record<string, string | undefined>) => {
+      const keys = ["OPENAI_API_KEY", "ELEVENLABS_API_KEY", "XI_API_KEY"] as const;
+      for (const key of keys) {
+        const value = snapshot[key];
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    };
+
+    const withEnv = (env: Record<string, string | undefined>, run: () => void) => {
+      const snapshot = {
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
+        XI_API_KEY: process.env.XI_API_KEY,
+      };
+      try {
+        for (const [key, value] of Object.entries(env)) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+        run();
+      } finally {
+        restoreEnv(snapshot);
+      }
+    };
+
+    it("prefers OpenAI when no provider is configured and API key exists", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: "test-openai-key",
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-openai.json");
+          expect(provider).toBe("openai");
+        },
+      );
+    });
+
+    it("prefers ElevenLabs when OpenAI is missing and ElevenLabs key exists", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: "test-elevenlabs-key",
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-elevenlabs.json");
+          expect(provider).toBe("elevenlabs");
+        },
+      );
+    });
+
+    it("falls back to Edge when no API keys are present", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-edge.json");
+          expect(provider).toBe("edge");
+        },
+      );
     });
   });
 });

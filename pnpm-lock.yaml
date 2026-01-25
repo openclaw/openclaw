@@ -127,6 +127,9 @@ importers:
       markdown-it:
         specifier: ^14.1.0
         version: 14.1.0
+      node-edge-tts:
+        specifier: ^1.2.9
+        version: 1.2.9
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
@@ -4296,6 +4299,10 @@ packages:
   node-downloader-helper@2.1.10:
     resolution: {integrity: sha512-8LdieUd4Bqw/CzfZLf30h+1xSAq3riWSDfWKsPJYz8EULoWxjS1vw6BGLYFZDxQgXjDR7UmC9UpQ0oV93U98Fg==}
     engines: {node: '>=14.18'}
+    hasBin: true
+
+  node-edge-tts@1.2.9:
+    resolution: {integrity: sha512-fvfW1dUgJdZAdTniC6MzLTMwnNUFKGKaUdRJ1OsveOYlfnPUETBU973CG89565txvbBowCQ4Czdeu3qSX8bNOg==}
     hasBin: true
 
   node-fetch@2.7.0:
@@ -10201,6 +10208,16 @@ snapshots:
   node-domexception@1.0.0: {}
 
   node-downloader-helper@2.1.10: {}
+
+  node-edge-tts@1.2.9:
+    dependencies:
+      https-proxy-agent: 7.0.6
+      ws: 8.19.0
+      yargs: 17.7.2
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   node-fetch@2.7.0:
     dependencies:

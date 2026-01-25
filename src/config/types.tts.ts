@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai";
+export type TtsProvider = "elevenlabs" | "openai" | "edge";
 
 export type TtsMode = "final" | "all";
 
@@ -54,6 +54,20 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+  };
+  /** Microsoft Edge (node-edge-tts) configuration. */
+  edge?: {
+    /** Explicitly allow Edge TTS usage (no API key required). */
+    enabled?: boolean;
+    voice?: string;
+    lang?: string;
+    outputFormat?: string;
+    pitch?: string;
+    rate?: string;
+    volume?: string;
+    saveSubtitles?: boolean;
+    proxy?: string;
+    timeoutMs?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

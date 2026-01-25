@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
+import { EdgeTTS } from "node-edge-tts";
 
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -24,6 +25,7 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
@@ -45,6 +47,9 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
+const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
+const DEFAULT_EDGE_LANG = "en-US";
+const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -74,6 +79,7 @@ export type ResolvedTtsConfig = {
   enabled: boolean;
   mode: TtsMode;
   provider: TtsProvider;
+  providerSource: "config" | "default";
   summaryModel?: string;
   modelOverrides: ResolvedTtsModelOverrides;
   elevenlabs: {
@@ -96,6 +102,19 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+  };
+  edge: {
+    enabled: boolean;
+    voice: string;
+    lang: string;
+    outputFormat: string;
+    outputFormatConfigured: boolean;
+    pitch?: string;
+    rate?: string;
+    volume?: string;
+    saveSubtitles: boolean;
+    proxy?: string;
+    timeoutMs?: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -199,10 +218,13 @@ function resolveModelOverridePolicy(
 
 export function resolveTtsConfig(cfg: ClawdbotConfig): ResolvedTtsConfig {
   const raw: TtsConfig = cfg.messages?.tts ?? {};
+  const providerSource = raw.provider ? "config" : "default";
+  const edgeOutputFormat = raw.edge?.outputFormat?.trim();
   return {
     enabled: raw.enabled ?? false,
     mode: raw.mode ?? "final",
-    provider: raw.provider ?? "elevenlabs",
+    provider: raw.provider ?? "edge",
+    providerSource,
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     elevenlabs: {
@@ -230,6 +252,19 @@ export function resolveTtsConfig(cfg: ClawdbotConfig): ResolvedTtsConfig {
       apiKey: raw.openai?.apiKey,
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+    },
+    edge: {
+      enabled: raw.edge?.enabled ?? true,
+      voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
+      lang: raw.edge?.lang?.trim() || DEFAULT_EDGE_LANG,
+      outputFormat: edgeOutputFormat || DEFAULT_EDGE_OUTPUT_FORMAT,
+      outputFormatConfigured: Boolean(edgeOutputFormat),
+      pitch: raw.edge?.pitch?.trim() || undefined,
+      rate: raw.edge?.rate?.trim() || undefined,
+      volume: raw.edge?.volume?.trim() || undefined,
+      saveSubtitles: raw.edge?.saveSubtitles ?? false,
+      proxy: raw.edge?.proxy?.trim() || undefined,
+      timeoutMs: raw.edge?.timeoutMs,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -302,7 +337,12 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
 
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   const prefs = readPrefs(prefsPath);
-  return prefs.tts?.provider ?? config.provider;
+  if (prefs.tts?.provider) return prefs.tts.provider;
+  if (config.providerSource === "config") return config.provider;
+
+  if (resolveTtsApiKey(config, "openai")) return "openai";
+  if (resolveTtsApiKey(config, "elevenlabs")) return "elevenlabs";
+  return "edge";
 }
 
 export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
@@ -350,6 +390,10 @@ function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
 }
 
+function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
+  return config.edge.outputFormat;
+}
+
 export function resolveTtsApiKey(
   config: ResolvedTtsConfig,
   provider: TtsProvider,
@@ -361,6 +405,17 @@ export function resolveTtsApiKey(
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
   return undefined;
+}
+
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+
+export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
+  return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
+}
+
+export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
+  if (provider === "edge") return config.edge.enabled;
+  return Boolean(resolveTtsApiKey(config, provider));
 }
 
 function isValidVoiceId(voiceId: string): boolean {
@@ -459,7 +514,7 @@ function parseTtsDirectives(
         switch (key) {
           case "provider":
             if (!policy.allowProvider) break;
-            if (rawValue === "openai" || rawValue === "elevenlabs") {
+            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -893,6 +948,38 @@ async function openaiTTS(params: {
   }
 }
 
+function inferEdgeExtension(outputFormat: string): string {
+  const normalized = outputFormat.toLowerCase();
+  if (normalized.includes("webm")) return ".webm";
+  if (normalized.includes("ogg")) return ".ogg";
+  if (normalized.includes("opus")) return ".opus";
+  if (normalized.includes("wav") || normalized.includes("riff") || normalized.includes("pcm")) {
+    return ".wav";
+  }
+  return ".mp3";
+}
+
+async function edgeTTS(params: {
+  text: string;
+  outputPath: string;
+  config: ResolvedTtsConfig["edge"];
+  timeoutMs: number;
+}): Promise<void> {
+  const { text, outputPath, config, timeoutMs } = params;
+  const tts = new EdgeTTS({
+    voice: config.voice,
+    lang: config.lang,
+    outputFormat: config.outputFormat,
+    saveSubtitles: config.saveSubtitles,
+    proxy: config.proxy,
+    rate: config.rate,
+    pitch: config.pitch,
+    volume: config.volume,
+    timeout: config.timeoutMs ?? timeoutMs,
+  });
+  await tts.ttsPromise(text, outputPath);
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: ClawdbotConfig;
@@ -915,19 +1002,87 @@ export async function textToSpeech(params: {
   const userProvider = getTtsProvider(config, prefsPath);
   const overrideProvider = params.overrides?.provider;
   const provider = overrideProvider ?? userProvider;
-  const providers: TtsProvider[] = [provider, provider === "openai" ? "elevenlabs" : "openai"];
+  const providers = resolveTtsProviderOrder(provider);
 
   let lastError: string | undefined;
 
   for (const provider of providers) {
-    const apiKey = resolveTtsApiKey(config, provider);
-    if (!apiKey) {
-      lastError = `No API key for ${provider}`;
-      continue;
-    }
-
     const providerStart = Date.now();
     try {
+      if (provider === "edge") {
+        if (!config.edge.enabled) {
+          lastError = "edge: disabled";
+          continue;
+        }
+
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        let edgeOutputFormat = resolveEdgeOutputFormat(config);
+        const fallbackEdgeOutputFormat =
+          edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
+
+        const attemptEdgeTts = async (outputFormat: string) => {
+          const extension = inferEdgeExtension(outputFormat);
+          const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+          await edgeTTS({
+            text: params.text,
+            outputPath: audioPath,
+            config: {
+              ...config.edge,
+              outputFormat,
+            },
+            timeoutMs: config.timeoutMs,
+          });
+          return { audioPath, outputFormat };
+        };
+
+        let edgeResult: { audioPath: string; outputFormat: string };
+        try {
+          edgeResult = await attemptEdgeTts(edgeOutputFormat);
+        } catch (err) {
+          if (fallbackEdgeOutputFormat && fallbackEdgeOutputFormat !== edgeOutputFormat) {
+            logVerbose(
+              `TTS: Edge output ${edgeOutputFormat} failed; retrying with ${fallbackEdgeOutputFormat}.`,
+            );
+            edgeOutputFormat = fallbackEdgeOutputFormat;
+            try {
+              edgeResult = await attemptEdgeTts(edgeOutputFormat);
+            } catch (fallbackErr) {
+              try {
+                rmSync(tempDir, { recursive: true, force: true });
+              } catch {
+                // ignore cleanup errors
+              }
+              throw fallbackErr;
+            }
+          } else {
+            try {
+              rmSync(tempDir, { recursive: true, force: true });
+            } catch {
+              // ignore cleanup errors
+            }
+            throw err;
+          }
+        }
+
+        scheduleCleanup(tempDir);
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
+
+        return {
+          success: true,
+          audioPath: edgeResult.audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: edgeResult.outputFormat,
+          voiceCompatible,
+        };
+      }
+
+      const apiKey = resolveTtsApiKey(config, provider);
+      if (!apiKey) {
+        lastError = `No API key for ${provider}`;
+        continue;
+      }
+
       let audioBuffer: Buffer;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
@@ -1120,4 +1275,5 @@ export const _test = {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  resolveEdgeOutputFormat,
 };

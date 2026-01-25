@@ -8,6 +8,7 @@ Docs: https://docs.clawd.bot
 - Ollama: provider discovery + docs. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama
 
 ### Changes
+- TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.clawd.bot/tts
 - Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).
 - Docs: add verbose installer troubleshooting guidance.
 - Docs: update Fly.io guide notes.

@@ -7,9 +7,11 @@ import {
   getTtsProvider,
   isSummarizationEnabled,
   isTtsEnabled,
+  isTtsProviderConfigured,
   resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  resolveTtsProviderOrder,
   setLastTtsAttempt,
   setSummarizationEnabled,
   setTtsEnabled,
@@ -41,6 +43,7 @@ function ttsUsage(): ReplyPayload {
       "\nExamples:\n" +
       "/tts on\n" +
       "/tts provider openai\n" +
+      "/tts provider edge\n" +
       "/tts limit 2000\n" +
       "/tts summary off\n" +
       "/tts audio Hello from Clawdbot",
@@ -126,33 +129,45 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const fallback = currentProvider === "openai" ? "elevenlabs" : "openai";
+      const fallback = resolveTtsProviderOrder(currentProvider)
+        .slice(1)
+        .filter((provider) => isTtsProviderConfigured(config, provider));
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
+      const hasEdge = isTtsProviderConfigured(config, "edge");
       return {
         shouldContinue: false,
         reply: {
           text:
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            `Fallback: ${fallback}\n` +
+            `Fallbacks: ${fallback.join(", ") || "none"}\n` +
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs`,
+            `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
+            `Usage: /tts provider openai | elevenlabs | edge`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs") {
+    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
     setTtsProvider(prefsPath, requested);
-    const fallback = requested === "openai" ? "elevenlabs" : "openai";
+    const fallback = resolveTtsProviderOrder(requested)
+      .slice(1)
+      .filter((provider) => isTtsProviderConfigured(config, provider));
     return {
       shouldContinue: false,
-      reply: { text: `✅ TTS provider set to ${requested} (fallback: ${fallback}).` },
+      reply: {
+        text:
+          `✅ TTS provider set to ${requested} (fallbacks: ${fallback.join(", ") || "none"}).` +
+          (requested === "edge"
+            ? "\nEnable Edge TTS in config: messages.tts.edge.enabled = true."
+            : ""),
+      },
     };
   }
 
@@ -199,14 +214,22 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
-    const hasKey = Boolean(resolveTtsApiKey(config, provider));
+    const hasKey = isTtsProviderConfigured(config, provider);
+    const providerStatus =
+      provider === "edge"
+        ? hasKey
+          ? "✅ enabled"
+          : "❌ disabled"
+        : hasKey
+          ? "✅ key"
+          : "❌ no key";
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();
     const lines = [
       "📊 TTS status",
       `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
-      `Provider: ${provider} (${hasKey ? "✅ key" : "❌ no key"})`,
+      `Provider: ${provider} (${providerStatus})`,
       `Text limit: ${maxLength} chars`,
       `Auto-summary: ${summarize ? "on" : "off"}`,
     ];
