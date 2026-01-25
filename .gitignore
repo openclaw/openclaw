@@ -69,3 +69,11 @@ USER.md
 
 # local tooling
 .serena/
+
+# Local workspace files
+HEARTBEAT.md
+SOUL.md
+TOOLS.md
+IDENTITY.md
+USER.md
+canvas/
