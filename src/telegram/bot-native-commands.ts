@@ -348,6 +348,7 @@ export const registerTelegramNativeCommands = ({
                   messageThreadId: resolvedThreadId,
                   tableMode,
                   chunkMode,
+                  linkPreview: telegramCfg.linkPreview,
                 });
               },
               onError: (err, info) => {

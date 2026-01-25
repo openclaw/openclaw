@@ -118,6 +118,8 @@ export type TelegramAccountConfig = {
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Controls whether link previews are shown in outbound messages. Default: true. */
+  linkPreview?: boolean;
 };
 
 export type TelegramTopicConfig = {
