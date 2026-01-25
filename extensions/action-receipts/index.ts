@@ -1,13 +1,57 @@
 import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
-import { Type } from "@sinclair/typebox";
 
 import { createReceiptStore } from "./src/store.js";
 
-const configSchema = Type.Object({
-  enabled: Type.Optional(Type.Boolean({ default: true })),
-  receiptsDir: Type.Optional(Type.String({ description: "Override receipts directory" })),
-  includeParams: Type.Optional(Type.Boolean({ default: true })),
-});
+type Issue = { path: Array<string | number>; message: string };
+type SafeParseResult =
+  | { success: true; data?: unknown }
+  | { success: false; error: { issues: Issue[] } };
+
+function ok(data?: unknown): SafeParseResult {
+  return { success: true, data };
+}
+
+function err(message: string, path: Array<string | number> = []): SafeParseResult {
+  return { success: false, error: { issues: [{ path, message }] } };
+}
+
+const configSchema = {
+  safeParse(value: unknown): SafeParseResult {
+    if (value === undefined) return ok(undefined);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return err("expected config object");
+    }
+
+    const v = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+
+    if ("enabled" in v) {
+      if (typeof v.enabled !== "boolean") return err("enabled must be boolean", ["enabled"]);
+      out.enabled = v.enabled;
+    }
+
+    if ("receiptsDir" in v) {
+      if (typeof v.receiptsDir !== "string") return err("receiptsDir must be string", ["receiptsDir"]);
+      out.receiptsDir = v.receiptsDir;
+    }
+
+    if ("includeParams" in v) {
+      if (typeof v.includeParams !== "boolean") return err("includeParams must be boolean", ["includeParams"]);
+      out.includeParams = v.includeParams;
+    }
+
+    return ok(out);
+  },
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: { type: "boolean", default: true },
+      receiptsDir: { type: "string" },
+      includeParams: { type: "boolean", default: true }
+    }
+  }
+};
 
 const plugin = {
   id: "action-receipts",
@@ -18,12 +62,12 @@ const plugin = {
     const store = createReceiptStore({ api });
 
     api.registerHook(["before_tool_call"], async (event, ctx) => {
-      await store.onBeforeToolCall(event, ctx);
+      await store.onBeforeToolCall(event as any, ctx as any);
       return undefined;
     });
 
     api.registerHook(["after_tool_call"], async (event, ctx) => {
-      await store.onAfterToolCall(event, ctx);
+      await store.onAfterToolCall(event as any, ctx as any);
       return undefined;
     });
 
@@ -34,15 +78,17 @@ const plugin = {
         (yargs) =>
           yargs.option("limit", { type: "number", default: 20 }).option("session", {
             type: "string",
-            describe: "Filter by session key",
+            describe: "Filter by session key"
           }),
         async (argv) => {
-          const rows = await store.list({ limit: argv.limit as number, sessionKey: argv.session as any });
+          const rows = await store.list({
+            limit: argv.limit as number,
+            sessionKey: argv.session ? String(argv.session) : undefined
+          });
           for (const r of rows) {
-            // eslint-disable-next-line no-console
             console.log(`${r.createdAt}\t${r.toolName}\t${r.sessionKey ?? ""}\t${r.id}`);
           }
-        },
+        }
       );
 
       cli.command(
@@ -51,12 +97,11 @@ const plugin = {
         (yargs) => yargs.positional("id", { type: "string", demandOption: true }),
         async (argv) => {
           const receipt = await store.read(String(argv.id));
-          // eslint-disable-next-line no-console
           console.log(JSON.stringify(receipt, null, 2));
-        },
+        }
       );
     });
-  },
+  }
 };
 
 export default plugin;

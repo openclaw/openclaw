@@ -12,7 +12,7 @@ type AfterToolCallEvent = {
   durationMs?: number;
 };
 
-type ToolCtx = { agentId?: string; sessionKey?: string; toolName: string };
+type ToolCtx = { agentId?: string; sessionKey?: string; toolName: string; toolCallId?: string };
 
 type Receipt = {
   id: string;
@@ -53,7 +53,9 @@ export function createReceiptStore(opts: { api: ClawdbotPluginApi }) {
   const pending = new Map<string, { id: string; createdAt: string; params?: Record<string, unknown> }>();
 
   function key(ctx: ToolCtx) {
-    return `${ctx.sessionKey ?? ""}::${ctx.toolName}`;
+    return ctx.toolCallId && ctx.toolCallId.length > 0
+      ? ctx.toolCallId
+      : `${ctx.sessionKey ?? ""}::${ctx.toolName}`;
   }
 
   async function writeReceipt(receipt: Receipt) {

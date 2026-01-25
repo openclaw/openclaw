@@ -1,10 +1,17 @@
 {
-  "name": "@clawdbot/extension-action-receipts",
-  "private": true,
+  "name": "@clawdbot/action-receipts",
+  "version": "0.1.0",
   "type": "module",
-  "main": "index.ts",
-  "dependencies": {
-    "clawdbot/plugin-sdk": "workspace:*",
-    "@sinclair/typebox": "^0.34.0"
+  "description": "Optional reference extension: write tool-call receipts to local state for debugging/audit.",
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "clawdbot/plugin-sdk": "^0.0.0"
+  },
+  "devDependencies": {
+    "clawdbot/plugin-sdk": "workspace:*"
   }
 }

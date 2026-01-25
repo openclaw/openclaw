@@ -24,7 +24,7 @@ export function wrapToolWithPluginHooks(
     execute: async (toolCallId, args, signal, onUpdate) => {
       const hookRunner = getGlobalHookRunner();
       const toolName = tool.name ?? "unknown";
-      const ctx = { agentId: opts?.agentId, sessionKey: opts?.sessionKey, toolName };
+      const ctx = { agentId: opts?.agentId, sessionKey: opts?.sessionKey, toolName, toolCallId };
 
       let effectiveArgs = (args ?? {}) as any;
 
