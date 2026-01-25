@@ -96,7 +96,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).toHaveBeenCalled();
   });
 
-  it("merges configEnvVars into the environment", async () => {
+  it("merges config env vars into the environment", async () => {
     mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
     mocks.resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: ["node", "gateway"],
@@ -116,9 +116,13 @@ describe("buildGatewayInstallPlan", () => {
       env: {},
       port: 3000,
       runtime: "node",
-      configEnvVars: {
-        GOOGLE_API_KEY: "test-key",
-        CUSTOM_VAR: "custom-value",
+      config: {
+        env: {
+          vars: {
+            GOOGLE_API_KEY: "test-key",
+          },
+          CUSTOM_VAR: "custom-value",
+        },
       },
     });
 
@@ -130,7 +134,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.HOME).toBe("/Users/me");
   });
 
-  it("does not include empty configEnvVars values", async () => {
+  it("does not include empty config env values", async () => {
     mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
     mocks.resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: ["node", "gateway"],
@@ -147,16 +151,83 @@ describe("buildGatewayInstallPlan", () => {
       env: {},
       port: 3000,
       runtime: "node",
-      configEnvVars: {
-        VALID_KEY: "valid",
-        EMPTY_KEY: "",
-        UNDEFINED_KEY: undefined,
+      config: {
+        env: {
+          vars: {
+            VALID_KEY: "valid",
+            EMPTY_KEY: "",
+          },
+        },
       },
     });
 
     expect(plan.environment.VALID_KEY).toBe("valid");
     expect(plan.environment.EMPTY_KEY).toBeUndefined();
-    expect(plan.environment.UNDEFINED_KEY).toBeUndefined();
+  });
+
+  it("drops whitespace-only config env values", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({});
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      config: {
+        env: {
+          vars: {
+            VALID_KEY: "valid",
+          },
+          TRIMMED_KEY: "  ",
+        },
+      },
+    });
+
+    expect(plan.environment.VALID_KEY).toBe("valid");
+    expect(plan.environment.TRIMMED_KEY).toBeUndefined();
+  });
+
+  it("keeps service env values over config env vars", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({
+      HOME: "/Users/service",
+      CLAWDBOT_PORT: "3000",
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      config: {
+        env: {
+          HOME: "/Users/config",
+          vars: {
+            CLAWDBOT_PORT: "9999",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.HOME).toBe("/Users/service");
+    expect(plan.environment.CLAWDBOT_PORT).toBe("3000");
   });
 });
 

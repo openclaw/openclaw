@@ -89,7 +89,7 @@ export async function maybeInstallDaemon(params: {
           token: params.gatewayToken,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
-          configEnvVars: cfg.env?.vars,
+          config: cfg,
         });
 
         progress.setLabel("Installing Gateway service…");

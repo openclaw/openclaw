@@ -110,7 +110,7 @@ export async function maybeMigrateLegacyGatewayService(
     token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
     runtime: daemonRuntime,
     warn: (message, title) => note(message, title),
-    configEnvVars: cfg.env?.vars,
+    config: cfg,
   });
   try {
     await service.install({
@@ -178,7 +178,7 @@ export async function maybeRepairGatewayServiceConfig(
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
     warn: (message, title) => note(message, title),
-    configEnvVars: cfg.env?.vars,
+    config: cfg,
   });
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
   const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
