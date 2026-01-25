@@ -189,11 +189,19 @@ export function chunkByParagraph(text: string, limit: number): string[] {
     return normalized.length <= limit ? [normalized] : chunkText(normalized, limit);
   }
 
+  const spans = parseFenceSpans(normalized);
+
   const parts: string[] = [];
   const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
   let lastIndex = 0;
   for (const match of normalized.matchAll(re)) {
     const idx = match.index ?? 0;
+
+    // Do not split on blank lines that occur inside fenced code blocks.
+    if (!isSafeFenceBreak(spans, idx)) {
+      continue;
+    }
+
     parts.push(normalized.slice(lastIndex, idx));
     lastIndex = idx + match[0].length;
   }
