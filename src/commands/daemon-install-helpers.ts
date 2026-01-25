@@ -31,6 +31,8 @@ export async function buildGatewayInstallPlan(params: {
   devMode?: boolean;
   nodePath?: string;
   warn?: WarnFn;
+  /** Environment variables from config.env.vars to include in the service environment */
+  configEnvVars?: Record<string, string | undefined>;
 }): Promise<GatewayInstallPlan> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   const nodePath =
@@ -50,7 +52,7 @@ export async function buildGatewayInstallPlan(params: {
     const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
     if (warning) params.warn?.(warning, "Gateway runtime");
   }
-  const environment = buildServiceEnvironment({
+  const serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,
     token: params.token,
@@ -59,6 +61,16 @@ export async function buildGatewayInstallPlan(params: {
         ? resolveGatewayLaunchAgentLabel(params.env.CLAWDBOT_PROFILE)
         : undefined,
   });
+
+  // Merge config.env.vars into the service environment.
+  // Config env vars are added first so service-specific vars take precedence.
+  const environment: Record<string, string | undefined> = {};
+  if (params.configEnvVars) {
+    for (const [key, value] of Object.entries(params.configEnvVars)) {
+      if (value) environment[key] = value;
+    }
+  }
+  Object.assign(environment, serviceEnvironment);
 
   return { programArguments, workingDirectory, environment };
 }

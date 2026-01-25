@@ -169,6 +169,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           token: settings.gatewayToken,
           runtime: daemonRuntime,
           warn: (message, title) => prompter.note(message, title),
+          configEnvVars: nextConfig.env?.vars,
         });
 
         progress.update("Installing Gateway service…");

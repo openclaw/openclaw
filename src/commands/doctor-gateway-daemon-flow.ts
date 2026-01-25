@@ -161,6 +161,7 @@ export async function maybeRepairGatewayDaemon(params: {
           token: params.cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
+          configEnvVars: params.cfg.env?.vars,
         });
         try {
           await service.install({

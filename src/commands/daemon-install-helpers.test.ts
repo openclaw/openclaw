@@ -95,6 +95,69 @@ describe("buildGatewayInstallPlan", () => {
     expect(warn).toHaveBeenCalledWith("Node too old", "Gateway runtime");
     expect(mocks.resolvePreferredNodePath).toHaveBeenCalled();
   });
+
+  it("merges configEnvVars into the environment", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({
+      CLAWDBOT_PORT: "3000",
+      HOME: "/Users/me",
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      configEnvVars: {
+        GOOGLE_API_KEY: "test-key",
+        CUSTOM_VAR: "custom-value",
+      },
+    });
+
+    // Config env vars should be present
+    expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
+    expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
+    // Service environment vars should take precedence
+    expect(plan.environment.CLAWDBOT_PORT).toBe("3000");
+    expect(plan.environment.HOME).toBe("/Users/me");
+  });
+
+  it("does not include empty configEnvVars values", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({ CLAWDBOT_PORT: "3000" });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      configEnvVars: {
+        VALID_KEY: "valid",
+        EMPTY_KEY: "",
+        UNDEFINED_KEY: undefined,
+      },
+    });
+
+    expect(plan.environment.VALID_KEY).toBe("valid");
+    expect(plan.environment.EMPTY_KEY).toBeUndefined();
+    expect(plan.environment.UNDEFINED_KEY).toBeUndefined();
+  });
 });
 
 describe("gatewayInstallErrorHint", () => {
