@@ -16,6 +16,7 @@ import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { makeProxyFetch } from "./proxy.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { splitTelegramCaption } from "./caption.js";
@@ -146,7 +147,9 @@ export async function sendMessageTelegram(
   const chatId = normalizeChatId(target.chatId);
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
-  const fetchImpl = resolveTelegramFetch();
+  const proxyUrl = account.config.proxy;
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl as string) : undefined;
+  const fetchImpl = resolveTelegramFetch(proxyFetch);
   const timeoutSeconds =
     typeof account.config.timeoutSeconds === "number" &&
     Number.isFinite(account.config.timeoutSeconds)
@@ -390,7 +393,9 @@ export async function reactMessageTelegram(
   const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
-  const fetchImpl = resolveTelegramFetch();
+  const proxyUrl = account.config.proxy;
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl as string) : undefined;
+  const fetchImpl = resolveTelegramFetch(proxyFetch);
   const client: ApiClientOptions | undefined = fetchImpl
     ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
     : undefined;
@@ -436,7 +441,9 @@ export async function deleteMessageTelegram(
   const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
-  const fetchImpl = resolveTelegramFetch();
+  const proxyUrl = account.config.proxy;
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl as string) : undefined;
+  const fetchImpl = resolveTelegramFetch(proxyFetch);
   const client: ApiClientOptions | undefined = fetchImpl
     ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
     : undefined;
