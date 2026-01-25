@@ -234,8 +234,9 @@ export function renderConfig(props: ConfigProps) {
   const hasChanges = props.formMode === "form" ? diff.length > 0 : hasRawChanges;
 
   // Save/apply buttons require actual changes to be enabled
+  // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving
   const canSaveForm =
-    Boolean(props.formValue) && !props.loading && !formUnsafe;
+    Boolean(props.formValue) && !props.loading;
   const canSave =
     props.connected &&
     !props.saving &&
