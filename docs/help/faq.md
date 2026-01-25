@@ -57,6 +57,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [What is Clawdbot?](#what-is-clawdbot)
   - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
   - [What’s the value proposition?](#whats-the-value-proposition)
+  - [I just set it up what should I do first](#i-just-set-it-up-what-should-i-do-first)
   - [What are the top five everyday use cases for Clawdbot](#what-are-the-top-five-everyday-use-cases-for-clawdbot)
   - [Can Clawdbot help with lead gen outreach ads and blogs for a SaaS](#can-clawdbot-help-with-lead-gen-outreach-ads-and-blogs-for-a-saas)
   - [What are the advantages vs Claude Code for web development?](#what-are-the-advantages-vs-claude-code-for-web-development)
@@ -860,6 +861,17 @@ Highlights:
 
 Docs: [Gateway](/gateway), [Channels](/channels), [Multi‑agent](/concepts/multi-agent),
 [Memory](/concepts/memory).
+
+### I just set it up what should I do first
+
+Good first projects:
+- Build a website (WordPress, Shopify, or a simple static site).
+- Prototype a mobile app (outline, screens, API plan).
+- Organize files and folders (cleanup, naming, tagging).
+- Connect Gmail and automate summaries or follow ups.
+
+It can handle large tasks, but it works best when you split them into phases and
+use sub agents for parallel work.
 
 ### What are the top five everyday use cases for Clawdbot
 
