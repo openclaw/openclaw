@@ -94,6 +94,9 @@ function buildReactionSchema() {
     messageId: Type.Optional(Type.String()),
     emoji: Type.Optional(Type.String()),
     remove: Type.Optional(Type.Boolean()),
+    targetAuthor: Type.Optional(Type.String()),
+    targetAuthorUuid: Type.Optional(Type.String()),
+    groupId: Type.Optional(Type.String()),
   };
 }
 

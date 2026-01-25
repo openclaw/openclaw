@@ -105,8 +105,29 @@ Groups:
 - **Read receipts**: when `channels.signal.sendReadReceipts` is true, Clawdbot forwards read receipts for allowed DMs.
 - Signal-cli does not expose read receipts for groups.
 
+## Reactions (message tool)
+- Use `message action=react` with `channel=signal`.
+- Targets: sender E.164 or UUID (use `uuid:<id>` from pairing output; bare UUID works too).
+- `messageId` is the Signal timestamp for the message you’re reacting to.
+- Group reactions require `targetAuthor` or `targetAuthorUuid`.
+
+Examples:
+```
+message action=react channel=signal target=uuid:123e4567-e89b-12d3-a456-426614174000 messageId=1737630212345 emoji=🔥
+message action=react channel=signal target=+15551234567 messageId=1737630212345 emoji=🔥 remove=true
+message action=react channel=signal target=signal:group:<groupId> targetAuthor=uuid:<sender-uuid> messageId=1737630212345 emoji=✅
+```
+
+Config:
+- `channels.signal.actions.reactions`: enable/disable reaction actions (default true).
+- `channels.signal.reactionLevel`: `off | ack | minimal | extensive`.
+  - `off`/`ack` disables agent reactions (message tool `react` will error).
+  - `minimal`/`extensive` enables agent reactions and sets the guidance level.
+- Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
+
 ## Delivery targets (CLI/cron)
 - DMs: `signal:+15551234567` (or plain E.164).
+- UUID DMs: `uuid:<id>` (or bare UUID).
 - Groups: `signal:group:<groupId>`.
 - Usernames: `username:<name>` (if supported by your Signal account).
 

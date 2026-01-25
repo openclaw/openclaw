@@ -40,6 +40,7 @@ import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/a
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
+import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
 import { monitorWebChannel } from "../../channels/web/index.js";
@@ -269,6 +270,7 @@ export function createPluginRuntime(): PluginRuntime {
         probeSignal,
         sendMessageSignal,
         monitorSignalProvider,
+        messageActions: signalMessageActions,
       },
       imessage: {
         monitorIMessageProvider,

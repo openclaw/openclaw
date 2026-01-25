@@ -66,11 +66,12 @@ Name lookup:
   - Discord only: `--poll-duration-hours`, `--message`
 
 - `react`
-  - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp
+  - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
   - Required: `--message-id`, `--target`
-  - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`
+  - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--target-author`, `--target-author-uuid`
   - Note: `--remove` requires `--emoji` (omit `--emoji` to clear own reactions where supported; see /tools/reactions)
   - WhatsApp only: `--participant`, `--from-me`
+  - Signal group reactions: `--target-author` or `--target-author-uuid` required
 
 - `reactions`
   - Channels: Discord/Google Chat/Slack
@@ -211,6 +212,13 @@ React in Slack:
 ```
 clawdbot message react --channel slack \
   --target C123 --message-id 456 --emoji "✅"
+```
+
+React in a Signal group:
+```
+clawdbot message react --channel signal \
+  --target signal:group:abc123 --message-id 1737630212345 \
+  --emoji "✅" --target-author-uuid 123e4567-e89b-12d3-a456-426614174000
 ```
 
 Send Telegram inline buttons:
