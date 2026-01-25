@@ -346,7 +346,7 @@ export function createClawdbotCodingTools(options?: {
     if (resolved.unknownAllowlist.length > 0) {
       const entries = resolved.unknownAllowlist.join(", ");
       const suffix = resolved.strippedAllowlist
-        ? "Ignoring allowlist so core tools remain available."
+        ? "Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
         : "These entries won't match any tool unless the plugin is enabled.";
       logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
     }
