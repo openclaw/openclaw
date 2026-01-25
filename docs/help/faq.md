@@ -241,6 +241,14 @@ clawdbot models status
 clawdbot doctor
 ```
 
+What they do:
+- `clawdbot status`: quick snapshot of gateway/agent health + basic config.
+- `clawdbot models status`: checks provider auth + model availability.
+- `clawdbot doctor`: validates and repairs common config/state issues.
+
+Other useful CLI checks: `clawdbot status --all`, `clawdbot logs --follow`,
+`clawdbot gateway status`, `clawdbot health --verbose`.
+
 Quick debug loop: [First 60 seconds if something's broken](#first-60-seconds-if-somethings-broken).
 Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
