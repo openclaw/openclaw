@@ -31,6 +31,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I ask Clawd to update itself?](#can-i-ask-clawd-to-update-itself)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
+  - [Can I use Claude Max subscription without an API key](#can-i-use-claude-max-subscription-without-an-api-key)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setuptoken-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setuptoken)
   - [Do you support Claude subscription auth (Claude Code OAuth)?](#do-you-support-claude-subscription-auth-claude-code-oauth)
@@ -603,6 +604,15 @@ Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
 Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
 [Local models](/gateway/local-models), [Models](/concepts/models).
+
+### Can I use Claude Max subscription without an API key
+
+Yes. You can authenticate with **Claude Code CLI OAuth** or a **setup-token**
+instead of an API key. This is the subscription path.
+
+Important: you must verify with Anthropic that this usage is allowed under
+their subscription policy and terms. If you want the most explicit, supported
+path, use an Anthropic API key.
 
 ### How does Anthropic setuptoken auth work
 
