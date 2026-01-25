@@ -24,6 +24,7 @@ Docs: https://docs.clawd.bot
 - Telegram: add verbose raw-update logging for inbound Telegram updates. (#1597) Thanks @rohannagpal.
 
 ### Fixes
+- BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.clawd.bot/channels/bluebubbles
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Web UI: show Stop button during active runs, swap back to New session when idle. (#1664) Thanks @ndbroadbent.

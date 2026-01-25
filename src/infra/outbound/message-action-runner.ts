@@ -526,6 +526,7 @@ async function handleBroadcastAction(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
 ): Promise<MessageActionRunResult> {
+  throwIfAborted(input.abortSignal);
   const broadcastEnabled = input.cfg.tools?.message?.broadcast?.enabled !== false;
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
@@ -550,8 +551,11 @@ async function handleBroadcastAction(
     error?: string;
     result?: MessageSendResult;
   }> = [];
+  const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
   for (const targetChannel of targetChannels) {
+    throwIfAborted(input.abortSignal);
     for (const target of rawTargets) {
+      throwIfAborted(input.abortSignal);
       try {
         const resolved = await resolveChannelTarget({
           cfg: input.cfg,
@@ -575,6 +579,7 @@ async function handleBroadcastAction(
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
+        if (isAbortError(err)) throw err;
         results.push({
           channel: targetChannel,
           to: target,

@@ -385,14 +385,14 @@ describe("send", () => {
       ).rejects.toThrow("password is required");
     });
 
-    it("throws when chatGuid cannot be resolved", async () => {
+    it("throws when chatGuid cannot be resolved for non-handle targets", async () => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ data: [] }),
       });
 
       await expect(
-        sendMessageBlueBubbles("+15559999999", "Hello", {
+        sendMessageBlueBubbles("chat_id:999", "Hello", {
           serverUrl: "http://localhost:1234",
           password: "test",
         }),
@@ -437,6 +437,57 @@ describe("send", () => {
       expect(body.chatGuid).toBe("iMessage;-;+15551234567");
       expect(body.message).toBe("Hello world!");
       expect(body.method).toBeUndefined();
+    });
+
+    it("creates a new chat when handle target is missing", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                data: { guid: "new-msg-guid" },
+              }),
+            ),
+        });
+
+      const result = await sendMessageBlueBubbles("+15550009999", "Hello new chat", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("new-msg-guid");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const createCall = mockFetch.mock.calls[1];
+      expect(createCall[0]).toContain("/api/v1/chat/new");
+      const body = JSON.parse(createCall[1].body);
+      expect(body.addresses).toEqual(["+15550009999"]);
+      expect(body.message).toBe("Hello new chat");
+    });
+
+    it("throws when creating a new chat requires Private API", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 403,
+          text: () => Promise.resolve("Private API not enabled"),
+        });
+
+      await expect(
+        sendMessageBlueBubbles("+15550008888", "Hello", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        }),
+      ).rejects.toThrow("Private API must be enabled");
     });
 
     it("uses private-api when reply metadata is present", async () => {
