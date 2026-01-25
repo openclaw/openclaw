@@ -1,4 +1,4 @@
-import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat";
+import { abortChatRun, loadChatHistory, sendChatMessage, type ChatAttachment } from "./controllers/chat";
 import { loadSessions } from "./controllers/sessions";
 import { generateUUID } from "./uuid";
 import { resetToolStream } from "./app-tool-stream";
@@ -12,6 +12,7 @@ import type { ClawdbotApp } from "./app";
 type ChatHost = {
   connected: boolean;
   chatMessage: string;
+  chatAttachments: ChatAttachment[];
   chatQueue: Array<{ id: string; text: string; createdAt: number }>;
   chatRunId: string | null;
   chatSending: boolean;
@@ -61,10 +62,10 @@ function enqueueChatMessage(host: ChatHost, text: string) {
 async function sendChatMessageNow(
   host: ChatHost,
   message: string,
-  opts?: { previousDraft?: string; restoreDraft?: boolean },
+  opts?: { previousDraft?: string; restoreDraft?: boolean; attachments?: ChatAttachment[] },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const ok = await sendChatMessage(host as unknown as ClawdbotApp, message);
+  const ok = await sendChatMessage(host as unknown as ClawdbotApp, message, opts?.attachments);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
   }
@@ -104,7 +105,11 @@ export async function handleSendChat(
   if (!host.connected) return;
   const previousDraft = host.chatMessage;
   const message = (messageOverride ?? host.chatMessage).trim();
-  if (!message) return;
+  const attachments = host.chatAttachments ?? [];
+  const hasAttachments = attachments.length > 0;
+
+  // Allow sending with just attachments (no message text required)
+  if (!message && !hasAttachments) return;
 
   if (isChatStopCommand(message)) {
     await handleAbortChat(host);
@@ -113,6 +118,8 @@ export async function handleSendChat(
 
   if (messageOverride == null) {
     host.chatMessage = "";
+    // Clear attachments when sending
+    host.chatAttachments = [];
   }
 
   if (isChatBusy(host)) {
@@ -123,6 +130,7 @@ export async function handleSendChat(
   await sendChatMessageNow(host, message, {
     previousDraft: messageOverride == null ? previousDraft : undefined,
     restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+    attachments: hasAttachments ? attachments : undefined,
   });
 }
 
