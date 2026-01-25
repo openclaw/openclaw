@@ -8,7 +8,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Quick start and first-run setup](#quick-start-and-first-run-setup)
-  - [I'm stuck - what's the fastest way to get unstuck?](#im-stuck--whats-the-fastest-way-to-get-unstuck)
+  - [Im stuck - whats the fastest way to get unstuck?](#im-stuck--whats-the-fastest-way-to-get-unstuck)
   - [What’s the recommended way to install and set up Clawdbot?](#whats-the-recommended-way-to-install-and-set-up-clawdbot)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
@@ -51,6 +51,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I switch between npm and git installs later?](#can-i-switch-between-npm-and-git-installs-later)
   - [Should I run the Gateway on my laptop or a VPS?](#should-i-run-the-gateway-on-my-laptop-or-a-vps)
   - [How important is it to run Clawdbot on a dedicated machine?](#how-important-is-it-to-run-clawdbot-on-a-dedicated-machine)
+  - [What are the minimum VPS requirements and recommended OS?](#what-are-the-minimum-vps-requirements-and-recommended-os)
 - [What is Clawdbot?](#what-is-clawdbot)
   - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
   - [What’s the value proposition?](#whats-the-value-proposition)
@@ -96,6 +97,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What’s a minimal “sane” config for a first install?](#whats-a-minimal-sane-config-for-a-first-install)
   - [How do I set up Tailscale on a VPS and connect from my Mac?](#how-do-i-set-up-tailscale-on-a-vps-and-connect-from-my-mac)
   - [How do I connect a Mac node to a remote Gateway (Tailscale Serve)?](#how-do-i-connect-a-mac-node-to-a-remote-gateway-tailscale-serve)
+  - [Should I install on a second laptop or just add a node?](#should-i-install-on-a-second-laptop-or-just-add-a-node)
 - [Env vars and .env loading](#env-vars-and-env-loading)
   - [How does Clawdbot load environment variables?](#how-does-clawdbot-load-environment-variables)
   - [“I started the Gateway via the service and my env vars disappeared.” What now?](#i-started-the-gateway-via-the-service-and-my-env-vars-disappeared-what-now)
@@ -116,6 +118,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Models: defaults, selection, aliases, switching](#models-defaults-selection-aliases-switching)
   - [What is the “default model”?](#what-is-the-default-model)
   - [What model do you recommend?](#what-model-do-you-recommend)
+  - [How do I switch models without wiping my config?](#how-do-i-switch-models-without-wiping-my-config)
   - [Can I use self-hosted models (llama.cpp, vLLM, Ollama)?](#can-i-use-self-hosted-models-llamacpp-vllm-ollama)
   - [What do Clawd, Flawd, and Krill use for models?](#what-do-clawd-flawd-and-krill-use-for-models)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
@@ -150,6 +153,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I start/stop/restart the Gateway service?](#how-do-i-startstoprestart-the-gateway-service)
   - [I closed my terminal on Windows - how do I restart Clawdbot?](#i-closed-my-terminal-on-windows--how-do-i-restart-clawdbot)
   - [The Gateway is up but replies never arrive. What should I check?](#the-gateway-is-up-but-replies-never-arrive-what-should-i-check)
+  - ["Disconnected from gateway: no reason" - what now?](#disconnected-from-gateway-no-reason---what-now)
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `clawdbot gateway restart` vs `clawdbot gateway`](#eli5-clawdbot-gateway-restart-vs-clawdbot-gateway)
   - [What’s the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
@@ -217,7 +221,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-### I'm stuck - what's the fastest way to get unstuck?
+### Im stuck - whats the fastest way to get unstuck?
 
 Use a local AI agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
@@ -334,15 +338,18 @@ Docs: [Linux](/platforms/linux), [Install](/install).
 
 ### It is stuck on "wake up my friend" / onboarding will not hatch. What now?
 
-That screen depends on the Gateway being reachable and authenticated.
+That screen depends on the Gateway being reachable and authenticated. The TUI also sends
+"Wake up, my friend!" automatically on first hatch. If you see that line with **no reply**
+and tokens stay at 0, the agent never ran.
 
 1) Restart the Gateway:
 ```bash
 clawdbot gateway restart
 ```
-2) Check status + logs:
+2) Check status + auth:
 ```bash
 clawdbot status
+clawdbot models status
 clawdbot logs --follow
 ```
 3) If it still hangs, run:
@@ -350,7 +357,8 @@ clawdbot logs --follow
 clawdbot doctor
 ```
 
-If the Gateway is remote, ensure the tunnel/Tailscale connection is up. See [Remote access](/gateway/remote).
+If the Gateway is remote, ensure the tunnel/Tailscale connection is up and that the UI
+is pointed at the right Gateway. See [Remote access](/gateway/remote).
 
 ### Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?
 
@@ -774,6 +782,17 @@ Not required, but **recommended for reliability and isolation**.
 
 If you want the best of both worlds, keep the Gateway on a dedicated host and pair your laptop as a **node** for local screen/camera/exec tools. See [Nodes](/nodes).
 For security guidance, read [Security](/gateway/security).
+
+### What are the minimum VPS requirements and recommended OS?
+
+Clawdbot is lightweight. For a basic Gateway + one chat channel:
+
+- **Absolute minimum:** 1 vCPU, 1GB RAM, ~500MB disk.
+- **Recommended:** 1-2 vCPU, 2GB RAM or more for headroom (logs, media, multiple channels). Node tools and browser automation can be resource hungry.
+
+OS: use **Ubuntu LTS** (or any modern Debian/Ubuntu). The Linux install path is best tested there.
+
+Docs: [Linux](/platforms/linux), [VPS hosting](/vps).
 
 ## What is Clawdbot?
 
@@ -1279,6 +1298,16 @@ device automation.
 
 Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Chrome extension](/tools/chrome-extension).
 
+### Should I install on a second laptop or just add a node?
+
+If you only need **local tools** (screen/camera/exec) on the second laptop, add it as a
+**node**. That keeps a single Gateway and avoids duplicated config. Local node tools are
+currently macOS-only, but we plan to extend them to other OSes.
+
+Install a second Gateway only when you need **hard isolation** or two fully separate bots.
+
+Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Multiple gateways](/gateway/multiple-gateways).
+
 ### Do nodes run a gateway service?
 
 No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect
@@ -1631,6 +1660,21 @@ If you still want small models, enable sandboxing and strict tool allowlists.
 Docs: [Ollama](/providers/ollama), [Local models](/gateway/local-models),
 [Model providers](/concepts/model-providers), [Security](/gateway/security),
 [Sandboxing](/gateway/sandboxing).
+
+### How do I switch models without wiping my config?
+
+Use **model commands** or edit only the **model** fields. Avoid full config replaces.
+
+Safe options:
+- `/model` in chat (quick, per-session)
+- `clawdbot models set ...` (updates just model config)
+- `clawdbot configure --section models` (interactive)
+- edit `agents.defaults.model` in `~/.clawdbot/clawdbot.json`
+
+Avoid `config.apply` with a partial object unless you intend to replace the whole config.
+If you did overwrite config, restore from backup or re-run `clawdbot doctor` to repair.
+
+Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/config), [Doctor](/gateway/doctor).
 
 ### What do Clawd, Flawd, and Krill use for models?
 
@@ -2167,6 +2211,23 @@ If you are remote, confirm the tunnel/Tailscale connection is up and that the
 Gateway WebSocket is reachable.
 
 Docs: [Channels](/channels), [Troubleshooting](/gateway/troubleshooting), [Remote access](/gateway/remote).
+
+### "Disconnected from gateway: no reason" - what now?
+
+This usually means the UI lost the WebSocket connection. Check:
+
+1) Is the Gateway running? `clawdbot gateway status`
+2) Is the Gateway healthy? `clawdbot status`
+3) Does the UI have the right token? `clawdbot dashboard`
+4) If remote, is the tunnel/Tailscale link up?
+
+Then tail logs:
+
+```bash
+clawdbot logs --follow
+```
+
+Docs: [Dashboard](/web/dashboard), [Remote access](/gateway/remote), [Troubleshooting](/gateway/troubleshooting).
 
 ### How do I completely stop then start the Gateway?
 
