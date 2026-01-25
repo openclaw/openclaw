@@ -20,7 +20,6 @@ Venice offers two privacy levels — understanding this is key to choosing your 
 - **Streaming**: ✅ Supported on all models
 - **Function calling**: ✅ Supported on select models (check model capabilities)
 - **Vision**: ✅ Supported on models with vision capability
-- **No rate limits**: Fair usage without hard limits for most use cases
 
 ## Setup
 
@@ -202,10 +201,6 @@ The Venice model catalog updates dynamically. Run `clawdbot models list` to see 
 ### Connection issues
 
 Venice API is at `https://api.venice.ai/api/v1`. Ensure your network allows HTTPS connections.
-
-### Rate limits
-
-While Venice doesn't enforce hard rate limits, excessive usage may trigger fair-use throttling. This is rare for normal usage.
 
 ## Links
 
