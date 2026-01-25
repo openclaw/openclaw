@@ -135,7 +135,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const forumParentSlug =
     isForumParent && threadParentName ? normalizeDiscordSlug(threadParentName) : "";
   const isForumStarter =
-    Boolean(threadChannel && isForumParent && forumParentSlug) && message.id === threadChannel.id;
+    threadChannel && isForumParent && forumParentSlug ? message.id === threadChannel.id : false;
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupChannel;
