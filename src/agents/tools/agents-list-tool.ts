@@ -41,7 +41,9 @@ export function createAgentsListTool(opts?: {
             })
           : alias;
       const requesterAgentId = normalizeAgentId(
-        opts?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId ?? DEFAULT_AGENT_ID,
+        opts?.requesterAgentIdOverride ??
+          parseAgentSessionKey(requesterInternalKey)?.agentId ??
+          DEFAULT_AGENT_ID,
       );
 
       const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
