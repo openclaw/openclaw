@@ -7,7 +7,7 @@
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
   gap: 0;
-  min-height: calc(100vh - 140px);
+  height: calc(100vh - 140px);
   margin: -16px;
   border-radius: 16px;
   overflow: hidden;
@@ -23,6 +23,8 @@
   flex-direction: column;
   background: rgba(0, 0, 0, 0.2);
   border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow: hidden;
 }
 
 :root[data-theme="light"] .config-sidebar {
@@ -75,7 +77,10 @@
   background: rgba(0, 0, 0, 0.15);
   font-size: 13px;
   outline: none;
-  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background 150ms ease;
 }
 
 .config-search__input::placeholder {
@@ -113,7 +118,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 150ms ease, color 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
 }
 
 .config-search__clear:hover {
@@ -142,7 +149,9 @@
   font-weight: 500;
   text-align: left;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
 }
 
 .config-nav__item:hover {
@@ -205,7 +214,10 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .config-mode-toggle__btn:hover {
@@ -230,7 +242,9 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--panel);
+  overflow: hidden;
 }
 
 /* Actions Bar */
@@ -427,7 +441,10 @@
   color: var(--muted);
   background: rgba(0, 0, 0, 0.12);
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease;
   white-space: nowrap;
 }
 
@@ -485,7 +502,9 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Empty State */
@@ -626,7 +645,10 @@
   background: rgba(0, 0, 0, 0.12);
   font-size: 14px;
   outline: none;
-  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background 150ms ease;
 }
 
 .cfg-input::placeholder {
@@ -661,7 +683,9 @@
   color: var(--muted);
   font-size: 14px;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
 }
 
 .cfg-input__reset:hover:not(:disabled) {
@@ -686,7 +710,9 @@
   line-height: 1.5;
   resize: vertical;
   outline: none;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .cfg-textarea:focus {
@@ -776,7 +802,9 @@
   cursor: pointer;
   outline: none;
   appearance: none;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .cfg-select:focus {
@@ -810,7 +838,10 @@
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .cfg-segmented__btn:hover:not(:disabled):not(.active) {
@@ -844,7 +875,9 @@
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.06);
   cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
 }
 
 .cfg-toggle-row:hover:not(.disabled) {
@@ -906,7 +939,9 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   position: relative;
-  transition: background 200ms ease, border-color 200ms ease;
+  transition:
+    background 200ms ease,
+    border-color 200ms ease;
 }
 
 :root[data-theme="light"] .cfg-toggle__track {
@@ -923,7 +958,9 @@
   background: var(--text);
   border-radius: 50%;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-  transition: transform 200ms ease, background 200ms ease;
+  transition:
+    transform 200ms ease,
+    background 200ms ease;
 }
 
 .cfg-toggle input:checked + .cfg-toggle__track {
@@ -1138,7 +1175,9 @@
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
 }
 
 .cfg-array__item-remove svg {
@@ -1255,7 +1294,9 @@
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
 }
 
 .cfg-map__item-remove svg {
