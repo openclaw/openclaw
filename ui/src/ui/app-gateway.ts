@@ -134,7 +134,10 @@ export function connectGateway(host: GatewayHost) {
     },
     onClose: ({ code, reason }) => {
       host.connected = false;
-      host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+      // Code 1012 = Service Restart (expected during config saves, don't show as error)
+      if (code !== 1012) {
+        host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+      }
     },
     onEvent: (evt) => handleGatewayEvent(host, evt),
     onGap: ({ expected, received }) => {
