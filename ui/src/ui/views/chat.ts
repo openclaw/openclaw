@@ -22,6 +22,12 @@ export type CompactionIndicatorStatus = {
   completedAt: number | null;
 };
 
+export type ChatAttachment = {
+  id: string;
+  dataUrl: string;
+  mimeType: string;
+};
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -52,6 +58,9 @@ export type ChatProps = {
   splitRatio?: number;
   assistantName: string;
   assistantAvatar: string | null;
+  // Image attachments
+  attachments?: ChatAttachment[];
+  onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
@@ -95,6 +104,82 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   return nothing;
 }
 
+function generateAttachmentId(): string {
+  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function handlePaste(
+  e: ClipboardEvent,
+  props: ChatProps,
+) {
+  const items = e.clipboardData?.items;
+  if (!items || !props.onAttachmentsChange) return;
+
+  const imageItems: DataTransferItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.type.startsWith("image/")) {
+      imageItems.push(item);
+    }
+  }
+
+  if (imageItems.length === 0) return;
+
+  e.preventDefault();
+
+  for (const item of imageItems) {
+    const file = item.getAsFile();
+    if (!file) continue;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const newAttachment: ChatAttachment = {
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType: file.type,
+      };
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, newAttachment]);
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+function renderAttachmentPreview(props: ChatProps) {
+  const attachments = props.attachments ?? [];
+  if (attachments.length === 0) return nothing;
+
+  return html`
+    <div class="chat-attachments">
+      ${attachments.map(
+        (att) => html`
+          <div class="chat-attachment">
+            <img
+              src=${att.dataUrl}
+              alt="Attachment preview"
+              class="chat-attachment__img"
+            />
+            <button
+              class="chat-attachment__remove"
+              type="button"
+              aria-label="Remove attachment"
+              @click=${() => {
+                const next = (props.attachments ?? []).filter(
+                  (a) => a.id !== att.id,
+                );
+                props.onAttachmentsChange?.(next);
+              }}
+            >
+              ${icons.x}
+            </button>
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -109,8 +194,11 @@ export function renderChat(props: ChatProps) {
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
   };
 
+  const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
-    ? "Message (↩ to send, Shift+↩ for line breaks)"
+    ? hasAttachments
+      ? "Add a message or paste more images..."
+      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -235,39 +323,43 @@ export function renderChat(props: ChatProps) {
         : nothing}
 
       <div class="chat-compose">
-        <label class="field chat-compose__field">
-          <span>Message</span>
-          <textarea
-            .value=${props.draft}
-            ?disabled=${!props.connected}
-            @keydown=${(e: KeyboardEvent) => {
-              if (e.key !== "Enter") return;
-              if (e.isComposing || e.keyCode === 229) return;
-              if (e.shiftKey) return; // Allow Shift+Enter for line breaks
-              if (!props.connected) return;
-              e.preventDefault();
-              if (canCompose) props.onSend();
-            }}
-            @input=${(e: Event) =>
-              props.onDraftChange((e.target as HTMLTextAreaElement).value)}
-            placeholder=${composePlaceholder}
-          ></textarea>
-        </label>
-        <div class="chat-compose__actions">
-          <button
-            class="btn"
-            ?disabled=${!props.connected || (!canAbort && props.sending)}
-            @click=${canAbort ? props.onAbort : props.onNewSession}
-          >
-            ${canAbort ? "Stop" : "New session"}
-          </button>
-          <button
-            class="btn primary"
-            ?disabled=${!props.connected}
-            @click=${props.onSend}
-          >
-            ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
-          </button>
+        ${renderAttachmentPreview(props)}
+        <div class="chat-compose__row">
+          <label class="field chat-compose__field">
+            <span>Message</span>
+            <textarea
+              .value=${props.draft}
+              ?disabled=${!props.connected}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key !== "Enter") return;
+                if (e.isComposing || e.keyCode === 229) return;
+                if (e.shiftKey) return; // Allow Shift+Enter for line breaks
+                if (!props.connected) return;
+                e.preventDefault();
+                if (canCompose) props.onSend();
+              }}
+              @input=${(e: Event) =>
+                props.onDraftChange((e.target as HTMLTextAreaElement).value)}
+              @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              placeholder=${composePlaceholder}
+            ></textarea>
+          </label>
+          <div class="chat-compose__actions">
+            <button
+              class="btn"
+              ?disabled=${!props.connected || (!canAbort && props.sending)}
+              @click=${canAbort ? props.onAbort : props.onNewSession}
+            >
+              ${canAbort ? "Stop" : "New session"}
+            </button>
+            <button
+              class="btn primary"
+              ?disabled=${!props.connected}
+              @click=${props.onSend}
+            >
+              ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+            </button>
+          </div>
         </div>
       </div>
     </section>
