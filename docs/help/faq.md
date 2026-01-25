@@ -56,6 +56,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [What is Clawdbot?](#what-is-clawdbot)
   - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
   - [What’s the value proposition?](#whats-the-value-proposition)
+  - [What are the advantages vs Claude Code for web development?](#what-are-the-advantages-vs-claude-code-for-web-development)
 - [Skills and automation](#skills-and-automation)
   - [How do I customize skills without keeping the repo dirty?](#how-do-i-customize-skills-without-keeping-the-repo-dirty)
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
@@ -841,6 +842,21 @@ Highlights:
 
 Docs: [Gateway](/gateway), [Channels](/channels), [Multi‑agent](/concepts/multi-agent),
 [Memory](/concepts/memory).
+
+### What are the advantages vs Claude Code for web development
+
+Clawdbot is a **personal assistant** and coordination layer, not an IDE replacement. Use
+Claude Code or Codex for the fastest direct coding loop inside a repo. Use Clawdbot when you
+want durable memory, cross-device access, and tool orchestration.
+
+Advantages:
+- **Persistent memory + workspace** across sessions
+- **Multi-platform access** (WhatsApp, Telegram, TUI, WebChat)
+- **Tool orchestration** (browser, files, scheduling, hooks)
+- **Always-on Gateway** (run on a VPS, interact from anywhere)
+- **Nodes** for local browser/screen/camera/exec
+
+Showcase: https://clawd.bot/showcase
 
 ## Skills and automation
 
