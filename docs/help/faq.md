@@ -143,6 +143,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Logging and debugging](#logging-and-debugging)
   - [Where are logs?](#where-are-logs)
   - [How do I start/stop/restart the Gateway service?](#how-do-i-startstoprestart-the-gateway-service)
+  - [I closed my terminal on Windows — how do I restart Clawdbot?](#i-closed-my-terminal-on-windows--how-do-i-restart-clawdbot)
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `clawdbot gateway restart` vs `clawdbot gateway`](#eli5-clawdbot-gateway-restart-vs-clawdbot-gateway)
   - [What’s the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
@@ -2035,6 +2036,43 @@ clawdbot gateway restart
 ```
 
 If you run the gateway manually, `clawdbot gateway --force` can reclaim the port. See [Gateway](/gateway).
+
+### I closed my terminal on Windows — how do I restart Clawdbot?
+
+There are **two Windows install modes**:
+
+**1) WSL2 (recommended):** the Gateway runs inside Linux.
+
+Open PowerShell, enter WSL, then restart:
+
+```powershell
+wsl
+clawdbot gateway status
+clawdbot gateway restart
+```
+
+If you never installed the service, start it in the foreground:
+
+```bash
+clawdbot gateway run
+```
+
+**2) Native Windows (not recommended):** the Gateway runs directly in Windows.
+
+Open PowerShell and run:
+
+```powershell
+clawdbot gateway status
+clawdbot gateway restart
+```
+
+If you run it manually (no service), use:
+
+```powershell
+clawdbot gateway run
+```
+
+Docs: [Windows (WSL2)](/platforms/windows), [Gateway service runbook](/gateway).
 
 ### How do I completely stop then start the Gateway?
 
