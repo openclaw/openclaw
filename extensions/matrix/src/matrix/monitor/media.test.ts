@@ -25,10 +25,8 @@ describe("downloadMatrixMedia", () => {
 
   it("decrypts encrypted media when file payloads are present", async () => {
     const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
-    const downloadContent = vi.fn().mockResolvedValue(Buffer.from("encrypted"));
 
     const client = {
-      downloadContent,
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
     } as unknown as import("matrix-bot-sdk").MatrixClient;
@@ -55,7 +53,8 @@ describe("downloadMatrixMedia", () => {
       file,
     });
 
-    expect(decryptMedia).toHaveBeenCalled();
+    // decryptMedia should be called with just the file object (it handles download internally)
+    expect(decryptMedia).toHaveBeenCalledWith(file);
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       Buffer.from("decrypted"),
       "image/png",

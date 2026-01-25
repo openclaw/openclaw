@@ -40,6 +40,7 @@ async function fetchMatrixMediaBuffer(params: {
 
 /**
  * Download and decrypt encrypted media from a Matrix room.
+ * Uses matrix-bot-sdk's decryptMedia which handles both download and decryption.
  */
 async function fetchEncryptedMediaBuffer(params: {
   client: MatrixClient;
@@ -50,18 +51,13 @@ async function fetchEncryptedMediaBuffer(params: {
     throw new Error("Cannot decrypt media: crypto not enabled");
   }
 
-  // Download the encrypted content
-  const encryptedBuffer = await params.client.downloadContent(params.file.url);
-  if (encryptedBuffer.byteLength > params.maxBytes) {
+  // decryptMedia handles downloading and decrypting the encrypted content internally
+  const decrypted = await params.client.crypto.decryptMedia(params.file);
+
+  if (decrypted.byteLength > params.maxBytes) {
     throw new Error("Matrix media exceeds configured size limit");
   }
 
-  // Decrypt using matrix-bot-sdk crypto
-  const decrypted = await params.client.crypto.decryptMedia(
-    Buffer.from(encryptedBuffer),
-    params.file,
-  );
-  
   return { buffer: decrypted };
 }
 
