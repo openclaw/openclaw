@@ -97,6 +97,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
+  const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find(
     (row) => row.key === props.sessionKey,
   );
@@ -254,10 +255,10 @@ export function renderChat(props: ChatProps) {
         <div class="chat-compose__actions">
           <button
             class="btn"
-            ?disabled=${!props.connected || props.sending}
-            @click=${props.onNewSession}
+            ?disabled=${!props.connected || (!canAbort && props.sending)}
+            @click=${canAbort ? props.onAbort : props.onNewSession}
           >
-            New session
+            ${canAbort ? "Stop" : "New session"}
           </button>
           <button
             class="btn primary"
