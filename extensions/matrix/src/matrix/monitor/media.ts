@@ -25,7 +25,7 @@ async function fetchMatrixMediaBuffer(params: {
   // matrix-bot-sdk provides mxcToHttp helper
   const url = params.client.mxcToHttp(params.mxcUrl);
   if (!url) return null;
-  
+
   // Use the client's download method which handles auth
   try {
     const buffer = await params.client.downloadContent(params.mxcUrl);
@@ -61,7 +61,7 @@ async function fetchEncryptedMediaBuffer(params: {
     Buffer.from(encryptedBuffer),
     params.file,
   );
-  
+
   return { buffer: decrypted };
 }
 
@@ -77,7 +77,7 @@ export async function downloadMatrixMedia(params: {
   placeholder: string;
 } | null> {
   let fetched: { buffer: Buffer; headerType?: string } | null;
-  
+
   if (params.file) {
     // Encrypted media
     fetched = await fetchEncryptedMediaBuffer({
@@ -93,7 +93,7 @@ export async function downloadMatrixMedia(params: {
       maxBytes: params.maxBytes,
     });
   }
-  
+
   if (!fetched) return null;
   const headerType = fetched.headerType ?? params.contentType ?? undefined;
   const saved = await getMatrixRuntime().channel.media.saveMediaBuffer(
