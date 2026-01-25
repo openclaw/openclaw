@@ -1,63 +1,75 @@
 @import './chat.css';
 
 /* ===========================================
-   Cards
+   Cards - Refined with depth
    =========================================== */
 
 .card {
   border: 1px solid var(--border);
   background: var(--card);
   border-radius: var(--radius-lg);
-  padding: 16px;
-  animation: rise 0.3s var(--ease-out);
-  transition: border-color var(--duration-fast) ease;
-  box-shadow: inset 0 1px 0 var(--card-highlight);
+  padding: 20px;
+  animation: rise 0.35s var(--ease-out) backwards;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
 }
 
 .card:hover {
   border-color: var(--border-strong);
+  box-shadow: var(--shadow-md), inset 0 1px 0 var(--card-highlight);
 }
 
 .card-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--text-strong);
 }
 
 .card-sub {
   color: var(--muted);
   font-size: 13px;
-  margin-top: 4px;
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 /* ===========================================
-   Stats
+   Stats - Bold values, subtle labels
    =========================================== */
 
 .stat {
   background: var(--card);
   border-radius: var(--radius-md);
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
 .stat:hover {
   border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
 }
 
 .stat-label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .stat-value {
-  font-size: 20px;
-  font-weight: 600;
-  margin-top: 4px;
-  letter-spacing: -0.02em;
+  font-size: 24px;
+  font-weight: 700;
+  margin-top: 6px;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
 }
 
 .stat-value.ok {
@@ -70,11 +82,12 @@
 
 .stat-card {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .note-title {
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 /* ===========================================
@@ -262,7 +275,7 @@
 }
 
 /* ===========================================
-   Status Dot
+   Status Dot - With glow for emphasis
    =========================================== */
 
 .statusDot {
@@ -270,14 +283,18 @@
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--danger);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  animation: pulse-subtle 2s ease-in-out infinite;
 }
 
 .statusDot.ok {
   background: var(--ok);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  animation: none;
 }
 
 /* ===========================================
-   Buttons
+   Buttons - Tactile with personality
    =========================================== */
 
 .btn {
@@ -287,23 +304,30 @@
   gap: 8px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
-  padding: 8px 14px;
+  padding: 9px 16px;
   border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 500;
+  letter-spacing: -0.01em;
   cursor: pointer;
   transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 
 .btn:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
 
 .btn:active {
   background: var(--secondary);
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .btn svg {
@@ -321,11 +345,13 @@
   border-color: var(--accent);
   background: var(--accent);
   color: var(--primary-foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .btn.primary:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+  box-shadow: var(--shadow-md), 0 0 20px var(--accent-glow);
 }
 
 /* Keyboard shortcut badge (shadcn style) */
@@ -497,32 +523,34 @@
 }
 
 /* ===========================================
-   Callouts
+   Callouts - Informative with subtle depth
    =========================================== */
 
 .callout {
-  padding: 12px 14px;
+  padding: 14px 16px;
   border-radius: var(--radius-md);
   background: var(--secondary);
   border: 1px solid var(--border);
   font-size: 13px;
+  line-height: 1.5;
+  position: relative;
 }
 
 .callout.danger {
-  border-color: var(--danger-subtle);
-  background: var(--danger-subtle);
+  border-color: rgba(239, 68, 68, 0.25);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);
   color: var(--danger);
 }
 
 .callout.info {
-  border-color: rgba(59, 130, 246, 0.2);
-  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.25);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%);
   color: var(--info);
 }
 
 .callout.success {
-  border-color: var(--ok-subtle);
-  background: var(--ok-subtle);
+  border-color: rgba(34, 197, 94, 0.25);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
   color: var(--ok);
 }
 
@@ -655,13 +683,13 @@
 }
 
 /* ===========================================
-   Chips
+   Chips - Compact and punchy
    =========================================== */
 
 .chip-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .chip {
@@ -669,10 +697,18 @@
   font-weight: 500;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  padding: 4px 10px;
+  padding: 5px 12px;
   color: var(--muted);
   background: var(--secondary);
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
 
 .chip input {
@@ -681,12 +717,14 @@
 
 .chip-ok {
   color: var(--ok);
-  border-color: var(--ok-subtle);
+  border-color: rgba(34, 197, 94, 0.3);
+  background: var(--ok-subtle);
 }
 
 .chip-warn {
   color: var(--warn);
-  border-color: var(--warn-subtle);
+  border-color: rgba(245, 158, 11, 0.3);
+  background: var(--warn-subtle);
 }
 
 /* ===========================================
