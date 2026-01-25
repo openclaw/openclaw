@@ -593,6 +593,7 @@
   border: 1px solid var(--border);
   max-height: 360px;
   overflow: auto;
+  max-width: 100%;
 }
 
 :root[data-theme="light"] .code-block,

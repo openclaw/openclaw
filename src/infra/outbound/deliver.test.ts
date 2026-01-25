@@ -192,7 +192,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).toHaveBeenNthCalledWith(
       2,
       "+1555",
-      "\nLine two",
+      "Line two",
       expect.objectContaining({ verbose: false }),
     );
   });
@@ -241,9 +241,8 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text }],
     });
 
-    expect(chunker).toHaveBeenCalledTimes(2);
-    expect(chunker).toHaveBeenNthCalledWith(1, "```js\nconst a = 1;\nconst b = 2;\n```", 4000);
-    expect(chunker).toHaveBeenNthCalledWith(2, "After", 4000);
+    expect(chunker).toHaveBeenCalledTimes(1);
+    expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
   it("uses iMessage media maxBytes from agent fallback", async () => {

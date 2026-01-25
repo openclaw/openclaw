@@ -2,11 +2,30 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.24-3
+
+### Fixes
+- Gateway: harden reverse proxy handling for local-client detection and unauthenticated proxied connects. (#1795) Thanks @orlyjamie.
+- Security audit: flag loopback Control UI with auth disabled as critical. (#1795) Thanks @orlyjamie.
+
+## 2026.1.24-2
+
+### Fixes
+- Packaging: include dist/link-understanding output in npm tarball (fixes missing apply.js import on install).
+
+## 2026.1.24-1
+
+### Fixes
+- Packaging: include dist/shared output in npm tarball (fixes missing reasoning-tags import on install).
+
 ## 2026.1.24
 
 ### Highlights
-- Ollama: provider discovery + docs. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama
-- Venius (Venice AI): highlight provider guide + cross-links + expanded guidance. https://docs.clawd.bot/providers/venice
+- Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama https://docs.clawd.bot/providers/venice
+- Channels: LINE plugin (Messaging API) with rich replies + quick replies. (#1630) Thanks @plum-dawg.
+- TTS: Edge fallback (keyless) + `/tts` auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.clawd.bot/tts
+- Exec approvals: approve in-chat via `/approve` across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands
+- Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.clawd.bot/channels/telegram
 
 ### Changes
 - Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.
@@ -27,6 +46,7 @@ Docs: https://docs.clawd.bot
 - Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.
 
 ### Fixes
+- Web UI: fix config/debug layout overflow, scrolling, and code block sizing. (#1715) Thanks @saipreetham589.
 - Web UI: show Stop button during active runs, swap back to New session when idle. (#1664) Thanks @ndbroadbent.
 - Web UI: clear stale disconnect banners on reconnect; allow form saves with unsupported schema paths but block missing schema. (#1707) Thanks @Glucksberg.
 - Web UI: hide internal `message_id` hints in chat bubbles.
@@ -34,11 +54,13 @@ Docs: https://docs.clawd.bot
 - Matrix: decrypt E2EE media attachments with preflight size guard. (#1744) Thanks @araa47.
 - BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.clawd.bot/channels/bluebubbles
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
+- iMessage: normalize chat_id/chat_guid/chat_identifier prefixes case-insensitively and keep service-prefixed handles stable. (#1708) Thanks @aaronn.
 - Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.
 - Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.clawd.bot/channels/signal
 - Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Telegram: honor per-account proxy for outbound API calls. (#1774) Thanks @radek-paclt.
+- Telegram: fall back to text when voice notes are blocked by privacy settings. (#1725) Thanks @foeken.
 - Voice Call: return stream TwiML for outbound conversation calls on initial Twilio webhook. (#1634)
 - Voice Call: serialize Twilio TTS playback and cancel on barge-in to prevent overlap. (#1713) Thanks @dguido.
 - Google Chat: tighten email allowlist matching, typing cleanup, media caps, and onboarding/docs/tests. (#1635) Thanks @iHildy.
@@ -48,6 +70,7 @@ Docs: https://docs.clawd.bot
 - Media understanding: skip image understanding when the primary model already supports vision. (#1747) Thanks @tyler6204.
 - Models: default missing custom provider fields so minimal configs are accepted.
 - Messaging: keep newline chunking safe for fenced markdown blocks across channels.
+- Messaging: treat newline chunking as paragraph-aware (blank-line splits) to keep lists and headings together. (#1726) Thanks @tyler6204.
 - TUI: reload history after gateway reconnect to restore session state. (#1663)
 - Heartbeat: normalize target identifiers for consistent routing.
 - Exec: keep approvals for elevated ask unless full mode. (#1616) Thanks @ivancasco.

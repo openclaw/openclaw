@@ -7,7 +7,7 @@
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 0;
-  min-height: calc(100vh - 160px);
+  height: calc(100vh - 160px);
   margin: -16px;
   border-radius: var(--radius-xl);
   overflow: hidden;
@@ -24,6 +24,8 @@
   flex-direction: column;
   background: var(--bg-accent);
   border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow: hidden;
 }
 
 :root[data-theme="light"] .config-sidebar {
@@ -245,7 +247,7 @@
   min-height: 0;
   min-width: 0;
   background: var(--panel);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* Actions Bar */
