@@ -352,12 +352,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   }
 
   if (config.provider === "telnyx") {
-    if (!config.telnyx?.apiKey) {
+    if (!config.telnyx?.apiKey && !process.env.TELNYX_API_KEY) {
       errors.push(
         "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
       );
     }
-    if (!config.telnyx?.connectionId) {
+    if (!config.telnyx?.connectionId && !process.env.TELNYX_CONNECTION_ID) {
       errors.push(
         "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
       );
@@ -365,12 +365,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   }
 
   if (config.provider === "twilio") {
-    if (!config.twilio?.accountSid) {
+    if (!config.twilio?.accountSid && !process.env.TWILIO_ACCOUNT_SID) {
       errors.push(
         "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
       );
     }
-    if (!config.twilio?.authToken) {
+    if (!config.twilio?.authToken && !process.env.TWILIO_AUTH_TOKEN) {
       errors.push(
         "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
       );
@@ -378,12 +378,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   }
 
   if (config.provider === "plivo") {
-    if (!config.plivo?.authId) {
+    if (!config.plivo?.authId && !process.env.PLIVO_AUTH_ID) {
       errors.push(
         "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
       );
     }
-    if (!config.plivo?.authToken) {
+    if (!config.plivo?.authToken && !process.env.PLIVO_AUTH_TOKEN) {
       errors.push(
         "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
       );
