@@ -2796,6 +2796,7 @@ Defaults:
     // noSandbox: false,
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     // attachOnly: false, // set true when tunneling a remote CDP to localhost
+    // stealth: true, // evade bot detection via playwright-extra + stealth plugin
   }
 }
 ```
