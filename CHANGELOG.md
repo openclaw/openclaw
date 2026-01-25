@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Highlights
 - Ollama: provider discovery + docs. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama
+- Venius (Venice AI): highlight provider guide + cross-links + expanded guidance. https://docs.clawd.bot/providers/venice
 
 ### Changes
 - TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.clawd.bot/tts
