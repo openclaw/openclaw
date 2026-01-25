@@ -66,6 +66,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How does memory work?](#how-does-memory-work)
   - [Does semantic memory search require an OpenAI API key?](#does-semantic-memory-search-require-an-openai-api-key)
 - [Where things live on disk](#where-things-live-on-disk)
+  - [Is all data used with Clawdbot saved locally?](#is-all-data-used-with-clawdbot-saved-locally)
   - [Where does Clawdbot store its data?](#where-does-clawdbot-store-its-data)
   - [Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?](#where-should-agentsmd--soulmd--usermd--memorymd-live)
   - [What’s the recommended backup strategy?](#whats-the-recommended-backup-strategy)
@@ -917,6 +918,20 @@ If you’d rather stay local, set `memorySearch.provider = "local"` (and optiona
 models — see [Memory](/concepts/memory) for the setup details.
 
 ## Where things live on disk
+
+### Is all data used with Clawdbot saved locally?
+
+No — **Clawdbot’s state is local**, but **external services still see what you send them**.
+
+- **Local by default:** sessions, memory files, config, and workspace live on the Gateway host
+  (`~/.clawdbot` + your workspace directory).
+- **Remote by necessity:** messages you send to model providers (Anthropic/OpenAI/etc.) go to
+  their APIs, and chat platforms (WhatsApp/Telegram/Slack/etc.) store message data on their
+  servers.
+- **You control the footprint:** using local models keeps prompts on your machine, but channel
+  traffic still goes through the channel’s servers.
+
+Related: [Agent workspace](/concepts/agent-workspace), [Memory](/concepts/memory).
 
 ### Where does Clawdbot store its data?
 
