@@ -74,6 +74,22 @@ Example:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
+## External daemon mode (httpUrl)
+If you want to manage `signal-cli` yourself (slow JVM cold starts, container init, or shared CPUs), run the daemon separately and point Clawdbot at it:
+
+```json5
+{
+  channels: {
+    signal: {
+      httpUrl: "http://127.0.0.1:8080",
+      autoStart: false
+    }
+  }
+}
+```
+
+This skips auto-spawn and the startup wait inside Clawdbot. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
+
 ## Access control (DMs + groups)
 DMs:
 - Default: `channels.signal.dmPolicy = "pairing"`.
@@ -142,6 +158,7 @@ Provider options:
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
 - `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default 127.0.0.1:8080).
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
+- `channels.signal.startupTimeoutMs`: startup wait timeout in ms (cap 120000).
 - `channels.signal.receiveMode`: `on-start | manual`.
 - `channels.signal.ignoreAttachments`: skip attachment downloads.
 - `channels.signal.ignoreStories`: ignore stories from the daemon.

@@ -486,6 +486,7 @@ export const SignalAccountSchemaBase = z
     httpPort: z.number().int().positive().optional(),
     cliPath: ExecutableTokenSchema.optional(),
     autoStart: z.boolean().optional(),
+    startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
     receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
     ignoreAttachments: z.boolean().optional(),
     ignoreStories: z.boolean().optional(),

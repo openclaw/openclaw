@@ -33,6 +33,8 @@ export type SignalAccountConfig = {
   cliPath?: string;
   /** Auto-start signal-cli daemon (default: true if httpUrl not set). */
   autoStart?: boolean;
+  /** Max time to wait for signal-cli daemon startup (ms, cap 120000). */
+  startupTimeoutMs?: number;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;

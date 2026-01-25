@@ -43,6 +43,7 @@ export type MonitorSignalOpts = {
   config?: ClawdbotConfig;
   baseUrl?: string;
   autoStart?: boolean;
+  startupTimeoutMs?: number;
   cliPath?: string;
   httpHost?: string;
   httpPort?: number;
@@ -285,6 +286,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
+  const startupTimeoutMs = Math.min(
+    120_000,
+    Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
+  );
   const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
   let daemonHandle: ReturnType<typeof spawnSignalDaemon> | null = null;
 
@@ -315,7 +320,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await waitForSignalDaemonReady({
         baseUrl,
         abortSignal: opts.abortSignal,
-        timeoutMs: 30_000,
+        timeoutMs: startupTimeoutMs,
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,

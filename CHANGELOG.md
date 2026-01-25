@@ -30,6 +30,7 @@ Docs: https://docs.clawd.bot
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.
 - Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.
+- Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.clawd.bot/channels/signal
 - Exec: keep approvals for elevated ask unless full mode. (#1616) Thanks @ivancasco.
 - Agents: auto-compact on context overflow prompt errors before failing. (#1627) Thanks @rodrigouroz.
 - Agents: use the active auth profile for auto-compaction recovery.

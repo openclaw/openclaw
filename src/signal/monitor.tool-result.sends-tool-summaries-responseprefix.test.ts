@@ -126,6 +126,90 @@ describe("monitorSignalProvider tool results", () => {
       }),
     );
   });
+
+  it("uses startupTimeoutMs override when provided", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: ((code: number): never => {
+        throw new Error(`exit ${code}`);
+      }) as (code: number) => never,
+    };
+    config = {
+      ...config,
+      channels: {
+        ...config.channels,
+        signal: {
+          autoStart: true,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          startupTimeoutMs: 60_000,
+        },
+      },
+    };
+    const abortController = new AbortController();
+    streamMock.mockImplementation(async () => {
+      abortController.abort();
+      return;
+    });
+
+    await monitorSignalProvider({
+      autoStart: true,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+      runtime,
+      startupTimeoutMs: 90_000,
+    });
+
+    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
+    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 90_000,
+      }),
+    );
+  });
+
+  it("caps startupTimeoutMs at 2 minutes", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: ((code: number): never => {
+        throw new Error(`exit ${code}`);
+      }) as (code: number) => never,
+    };
+    config = {
+      ...config,
+      channels: {
+        ...config.channels,
+        signal: {
+          autoStart: true,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          startupTimeoutMs: 180_000,
+        },
+      },
+    };
+    const abortController = new AbortController();
+    streamMock.mockImplementation(async () => {
+      abortController.abort();
+      return;
+    });
+
+    await monitorSignalProvider({
+      autoStart: true,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
+    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 120_000,
+      }),
+    );
+  });
+
   it("sends tool summaries with responsePrefix", async () => {
     const abortController = new AbortController();
     replyMock.mockImplementation(async (_ctx, opts) => {
