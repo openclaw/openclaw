@@ -10,11 +10,20 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
 
+/**
+ * Chunking mode for outbound messages:
+ * - "length": Split only when exceeding textChunkLimit (default)
+ * - "newline": Split on every newline, with fallback to length-based for long lines
+ */
+export type ChunkMode = "length" | "newline";
+
 const DEFAULT_CHUNK_LIMIT = 4000;
+const DEFAULT_CHUNK_MODE: ChunkMode = "length";
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
-  accounts?: Record<string, { textChunkLimit?: number }>;
+  chunkMode?: ChunkMode;
+  accounts?: Record<string, { textChunkLimit?: number; chunkMode?: ChunkMode }>;
 };
 
 function resolveChunkLimitForProvider(
@@ -61,6 +70,79 @@ export function resolveTextChunkLimit(
     return providerOverride;
   }
   return fallback;
+}
+
+function resolveChunkModeForProvider(
+  cfgSection: ProviderChunkConfig | undefined,
+  accountId?: string | null,
+): ChunkMode | undefined {
+  if (!cfgSection) return undefined;
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const accounts = cfgSection.accounts;
+  if (accounts && typeof accounts === "object") {
+    const direct = accounts[normalizedAccountId];
+    if (direct?.chunkMode) {
+      return direct.chunkMode;
+    }
+    const matchKey = Object.keys(accounts).find(
+      (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
+    );
+    const match = matchKey ? accounts[matchKey] : undefined;
+    if (match?.chunkMode) {
+      return match.chunkMode;
+    }
+  }
+  return cfgSection.chunkMode;
+}
+
+export function resolveChunkMode(
+  cfg: ClawdbotConfig | undefined,
+  provider?: TextChunkProvider,
+  accountId?: string | null,
+): ChunkMode {
+  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) return DEFAULT_CHUNK_MODE;
+  // Chunk mode is only supported for BlueBubbles.
+  if (provider !== "bluebubbles") return DEFAULT_CHUNK_MODE;
+  const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
+  const providerConfig = (channelsConfig?.[provider] ??
+    (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
+  const mode = resolveChunkModeForProvider(providerConfig, accountId);
+  return mode ?? DEFAULT_CHUNK_MODE;
+}
+
+/**
+ * Split text on newlines, filtering empty lines.
+ * Lines exceeding maxLineLength are further split using length-based chunking.
+ */
+export function chunkByNewline(text: string, maxLineLength: number): string[] {
+  if (!text) return [];
+  const lines = text.split("\n");
+  const chunks: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue; // skip empty lines
+
+    if (trimmed.length <= maxLineLength) {
+      chunks.push(trimmed);
+    } else {
+      // Long line: fall back to length-based chunking
+      const subChunks = chunkText(trimmed, maxLineLength);
+      chunks.push(...subChunks);
+    }
+  }
+
+  return chunks;
+}
+
+/**
+ * Unified chunking function that dispatches based on mode.
+ */
+export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+  if (mode === "newline") {
+    return chunkByNewline(text, limit);
+  }
+  return chunkText(text, limit);
 }
 
 export function chunkText(text: string, limit: number): string[] {
