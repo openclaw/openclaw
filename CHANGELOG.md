@@ -3,6 +3,7 @@
 Docs: https://docs.clawd.bot
 
 ## 2026.1.25
+Status: unreleased.
 
 ### Changes
 - TBD.
