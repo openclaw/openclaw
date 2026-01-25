@@ -85,6 +85,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Remote gateways + nodes](#remote-gateways-nodes)
   - [How do commands propagate between Telegram, the gateway, and nodes?](#how-do-commands-propagate-between-telegram-the-gateway-and-nodes)
   - [How can my agent access my computer if the Gateway is hosted remotely?](#how-can-my-agent-access-my-computer-if-the-gateway-is-hosted-remotely)
+  - [Can two Clawdbots talk to each other (local + VPS)?](#can-two-clawdbots-talk-to-each-other-local--vps)
   - [Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?](#is-there-a-benefit-to-using-a-node-on-my-personal-laptop-instead-of-ssh-from-a-vps)
   - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
@@ -230,6 +231,9 @@ This installs Clawdbot **from a git checkout**, so the agent can read the code +
 reason about the exact version you are running. You can always switch back to stable later
 by re-running the installer without `--install-method git`.
 
+Tip: ask the agent to **plan and supervise** the fix (step-by-step), then execute only the
+necessary commands. That keeps changes small and easier to audit.
+
 If you discover a real bug or fix, please file a GitHub issue or send a PR:
 https://github.com/clawdbot/clawdbot/issues
 https://github.com/clawdbot/clawdbot/pulls
@@ -306,6 +310,9 @@ disk as enough for personal use, and note that a **Raspberry Pi 4 can run it**.
 
 If you want extra headroom (logs, media, other services), **2GB is recommended**, but it’s
 not a hard minimum.
+
+Tip: a small Pi/VPS can host the Gateway, and you can pair **nodes** on your laptop/phone for
+local screen/camera/canvas or command execution. See [Nodes](/nodes).
 
 ### Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?
 
@@ -973,6 +980,9 @@ If the bot “forgets” after a restart, confirm the Gateway is using the same
 workspace on every launch (and remember: remote mode uses the **gateway host’s**
 workspace, not your local laptop).
 
+Tip: if you want a durable behavior or preference, ask the bot to **write it into
+AGENTS.md or MEMORY.md** rather than relying on chat history.
+
 See [Agent workspace](/concepts/agent-workspace) and [Memory](/concepts/memory).
 
 ### What’s the recommended backup strategy?
@@ -1166,6 +1176,29 @@ Security reminder: pairing a macOS node allows `system.run` on that machine. Onl
 pair devices you trust, and review [Security](/gateway/security).
 
 Docs: [Nodes](/nodes), [Gateway protocol](/gateway/protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
+
+### Can two Clawdbots talk to each other (local + VPS)?
+
+Yes. There is no built-in "bot-to-bot" bridge, but you can wire it up in a few
+reliable ways:
+
+**Simplest:** use a normal chat channel both bots can access (Telegram/Slack/WhatsApp).
+Have Bot A send a message to Bot B, then let Bot B reply as usual.
+
+**CLI bridge (generic):** run a script that calls the other Gateway with
+`clawdbot agent --message ... --deliver`, targeting a chat where the other bot
+listens. If one bot is on Railway/VPS, point your CLI at that remote Gateway
+via SSH/Tailscale (see [Remote access](/gateway/remote)).
+
+Example pattern (run from a machine that can reach the target Gateway):
+```bash
+clawdbot agent --message "Hello from local bot" --deliver --channel telegram --reply-to <chat-id>
+```
+
+Tip: add a guardrail so the two bots do not loop endlessly (mention-only, channel
+allowlists, or a "do not reply to bot messages" rule).
+
+Docs: [Remote access](/gateway/remote), [Agent CLI](/cli/agent), [Agent send](/tools/agent-send).
 
 ### Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?
 
@@ -1514,6 +1547,11 @@ Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-5`)
 
 MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
 [Local models](/gateway/local-models).
+
+Rule of thumb: use the **best model you can afford** for high-stakes work, and a cheaper
+model for routine chat or summaries. You can route models per agent and use sub-agents to
+parallelize long tasks (each sub-agent consumes tokens). See [Models](/concepts/models) and
+[Sub-agents](/tools/subagents).
 
 Strong warning: weaker/over-quantized models are more vulnerable to prompt
 injection and unsafe behavior. See [Security](/gateway/security).

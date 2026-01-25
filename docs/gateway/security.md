@@ -29,6 +29,8 @@ Clawdbot is both a product and an experiment: you’re wiring frontier-model beh
 - where the bot is allowed to act
 - what the bot can touch
 
+Start with the smallest access that still works, then widen it as you gain confidence.
+
 ### What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
