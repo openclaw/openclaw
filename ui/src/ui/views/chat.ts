@@ -3,6 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../types";
 import type { ChatQueueItem } from "../ui-types";
 import type { ChatItem, MessageGroup } from "../types/chat-types";
+import { icons } from "../icons";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
@@ -74,18 +75,18 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   if (status.active) {
     return html`
       <div class="callout info compaction-indicator compaction-indicator--active">
-        🧹 Compacting context...
+        ${icons.loader} Compacting context...
       </div>
     `;
   }
-  
+
   // Show "compaction complete" briefly after completion
   if (status.completedAt) {
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
         <div class="callout success compaction-indicator compaction-indicator--complete">
-          🧹 Context compacted
+          ${icons.check} Context compacted
         </div>
       `;
     }
@@ -171,7 +172,7 @@ export function renderChat(props: ChatProps) {
               aria-label="Exit focus mode"
               title="Exit focus mode"
             >
-              ✕
+              ${icons.x}
             </button>
           `
         : nothing}
@@ -223,7 +224,7 @@ export function renderChat(props: ChatProps) {
                         aria-label="Remove queued message"
                         @click=${() => props.onQueueRemove(item.id)}
                       >
-                        ✕
+                        ${icons.x}
                       </button>
                     </div>
                   `,
@@ -265,7 +266,7 @@ export function renderChat(props: ChatProps) {
             ?disabled=${!props.connected}
             @click=${props.onSend}
           >
-            ${isBusy ? "Queue" : "Send"}
+            ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
           </button>
         </div>
       </div>
