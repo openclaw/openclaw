@@ -18,6 +18,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
 - Web UI: hide internal `message_id` hints in chat bubbles.
+- Web UI: show Stop button during active runs, swap back to New session when idle. (#1664) Thanks @ndbroadbent.
 - Heartbeat: normalize target identifiers for consistent routing.
 - TUI: reload history after gateway reconnect to restore session state. (#1663)
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
