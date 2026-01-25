@@ -53,6 +53,7 @@ Docs: https://docs.clawd.bot
 - Media understanding: skip image understanding when the primary model already supports vision. (#1747) Thanks @tyler6204.
 - Models: default missing custom provider fields so minimal configs are accepted.
 - Messaging: keep newline chunking safe for fenced markdown blocks across channels.
+- Messaging: treat newline chunking as paragraph-aware (blank-line splits) to keep lists and headings together. (#1726) Thanks @tyler6204.
 - TUI: reload history after gateway reconnect to restore session state. (#1663)
 - Heartbeat: normalize target identifiers for consistent routing.
 - Exec: keep approvals for elevated ask unless full mode. (#1616) Thanks @ivancasco.

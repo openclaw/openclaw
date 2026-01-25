@@ -173,10 +173,16 @@ export function chunkByNewline(
  * - Only breaks at paragraph separators ("\n\n" or more, allowing whitespace on blank lines)
  * - Packs multiple paragraphs into a single chunk up to `limit`
  * - Falls back to length-based splitting when a single paragraph exceeds `limit`
+ *   (unless `splitLongParagraphs` is disabled)
  */
-export function chunkByParagraph(text: string, limit: number): string[] {
+export function chunkByParagraph(
+  text: string,
+  limit: number,
+  opts?: { splitLongParagraphs?: boolean },
+): string[] {
   if (!text) return [];
   if (limit <= 0) return [text];
+  const splitLongParagraphs = opts?.splitLongParagraphs !== false;
 
   // Normalize to \n so blank line detection is consistent.
   const normalized = text.replace(/\r\n?/g, "\n");
@@ -186,7 +192,9 @@ export function chunkByParagraph(text: string, limit: number): string[] {
   // boundaries, not only exceeding a length limit.)
   const paragraphRe = /\n[\t ]*\n+/;
   if (!paragraphRe.test(normalized)) {
-    return normalized.length <= limit ? [normalized] : chunkText(normalized, limit);
+    if (normalized.length <= limit) return [normalized];
+    if (!splitLongParagraphs) return [normalized];
+    return chunkText(normalized, limit);
   }
 
   const spans = parseFenceSpans(normalized);
@@ -213,6 +221,8 @@ export function chunkByParagraph(text: string, limit: number): string[] {
     if (!paragraph.trim()) continue;
     if (paragraph.length <= limit) {
       chunks.push(paragraph);
+    } else if (!splitLongParagraphs) {
+      chunks.push(paragraph);
     } else {
       chunks.push(...chunkText(paragraph, limit));
     }
@@ -235,7 +245,7 @@ export function chunkMarkdownTextWithMode(text: string, limit: number, mode: Chu
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    const paragraphChunks = chunkByParagraph(text, limit);
+    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
     const out: string[] = [];
     for (const chunk of paragraphChunks) {
       const nested = chunkMarkdownText(chunk, limit);
