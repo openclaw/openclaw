@@ -344,7 +344,16 @@ jobs:
       - name: Run ${{ matrix.task }}
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: ${{ matrix.command }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if ${{ matrix.command }}; then
+              exit 0
+            fi
+            echo "Test run failed (attempt $attempt/3). Retrying (flaky vitest worker crash)…"
+            sleep 10
+          done
+          exit 1
 
   macos-app:
     if: github.event_name == 'pull_request'

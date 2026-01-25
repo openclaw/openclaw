@@ -6,8 +6,10 @@ import { defineConfig } from "vitest/config";
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
+const isMacOS = process.platform === "darwin";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const ciWorkers = isWindows ? 2 : 3;
+// Cap CI workers: Windows/macOS get 2 (flaky worker crashes), Linux gets 3
+const ciWorkers = isWindows || isMacOS ? 2 : 3;
 
 export default defineConfig({
   resolve: {
