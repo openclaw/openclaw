@@ -1021,6 +1021,7 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
       ],
       historyLimit: 50,                     // include last N group messages as context (0 disables)
       replyToMode: "first",                 // off | first | all
+      linkPreview: true,                   // toggle outbound link previews
       streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
       draftChunk: {                        // optional; only for streamMode=block
         minChars: 200,

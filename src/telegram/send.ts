@@ -42,8 +42,6 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
-  /** Controls whether link previews are shown. Default: true (previews enabled). */
-  linkPreview?: boolean;
 };
 
 type TelegramSendResult = {
@@ -200,8 +198,8 @@ export async function sendMessageTelegram(
   });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
 
-  // Resolve link preview setting: explicit opt > config > default (enabled).
-  const linkPreviewEnabled = opts.linkPreview ?? account.config.linkPreview ?? true;
+  // Resolve link preview setting from config (default: enabled).
+  const linkPreviewEnabled = account.config.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
 
   const sendTelegramText = async (
@@ -210,10 +208,14 @@ export async function sendMessageTelegram(
     fallbackText?: string,
   ) => {
     const htmlText = renderHtmlText(rawText);
+    const baseParams = params ? { ...params } : {};
+    if (linkPreviewOptions) {
+      baseParams.link_preview_options = linkPreviewOptions;
+    }
+    const hasBaseParams = Object.keys(baseParams).length > 0;
     const sendParams = {
       parse_mode: "HTML" as const,
-      ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-      ...params,
+      ...baseParams,
     };
     const res = await request(() => api.sendMessage(chatId, htmlText, sendParams), "message").catch(
       async (err) => {
@@ -225,7 +227,7 @@ export async function sendMessageTelegram(
             console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
           }
           const fallback = fallbackText ?? rawText;
-          const plainParams = params && Object.keys(params).length > 0 ? { ...params } : undefined;
+          const plainParams = hasBaseParams ? baseParams : undefined;
           return await request(
             () =>
               plainParams
