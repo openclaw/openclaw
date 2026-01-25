@@ -16,6 +16,56 @@ function normalizeIPv4MappedAddress(ip: string): string {
   return ip;
 }
 
+function normalizeIp(ip: string | undefined): string | undefined {
+  const trimmed = ip?.trim();
+  if (!trimmed) return undefined;
+  return normalizeIPv4MappedAddress(trimmed.toLowerCase());
+}
+
+function stripOptionalPort(ip: string): string {
+  if (ip.startsWith("[")) {
+    const end = ip.indexOf("]");
+    if (end !== -1) return ip.slice(1, end);
+  }
+  if (net.isIP(ip)) return ip;
+  const lastColon = ip.lastIndexOf(":");
+  if (lastColon > -1 && ip.includes(".") && ip.indexOf(":") === lastColon) {
+    const candidate = ip.slice(0, lastColon);
+    if (net.isIP(candidate) === 4) return candidate;
+  }
+  return ip;
+}
+
+function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
+  const raw = forwardedFor?.split(",")[0]?.trim();
+  if (!raw) return undefined;
+  return normalizeIp(stripOptionalPort(raw));
+}
+
+function parseRealIp(realIp?: string): string | undefined {
+  const raw = realIp?.trim();
+  if (!raw) return undefined;
+  return normalizeIp(stripOptionalPort(raw));
+}
+
+export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
+  const normalized = normalizeIp(ip);
+  if (!normalized || !trustedProxies || trustedProxies.length === 0) return false;
+  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+}
+
+export function resolveGatewayClientIp(params: {
+  remoteAddr?: string;
+  forwardedFor?: string;
+  realIp?: string;
+  trustedProxies?: string[];
+}): string | undefined {
+  const remote = normalizeIp(params.remoteAddr);
+  if (!remote) return undefined;
+  if (!isTrustedProxyAddress(remote, params.trustedProxies)) return remote;
+  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp) ?? remote;
+}
+
 export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (isLoopbackAddress(ip)) return true;
   if (!ip) return false;

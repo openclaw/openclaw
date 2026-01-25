@@ -8,7 +8,7 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv6: () => testTailnetIPv6.value,
 }));
 
-import { isLocalGatewayAddress } from "./net.js";
+import { isLocalGatewayAddress, resolveGatewayClientIp } from "./net.js";
 
 describe("gateway net", () => {
   beforeEach(() => {
@@ -37,5 +37,41 @@ describe("gateway net", () => {
   test("treats local tailnet IPv6 as local", () => {
     testTailnetIPv6.value = "fd7a:115c:a1e0::123";
     expect(isLocalGatewayAddress("fd7a:115c:a1e0::123")).toBe(true);
+  });
+
+  test("uses forwarded-for when remote is a trusted proxy", () => {
+    const clientIp = resolveGatewayClientIp({
+      remoteAddr: "10.0.0.2",
+      forwardedFor: "203.0.113.9, 10.0.0.2",
+      trustedProxies: ["10.0.0.2"],
+    });
+    expect(clientIp).toBe("203.0.113.9");
+  });
+
+  test("ignores forwarded-for from untrusted proxies", () => {
+    const clientIp = resolveGatewayClientIp({
+      remoteAddr: "10.0.0.3",
+      forwardedFor: "203.0.113.9",
+      trustedProxies: ["10.0.0.2"],
+    });
+    expect(clientIp).toBe("10.0.0.3");
+  });
+
+  test("normalizes trusted proxy IPs and strips forwarded ports", () => {
+    const clientIp = resolveGatewayClientIp({
+      remoteAddr: "::ffff:10.0.0.2",
+      forwardedFor: "203.0.113.9:1234",
+      trustedProxies: ["10.0.0.2"],
+    });
+    expect(clientIp).toBe("203.0.113.9");
+  });
+
+  test("falls back to x-real-ip when forwarded-for is missing", () => {
+    const clientIp = resolveGatewayClientIp({
+      remoteAddr: "10.0.0.2",
+      realIp: "203.0.113.10",
+      trustedProxies: ["10.0.0.2"],
+    });
+    expect(clientIp).toBe("203.0.113.10");
   });
 });

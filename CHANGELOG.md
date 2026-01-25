@@ -28,6 +28,7 @@ Docs: https://docs.clawd.bot
 - Agents: auto-compact on context overflow prompt errors before failing. (#1627) Thanks @rodrigouroz.
 - Agents: use the active auth profile for auto-compaction recovery.
 - Models: default missing custom provider fields so minimal configs are accepted.
+- Gateway: honor trusted proxy client IPs for local pairing + HTTP checks. (#1654) Thanks @ndbroadbent.
 - Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
 - macOS: default direct-transport `ws://` URLs to port 18789; document `gateway.remote.transport`. (#1603) Thanks @ngutman.
 - Voice Call: return stream TwiML for outbound conversation calls on initial Twilio webhook. (#1634)

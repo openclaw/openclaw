@@ -322,6 +322,11 @@ Tailscale.
 you terminate TLS or proxy in front of the gateway, disable
 `gateway.auth.allowTailscale` and use token/password auth instead.
 
+Trusted proxies:
+- If you terminate TLS in front of the Gateway, set `gateway.trustedProxies` to your proxy IPs.
+- Clawdbot will trust `x-forwarded-for` (or `x-real-ip`) from those IPs to determine the client IP for local pairing checks and HTTP auth/local checks.
+- Ensure your proxy **overwrites** `x-forwarded-for` and blocks direct access to the Gateway port.
+
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 ### 0.6.1) Browser control server over Tailscale (recommended)

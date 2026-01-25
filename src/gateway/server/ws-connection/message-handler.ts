@@ -26,7 +26,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect } from "../../auth.js";
 import { loadConfig } from "../../../config/config.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
-import { isLocalGatewayAddress } from "../../net.js";
+import { isLocalGatewayAddress, resolveGatewayClientIp } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import {
   type ConnectParams,
@@ -104,6 +104,7 @@ export function attachGatewayWsMessageHandler(params: {
   connId: string;
   remoteAddr?: string;
   forwardedFor?: string;
+  realIp?: string;
   requestHost?: string;
   requestOrigin?: string;
   requestUserAgent?: string;
@@ -133,6 +134,7 @@ export function attachGatewayWsMessageHandler(params: {
     connId,
     remoteAddr,
     forwardedFor,
+    realIp,
     requestHost,
     requestOrigin,
     requestUserAgent,
@@ -156,6 +158,11 @@ export function attachGatewayWsMessageHandler(params: {
     logHealth,
     logWsControl,
   } = params;
+
+  const configSnapshot = loadConfig();
+  const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+  const clientIp = resolveGatewayClientIp({ remoteAddr, forwardedFor, realIp, trustedProxies });
+  const isLocalClient = isLocalGatewayAddress(clientIp);
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
 
@@ -300,7 +307,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         if (!device) {
           const allowInsecureControlUi =
-            isControlUi && loadConfig().gateway?.controlUi?.allowInsecureAuth === true;
+            isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
           const canSkipDevice =
             isControlUi && allowInsecureControlUi ? hasTokenAuth || hasPasswordAuth : hasTokenAuth;
 
@@ -380,7 +387,7 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, "device signature expired");
             return;
           }
-          const nonceRequired = !isLocalGatewayAddress(remoteAddr);
+          const nonceRequired = !isLocalClient;
           const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
           if (nonceRequired && !providedNonce) {
             setHandshakeState("failed");
@@ -495,6 +502,7 @@ export function attachGatewayWsMessageHandler(params: {
           auth: resolvedAuth,
           connectAuth: connectParams.auth,
           req: upgradeReq,
+          trustedProxies,
         });
         let authOk = authResult.ok;
         let authMethod = authResult.method ?? "none";
@@ -556,8 +564,8 @@ export function attachGatewayWsMessageHandler(params: {
               clientMode: connectParams.client.mode,
               role,
               scopes,
-              remoteIp: remoteAddr,
-              silent: isLocalGatewayAddress(remoteAddr),
+              remoteIp: clientIp,
+              silent: isLocalClient,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -640,7 +648,7 @@ export function attachGatewayWsMessageHandler(params: {
               clientMode: connectParams.client.mode,
               role,
               scopes,
-              remoteIp: remoteAddr,
+              remoteIp: clientIp,
             });
           }
         }
@@ -689,7 +697,7 @@ export function attachGatewayWsMessageHandler(params: {
         if (presenceKey) {
           upsertPresence(presenceKey, {
             host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
-            ip: isLocalGatewayAddress(remoteAddr) ? undefined : remoteAddr,
+            ip: isLocalClient ? undefined : clientIp,
             version: connectParams.client.version,
             platform: connectParams.client.platform,
             deviceFamily: connectParams.client.deviceFamily,
@@ -748,7 +756,7 @@ export function attachGatewayWsMessageHandler(params: {
         setHandshakeState("connected");
         if (role === "node") {
           const context = buildRequestContext();
-          const nodeSession = context.nodeRegistry.register(nextClient, { remoteIp: remoteAddr });
+          const nodeSession = context.nodeRegistry.register(nextClient, { remoteIp: clientIp });
           const instanceIdRaw = connectParams.client.instanceId;
           const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
