@@ -97,14 +97,14 @@ export async function resolveGatewayBindHost(
 
   if (mode === "loopback") {
     // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindTo("127.0.0.1")) return "127.0.0.1";
+    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
     return "0.0.0.0"; // extreme fallback
   }
 
   if (mode === "tailnet") {
     const tailnetIP = pickPrimaryTailnetIPv4();
-    if (tailnetIP && (await canBindTo(tailnetIP))) return tailnetIP;
-    if (await canBindTo("127.0.0.1")) return "127.0.0.1";
+    if (tailnetIP && (await canBindToHost(tailnetIP))) return tailnetIP;
+    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
     return "0.0.0.0";
   }
 
@@ -116,13 +116,13 @@ export async function resolveGatewayBindHost(
     const host = customHost?.trim();
     if (!host) return "0.0.0.0"; // invalid config → fall back to all
 
-    if (isValidIPv4(host) && (await canBindTo(host))) return host;
+    if (isValidIPv4(host) && (await canBindToHost(host))) return host;
     // Custom IP failed → fall back to LAN
     return "0.0.0.0";
   }
 
   if (mode === "auto") {
-    if (await canBindTo("127.0.0.1")) return "127.0.0.1";
+    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
     return "0.0.0.0";
   }
 
@@ -136,7 +136,7 @@ export async function resolveGatewayBindHost(
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-async function canBindTo(host: string): Promise<boolean> {
+export async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -149,6 +149,16 @@ async function canBindTo(host: string): Promise<boolean> {
     // Use port 0 to let OS pick an available port for testing
     testServer.listen(0, host);
   });
+}
+
+export async function resolveGatewayListenHosts(
+  bindHost: string,
+  opts?: { canBindToHost?: (host: string) => Promise<boolean> },
+): Promise<string[]> {
+  if (bindHost !== "127.0.0.1") return [bindHost];
+  const canBind = opts?.canBindToHost ?? canBindToHost;
+  if (await canBind("::1")) return [bindHost, "::1"];
+  return [bindHost];
 }
 
 /**
