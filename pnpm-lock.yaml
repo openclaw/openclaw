@@ -34,6 +34,9 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.4
         version: 1.3.4
+      '@line/bot-sdk':
+        specifier: ^10.6.0
+        version: 10.6.0
       '@lydell/node-pty':
         specifier: 1.2.0-beta.3
         version: 1.2.0-beta.3
@@ -127,6 +130,9 @@ importers:
       markdown-it:
         specifier: ^14.1.0
         version: 14.1.0
+      node-edge-tts:
+        specifier: ^1.2.9
+        version: 1.2.9
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
@@ -302,7 +308,23 @@ importers:
 
   extensions/google-gemini-cli-auth: {}
 
+  extensions/googlechat:
+    dependencies:
+      google-auth-library:
+        specifier: ^10.5.0
+        version: 10.5.0
+    devDependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/imessage: {}
+
+  extensions/line:
+    devDependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/llm-task: {}
 
@@ -335,8 +357,8 @@ importers:
   extensions/memory-core:
     dependencies:
       clawdbot:
-        specifier: '*'
-        version: 2026.1.23-1(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
+        specifier: '>=2026.1.24'
+        version: 2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
 
   extensions/memory-lancedb:
     dependencies:
@@ -362,8 +384,8 @@ importers:
         specifier: ^1.2.2
         version: 1.2.2
       clawdbot:
-        specifier: '*'
-        version: 2026.1.23-1(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
+        specifier: '>=2026.1.24'
+        version: 2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -376,8 +398,8 @@ importers:
   extensions/nostr:
     dependencies:
       clawdbot:
-        specifier: '*'
-        version: 2026.1.23-1(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
+        specifier: '>=2026.1.24'
+        version: 2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
       nostr-tools:
         specifier: ^2.20.0
         version: 2.20.0(typescript@5.9.3)
@@ -419,8 +441,8 @@ importers:
   extensions/zalo:
     dependencies:
       clawdbot:
-        specifier: '*'
-        version: 2026.1.23-1(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
+        specifier: '>=2026.1.24'
+        version: 2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
       undici:
         specifier: 7.19.0
         version: 7.19.0
@@ -431,8 +453,8 @@ importers:
         specifier: 0.34.47
         version: 0.34.47
       clawdbot:
-        specifier: '*'
-        version: 2026.1.23-1(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
+        specifier: '>=2026.1.24'
+        version: 2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
 
   ui:
     dependencies:
@@ -1162,6 +1184,10 @@ packages:
     os: [darwin, linux, win32]
     peerDependencies:
       apache-arrow: '>=15.0.0 <=18.1.0'
+
+  '@line/bot-sdk@10.6.0':
+    resolution: {integrity: sha512-4hSpglL/G/cW2JCcohaYz/BS0uOSJNV9IEYdMm0EiPEvDLayoI2hGq2D86uYPQFD2gvgkyhmzdShpWLG3P5r3w==}
+    engines: {node: '>=20'}
 
   '@lit-labs/signals@0.2.0':
     resolution: {integrity: sha512-68plyIbciumbwKaiilhLNyhz4Vg6/+nJwDufG2xxWA9r/fUw58jxLHCAlKs+q1CE5Lmh3cZ3ShyYKnOCebEpVA==}
@@ -2526,6 +2552,9 @@ packages:
   '@types/node@20.19.30':
     resolution: {integrity: sha512-WJtwWJu7UdlvzEAUm484QNg5eAoq5QR08KDNx7g45Usrs2NtOPiX8ugDqmKdXkyL03rBqU5dYNYVQetEpBHq2g==}
 
+  '@types/node@24.10.9':
+    resolution: {integrity: sha512-ne4A0IpG3+2ETuREInjPNhUGis1SFjv1d5asp8MzEAGtOZeTeHVDOYqOgqfhvseqg/iXty2hjBf1zAOb7RNiNw==}
+
   '@types/node@25.0.10':
     resolution: {integrity: sha512-zWW5KPngR/yvakJgGOmZ5vTBemDoSqF3AcV/LrO5u5wTWyEAVVh+IT39G4gtyAkh3CtTZs8aX/yRM82OfzHJRg==}
 
@@ -2987,8 +3016,8 @@ packages:
   class-variance-authority@0.7.1:
     resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
 
-  clawdbot@2026.1.23-1:
-    resolution: {integrity: sha512-t51ks5bnTRQNCzoTunUJaoeMjamvP3zP5EyyadmI34kXYGIbWcCx242w5XMr5h4sLSw59nBw3lJ74vErWDsz9w==}
+  clawdbot@2026.1.24:
+    resolution: {integrity: sha512-foszbNXzk743kQBx2Nfc2KNlStZyBAVAYLQJ+KaONh009r8oB1a74kQ8wTnKX+SDNaQ9MvaE9tOisVUi+H3F+Q==}
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -4178,6 +4207,10 @@ packages:
   node-downloader-helper@2.1.10:
     resolution: {integrity: sha512-8LdieUd4Bqw/CzfZLf30h+1xSAq3riWSDfWKsPJYz8EULoWxjS1vw6BGLYFZDxQgXjDR7UmC9UpQ0oV93U98Fg==}
     engines: {node: '>=14.18'}
+    hasBin: true
+
+  node-edge-tts@1.2.9:
+    resolution: {integrity: sha512-fvfW1dUgJdZAdTniC6MzLTMwnNUFKGKaUdRJ1OsveOYlfnPUETBU973CG89565txvbBowCQ4Czdeu3qSX8bNOg==}
     hasBin: true
 
   node-fetch@2.7.0:
@@ -6318,6 +6351,14 @@ snapshots:
       '@lancedb/lancedb-win32-arm64-msvc': 0.23.0
       '@lancedb/lancedb-win32-x64-msvc': 0.23.0
 
+  '@line/bot-sdk@10.6.0':
+    dependencies:
+      '@types/node': 24.10.9
+    optionalDependencies:
+      axios: 1.13.2(debug@4.4.3)
+    transitivePeerDependencies:
+      - debug
+
   '@lit-labs/signals@0.2.0':
     dependencies:
       lit: 3.3.2
@@ -7832,6 +7873,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/node@24.10.9':
+    dependencies:
+      undici-types: 7.16.0
+
   '@types/node@25.0.10':
     dependencies:
       undici-types: 7.16.0
@@ -8373,7 +8418,7 @@ snapshots:
     dependencies:
       clsx: 2.1.1
 
-  clawdbot@2026.1.23-1(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3):
+  clawdbot@2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3):
     dependencies:
       '@agentclientprotocol/sdk': 0.13.1(zod@4.3.6)
       '@aws-sdk/client-bedrock': 3.975.0
@@ -8382,6 +8427,7 @@ snapshots:
       '@grammyjs/runner': 2.0.3(grammy@1.39.3)
       '@grammyjs/transformer-throttler': 1.2.1(grammy@1.39.3)
       '@homebridge/ciao': 1.3.4
+      '@line/bot-sdk': 10.6.0
       '@lydell/node-pty': 1.2.0-beta.3
       '@mariozechner/pi-agent-core': 0.49.3(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai': 0.49.3(ws@8.19.0)(zod@4.3.6)
@@ -8413,6 +8459,7 @@ snapshots:
       linkedom: 0.18.12
       long: 5.3.2
       markdown-it: 14.1.0
+      node-edge-tts: 1.2.9
       osc-progress: 0.3.0
       pdfjs-dist: 5.4.530
       playwright-core: 1.58.0
@@ -9742,6 +9789,16 @@ snapshots:
   node-domexception@1.0.0: {}
 
   node-downloader-helper@2.1.10: {}
+
+  node-edge-tts@1.2.9:
+    dependencies:
+      https-proxy-agent: 7.0.6
+      ws: 8.19.0
+      yargs: 17.7.2
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   node-fetch@2.7.0:
     dependencies:

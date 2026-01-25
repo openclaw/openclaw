@@ -328,11 +328,14 @@ describe("runHeartbeatOnce", () => {
   it("uses the last non-empty payload for delivery", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: workspaceDir,
             heartbeat: { every: "5m", target: "whatsapp" },
           },
         },
@@ -385,17 +388,21 @@ describe("runHeartbeatOnce", () => {
   it("uses per-agent heartbeat overrides and session keys", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: workspaceDir,
             heartbeat: { every: "30m", prompt: "Default prompt" },
           },
           list: [
             { id: "main", default: true },
             {
               id: "ops",
+              workspace: workspaceDir,
               heartbeat: { every: "5m", target: "whatsapp", prompt: "Ops check" },
             },
           ],
@@ -455,12 +462,15 @@ describe("runHeartbeatOnce", () => {
   it("runs heartbeats in the explicit session key when configured", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const groupId = "120363401234567890@g.us";
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: workspaceDir,
             heartbeat: {
               every: "5m",
               target: "last",
@@ -592,11 +602,14 @@ describe("runHeartbeatOnce", () => {
   it("can include reasoning payloads when enabled", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: workspaceDir,
             heartbeat: {
               every: "5m",
               target: "whatsapp",
@@ -663,11 +676,14 @@ describe("runHeartbeatOnce", () => {
   it("delivers reasoning even when the main heartbeat reply is HEARTBEAT_OK", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: workspaceDir,
             heartbeat: {
               every: "5m",
               target: "whatsapp",
@@ -733,12 +749,14 @@ describe("runHeartbeatOnce", () => {
   it("loads the default agent session from templated stores", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const cfg: ClawdbotConfig = {
         agents: {
-          defaults: { heartbeat: { every: "5m" } },
-          list: [{ id: "work", default: true }],
+          defaults: { workspace: workspaceDir, heartbeat: { every: "5m" } },
+          list: [{ id: "work", default: true, workspace: workspaceDir }],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storeTemplate },
