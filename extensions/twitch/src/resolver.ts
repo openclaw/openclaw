@@ -99,7 +99,7 @@ export async function resolveTwitchTargets(
             id: user.id,
             name: user.name,
           });
-          log.debug(`Resolved user ID ${normalized} -> ${user.name}`);
+          log.debug?.(`Resolved user ID ${normalized} -> ${user.name}`);
         } else {
           results.push({
             input,
@@ -120,7 +120,7 @@ export async function resolveTwitchTargets(
             name: user.name,
             note: user.displayName !== user.name ? `display: ${user.displayName}` : undefined,
           });
-          log.debug(`Resolved username ${normalized} -> ${user.id} (${user.name})`);
+          log.debug?.(`Resolved username ${normalized} -> ${user.id} (${user.name})`);
         } else {
           results.push({
             input,
