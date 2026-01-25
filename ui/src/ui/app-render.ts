@@ -512,7 +512,6 @@ export function renderApp(state: AppViewState) {
               activeSubsection: state.configActiveSubsection,
               onRawChange: (next) => {
                 state.configRaw = next;
-                state.configFormDirty = true;
               },
               onFormModeChange: (mode) => (state.configFormMode = mode),
               onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
