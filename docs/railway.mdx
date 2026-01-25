@@ -8,10 +8,16 @@ Deploy Clawdbot on Railway with a one-click template and finish setup in your br
 
 <a href="https://railway.com/deploy/clawdbot-railway-template" target="_blank" rel="noreferrer">Deploy on Railway</a>
 
-After deploy, open:
+After deploy, find your public URL in **Railway → your service → Settings → Domains**.
 
-- `https://<your-domain>/setup` — setup wizard (password protected)
-- `https://<your-domain>/clawdbot` — Control UI
+Railway will either:
+- give you a generated domain (often `https://<something>.up.railway.app`), or
+- use your custom domain if you attached one.
+
+Then open:
+
+- `https://<your-railway-domain>/setup` — setup wizard (password protected)
+- `https://<your-railway-domain>/clawdbot` — Control UI
 
 ## What you get
 
@@ -45,7 +51,7 @@ Set these variables on the service:
 
 ## Setup flow
 
-1) Visit `https://<your-domain>/setup` and enter your `SETUP_PASSWORD`.
+1) Visit `https://<your-railway-domain>/setup` and enter your `SETUP_PASSWORD`.
 2) Choose a model/auth provider and paste your key.
 3) (Optional) Add Telegram/Discord/Slack tokens.
 4) Click **Run setup**.
@@ -73,6 +79,6 @@ If Telegram DMs are set to pairing, the setup wizard can approve the pairing cod
 
 Download a backup at:
 
-- `https://<your-domain>/setup/export`
+- `https://<your-railway-domain>/setup/export`
 
 This exports your Clawdbot state + workspace so you can migrate to another host without losing config or memory.
