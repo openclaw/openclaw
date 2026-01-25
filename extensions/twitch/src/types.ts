@@ -52,7 +52,7 @@ export interface TwitchAccountConfig {
   /** Twitch OAuth token (requires chat:read and chat:write scopes) */
   token: string;
   /** Twitch client ID (from Twitch Developer Portal or twitchtokengenerator.com) */
-  clientId?: string;
+  clientId: string;
   /** Channel name to join (required) */
   channel: string;
   /** Enable this account */

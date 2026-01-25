@@ -196,6 +196,7 @@ Restrict access to specific roles:
           username: "mybot",
           token: "oauth:...",
           clientId: "...",
+          channel: "your_channel",
           allowedRoles: ["moderator", "vip"]
         }
       }
@@ -224,6 +225,7 @@ Only allow specific Twitch user IDs (most secure):
           username: "mybot",
           token: "oauth:...",
           clientId: "...",
+          channel: "your_channel",
           allowFrom: ["123456789", "987654321"]
         }
       }
@@ -252,6 +254,7 @@ Users in `allowFrom` bypass role checks. In this example:
           username: "mybot",
           token: "oauth:...",
           clientId: "...",
+          channel: "your_channel",
           allowFrom: ["123456789"],
           allowedRoles: ["moderator"]
         }
@@ -274,6 +277,7 @@ Only respond when the bot is mentioned:
           username: "mybot",
           token: "oauth:...",
           clientId: "...",
+          channel: "your_channel",
           requireMention: true
         }
       }
@@ -306,7 +310,8 @@ Config with env fallback:
       accounts: {
         default: {
           username: "mybot",
-          clientId: "your_client_id"
+          clientId: "your_client_id",
+          channel: "your_channel"
           // token will be read from CLAWDBOT_TWITCH_ACCESS_TOKEN
         }
       }
@@ -377,6 +382,7 @@ clawdbot channels status --probe
           username: "mybot",
           token: "oauth:...",
           clientId: "...",
+          channel: "your_channel",
           // Temporary: allow everyone
           allowedRoles: ["all"]
         }
@@ -386,7 +392,7 @@ clawdbot channels status --probe
 }
 ```
 
-**Check the bot is in the channel:** The bot must join the channel (either `channel: "target_channel"` or defaults to `username`).
+**Check the bot is in the channel:** The bot must join the channel specified in `channel`.
 
 ### Token issues
 
