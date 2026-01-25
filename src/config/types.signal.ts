@@ -8,6 +8,7 @@ import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
+export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -64,6 +65,19 @@ export type SignalAccountConfig = {
   reactionNotifications?: SignalReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
   reactionAllowlist?: Array<string | number>;
+  /** Action toggles for message tool capabilities. */
+  actions?: {
+    /** Enable/disable sending reactions via message tool (default: true). */
+    reactions?: boolean;
+  };
+  /**
+   * Controls agent reaction behavior:
+   * - "off": No reactions
+   * - "ack": Only automatic ack reactions (👀 when processing)
+   * - "minimal": Agent can react sparingly (default)
+   * - "extensive": Agent can react liberally
+   */
+  reactionLevel?: SignalReactionLevel;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
