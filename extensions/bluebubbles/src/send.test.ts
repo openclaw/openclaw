@@ -187,6 +187,47 @@ describe("send", () => {
       expect(result).toBe("iMessage;-;+15551234567");
     });
 
+    it("returns null when handle only exists in group chat (not DM)", async () => {
+      // This is the critical fix: if a phone number only exists as a participant in a group chat
+      // (no direct DM chat), we should NOT send to that group. Return null instead.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;+;group-the-council",
+                  participants: [
+                    { address: "+12622102921" },
+                    { address: "+15550001111" },
+                    { address: "+15550002222" },
+                  ],
+                },
+              ],
+            }),
+        })
+        // Empty second page to stop pagination
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+12622102921",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      // Should return null, NOT the group chat GUID
+      expect(result).toBeNull();
+    });
+
     it("returns null when chat not found", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
