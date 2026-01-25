@@ -155,9 +155,44 @@ export async function deliverReplies(params: {
           // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
-          await bot.api.sendVoice(chatId, file, {
-            ...mediaParams,
-          });
+          try {
+            await bot.api.sendVoice(chatId, file, {
+              ...mediaParams,
+            });
+          } catch (voiceErr) {
+            // Fall back to text if voice messages are forbidden in this chat.
+            // This happens when the recipient has Telegram Premium privacy settings
+            // that block voice messages (Settings > Privacy > Voice Messages).
+            const errMsg = formatErrorMessage(voiceErr);
+            if (errMsg.includes("VOICE_MESSAGES_FORBIDDEN")) {
+              if (!reply.text?.trim()) {
+                throw voiceErr;
+              }
+              logVerbose(
+                "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
+              );
+              // Send the text content instead of the voice message.
+              if (reply.text) {
+                const chunks = chunkText(reply.text);
+                for (const chunk of chunks) {
+                  await sendTelegramText(bot, chatId, chunk.html, runtime, {
+                    replyToMessageId:
+                      replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
+                    messageThreadId,
+                    textMode: "html",
+                    plainText: chunk.text,
+                    linkPreview,
+                  });
+                  if (replyToId && !hasReplied) {
+                    hasReplied = true;
+                  }
+                }
+              }
+              // Skip this media item; continue with next.
+              continue;
+            }
+            throw voiceErr;
+          }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
           await bot.api.sendAudio(chatId, file, {

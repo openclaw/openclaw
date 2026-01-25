@@ -42,6 +42,7 @@ Docs: https://docs.clawd.bot
 - Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Telegram: honor per-account proxy for outbound API calls. (#1774) Thanks @radek-paclt.
+- Telegram: fall back to text when voice notes are blocked by privacy settings. (#1725) Thanks @foeken.
 - Voice Call: return stream TwiML for outbound conversation calls on initial Twilio webhook. (#1634)
 - Voice Call: serialize Twilio TTS playback and cancel on barge-in to prevent overlap. (#1713) Thanks @dguido.
 - Google Chat: tighten email allowlist matching, typing cleanup, media caps, and onboarding/docs/tests. (#1635) Thanks @iHildy.
