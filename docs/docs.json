@@ -780,6 +780,18 @@
     {
       "source": "/plugins",
       "destination": "/plugin"
+    },
+    {
+      "source": "/railway/",
+      "destination": "/railway"
+    },
+    {
+      "source": "/install/railway",
+      "destination": "/railway"
+    },
+    {
+      "source": "/install/railway/",
+      "destination": "/railway"
     }
   ],
   "navigation": {
@@ -818,6 +830,7 @@
           "install/ansible",
           "install/nix",
           "install/docker",
+          "railway",
           "install/bun"
         ]
       },
