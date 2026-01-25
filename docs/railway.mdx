@@ -16,7 +16,7 @@ and you configure everything via the `/setup` web wizard.
 
 ## One-click deploy
 
-<a href="https://railway.com/deploy/clawdbot-railway-template" target="_blank" rel="noreferrer">Deploy on Railway</a>
+<a href="https://railway.app/new/template?template=https://github.com/vignesh07/clawdbot-railway-template" target="_blank" rel="noreferrer">Deploy on Railway</a>
 
 After deploy, find your public URL in **Railway → your service → Settings → Domains**.
 
@@ -55,6 +55,7 @@ Attach a volume mounted at:
 Set these variables on the service:
 
 - `SETUP_PASSWORD` (required)
+- `PORT=8080` (required — must match the port in Public Networking)
 - `CLAWDBOT_STATE_DIR=/data/.clawdbot` (recommended)
 - `CLAWDBOT_WORKSPACE_DIR=/data/workspace` (recommended)
 - `CLAWDBOT_GATEWAY_TOKEN` (recommended; treat as an admin secret)
@@ -82,8 +83,9 @@ If Telegram DMs are set to pairing, the setup wizard can approve the pairing cod
 1) Go to https://discord.com/developers/applications
 2) **New Application** → choose a name
 3) **Bot** → **Add Bot**
-4) Copy the **Bot Token** and paste into `/setup`
-5) Invite the bot to your server (OAuth2 URL Generator; scopes: `bot`, `applications.commands`)
+4) **Enable MESSAGE CONTENT INTENT** under Bot → Privileged Gateway Intents (required or the bot will crash on startup)
+5) Copy the **Bot Token** and paste into `/setup`
+6) Invite the bot to your server (OAuth2 URL Generator; scopes: `bot`, `applications.commands`)
 
 ## Backups & migration
 

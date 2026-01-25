@@ -64,6 +64,8 @@ export type {
   ClawdbotPluginServiceContext,
 } from "../plugins/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
+export { normalizePluginHttpPath } from "../plugins/http-path.js";
+export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { ClawdbotConfig } from "../config/config.js";
 export type { ChannelDock } from "../channels/dock.js";
@@ -323,6 +325,36 @@ export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/w
 
 // Channel: BlueBubbles
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
+
+// Channel: LINE
+export {
+  listLineAccountIds,
+  normalizeAccountId as normalizeLineAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "../line/accounts.js";
+export { LineConfigSchema } from "../line/config-schema.js";
+export type {
+  LineConfig,
+  LineAccountConfig,
+  ResolvedLineAccount,
+  LineChannelData,
+} from "../line/types.js";
+export {
+  createInfoCard,
+  createListCard,
+  createImageCard,
+  createActionCard,
+  createReceiptCard,
+  type CardAction,
+  type ListItem,
+} from "../line/flex-templates.js";
+export {
+  processLineMessage,
+  hasMarkdownToConvert,
+  stripMarkdown,
+} from "../line/markdown-to-line.js";
+export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";

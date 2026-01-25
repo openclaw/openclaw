@@ -14,6 +14,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
+import { logAcceptedEnvOption } from "../infra/env.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -149,6 +150,14 @@ export async function startGatewayServer(
 ): Promise<GatewayServer> {
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.CLAWDBOT_GATEWAY_PORT = String(port);
+  logAcceptedEnvOption({
+    key: "CLAWDBOT_RAW_STREAM",
+    description: "raw stream logging enabled",
+  });
+  logAcceptedEnvOption({
+    key: "CLAWDBOT_RAW_STREAM_PATH",
+    description: "raw stream log path override",
+  });
 
   let configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.legacyIssues.length > 0) {

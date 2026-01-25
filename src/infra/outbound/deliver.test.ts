@@ -311,6 +311,28 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
   });
 
+  it("passes normalized payload to onError", async () => {
+    const sendWhatsApp = vi.fn().mockRejectedValue(new Error("boom"));
+    const onError = vi.fn();
+    const cfg: ClawdbotConfig = {};
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi", mediaUrl: "https://x.test/a.jpg" }],
+      deps: { sendWhatsApp },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ text: "hi", mediaUrls: ["https://x.test/a.jpg"] }),
+    );
+  });
+
   it("mirrors delivered output when mirror options are provided", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: ClawdbotConfig = {
