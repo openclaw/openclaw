@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.24-1
+
+### Fixes
+- Packaging: include dist/shared output in npm tarball (fixes missing reasoning-tags import on install).
+
 ## 2026.1.24
 
 ### Highlights
