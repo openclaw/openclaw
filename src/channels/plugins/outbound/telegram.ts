@@ -50,4 +50,24 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "telegram", ...result };
   },
+  sendPayload: async ({ to, payload, accountId, deps, replyToId, threadId }) => {
+    const send = deps?.sendTelegram ?? sendMessageTelegram;
+    const replyToMessageId = parseReplyToMessageId(replyToId);
+    const messageThreadId = parseThreadId(threadId);
+
+    // Extract Telegram-specific data from channelData
+    const telegramData = payload.channelData?.telegram as
+      | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+      | undefined;
+
+    const result = await send(to, payload.text ?? "", {
+      verbose: false,
+      textMode: "html",
+      messageThreadId,
+      replyToMessageId,
+      accountId: accountId ?? undefined,
+      buttons: telegramData?.buttons,
+    });
+    return { channel: "telegram", ...result };
+  },
 };
