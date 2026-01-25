@@ -26,6 +26,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [The docs didn’t answer my question — how do I get a better answer?](#the-docs-didnt-answer-my-question--how-do-i-get-a-better-answer)
   - [How do I install Clawdbot on Linux?](#how-do-i-install-clawdbot-on-linux)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
+  - [Where are the cloud/VPS install guides?](#where-are-the-cloudvps-install-guides)
   - [Can I ask Clawd to update itself?](#can-i-ask-clawd-to-update-itself)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
@@ -436,6 +437,21 @@ Any Linux VPS works. Install on the server, then use SSH/Tailscale to reach the 
 
 Guides: [exe.dev](/platforms/exe-dev), [Hetzner](/platforms/hetzner), [Fly.io](/platforms/fly).  
 Remote access: [Gateway remote](/gateway/remote).
+
+### Where are the cloud/VPS install guides?
+
+We keep a **hosting hub** with the common providers. Pick one and follow the guide:
+
+- [Railway](/railway) (one‑click, browser‑based setup)
+- [Fly.io](/platforms/fly)
+- [Hetzner](/platforms/hetzner)
+- [exe.dev](/platforms/exe-dev)
+
+How it works in the cloud: the **Gateway runs on the server**, and you access it
+from your laptop/phone via the Control UI (or Tailscale/SSH). Your state + workspace
+live on the server, so treat the host as the source of truth and back it up.
+
+Hub: [Platforms](/platforms). Remote access: [Gateway remote](/gateway/remote).
 
 ### Can I ask Clawd to update itself?
 
