@@ -32,11 +32,19 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.23.0
-          run_install: false
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Runtime versions
         run: |
@@ -109,11 +117,19 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.23.0
-          run_install: false
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -170,6 +186,8 @@ jobs:
 
   checks-windows:
     runs-on: blacksmith-4vcpu-windows-2025
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     defaults:
       run:
         shell: bash
@@ -214,11 +232,19 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.23.0
-          run_install: false
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -282,11 +308,19 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.23.0
-          run_install: false
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Runtime versions
         run: |
