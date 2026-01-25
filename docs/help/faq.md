@@ -442,6 +442,7 @@ Remote access: [Gateway remote](/gateway/remote).
 
 We keep a **hosting hub** with the common providers. Pick one and follow the guide:
 
+- [VPS hosting](/vps) (all providers in one place)
 - [Railway](/railway) (one‑click, browser‑based setup)
 - [Fly.io](/platforms/fly)
 - [Hetzner](/platforms/hetzner)
