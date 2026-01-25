@@ -164,6 +164,17 @@ export function resolveGoogleChatGroupRequireMention(params: GroupMentionParams)
   });
 }
 
+export function resolveGoogleChatGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  return resolveChannelGroupToolsPolicy({
+    cfg: params.cfg,
+    channel: "googlechat",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
 export function resolveSlackGroupRequireMention(params: GroupMentionParams): boolean {
   const account = resolveSlackAccount({
     cfg: params.cfg,

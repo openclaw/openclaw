@@ -28,6 +28,7 @@ Docs: https://docs.clawd.bot
 - macOS: default direct-transport `ws://` URLs to port 18789; document `gateway.remote.transport`. (#1603) Thanks @ngutman.
 - Voice Call: return stream TwiML for outbound conversation calls on initial Twilio webhook. (#1634)
 - Google Chat: tighten email allowlist matching, typing cleanup, media caps, and onboarding/docs/tests. (#1635) Thanks @iHildy.
+- Google Chat: normalize space targets without double `spaces/` prefix.
 
 ## 2026.1.23-1
 
