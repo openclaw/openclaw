@@ -34,6 +34,9 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.4
         version: 1.3.4
+      '@line/bot-sdk':
+        specifier: ^10.6.0
+        version: 10.6.0
       '@lydell/node-pty':
         specifier: 1.2.0-beta.3
         version: 1.2.0-beta.3
@@ -316,6 +319,12 @@ importers:
         version: link:../..
 
   extensions/imessage: {}
+
+  extensions/line:
+    devDependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/llm-task: {}
 
@@ -1259,6 +1268,10 @@ packages:
     os: [darwin, linux, win32]
     peerDependencies:
       apache-arrow: '>=15.0.0 <=18.1.0'
+
+  '@line/bot-sdk@10.6.0':
+    resolution: {integrity: sha512-4hSpglL/G/cW2JCcohaYz/BS0uOSJNV9IEYdMm0EiPEvDLayoI2hGq2D86uYPQFD2gvgkyhmzdShpWLG3P5r3w==}
+    engines: {node: '>=20'}
 
   '@lit-labs/signals@0.2.0':
     resolution: {integrity: sha512-68plyIbciumbwKaiilhLNyhz4Vg6/+nJwDufG2xxWA9r/fUw58jxLHCAlKs+q1CE5Lmh3cZ3ShyYKnOCebEpVA==}
@@ -2646,6 +2659,9 @@ packages:
 
   '@types/node@20.19.30':
     resolution: {integrity: sha512-WJtwWJu7UdlvzEAUm484QNg5eAoq5QR08KDNx7g45Usrs2NtOPiX8ugDqmKdXkyL03rBqU5dYNYVQetEpBHq2g==}
+
+  '@types/node@24.10.9':
+    resolution: {integrity: sha512-ne4A0IpG3+2ETuREInjPNhUGis1SFjv1d5asp8MzEAGtOZeTeHVDOYqOgqfhvseqg/iXty2hjBf1zAOb7RNiNw==}
 
   '@types/node@25.0.10':
     resolution: {integrity: sha512-zWW5KPngR/yvakJgGOmZ5vTBemDoSqF3AcV/LrO5u5wTWyEAVVh+IT39G4gtyAkh3CtTZs8aX/yRM82OfzHJRg==}
@@ -6721,6 +6737,14 @@ snapshots:
       '@lancedb/lancedb-win32-arm64-msvc': 0.23.0
       '@lancedb/lancedb-win32-x64-msvc': 0.23.0
 
+  '@line/bot-sdk@10.6.0':
+    dependencies:
+      '@types/node': 24.10.9
+    optionalDependencies:
+      axios: 1.13.2(debug@4.4.3)
+    transitivePeerDependencies:
+      - debug
+
   '@lit-labs/signals@0.2.0':
     dependencies:
       lit: 3.3.2
@@ -8297,6 +8321,10 @@ snapshots:
   '@types/node@20.19.30':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/node@24.10.9':
+    dependencies:
+      undici-types: 7.16.0
 
   '@types/node@25.0.10':
     dependencies:

@@ -230,8 +230,6 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       if (await handleHooksRequest(req, res)) return;
-      if (await handleSlackHttpRequest(req, res)) return;
-      if (handlePluginRequest && (await handlePluginRequest(req, res))) return;
       if (
         await handleToolsInvokeHttpRequest(req, res, {
           auth: resolvedAuth,
@@ -239,6 +237,8 @@ export function createGatewayHttpServer(opts: {
         })
       )
         return;
+      if (await handleSlackHttpRequest(req, res)) return;
+      if (handlePluginRequest && (await handlePluginRequest(req, res))) return;
       if (openResponsesEnabled) {
         if (
           await handleOpenResponsesHttpRequest(req, res, {

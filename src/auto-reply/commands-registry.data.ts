@@ -179,6 +179,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       acceptsArgs: true,
     }),
     defineChatCommand({
+      key: "tts",
+      nativeName: "tts",
+      description: "Configure text-to-speech.",
+      textAlias: "/tts",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "whoami",
       nativeName: "whoami",
       description: "Show your sender id.",
@@ -275,27 +282,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
           description: "off, tokens, full, or cost",
           type: "string",
           choices: ["off", "tokens", "full", "cost"],
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
-      key: "tts",
-      nativeName: "tts",
-      description: "Control text-to-speech (TTS).",
-      textAlias: "/tts",
-      args: [
-        {
-          name: "action",
-          description: "on | off | status | provider | limit | summary | audio | help",
-          type: "string",
-          choices: ["on", "off", "status", "provider", "limit", "summary", "audio", "help"],
-        },
-        {
-          name: "value",
-          description: "Provider, limit, or text",
-          type: "string",
-          captureRemaining: true,
         },
       ],
       argsMenu: "auto",

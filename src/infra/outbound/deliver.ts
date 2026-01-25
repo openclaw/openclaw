@@ -22,7 +22,7 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
-import { normalizeOutboundPayloads } from "./payloads.js";
+import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -69,6 +69,7 @@ type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
+  sendPayload?: (payload: ReplyPayload) => Promise<OutboundDeliveryResult>;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
   sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
 };
@@ -132,6 +133,21 @@ function createPluginHandler(params: {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
+    sendPayload: outbound.sendPayload
+      ? async (payload) =>
+          outbound.sendPayload!({
+            cfg: params.cfg,
+            to: params.to,
+            text: payload.text ?? "",
+            mediaUrl: payload.mediaUrl,
+            accountId: params.accountId,
+            replyToId: params.replyToId,
+            threadId: params.threadId,
+            gifPlayback: params.gifPlayback,
+            deps: params.deps,
+            payload,
+          })
+      : undefined,
     sendText: async (text) =>
       sendText({
         cfg: params.cfg,
@@ -294,24 +310,33 @@ export async function deliverOutboundPayloads(params: {
       })),
     };
   };
-  const normalizedPayloads = normalizeOutboundPayloads(payloads);
+  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
   for (const payload of normalizedPayloads) {
+    const payloadSummary: NormalizedOutboundPayload = {
+      text: payload.text ?? "",
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+      channelData: payload.channelData,
+    };
     try {
       throwIfAborted(abortSignal);
-      params.onPayload?.(payload);
-      if (payload.mediaUrls.length === 0) {
+      params.onPayload?.(payloadSummary);
+      if (handler.sendPayload && payload.channelData) {
+        results.push(await handler.sendPayload(payload));
+        continue;
+      }
+      if (payloadSummary.mediaUrls.length === 0) {
         if (isSignalChannel) {
-          await sendSignalTextChunks(payload.text);
+          await sendSignalTextChunks(payloadSummary.text);
         } else {
-          await sendTextChunks(payload.text);
+          await sendTextChunks(payloadSummary.text);
         }
         continue;
       }
 
       let first = true;
-      for (const url of payload.mediaUrls) {
+      for (const url of payloadSummary.mediaUrls) {
         throwIfAborted(abortSignal);
-        const caption = first ? payload.text : "";
+        const caption = first ? payloadSummary.text : "";
         first = false;
         if (isSignalChannel) {
           results.push(await sendSignalMedia(caption, url));
@@ -321,7 +346,7 @@ export async function deliverOutboundPayloads(params: {
       }
     } catch (err) {
       if (!params.bestEffort) throw err;
-      params.onError?.(err, payload);
+      params.onError?.(err, payloadSummary);
     }
   }
   if (params.mirror && results.length > 0) {
