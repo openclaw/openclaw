@@ -195,12 +195,6 @@ export {
 } from "../channels/plugins/setup-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
-export {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-  type ResolvedIMessageAccount,
-} from "../imessage/accounts.js";
 
 export type {
   ChannelOnboardingAdapter,
@@ -208,7 +202,6 @@ export type {
 } from "../channels/plugins/onboarding-types.js";
 export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
-export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
 
 export {
   createActionGate,
@@ -261,6 +254,19 @@ export {
   normalizeDiscordMessagingTarget,
 } from "../channels/plugins/normalize/discord.js";
 export { collectDiscordStatusIssues } from "../channels/plugins/status-issues/discord.js";
+
+// Channel: iMessage
+export {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "../imessage/accounts.js";
+export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
+export {
+  looksLikeIMessageTargetId,
+  normalizeIMessageMessagingTarget,
+} from "../channels/plugins/normalize/imessage.js";
 
 // Channel: Slack
 export {
