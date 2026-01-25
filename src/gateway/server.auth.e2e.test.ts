@@ -230,6 +230,21 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
 
+    test("returns control ui hint when token is missing", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          version: "1.0.0",
+          platform: "web",
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("Control UI settings");
+      ws.close();
+    });
+
     test("rejects control ui without device identity by default", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
