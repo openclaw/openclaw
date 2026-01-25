@@ -539,6 +539,7 @@
 .stack {
   display: grid;
   gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .filters {

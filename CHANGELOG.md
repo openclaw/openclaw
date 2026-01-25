@@ -30,6 +30,7 @@ Docs: https://docs.clawd.bot
 - Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.
 
 ### Fixes
+- Web UI: fix config/debug layout overflow, scrolling, and code block sizing. (#1715) Thanks @saipreetham589.
 - Web UI: show Stop button during active runs, swap back to New session when idle. (#1664) Thanks @ndbroadbent.
 - Web UI: clear stale disconnect banners on reconnect; allow form saves with unsupported schema paths but block missing schema. (#1707) Thanks @Glucksberg.
 - Web UI: hide internal `message_id` hints in chat bubbles.
