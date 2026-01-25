@@ -340,7 +340,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     });
 
     if (!response.ok) {
-      console.warn(`[venice-models] Failed to discover models: HTTP ${response.status}, using static catalog`);
+      console.warn(
+        `[venice-models] Failed to discover models: HTTP ${response.status}, using static catalog`,
+      );
       return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 
@@ -351,7 +353,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     }
 
     // Merge discovered models with catalog metadata
-    const catalogById = new Map(VENICE_MODEL_CATALOG.map((m) => [m.id, m]));
+    const catalogById = new Map<string, VeniceCatalogEntry>(
+      VENICE_MODEL_CATALOG.map((m) => [m.id, m]),
+    );
     const models: ModelDefinitionConfig[] = [];
 
     for (const apiModel of data.data) {
