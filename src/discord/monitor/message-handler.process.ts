@@ -1,3 +1,4 @@
+import { ChannelType } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
   removeAckReactionAfterReply,
@@ -129,6 +130,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     senderDisplay && senderTag && senderDisplay !== senderTag
       ? `${senderDisplay} (${senderTag})`
       : (senderDisplay ?? senderTag ?? author.id);
+  const isForumParent =
+    threadParentType === ChannelType.GuildForum || threadParentType === ChannelType.GuildMedia;
+  const forumParentSlug =
+    isForumParent && threadParentName ? normalizeDiscordSlug(threadParentName) : "";
+  const isForumStarter =
+    Boolean(threadChannel && isForumParent && forumParentSlug) && message.id === threadChannel.id;
+  const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupChannel;
   const channelDescription = channelInfo?.topic?.trim();
@@ -181,6 +189,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   if (replyContext) {
     combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
+  }
+  if (forumContextLine) {
+    combinedBody = `${combinedBody}\n${forumContextLine}`;
   }
 
   let threadStarterBody: string | undefined;
