@@ -77,6 +77,31 @@ describe("security audit", () => {
     );
   });
 
+  it("flags loopback control UI without auth as critical", async () => {
+    const cfg: ClawdbotConfig = {
+      gateway: {
+        bind: "loopback",
+        controlUi: { enabled: true },
+        auth: { mode: "none" as any },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.loopback_no_auth",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
   it("flags logging.redactSensitive=off", async () => {
     const cfg: ClawdbotConfig = {
       logging: { redactSensitive: "off" },

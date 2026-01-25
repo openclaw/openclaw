@@ -236,6 +236,18 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
     });
   }
 
+  if (bind === "loopback" && controlUiEnabled && auth.mode === "none") {
+    findings.push({
+      checkId: "gateway.loopback_no_auth",
+      severity: "critical",
+      title: "Gateway auth disabled on loopback",
+      detail:
+        "gateway.bind is loopback and gateway.auth is disabled. " +
+        "If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
+      remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
+    });
+  }
+
   if (tailscaleMode === "funnel") {
     findings.push({
       checkId: "gateway.tailscale_funnel",
