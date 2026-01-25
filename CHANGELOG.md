@@ -42,6 +42,7 @@ Docs: https://docs.clawd.bot
 - Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
 - Gateway: clarify Control UI/WebChat auth error hints for missing tokens. (#1690)
 - Gateway: listen on IPv6 loopback when bound to 127.0.0.1 so localhost webhooks work.
+- Gateway: store lock files in the temp directory to avoid stale locks on persistent volumes. (#1676)
 - macOS: default direct-transport `ws://` URLs to port 18789; document `gateway.remote.transport`. (#1603) Thanks @ngutman.
 - Voice Call: return stream TwiML for outbound conversation calls on initial Twilio webhook. (#1634)
 - Google Chat: tighten email allowlist matching, typing cleanup, media caps, and onboarding/docs/tests. (#1635) Thanks @iHildy.
