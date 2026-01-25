@@ -48,6 +48,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What’s the difference between the hackable (git) install and npm install?](#whats-the-difference-between-the-hackable-git-install-and-npm-install)
   - [Can I switch between npm and git installs later?](#can-i-switch-between-npm-and-git-installs-later)
   - [Should I run the Gateway on my laptop or a VPS?](#should-i-run-the-gateway-on-my-laptop-or-a-vps)
+  - [How important is it to run Clawdbot on a dedicated machine?](#how-important-is-it-to-run-clawdbot-on-a-dedicated-machine)
 - [What is Clawdbot?](#what-is-clawdbot)
   - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
   - [What’s the value proposition?](#whats-the-value-proposition)
@@ -727,6 +728,15 @@ lowest friction and you’re okay with sleep/restarts, run it locally.
 **Clawdbot-specific note:** WhatsApp/Telegram/Slack/Mattermost (plugin)/Discord all work fine from a VPS. The only real trade-off is **headless browser** vs a visible window. See [Browser](/tools/browser).
 
 **Recommended default:** VPS if you had gateway disconnects before. Local is great when you’re actively using the Mac and want local file access or UI automation with a visible browser.
+
+### How important is it to run Clawdbot on a dedicated machine?
+
+Not required, but **recommended for reliability and isolation**.
+
+- **Dedicated host (VPS/Mac mini/Pi):** always‑on, fewer sleep/reboot interruptions, cleaner permissions, easier to keep running.
+- **Shared laptop/desktop:** totally fine for testing and active use, but expect pauses when the machine sleeps or updates.
+
+If you want the best of both worlds, keep the Gateway on a dedicated host and pair your laptop as a **node** for local screen/camera/exec tools. See [Nodes](/nodes).
 
 ## What is Clawdbot?
 
