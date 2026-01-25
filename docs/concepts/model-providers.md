@@ -295,6 +295,16 @@ Example (OpenAI‑compatible):
 }
 ```
 
+Notes:
+- For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
+  When omitted, Clawdbot defaults to:
+  - `reasoning: false`
+  - `input: ["text"]`
+  - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
+  - `contextWindow: 200000`
+  - `maxTokens: 8192`
+- Recommended: set explicit values that match your proxy/model limits.
+
 ## CLI examples
 
 ```bash
