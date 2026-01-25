@@ -14,6 +14,7 @@ Docs: https://docs.clawd.bot
 - TTS: add auto mode enum (off/always/inbound/tagged) with per-session `/tts` override. (#1667) Thanks @sebslight. https://docs.clawd.bot/tts
 - Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.
 - Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.
+- UI: refresh Control UI dashboard design system (typography, colors, spacing). (#1786) Thanks @mousberg.
 - Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).
 - Docs: add verbose installer troubleshooting guidance.
 - Docs: add macOS VM guide with local/hosted options + VPS/nodes guidance. (#1693) Thanks @f-trycua.
