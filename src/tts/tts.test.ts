@@ -4,7 +4,7 @@ import { completeSimple } from "@mariozechner/pi-ai";
 
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
-import { _test, getTtsProvider, resolveTtsConfig } from "./tts.js";
+import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", () => ({
   completeSimple: vi.fn(),
@@ -36,6 +36,8 @@ vi.mock("../agents/model-auth.js", () => ({
   })),
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
+
+const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
   isValidVoiceId,
@@ -429,6 +431,131 @@ describe("tts", () => {
           expect(provider).toBe("edge");
         },
       );
+    });
+  });
+
+  describe("maybeApplyTtsToPayload", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          auto: "inbound",
+          provider: "openai",
+          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+        },
+      },
+    };
+
+    it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const payload = { text: "Hello world" };
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg: baseCfg,
+        kind: "final",
+        inboundAudio: false,
+      });
+
+      expect(result).toBe(payload);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
+    });
+
+    it("attempts auto-TTS when inbound audio gating is on and the message is audio", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "Hello world" },
+        cfg: baseCfg,
+        kind: "final",
+        inboundAudio: true,
+      });
+
+      expect(result.mediaUrl).toBeDefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
+    });
+
+    it("skips auto-TTS in tagged mode unless a tts tag is present", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const cfg = {
+        ...baseCfg,
+        messages: {
+          ...baseCfg.messages,
+          tts: { ...baseCfg.messages.tts, auto: "tagged" },
+        },
+      };
+
+      const payload = { text: "Hello world" };
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        kind: "final",
+      });
+
+      expect(result).toBe(payload);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
+    });
+
+    it("runs auto-TTS in tagged mode when tags are present", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const cfg = {
+        ...baseCfg,
+        messages: {
+          ...baseCfg.messages,
+          tts: { ...baseCfg.messages.tts, auto: "tagged" },
+        },
+      };
+
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
+        cfg,
+        kind: "final",
+      });
+
+      expect(result.mediaUrl).toBeDefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
     });
   });
 });

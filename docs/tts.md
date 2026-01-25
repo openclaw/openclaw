@@ -53,8 +53,8 @@ so that provider must also be authenticated if you enable summaries.
 
 ## Is it enabled by default?
 
-No. TTS is **disabled** by default. Enable it in config or with `/tts on`,
-which writes a local preference override.
+No. Auto‑TTS is **off** by default. Enable it in config with
+`messages.tts.auto` or per session with `/tts always` (alias: `/tts on`).
 
 Edge TTS **is** enabled by default once TTS is on, and is used automatically
 when no OpenAI or ElevenLabs API keys are available.
@@ -70,7 +70,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always",
       provider: "elevenlabs"
     }
   }
@@ -83,7 +83,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always",
       provider: "openai",
       summaryModel: "openai/gpt-4.1-mini",
       modelOverrides: {
@@ -121,7 +121,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always",
       provider: "edge",
       edge: {
         enabled: true,
@@ -156,10 +156,22 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always",
       maxTextLength: 4000,
       timeoutMs: 30000,
       prefsPath: "~/.clawdbot/settings/tts.json"
+    }
+  }
+}
+```
+
+### Only reply with audio after an inbound voice note
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "inbound"
     }
   }
 }
@@ -171,7 +183,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true
+      auto: "always"
     }
   }
 }
@@ -185,7 +197,10 @@ Then run:
 
 ### Notes on fields
 
-- `enabled`: master toggle (default `false`; local prefs can override).
+- `auto`: auto‑TTS mode (`off`, `always`, `inbound`, `tagged`).
+  - `inbound` only sends audio after an inbound voice note.
+  - `tagged` only sends audio when the reply includes `[[tts]]` tags.
+- `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, Clawdbot prefers `openai` (if key), then `elevenlabs` (if key),
@@ -195,7 +210,7 @@ Then run:
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
-- `prefsPath`: override the local prefs JSON path.
+- `prefsPath`: override the local prefs JSON path (provider/limit/summary).
 - `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `elevenlabs.voiceSettings`:
@@ -218,6 +233,7 @@ Then run:
 ## Model-driven overrides (default on)
 
 By default, the model **can** emit TTS directives for a single reply.
+When `messages.tts.auto` is `tagged`, these directives are required to trigger audio.
 
 When enabled, the model can emit `[[tts:...]]` directives to override the voice
 for a single reply, plus an optional `[[tts:text]]...[[/tts:text]]` block to
@@ -338,8 +354,10 @@ Discord note: `/tts` is a built-in Discord command, so Clawdbot registers
 `/voice` as the native command there. Text `/tts ...` still works.
 
 ```
-/tts on
 /tts off
+/tts always
+/tts inbound
+/tts tagged
 /tts status
 /tts provider openai
 /tts limit 2000
@@ -350,6 +368,7 @@ Discord note: `/tts` is a built-in Discord command, so Clawdbot registers
 Notes:
 - Commands require an authorized sender (allowlist/owner rules still apply).
 - `commands.text` or native command registration must be enabled.
+- `off|always|inbound|tagged` are per‑session toggles (`/tts on` is an alias for `/tts always`).
 - `limit` and `summary` are stored in local prefs, not the main config.
 - `/tts audio` generates a one-off audio reply (does not toggle TTS on).
 

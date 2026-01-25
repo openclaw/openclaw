@@ -20,6 +20,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type {
   TtsConfig,
+  TtsAutoMode,
   TtsMode,
   TtsProvider,
   TtsModelOverrideConfig,
@@ -75,8 +76,10 @@ const DEFAULT_OUTPUT = {
   voiceCompatible: false,
 };
 
+const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
+
 export type ResolvedTtsConfig = {
-  enabled: boolean;
+  auto: TtsAutoMode;
   mode: TtsMode;
   provider: TtsProvider;
   providerSource: "config" | "default";
@@ -123,6 +126,7 @@ export type ResolvedTtsConfig = {
 
 type TtsUserPrefs = {
   tts?: {
+    auto?: TtsAutoMode;
     enabled?: boolean;
     provider?: TtsProvider;
     maxLength?: number;
@@ -161,6 +165,7 @@ type TtsDirectiveOverrides = {
 type TtsDirectiveParseResult = {
   cleanedText: string;
   ttsText?: string;
+  hasDirective: boolean;
   overrides: TtsDirectiveOverrides;
   warnings: string[];
 };
@@ -186,6 +191,15 @@ type TtsStatusEntry = {
 };
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
+
+export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (TTS_AUTO_MODES.has(normalized as TtsAutoMode)) {
+    return normalized as TtsAutoMode;
+  }
+  return undefined;
+}
 
 function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
@@ -220,8 +234,9 @@ export function resolveTtsConfig(cfg: ClawdbotConfig): ResolvedTtsConfig {
   const raw: TtsConfig = cfg.messages?.tts ?? {};
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
+  const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
   return {
-    enabled: raw.enabled ?? false,
+    auto,
     mode: raw.mode ?? "final",
     provider: raw.provider ?? "edge",
     providerSource,
@@ -279,17 +294,48 @@ export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   return path.join(CONFIG_DIR, "settings", "tts.json");
 }
 
+function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
+  const auto = normalizeTtsAutoMode(prefs.tts?.auto);
+  if (auto) return auto;
+  if (typeof prefs.tts?.enabled === "boolean") {
+    return prefs.tts.enabled ? "always" : "off";
+  }
+  return undefined;
+}
+
+export function resolveTtsAutoMode(params: {
+  config: ResolvedTtsConfig;
+  prefsPath: string;
+  sessionAuto?: string;
+}): TtsAutoMode {
+  const sessionAuto = normalizeTtsAutoMode(params.sessionAuto);
+  if (sessionAuto) return sessionAuto;
+  const prefsAuto = resolveTtsAutoModeFromPrefs(readPrefs(params.prefsPath));
+  if (prefsAuto) return prefsAuto;
+  return params.config.auto;
+}
+
 export function buildTtsSystemPromptHint(cfg: ClawdbotConfig): string | undefined {
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  if (!isTtsEnabled(config, prefsPath)) return undefined;
+  const autoMode = resolveTtsAutoMode({ config, prefsPath });
+  if (autoMode === "off") return undefined;
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
+  const autoHint =
+    autoMode === "inbound"
+      ? "Only use TTS when the user's last message includes audio/voice."
+      : autoMode === "tagged"
+        ? "Only use TTS when you include [[tts]] or [[tts:text]] tags."
+        : undefined;
   return [
     "Voice (TTS) is enabled.",
+    autoHint,
     `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
     "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function readPrefs(prefsPath: string): TtsUserPrefs {
@@ -323,16 +369,25 @@ function updatePrefs(prefsPath: string, update: (prefs: TtsUserPrefs) => void): 
   atomicWriteFileSync(prefsPath, JSON.stringify(prefs, null, 2));
 }
 
-export function isTtsEnabled(config: ResolvedTtsConfig, prefsPath: string): boolean {
-  const prefs = readPrefs(prefsPath);
-  if (prefs.tts?.enabled !== undefined) return prefs.tts.enabled === true;
-  return config.enabled;
+export function isTtsEnabled(
+  config: ResolvedTtsConfig,
+  prefsPath: string,
+  sessionAuto?: string,
+): boolean {
+  return resolveTtsAutoMode({ config, prefsPath, sessionAuto }) !== "off";
+}
+
+export function setTtsAutoMode(prefsPath: string, mode: TtsAutoMode): void {
+  updatePrefs(prefsPath, (prefs) => {
+    const next = { ...prefs.tts };
+    delete next.enabled;
+    next.auto = mode;
+    prefs.tts = next;
+  });
 }
 
 export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
-  updatePrefs(prefsPath, (prefs) => {
-    prefs.tts = { ...prefs.tts, enabled };
-  });
+  setTtsAutoMode(prefsPath, enabled ? "always" : "off");
 }
 
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
@@ -485,15 +540,17 @@ function parseTtsDirectives(
   policy: ResolvedTtsModelOverrides,
 ): TtsDirectiveParseResult {
   if (!policy.enabled) {
-    return { cleanedText: text, overrides: {}, warnings: [] };
+    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
   }
 
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
   let cleanedText = text;
+  let hasDirective = false;
 
   const blockRegex = /\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/gi;
   cleanedText = cleanedText.replace(blockRegex, (_match, inner: string) => {
+    hasDirective = true;
     if (policy.allowText && overrides.ttsText == null) {
       overrides.ttsText = inner.trim();
     }
@@ -502,6 +559,7 @@ function parseTtsDirectives(
 
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
+    hasDirective = true;
     const tokens = body.split(/\s+/).filter(Boolean);
     for (const token of tokens) {
       const eqIndex = token.indexOf("=");
@@ -672,6 +730,7 @@ function parseTtsDirectives(
   return {
     cleanedText,
     ttsText: overrides.ttsText,
+    hasDirective,
     overrides,
     warnings,
   };
@@ -1156,13 +1215,17 @@ export async function maybeApplyTtsToPayload(params: {
   cfg: ClawdbotConfig;
   channel?: string;
   kind?: "tool" | "block" | "final";
+  inboundAudio?: boolean;
+  ttsAuto?: string;
 }): Promise<ReplyPayload> {
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  if (!isTtsEnabled(config, prefsPath)) return params.payload;
-
-  const mode = config.mode ?? "final";
-  if (mode === "final" && params.kind && params.kind !== "final") return params.payload;
+  const autoMode = resolveTtsAutoMode({
+    config,
+    prefsPath,
+    sessionAuto: params.ttsAuto,
+  });
+  if (autoMode === "off") return params.payload;
 
   const text = params.payload.text ?? "";
   const directives = parseTtsDirectives(text, config.modelOverrides);
@@ -1183,6 +1246,12 @@ export async function maybeApplyTtsToPayload(params: {
           text: visibleText.length > 0 ? visibleText : undefined,
         };
 
+  if (autoMode === "tagged" && !directives.hasDirective) return nextPayload;
+  if (autoMode === "inbound" && params.inboundAudio !== true) return nextPayload;
+
+  const mode = config.mode ?? "final";
+  if (mode === "final" && params.kind && params.kind !== "final") return nextPayload;
+
   if (!ttsText.trim()) return nextPayload;
   if (params.payload.mediaUrl || (params.payload.mediaUrls?.length ?? 0) > 0) return nextPayload;
   if (text.includes("MEDIA:")) return nextPayload;
@@ -1197,7 +1266,7 @@ export async function maybeApplyTtsToPayload(params: {
       logVerbose(
         `TTS: skipping long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
       );
-      return params.payload;
+      return nextPayload;
     }
 
     try {
@@ -1219,7 +1288,7 @@ export async function maybeApplyTtsToPayload(params: {
     } catch (err) {
       const error = err as Error;
       logVerbose(`TTS: summarization failed: ${error.message}`);
-      return params.payload;
+      return nextPayload;
     }
   }
 
