@@ -6,6 +6,7 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import crypto from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -77,11 +78,14 @@ export function createEditorSubmitHandler(params: {
 
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
-  const initialSessionInput = (opts.session ?? "").trim();
+  const newSessionToken = "__new__";
+  const startNewSession = Boolean(opts.newSession);
+  const initialSessionInput = startNewSession ? newSessionToken : (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = agentDefaultId;
+  const requestedAgentId = opts.agent?.trim() ? normalizeAgentId(opts.agent) : null;
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -269,6 +273,12 @@ export async function runTui(opts: TuiOptions) {
     return name ? `${id} (${name})` : id;
   };
 
+  const buildNewSessionKey = (agentId: string) => {
+    const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 10);
+    const stamp = Date.now().toString(36);
+    return `agent:${normalizeAgentId(agentId)}:new-${stamp}-${suffix}`;
+  };
+
   const resolveSessionKey = (raw?: string) => {
     const trimmed = (raw ?? "").trim();
     if (sessionScope === "global") return "global";
@@ -278,11 +288,17 @@ export async function runTui(opts: TuiOptions) {
         mainKey: sessionMainKey,
       });
     }
+    if (trimmed === newSessionToken) {
+      return buildNewSessionKey(currentAgentId);
+    }
     if (trimmed === "global" || trimmed === "unknown") return trimmed;
     if (trimmed.startsWith("agent:")) return trimmed;
     return `agent:${currentAgentId}:${trimmed}`;
   };
 
+  if (requestedAgentId) {
+    currentAgentId = requestedAgentId;
+  }
   currentSessionKey = resolveSessionKey(initialSessionInput);
 
   const updateHeader = () => {
@@ -517,6 +533,7 @@ export async function runTui(opts: TuiOptions) {
       abortActive,
       setActivityStatus,
       formatSessionKey,
+      newSessionToken,
     });
 
   const { runLocalShellLine } = createLocalShellRunner({
@@ -591,7 +608,15 @@ export async function runTui(opts: TuiOptions) {
     void (async () => {
       await refreshAgents();
       updateHeader();
-      await loadHistory();
+      if (startNewSession && !requestedAgentId) {
+        setActivityStatus("select agent to start a new session");
+        await openAgentSelector({ createNewSession: true });
+        if (state.agents.length === 0) {
+          await loadHistory();
+        }
+      } else {
+        await loadHistory();
+      }
       setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
       tui.requestRender();
       if (!autoMessageSent && autoMessage) {

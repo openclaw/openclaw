@@ -18,6 +18,12 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { startOverseerRunner } from "../infra/overseer/runner.js";
+import {
+  startOverseerContinuationBridge,
+  stopOverseerContinuationBridge,
+} from "../infra/overseer/continuation-bridge.js";
+import { resolveOverseerStorePath } from "../infra/overseer/store.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
 import {
@@ -394,6 +400,40 @@ export async function startGatewayServer(
 
   let heartbeatRunner = startHeartbeatRunner({ cfg: cfgAtStart });
 
+  // Start Overseer runner with hooks that relay to continuation bridge
+  let overseerRunner = startOverseerRunner({
+    cfg: cfgAtStart,
+    hooks: {
+      onAssignmentStalled: (assignment) => {
+        log.debug(`Overseer assignment stalled: ${assignment.assignmentId}`);
+      },
+      onAssignmentActive: (assignment) => {
+        log.debug(`Overseer assignment active: ${assignment.assignmentId}`);
+      },
+      onAssignmentDone: (assignment) => {
+        log.debug(`Overseer assignment done: ${assignment.assignmentId}`);
+      },
+    },
+  });
+
+  // Start continuation bridge if Overseer is enabled
+  if (cfgAtStart.overseer?.enabled) {
+    startOverseerContinuationBridge({
+      storePath: resolveOverseerStorePath(cfgAtStart),
+      autoTriggerTick: true,
+      hooks: {
+        onTurnIssue: ({ event: _event, assignment, issue }) => {
+          log.debug(
+            `Overseer turn issue: ${issue} for assignment ${assignment?.assignmentId ?? "unknown"}`,
+          );
+        },
+        onAssignmentActivity: ({ assignment, source }) => {
+          log.debug(`Overseer activity from ${source}: ${assignment.assignmentId}`);
+        },
+      },
+    });
+  }
+
   void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
 
   const execApprovalManager = new ExecApprovalManager();
@@ -458,6 +498,7 @@ export async function startGatewayServer(
       markChannelLoggedOut,
       wizardRunner,
       broadcastVoiceWakeChanged,
+      overseerRunner,
     },
   });
   logGatewayStartup({
@@ -496,12 +537,14 @@ export async function startGatewayServer(
     getState: () => ({
       hooksConfig,
       heartbeatRunner,
+      overseerRunner,
       cronState,
       browserControl,
     }),
     setState: (nextState) => {
       hooksConfig = nextState.hooksConfig;
       heartbeatRunner = nextState.heartbeatRunner;
+      overseerRunner = nextState.overseerRunner;
       cronState = nextState.cronState;
       cron = cronState.cron;
       cronStorePath = cronState.storePath;
@@ -538,6 +581,7 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    overseerRunner,
     nodePresenceTimers,
     broadcast,
     tickInterval,
@@ -563,6 +607,7 @@ export async function startGatewayServer(
         skillsRefreshTimer = null;
       }
       skillsChangeUnsub();
+      stopOverseerContinuationBridge();
       await close(opts);
     },
   };

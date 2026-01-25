@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 
 import { clampText, formatAgo, formatList } from "../format";
+import { icon } from "../icons";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
@@ -32,6 +33,8 @@ export type NodesProps = {
   execApprovalsSelectedAgent: string | null;
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
+  activeTab?: "nodes" | "devices" | "approvals" | "bindings";
+  onTabChange?: (tab: "nodes" | "devices" | "approvals" | "bindings") => void;
   onRefresh: () => void;
   onDevicesRefresh: () => void;
   onDeviceApprove: (requestId: string) => void;
@@ -50,149 +53,418 @@ export type NodesProps = {
   onSaveExecApprovals: () => void;
 };
 
+type NodesTab = "nodes" | "devices" | "approvals" | "bindings";
+
 export function renderNodes(props: NodesProps) {
+  const activeTab = props.activeTab ?? "nodes";
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
+
   return html`
-    ${renderExecApprovals(approvalsState)}
-    ${renderBindings(bindingState)}
-    ${renderDevices(props)}
-    <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-          <div class="card-title">Nodes</div>
-          <div class="card-sub">Paired devices and live links.</div>
-        </div>
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
-        </button>
+    <div class="nodes-view">
+      ${renderHeader(props)}
+      ${renderTabs(activeTab, props.onTabChange)}
+      <div class="nodes-content">
+        ${activeTab === "nodes" ? renderNodesTab(props) : nothing}
+        ${activeTab === "devices" ? renderDevicesTab(props) : nothing}
+        ${activeTab === "approvals" ? renderApprovalsTab(approvalsState) : nothing}
+        ${activeTab === "bindings" ? renderBindingsTab(bindingState) : nothing}
       </div>
-      <div class="list" style="margin-top: 16px;">
-        ${props.nodes.length === 0
-          ? html`<div class="muted">No nodes found.</div>`
-          : props.nodes.map((n) => renderNode(n))}
-      </div>
-    </section>
+    </div>
   `;
 }
 
-function renderDevices(props: NodesProps) {
+function renderHeader(props: NodesProps) {
+  return html`
+    <div class="nodes-header">
+      <div class="nodes-header__info">
+        <div class="nodes-header__icon">
+          ${icon("server", { size: 24 })}
+        </div>
+        <div>
+          <h1 class="nodes-header__title">Nodes</h1>
+          <p class="nodes-header__desc">Manage connected nodes, devices, and execution approvals</p>
+        </div>
+      </div>
+      <button class="btn btn--secondary" ?disabled=${props.loading} @click=${props.onRefresh}>
+        ${icon("refresh-cw", { size: 16 })}
+        <span>${props.loading ? "Loading..." : "Refresh"}</span>
+      </button>
+    </div>
+  `;
+}
+
+function renderTabs(activeTab: NodesTab, onTabChange?: (tab: NodesTab) => void) {
+  const tabs: Array<{ id: NodesTab; label: string; icon: ReturnType<typeof icon> }> = [
+    { id: "nodes", label: "Nodes", icon: icon("server", { size: 16 }) },
+    { id: "devices", label: "Devices", icon: icon("monitor", { size: 16 }) },
+    { id: "approvals", label: "Exec Approvals", icon: icon("check", { size: 16 }) },
+    { id: "bindings", label: "Bindings", icon: icon("link", { size: 16 }) },
+  ];
+
+  return html`
+    <div class="nodes-tabs nodes-tabs--modern">
+      ${tabs.map(
+        (tab) => html`
+          <button
+            class="nodes-tab ${activeTab === tab.id ? "nodes-tab--active" : ""}"
+            @click=${() => onTabChange?.(tab.id)}
+          >
+            ${tab.icon}
+            <span>${tab.label}</span>
+          </button>
+        `
+      )}
+    </div>
+  `;
+}
+
+function renderNodesTab(props: NodesProps) {
+  const connectedNodes = props.nodes.filter((n) => Boolean(n.connected));
+  const offlineNodes = props.nodes.filter((n) => !Boolean(n.connected));
+
+  return html`
+    <div class="nodes-tab-content">
+      ${props.nodes.length === 0
+        ? html`
+            <div class="nodes-empty">
+              <div class="nodes-empty__icon">
+                ${icon("server", { size: 32 })}
+              </div>
+              <div class="nodes-empty__title">No nodes connected</div>
+              <div class="nodes-empty__desc">Nodes will appear here when they connect to the gateway</div>
+            </div>
+          `
+        : html`
+            <div class="node-tree">
+              <div class="node-tree__gateway">
+                <div class="node-card node-card--modern node-card--gateway">
+                  <div class="node-card__header">
+                    <div class="node-card__icon node-card__icon--gateway">
+                      ${icon("radio", { size: 20 })}
+                    </div>
+                    <div class="node-card__info">
+                      <div class="node-card__name">Gateway</div>
+                      <div class="node-card__subtitle">Central hub</div>
+                    </div>
+                    <div class="node-card__status">
+                      <span class="status-indicator--modern status-indicator--online"></span>
+                      <span class="status-label">Online</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              ${connectedNodes.length > 0 || offlineNodes.length > 0
+                ? html`
+                    <div class="node-tree__connector"></div>
+                    <div class="node-tree__children">
+                      ${connectedNodes.map((n) => renderNodeCard(n, true))}
+                      ${offlineNodes.map((n) => renderNodeCard(n, false))}
+                    </div>
+                  `
+                : nothing}
+            </div>
+          `}
+    </div>
+  `;
+}
+
+function renderNodeCard(node: Record<string, unknown>, isOnline: boolean) {
+  const title =
+    (typeof node.displayName === "string" && node.displayName.trim()) ||
+    (typeof node.nodeId === "string" ? node.nodeId : "unknown");
+  const nodeId = typeof node.nodeId === "string" ? node.nodeId : "";
+  const paired = Boolean(node.paired);
+  const version = typeof node.version === "string" ? node.version : "";
+  const remoteIp = typeof node.remoteIp === "string" ? node.remoteIp : "";
+  const caps = Array.isArray(node.caps) ? (node.caps as unknown[]).slice(0, 6) : [];
+  const commands = Array.isArray(node.commands) ? (node.commands as unknown[]).slice(0, 4) : [];
+
+  return html`
+    <div class="node-card node-card--modern ${isOnline ? "node-card--online" : "node-card--offline"}">
+      <div class="node-card__header">
+        <div class="node-card__icon ${isOnline ? "node-card__icon--online" : "node-card__icon--offline"}">
+          ${icon("server", { size: 18 })}
+        </div>
+        <div class="node-card__info">
+          <div class="node-card__name">${title}</div>
+          <div class="node-card__subtitle mono">${nodeId}</div>
+        </div>
+        <div class="node-card__status">
+          <span class="status-indicator--modern ${isOnline ? "status-indicator--online" : "status-indicator--offline"}"></span>
+          <span class="status-label">${isOnline ? "Online" : "Offline"}</span>
+        </div>
+      </div>
+
+      <div class="node-card__details">
+        <div class="node-card__meta-grid">
+          ${remoteIp
+            ? html`
+                <div class="node-card__meta-item">
+                  <span class="node-card__meta-label">IP Address</span>
+                  <span class="node-card__meta-value mono">${remoteIp}</span>
+                </div>
+              `
+            : nothing}
+          ${version
+            ? html`
+                <div class="node-card__meta-item">
+                  <span class="node-card__meta-label">Version</span>
+                  <span class="node-card__meta-value mono">${version}</span>
+                </div>
+              `
+            : nothing}
+          <div class="node-card__meta-item">
+            <span class="node-card__meta-label">Status</span>
+            <span class="badge ${paired ? "badge--ok" : "badge--warn"}">${paired ? "Paired" : "Unpaired"}</span>
+          </div>
+        </div>
+
+        ${caps.length > 0 || commands.length > 0
+          ? html`
+              <div class="node-card__tags">
+                ${caps.map((c) => html`<span class="chip">${String(c)}</span>`)}
+                ${commands.map((c) => html`<span class="chip chip--accent">${String(c)}</span>`)}
+              </div>
+            `
+          : nothing}
+      </div>
+    </div>
+  `;
+}
+
+function renderDevicesTab(props: NodesProps) {
   const list = props.devicesList ?? { pending: [], paired: [] };
   const pending = Array.isArray(list.pending) ? list.pending : [];
   const paired = Array.isArray(list.paired) ? list.paired : [];
+
   return html`
-    <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-          <div class="card-title">Devices</div>
-          <div class="card-sub">Pairing requests + role tokens.</div>
+    <div class="nodes-tab-content">
+      <div class="devices-header">
+        <div class="devices-header__info">
+          <span class="devices-header__count">${pending.length + paired.length} devices</span>
+          ${pending.length > 0
+            ? html`<span class="badge badge--warn">${pending.length} pending</span>`
+            : nothing}
         </div>
-        <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
-          ${props.devicesLoading ? "Loading…" : "Refresh"}
+        <button class="btn btn--sm" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
+          ${icon("refresh-cw", { size: 14 })}
+          <span>${props.devicesLoading ? "Loading..." : "Refresh"}</span>
         </button>
       </div>
+
       ${props.devicesError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.devicesError}</div>`
+        ? html`
+            <div class="callout--danger" style="margin-top: 16px;">
+              <div class="callout__icon">${icon("alert-circle", { size: 18 })}</div>
+              <div class="callout__content">${props.devicesError}</div>
+            </div>
+          `
         : nothing}
-      <div class="list" style="margin-top: 16px;">
-        ${pending.length > 0
-          ? html`
-              <div class="muted" style="margin-bottom: 8px;">Pending</div>
-              ${pending.map((req) => renderPendingDevice(req, props))}
-            `
-          : nothing}
-        ${paired.length > 0
-          ? html`
-              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">Paired</div>
-              ${paired.map((device) => renderPairedDevice(device, props))}
-            `
-          : nothing}
-        ${pending.length === 0 && paired.length === 0
-          ? html`<div class="muted">No paired devices.</div>`
-          : nothing}
-      </div>
-    </section>
+
+      ${pending.length > 0
+        ? html`
+            <div class="devices-section">
+              <div class="devices-section__header">
+                <div class="devices-section__icon devices-section__icon--warn">
+                  ${icon("clock", { size: 16 })}
+                </div>
+                <div class="devices-section__title">Pending Requests</div>
+              </div>
+              <div class="devices-list">
+                ${pending.map((req) => renderPendingDeviceCard(req, props))}
+              </div>
+            </div>
+          `
+        : nothing}
+
+      ${paired.length > 0
+        ? html`
+            <div class="devices-section">
+              <div class="devices-section__header">
+                <div class="devices-section__icon devices-section__icon--ok">
+                  ${icon("check", { size: 16 })}
+                </div>
+                <div class="devices-section__title">Approved Devices</div>
+              </div>
+              <div class="devices-list">
+                ${paired.map((device) => renderApprovedDeviceCard(device, props))}
+              </div>
+            </div>
+          `
+        : nothing}
+
+      ${pending.length === 0 && paired.length === 0
+        ? html`
+            <div class="nodes-empty">
+              <div class="nodes-empty__icon">
+                ${icon("monitor", { size: 32 })}
+              </div>
+              <div class="nodes-empty__title">No devices</div>
+              <div class="nodes-empty__desc">Paired devices will appear here</div>
+            </div>
+          `
+        : nothing}
+    </div>
   `;
 }
 
-function renderPendingDevice(req: PendingDevice, props: NodesProps) {
+function renderPendingDeviceCard(req: PendingDevice, props: NodesProps) {
   const name = req.displayName?.trim() || req.deviceId;
   const age = typeof req.ts === "number" ? formatAgo(req.ts) : "n/a";
-  const role = req.role?.trim() ? `role: ${req.role}` : "role: -";
-  const repair = req.isRepair ? " · repair" : "";
-  const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
-  return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${name}</div>
-        <div class="list-sub">${req.deviceId}${ip}</div>
-        <div class="muted" style="margin-top: 6px;">
-          ${role} · requested ${age}${repair}
-        </div>
-      </div>
-      <div class="list-meta">
-        <div class="row" style="justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
-          <button class="btn btn--sm primary" @click=${() => props.onDeviceApprove(req.requestId)}>
-            Approve
-          </button>
-          <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
-            Reject
-          </button>
-        </div>
-      </div>
-    </div>
-  `;
-}
+  const role = req.role?.trim() || "user";
+  const repair = req.isRepair;
+  const ip = req.remoteIp || "";
 
-function renderPairedDevice(device: PairedDevice, props: NodesProps) {
-  const name = device.displayName?.trim() || device.deviceId;
-  const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
-  const roles = `roles: ${formatList(device.roles)}`;
-  const scopes = `scopes: ${formatList(device.scopes)}`;
-  const tokens = Array.isArray(device.tokens) ? device.tokens : [];
   return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${name}</div>
-        <div class="list-sub">${device.deviceId}${ip}</div>
-        <div class="muted" style="margin-top: 6px;">${roles} · ${scopes}</div>
-        ${tokens.length === 0
-          ? html`<div class="muted" style="margin-top: 6px;">Tokens: none</div>`
-          : html`
-              <div class="muted" style="margin-top: 10px;">Tokens</div>
-              <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
-                ${tokens.map((token) => renderTokenRow(device.deviceId, token, props))}
+    <div class="device-card device-card--modern device-card--pending">
+      <div class="device-card__header">
+        <div class="device-card__icon device-card__icon--pending">
+          ${icon("monitor", { size: 18 })}
+        </div>
+        <div class="device-card__info">
+          <div class="device-card__name">${name}</div>
+          <div class="device-card__id mono">${req.deviceId}</div>
+        </div>
+        <div class="device-card__badge">
+          <span class="badge badge--warn badge--animated">
+            ${icon("clock", { size: 12 })}
+            <span>Pending</span>
+          </span>
+          ${repair ? html`<span class="badge badge--info">Repair</span>` : nothing}
+        </div>
+      </div>
+
+      <div class="device-card__meta">
+        <div class="device-card__meta-row">
+          <span class="muted">Role:</span>
+          <span>${role}</span>
+        </div>
+        ${ip
+          ? html`
+              <div class="device-card__meta-row">
+                <span class="muted">IP:</span>
+                <span class="mono">${ip}</span>
               </div>
-            `}
+            `
+          : nothing}
+        <div class="device-card__meta-row">
+          <span class="muted">Requested:</span>
+          <span>${age}</span>
+        </div>
+      </div>
+
+      <div class="device-card__actions">
+        <button class="btn btn--primary btn--sm" @click=${() => props.onDeviceApprove(req.requestId)}>
+          ${icon("check", { size: 14 })}
+          <span>Approve</span>
+        </button>
+        <button class="btn btn--danger btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
+          ${icon("x", { size: 14 })}
+          <span>Reject</span>
+        </button>
       </div>
     </div>
   `;
 }
 
-function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {
-  const status = token.revokedAtMs ? "revoked" : "active";
-  const scopes = `scopes: ${formatList(token.scopes)}`;
-  const when = formatAgo(token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null);
+function renderApprovedDeviceCard(device: PairedDevice, props: NodesProps) {
+  const name = device.displayName?.trim() || device.deviceId;
+  const ip = device.remoteIp || "";
+  const roles = device.roles || [];
+  const scopes = device.scopes || [];
+  const tokens = Array.isArray(device.tokens) ? device.tokens : [];
+
   return html`
-    <div class="row" style="justify-content: space-between; gap: 8px;">
-      <div class="list-sub">${token.role} · ${status} · ${scopes} · ${when}</div>
-      <div class="row" style="justify-content: flex-end; gap: 6px; flex-wrap: wrap;">
+    <div class="device-card device-card--modern device-card--active">
+      <div class="device-card__header">
+        <div class="device-card__icon device-card__icon--active">
+          ${icon("monitor", { size: 18 })}
+        </div>
+        <div class="device-card__info">
+          <div class="device-card__name">${name}</div>
+          <div class="device-card__id mono">${device.deviceId}</div>
+        </div>
+        <div class="device-card__badge">
+          <span class="badge badge--ok badge--animated">
+            ${icon("check", { size: 12 })}
+            <span>Active</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="device-card__meta">
+        ${ip
+          ? html`
+              <div class="device-card__meta-row">
+                <span class="muted">IP:</span>
+                <span class="mono">${ip}</span>
+              </div>
+            `
+          : nothing}
+        <div class="device-card__meta-row">
+          <span class="muted">Roles:</span>
+          <span>${formatList(roles)}</span>
+        </div>
+        <div class="device-card__meta-row">
+          <span class="muted">Scopes:</span>
+          <span>${formatList(scopes)}</span>
+        </div>
+      </div>
+
+      ${tokens.length > 0
+        ? html`
+            <div class="device-card__tokens">
+              <div class="device-card__tokens-title">
+                ${icon("zap", { size: 14 })}
+                <span>Tokens (${tokens.length})</span>
+              </div>
+              <div class="device-card__tokens-list">
+                ${tokens.map((token) => renderTokenCard(device.deviceId, token, props))}
+              </div>
+            </div>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+function renderTokenCard(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {
+  const isRevoked = Boolean(token.revokedAtMs);
+  const status = isRevoked ? "revoked" : "active";
+  const scopes = token.scopes || [];
+  const when = formatAgo(token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null);
+
+  return html`
+    <div class="token-card ${isRevoked ? "token-card--revoked" : ""}">
+      <div class="token-card__info">
+        <span class="token-card__role">${token.role}</span>
+        <span class="badge ${isRevoked ? "badge--muted" : "badge--ok"} badge--sm">${status}</span>
+      </div>
+      <div class="token-card__meta">
+        <span class="muted">scopes: ${formatList(scopes)}</span>
+        <span class="muted">${when}</span>
+      </div>
+      <div class="token-card__actions">
         <button
           class="btn btn--sm"
           @click=${() => props.onDeviceRotate(deviceId, token.role, token.scopes)}
         >
-          Rotate
+          ${icon("refresh-cw", { size: 12 })}
+          <span>Rotate</span>
         </button>
-        ${token.revokedAtMs
-          ? nothing
-          : html`
+        ${!isRevoked
+          ? html`
               <button
-                class="btn btn--sm danger"
+                class="btn btn--danger btn--sm"
                 @click=${() => props.onDeviceRevoke(deviceId, token.role)}
               >
-                Revoke
+                ${icon("trash", { size: 12 })}
+                <span>Revoke</span>
               </button>
-            `}
+            `
+          : nothing}
       </div>
     </div>
   `;
@@ -429,48 +701,67 @@ function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState {
   };
 }
 
-function renderBindings(state: BindingState) {
+function renderBindingsTab(state: BindingState) {
   const supportsBinding = state.nodes.length > 0;
   const defaultValue = state.defaultBinding ?? "";
+
   return html`
-    <section class="card">
-      <div class="row" style="justify-content: space-between; align-items: center;">
-        <div>
-          <div class="card-title">Exec node binding</div>
-          <div class="card-sub">
-            Pin agents to a specific node when using <span class="mono">exec host=node</span>.
+    <div class="nodes-tab-content">
+      <div class="approvals-header">
+        <div class="approvals-header__info">
+          <div class="approvals-header__icon">
+            ${icon("link", { size: 20 })}
+          </div>
+          <div>
+            <div class="approvals-header__title">Exec Node Binding</div>
+            <div class="approvals-header__desc">
+              Pin agents to a specific node when using <span class="mono">exec host=node</span>.
+            </div>
           </div>
         </div>
         <button
-          class="btn"
+          class="btn btn--primary btn--sm"
           ?disabled=${state.disabled || !state.configDirty}
           @click=${state.onSave}
         >
-          ${state.configSaving ? "Saving…" : "Save"}
+          ${icon("check", { size: 14 })}
+          <span>${state.configSaving ? "Saving..." : "Save"}</span>
         </button>
       </div>
 
       ${state.formMode === "raw"
-        ? html`<div class="callout warn" style="margin-top: 12px;">
-            Switch the Config tab to <strong>Form</strong> mode to edit bindings here.
-          </div>`
+        ? html`
+            <div class="callout--info" style="margin-top: 16px;">
+              <div class="callout__icon">${icon("info", { size: 18 })}</div>
+              <div class="callout__content">
+                Switch the Config tab to <strong>Form</strong> mode to edit bindings here.
+              </div>
+            </div>
+          `
         : nothing}
 
       ${!state.ready
-        ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
-            <div class="muted">Load config to edit bindings.</div>
-            <button class="btn" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
-              ${state.configLoading ? "Loading…" : "Load config"}
-            </button>
-          </div>`
+        ? html`
+            <div class="approvals-load-prompt">
+              <div class="muted">Load config to edit bindings.</div>
+              <button class="btn btn--sm" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
+                ${state.configLoading ? "Loading..." : "Load config"}
+              </button>
+            </div>
+          `
         : html`
-            <div class="list" style="margin-top: 16px;">
-              <div class="list-item">
-                <div class="list-main">
-                  <div class="list-title">Default binding</div>
-                  <div class="list-sub">Used when agents do not override a node binding.</div>
+            <div class="bindings-list">
+              <div class="binding-card binding-card--modern binding-card--default">
+                <div class="binding-card__header">
+                  <div class="binding-card__icon">
+                    ${icon("server", { size: 18 })}
+                  </div>
+                  <div class="binding-card__info">
+                    <div class="binding-card__name">Default Binding</div>
+                    <div class="binding-card__desc">Used when agents do not override a node binding.</div>
+                  </div>
                 </div>
-                <div class="list-meta">
+                <div class="binding-card__control">
                   <label class="field">
                     <span>Node</span>
                     <select
@@ -494,149 +785,155 @@ function renderBindings(state: BindingState) {
                     </select>
                   </label>
                   ${!supportsBinding
-                    ? html`<div class="muted">No nodes with system.run available.</div>`
+                    ? html`<div class="muted" style="font-size: 11px; margin-top: 4px;">No nodes with system.run available.</div>`
                     : nothing}
                 </div>
               </div>
 
               ${state.agents.length === 0
                 ? html`<div class="muted">No agents found.</div>`
-                : state.agents.map((agent) =>
-                    renderAgentBinding(agent, state),
-                  )}
+                : state.agents.map((agent) => renderAgentBindingCard(agent, state))}
             </div>
           `}
-    </section>
+    </div>
   `;
 }
 
-function renderExecApprovals(state: ExecApprovalsState) {
+function renderApprovalsTab(state: ExecApprovalsState) {
   const ready = state.ready;
   const targetReady = state.target !== "node" || Boolean(state.targetNodeId);
+
   return html`
-    <section class="card">
-      <div class="row" style="justify-content: space-between; align-items: center;">
-        <div>
-          <div class="card-title">Exec approvals</div>
-          <div class="card-sub">
-            Allowlist and approval policy for <span class="mono">exec host=gateway/node</span>.
+    <div class="nodes-tab-content">
+      <div class="approvals-header">
+        <div class="approvals-header__info">
+          <div class="approvals-header__icon">
+            ${icon("check", { size: 20 })}
+          </div>
+          <div>
+            <div class="approvals-header__title">Exec Approvals</div>
+            <div class="approvals-header__desc">
+              Allowlist and approval policy for <span class="mono">exec host=gateway/node</span>.
+            </div>
           </div>
         </div>
         <button
-          class="btn"
+          class="btn btn--primary btn--sm"
           ?disabled=${state.disabled || !state.dirty || !targetReady}
           @click=${state.onSave}
         >
-          ${state.saving ? "Saving…" : "Save"}
+          ${icon("check", { size: 14 })}
+          <span>${state.saving ? "Saving..." : "Save"}</span>
         </button>
       </div>
 
       ${renderExecApprovalsTarget(state)}
 
       ${!ready
-        ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
-            <div class="muted">Load exec approvals to edit allowlists.</div>
-            <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
-              ${state.loading ? "Loading…" : "Load approvals"}
-            </button>
-          </div>`
+        ? html`
+            <div class="approvals-load-prompt">
+              <div class="muted">Load exec approvals to edit allowlists.</div>
+              <button class="btn btn--sm" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
+                ${state.loading ? "Loading..." : "Load approvals"}
+              </button>
+            </div>
+          `
         : html`
-            ${renderExecApprovalsTabs(state)}
+            ${renderExecApprovalsScopeTabs(state)}
             ${renderExecApprovalsPolicy(state)}
             ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
               ? nothing
               : renderExecApprovalsAllowlist(state)}
           `}
-    </section>
+    </div>
   `;
 }
 
 function renderExecApprovalsTarget(state: ExecApprovalsState) {
   const hasNodes = state.targetNodes.length > 0;
   const nodeValue = state.targetNodeId ?? "";
+
   return html`
-    <div class="list" style="margin-top: 12px;">
-      <div class="list-item">
-        <div class="list-main">
-          <div class="list-title">Target</div>
-          <div class="list-sub">
-            Gateway edits local approvals; node edits the selected node.
-          </div>
-        </div>
-        <div class="list-meta">
-          <label class="field">
-            <span>Host</span>
-            <select
-              ?disabled=${state.disabled}
-              @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
-                const value = target.value;
-                if (value === "node") {
-                  const first = state.targetNodes[0]?.id ?? null;
-                  state.onSelectTarget("node", nodeValue || first);
-                } else {
-                  state.onSelectTarget("gateway", null);
-                }
-              }}
-            >
-              <option value="gateway" ?selected=${state.target === "gateway"}>Gateway</option>
-              <option value="node" ?selected=${state.target === "node"}>Node</option>
-            </select>
-          </label>
-          ${state.target === "node"
-            ? html`
-                <label class="field">
-                  <span>Node</span>
-                  <select
-                    ?disabled=${state.disabled || !hasNodes}
-                    @change=${(event: Event) => {
-                      const target = event.target as HTMLSelectElement;
-                      const value = target.value.trim();
-                      state.onSelectTarget("node", value ? value : null);
-                    }}
-                  >
-                    <option value="" ?selected=${nodeValue === ""}>Select node</option>
-                    ${state.targetNodes.map(
-                      (node) =>
-                        html`<option
-                          value=${node.id}
-                          ?selected=${nodeValue === node.id}
-                        >
-                          ${node.label}
-                        </option>`,
-                    )}
-                  </select>
-                </label>
-              `
-            : nothing}
-        </div>
+    <div class="approvals-target">
+      <div class="approvals-target__label">
+        ${icon("server", { size: 16 })}
+        <span>Target</span>
+      </div>
+      <div class="approvals-target__controls">
+        <label class="field">
+          <span>Host</span>
+          <select
+            ?disabled=${state.disabled}
+            @change=${(event: Event) => {
+              const target = event.target as HTMLSelectElement;
+              const value = target.value;
+              if (value === "node") {
+                const first = state.targetNodes[0]?.id ?? null;
+                state.onSelectTarget("node", nodeValue || first);
+              } else {
+                state.onSelectTarget("gateway", null);
+              }
+            }}
+          >
+            <option value="gateway" ?selected=${state.target === "gateway"}>Gateway</option>
+            <option value="node" ?selected=${state.target === "node"}>Node</option>
+          </select>
+        </label>
+        ${state.target === "node"
+          ? html`
+              <label class="field">
+                <span>Node</span>
+                <select
+                  ?disabled=${state.disabled || !hasNodes}
+                  @change=${(event: Event) => {
+                    const target = event.target as HTMLSelectElement;
+                    const value = target.value.trim();
+                    state.onSelectTarget("node", value ? value : null);
+                  }}
+                >
+                  <option value="" ?selected=${nodeValue === ""}>Select node</option>
+                  ${state.targetNodes.map(
+                    (node) =>
+                      html`<option
+                        value=${node.id}
+                        ?selected=${nodeValue === node.id}
+                      >
+                        ${node.label}
+                      </option>`,
+                  )}
+                </select>
+              </label>
+            `
+          : nothing}
       </div>
       ${state.target === "node" && !hasNodes
-        ? html`<div class="muted">No nodes advertise exec approvals yet.</div>`
+        ? html`<div class="muted" style="margin-top: 8px; font-size: 12px;">No nodes advertise exec approvals yet.</div>`
         : nothing}
     </div>
   `;
 }
 
-function renderExecApprovalsTabs(state: ExecApprovalsState) {
+function renderExecApprovalsScopeTabs(state: ExecApprovalsState) {
   return html`
-    <div class="row" style="margin-top: 12px; gap: 8px; flex-wrap: wrap;">
-      <span class="label">Scope</span>
-      <div class="row" style="gap: 8px; flex-wrap: wrap;">
+    <div class="approvals-scope">
+      <div class="approvals-scope__label">Scope</div>
+      <div class="approvals-scope__tabs">
         <button
-          class="btn btn--sm ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE ? "active" : ""}"
+          class="approvals-scope__tab ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE ? "approvals-scope__tab--active" : ""}"
           @click=${() => state.onSelectScope(EXEC_APPROVALS_DEFAULT_SCOPE)}
         >
-          Defaults
+          ${icon("settings", { size: 14 })}
+          <span>Defaults</span>
         </button>
         ${state.agents.map((agent) => {
-          const label = agent.name?.trim() ? `${agent.name} (${agent.id})` : agent.id;
+          const label = agent.name?.trim() ? `${agent.name}` : agent.id;
           return html`
             <button
-              class="btn btn--sm ${state.selectedScope === agent.id ? "active" : ""}"
+              class="approvals-scope__tab ${state.selectedScope === agent.id ? "approvals-scope__tab--active" : ""}"
               @click=${() => state.onSelectScope(agent.id)}
             >
-              ${label}
+              ${icon("user", { size: 14 })}
+              <span>${label}</span>
             </button>
           `;
         })}
@@ -665,148 +962,143 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
   const autoIsDefault = autoOverride == null;
 
   return html`
-    <div class="list" style="margin-top: 16px;">
-      <div class="list-item">
-        <div class="list-main">
-          <div class="list-title">Security</div>
-          <div class="list-sub">
-            ${isDefaults
-              ? "Default security mode."
-              : `Default: ${defaults.security}.`}
-          </div>
+    <div class="policy-grid">
+      <div class="policy-card policy-card--modern">
+        <div class="policy-card__header">
+          <div class="policy-card__icon">${icon("settings", { size: 16 })}</div>
+          <div class="policy-card__title">Security</div>
         </div>
-        <div class="list-meta">
-          <label class="field">
-            <span>Mode</span>
-            <select
-              ?disabled=${state.disabled}
-              @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
-                const value = target.value;
-                if (!isDefaults && value === "__default__") {
-                  state.onRemove([...basePath, "security"]);
-                } else {
-                  state.onPatch([...basePath, "security"], value);
-                }
-              }}
-            >
-              ${!isDefaults
-                ? html`<option value="__default__" ?selected=${securityValue === "__default__"}>
-                    Use default (${defaults.security})
-                  </option>`
-                : nothing}
-              ${SECURITY_OPTIONS.map(
-                (option) =>
-                  html`<option
-                    value=${option.value}
-                    ?selected=${securityValue === option.value}
-                  >
-                    ${option.label}
-                  </option>`,
-              )}
-            </select>
-          </label>
+        <div class="policy-card__desc">
+          ${isDefaults ? "Default security mode." : `Default: ${defaults.security}.`}
         </div>
+        <label class="field">
+          <span>Mode</span>
+          <select
+            ?disabled=${state.disabled}
+            @change=${(event: Event) => {
+              const target = event.target as HTMLSelectElement;
+              const value = target.value;
+              if (!isDefaults && value === "__default__") {
+                state.onRemove([...basePath, "security"]);
+              } else {
+                state.onPatch([...basePath, "security"], value);
+              }
+            }}
+          >
+            ${!isDefaults
+              ? html`<option value="__default__" ?selected=${securityValue === "__default__"}>
+                  Use default (${defaults.security})
+                </option>`
+              : nothing}
+            ${SECURITY_OPTIONS.map(
+              (option) =>
+                html`<option
+                  value=${option.value}
+                  ?selected=${securityValue === option.value}
+                >
+                  ${option.label}
+                </option>`,
+            )}
+          </select>
+        </label>
       </div>
 
-      <div class="list-item">
-        <div class="list-main">
-          <div class="list-title">Ask</div>
-          <div class="list-sub">
-            ${isDefaults ? "Default prompt policy." : `Default: ${defaults.ask}.`}
-          </div>
+      <div class="policy-card policy-card--modern">
+        <div class="policy-card__header">
+          <div class="policy-card__icon">${icon("alert-circle", { size: 16 })}</div>
+          <div class="policy-card__title">Ask</div>
         </div>
-        <div class="list-meta">
-          <label class="field">
-            <span>Mode</span>
-            <select
-              ?disabled=${state.disabled}
-              @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
-                const value = target.value;
-                if (!isDefaults && value === "__default__") {
-                  state.onRemove([...basePath, "ask"]);
-                } else {
-                  state.onPatch([...basePath, "ask"], value);
-                }
-              }}
-            >
-              ${!isDefaults
-                ? html`<option value="__default__" ?selected=${askValue === "__default__"}>
-                    Use default (${defaults.ask})
-                  </option>`
-                : nothing}
-              ${ASK_OPTIONS.map(
-                (option) =>
-                  html`<option
-                    value=${option.value}
-                    ?selected=${askValue === option.value}
-                  >
-                    ${option.label}
-                  </option>`,
-              )}
-            </select>
-          </label>
+        <div class="policy-card__desc">
+          ${isDefaults ? "Default prompt policy." : `Default: ${defaults.ask}.`}
         </div>
+        <label class="field">
+          <span>Mode</span>
+          <select
+            ?disabled=${state.disabled}
+            @change=${(event: Event) => {
+              const target = event.target as HTMLSelectElement;
+              const value = target.value;
+              if (!isDefaults && value === "__default__") {
+                state.onRemove([...basePath, "ask"]);
+              } else {
+                state.onPatch([...basePath, "ask"], value);
+              }
+            }}
+          >
+            ${!isDefaults
+              ? html`<option value="__default__" ?selected=${askValue === "__default__"}>
+                  Use default (${defaults.ask})
+                </option>`
+              : nothing}
+            ${ASK_OPTIONS.map(
+              (option) =>
+                html`<option
+                  value=${option.value}
+                  ?selected=${askValue === option.value}
+                >
+                  ${option.label}
+                </option>`,
+            )}
+          </select>
+        </label>
       </div>
 
-      <div class="list-item">
-        <div class="list-main">
-          <div class="list-title">Ask fallback</div>
-          <div class="list-sub">
-            ${isDefaults
-              ? "Applied when the UI prompt is unavailable."
-              : `Default: ${defaults.askFallback}.`}
-          </div>
+      <div class="policy-card policy-card--modern">
+        <div class="policy-card__header">
+          <div class="policy-card__icon">${icon("alert-triangle", { size: 16 })}</div>
+          <div class="policy-card__title">Ask Fallback</div>
         </div>
-        <div class="list-meta">
-          <label class="field">
-            <span>Fallback</span>
-            <select
-              ?disabled=${state.disabled}
-              @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
-                const value = target.value;
-                if (!isDefaults && value === "__default__") {
-                  state.onRemove([...basePath, "askFallback"]);
-                } else {
-                  state.onPatch([...basePath, "askFallback"], value);
-                }
-              }}
-            >
-              ${!isDefaults
-                ? html`<option value="__default__" ?selected=${askFallbackValue === "__default__"}>
-                    Use default (${defaults.askFallback})
-                  </option>`
-                : nothing}
-              ${SECURITY_OPTIONS.map(
-                (option) =>
-                  html`<option
-                    value=${option.value}
-                    ?selected=${askFallbackValue === option.value}
-                  >
-                    ${option.label}
-                  </option>`,
-              )}
-            </select>
-          </label>
+        <div class="policy-card__desc">
+          ${isDefaults
+            ? "Applied when UI prompt unavailable."
+            : `Default: ${defaults.askFallback}.`}
         </div>
+        <label class="field">
+          <span>Fallback</span>
+          <select
+            ?disabled=${state.disabled}
+            @change=${(event: Event) => {
+              const target = event.target as HTMLSelectElement;
+              const value = target.value;
+              if (!isDefaults && value === "__default__") {
+                state.onRemove([...basePath, "askFallback"]);
+              } else {
+                state.onPatch([...basePath, "askFallback"], value);
+              }
+            }}
+          >
+            ${!isDefaults
+              ? html`<option value="__default__" ?selected=${askFallbackValue === "__default__"}>
+                  Use default (${defaults.askFallback})
+                </option>`
+              : nothing}
+            ${SECURITY_OPTIONS.map(
+              (option) =>
+                html`<option
+                  value=${option.value}
+                  ?selected=${askFallbackValue === option.value}
+                >
+                  ${option.label}
+                </option>`,
+            )}
+          </select>
+        </label>
       </div>
 
-      <div class="list-item">
-        <div class="list-main">
-          <div class="list-title">Auto-allow skill CLIs</div>
-          <div class="list-sub">
-            ${isDefaults
-              ? "Allow skill executables listed by the Gateway."
-              : autoIsDefault
-                ? `Using default (${defaults.autoAllowSkills ? "on" : "off"}).`
-                : `Override (${autoEffective ? "on" : "off"}).`}
-          </div>
+      <div class="policy-card policy-card--modern">
+        <div class="policy-card__header">
+          <div class="policy-card__icon">${icon("zap", { size: 16 })}</div>
+          <div class="policy-card__title">Auto-allow Skills</div>
         </div>
-        <div class="list-meta">
-          <label class="field">
-            <span>Enabled</span>
+        <div class="policy-card__desc">
+          ${isDefaults
+            ? "Allow skill executables listed by Gateway."
+            : autoIsDefault
+              ? `Using default (${defaults.autoAllowSkills ? "on" : "off"}).`
+              : `Override (${autoEffective ? "on" : "off"}).`}
+        </div>
+        <div class="policy-card__toggle">
+          <label class="toggle-field">
             <input
               type="checkbox"
               ?disabled=${state.disabled}
@@ -816,15 +1108,18 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
                 state.onPatch([...basePath, "autoAllowSkills"], target.checked);
               }}
             />
+            <span>Enabled</span>
           </label>
           ${!isDefaults && !autoIsDefault
-            ? html`<button
-                class="btn btn--sm"
-                ?disabled=${state.disabled}
-                @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
-              >
-                Use default
-              </button>`
+            ? html`
+                <button
+                  class="btn btn--sm"
+                  ?disabled=${state.disabled}
+                  @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
+                >
+                  Use default
+                </button>
+              `
             : nothing}
         </div>
       </div>
@@ -835,29 +1130,43 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
 function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
   const allowlistPath = ["agents", state.selectedScope, "allowlist"];
   const entries = state.allowlist;
+
   return html`
-    <div class="row" style="margin-top: 18px; justify-content: space-between;">
-      <div>
-        <div class="card-title">Allowlist</div>
-        <div class="card-sub">Case-insensitive glob patterns.</div>
+    <div class="allowlist-section">
+      <div class="allowlist-header">
+        <div class="allowlist-header__info">
+          <div class="allowlist-header__icon">
+            ${icon("check", { size: 18 })}
+          </div>
+          <div>
+            <div class="allowlist-header__title">Allowlist</div>
+            <div class="allowlist-header__desc">Case-insensitive glob patterns.</div>
+          </div>
+        </div>
+        <button
+          class="btn btn--sm"
+          ?disabled=${state.disabled}
+          @click=${() => {
+            const next = [...entries, { pattern: "" }];
+            state.onPatch(allowlistPath, next);
+          }}
+        >
+          ${icon("plus", { size: 14 })}
+          <span>Add pattern</span>
+        </button>
       </div>
-      <button
-        class="btn btn--sm"
-        ?disabled=${state.disabled}
-        @click=${() => {
-          const next = [...entries, { pattern: "" }];
-          state.onPatch(allowlistPath, next);
-        }}
-      >
-        Add pattern
-      </button>
-    </div>
-    <div class="list" style="margin-top: 12px;">
-      ${entries.length === 0
-        ? html`<div class="muted">No allowlist entries yet.</div>`
-        : entries.map((entry, index) =>
-            renderAllowlistEntry(state, entry, index),
-          )}
+
+      <div class="allowlist-entries">
+        ${entries.length === 0
+          ? html`
+              <div class="allowlist-empty">
+                <div class="muted">No allowlist entries yet.</div>
+              </div>
+            `
+          : entries.map((entry, index) =>
+              renderAllowlistEntry(state, entry, index),
+            )}
+      </div>
     </div>
   `;
 }
@@ -869,25 +1178,21 @@ function renderAllowlistEntry(
 ) {
   const lastUsed = entry.lastUsedAt ? formatAgo(entry.lastUsedAt) : "never";
   const lastCommand = entry.lastUsedCommand
-    ? clampText(entry.lastUsedCommand, 120)
+    ? clampText(entry.lastUsedCommand, 100)
     : null;
   const lastPath = entry.lastResolvedPath
-    ? clampText(entry.lastResolvedPath, 120)
+    ? clampText(entry.lastResolvedPath, 100)
     : null;
+
   return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${entry.pattern?.trim() ? entry.pattern : "New pattern"}</div>
-        <div class="list-sub">Last used: ${lastUsed}</div>
-        ${lastCommand ? html`<div class="list-sub mono">${lastCommand}</div>` : nothing}
-        ${lastPath ? html`<div class="list-sub mono">${lastPath}</div>` : nothing}
-      </div>
-      <div class="list-meta">
+    <div class="allowlist-entry">
+      <div class="allowlist-entry__main">
         <label class="field">
           <span>Pattern</span>
           <input
             type="text"
             .value=${entry.pattern ?? ""}
+            placeholder="e.g., /usr/bin/*"
             ?disabled=${state.disabled}
             @input=${(event: Event) => {
               const target = event.target as HTMLInputElement;
@@ -898,40 +1203,54 @@ function renderAllowlistEntry(
             }}
           />
         </label>
-        <button
-          class="btn btn--sm danger"
-          ?disabled=${state.disabled}
-          @click=${() => {
-            if (state.allowlist.length <= 1) {
-              state.onRemove(["agents", state.selectedScope, "allowlist"]);
-              return;
-            }
-            state.onRemove(["agents", state.selectedScope, "allowlist", index]);
-          }}
-        >
-          Remove
-        </button>
+        <div class="allowlist-entry__meta">
+          <span class="muted">Last used: ${lastUsed}</span>
+          ${lastCommand ? html`<span class="mono">${lastCommand}</span>` : nothing}
+          ${lastPath ? html`<span class="mono muted">${lastPath}</span>` : nothing}
+        </div>
       </div>
+      <button
+        class="btn btn--danger btn--sm btn--icon"
+        ?disabled=${state.disabled}
+        @click=${() => {
+          if (state.allowlist.length <= 1) {
+            state.onRemove(["agents", state.selectedScope, "allowlist"]);
+            return;
+          }
+          state.onRemove(["agents", state.selectedScope, "allowlist", index]);
+        }}
+      >
+        ${icon("trash", { size: 14 })}
+      </button>
     </div>
   `;
 }
 
-function renderAgentBinding(agent: BindingAgent, state: BindingState) {
+function renderAgentBindingCard(agent: BindingAgent, state: BindingState) {
   const bindingValue = agent.binding ?? "__default__";
-  const label = agent.name?.trim() ? `${agent.name} (${agent.id})` : agent.id;
+  const label = agent.name?.trim() ? `${agent.name}` : agent.id;
   const supportsBinding = state.nodes.length > 0;
+
   return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${label}</div>
-        <div class="list-sub">
-          ${agent.isDefault ? "default agent" : "agent"} ·
-          ${bindingValue === "__default__"
-            ? `uses default (${state.defaultBinding ?? "any"})`
-            : `override: ${agent.binding}`}
+    <div class="binding-card binding-card--modern">
+      <div class="binding-card__header">
+        <div class="binding-card__icon binding-card__icon--agent">
+          ${icon("user", { size: 18 })}
         </div>
+        <div class="binding-card__info">
+          <div class="binding-card__name">${label}</div>
+          <div class="binding-card__desc">
+            ${agent.isDefault ? "default agent" : "agent"} ·
+            ${bindingValue === "__default__"
+              ? `uses default (${state.defaultBinding ?? "any"})`
+              : `override: ${agent.binding}`}
+          </div>
+        </div>
+        ${agent.isDefault
+          ? html`<span class="badge badge--accent badge--animated badge--sm">Default</span>`
+          : nothing}
       </div>
-      <div class="list-meta">
+      <div class="binding-card__control">
         <label class="field">
           <span>Binding</span>
           <select
@@ -1052,36 +1371,4 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
   }
 
   return { defaultBinding, agents };
-}
-
-function renderNode(node: Record<string, unknown>) {
-  const connected = Boolean(node.connected);
-  const paired = Boolean(node.paired);
-  const title =
-    (typeof node.displayName === "string" && node.displayName.trim()) ||
-    (typeof node.nodeId === "string" ? node.nodeId : "unknown");
-  const caps = Array.isArray(node.caps) ? (node.caps as unknown[]) : [];
-  const commands = Array.isArray(node.commands) ? (node.commands as unknown[]) : [];
-  return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${title}</div>
-        <div class="list-sub">
-          ${typeof node.nodeId === "string" ? node.nodeId : ""}
-          ${typeof node.remoteIp === "string" ? ` · ${node.remoteIp}` : ""}
-          ${typeof node.version === "string" ? ` · ${node.version}` : ""}
-        </div>
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${paired ? "paired" : "unpaired"}</span>
-          <span class="chip ${connected ? "chip-ok" : "chip-warn"}">
-            ${connected ? "connected" : "offline"}
-          </span>
-          ${caps.slice(0, 12).map((c) => html`<span class="chip">${String(c)}</span>`)}
-          ${commands
-            .slice(0, 8)
-            .map((c) => html`<span class="chip">${String(c)}</span>`)}
-        </div>
-      </div>
-    </div>
-  `;
 }

@@ -34,6 +34,7 @@ import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import { isErrno } from "./errno.js";
 import { formatGroupMembers } from "./group-members.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
@@ -308,6 +309,7 @@ export async function processMessage(params: {
     sessionKey: params.route.sessionKey,
     ctx: ctxPayload,
   }).catch((err) => {
+    if (isErrno(err, "ENOENT")) return;
     params.replyLogger.warn(
       {
         error: formatError(err),

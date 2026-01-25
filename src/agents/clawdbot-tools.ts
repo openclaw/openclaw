@@ -7,6 +7,7 @@ import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import { createCodingTaskTool } from "./tools/coding-task-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
@@ -71,6 +72,13 @@ export function createClawdbotTools(options?: {
     config: options?.config,
     sandboxed: options?.sandboxed,
   });
+  const codingTaskTool =
+    options?.config?.tools?.codingTask?.enabled === true
+      ? createCodingTaskTool({
+          config: options?.config,
+          workspaceDir: options?.workspaceDir,
+        })
+      : null;
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       defaultControlUrl: options?.browserControlUrl,
@@ -136,6 +144,7 @@ export function createClawdbotTools(options?: {
     }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
+    ...(codingTaskTool ? [codingTaskTool] : []),
     ...(imageTool ? [imageTool] : []),
   ];
 

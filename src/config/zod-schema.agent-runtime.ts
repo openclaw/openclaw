@@ -427,6 +427,18 @@ export const ToolsSchema = z
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
     byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+    codingTask: z
+      .object({
+        enabled: z.boolean().optional(),
+        permissionMode: z.enum(["default", "acceptEdits", "bypassPermissions", "plan"]).optional(),
+        toolPreset: z.enum(["readonly", "claude_code"]).optional(),
+        allowedTools: z.array(z.string()).optional(),
+        disallowedTools: z.array(z.string()).optional(),
+        settingSources: z.array(z.enum(["user", "project", "local"])).optional(),
+        additionalDirectories: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,

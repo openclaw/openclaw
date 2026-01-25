@@ -1,30 +1,13 @@
-import net from "node:net";
-
 import { describe, expect, it, vi } from "vitest";
 
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { loginChutes } from "./chutes-oauth.js";
 
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("No TCP address")));
-        return;
-      }
-      const port = address.port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
-
 describe("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
-    const port = await getFreePort();
-    const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
+    const redirectUri = "http://127.0.0.1:1456/oauth-callback";
+    let expectedStateFromWait: string | null = null;
+    let authState: string | null = null;
 
     const fetchFn: typeof fetch = async (input, init) => {
       const url = String(input);
@@ -54,14 +37,20 @@ describe("loginChutes", () => {
     const creds = await loginChutes({
       app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
       onAuth: async ({ url }) => {
-        const state = new URL(url).searchParams.get("state");
-        expect(state).toBeTruthy();
-        await fetch(`${redirectUri}?code=code_local&state=${state}`);
+        authState = new URL(url).searchParams.get("state");
+        expect(authState).toBeTruthy();
       },
       onPrompt,
+      waitForCallback: async ({ expectedState, redirectUri: callbackUri }) => {
+        expectedStateFromWait = expectedState;
+        expect(callbackUri).toBe(redirectUri);
+        expect(expectedState).toBeTruthy();
+        return { code: "code_local", state: expectedState };
+      },
       fetchFn,
     });
 
+    expect(authState).toBe(expectedStateFromWait);
     expect(onPrompt).not.toHaveBeenCalled();
     expect(creds.access).toBe("at_local");
     expect(creds.refresh).toBe("rt_local");

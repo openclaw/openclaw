@@ -1,5 +1,15 @@
 import type { ConfigUiHints } from "../types";
 
+export type ConfigIssueSeverity = "error" | "warn" | "info";
+
+export type ConfigValidationIssue = {
+  severity: ConfigIssueSeverity;
+  message: string;
+  raw?: unknown;
+};
+
+export type ConfigValidationMap = Record<string, ConfigValidationIssue[]>;
+
 export type JsonSchema = {
   type?: string | string[];
   title?: string;
@@ -89,4 +99,3 @@ export function isSensitivePath(path: Array<string | number>): boolean {
     key.endsWith("key")
   );
 }
-

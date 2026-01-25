@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -42,28 +39,19 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
+let nextTestPort = (() => {
+  const workerIdRaw = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "0";
+  const workerId = Number.parseInt(workerIdRaw, 10);
+  const shard = Number.isFinite(workerId) ? Math.max(0, workerId) : 0;
+  return 36_000 + shard * 100;
+})();
+
 async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (!addr || typeof addr === "string") {
-        srv.close();
-        reject(new Error("failed to acquire free port"));
-        return;
-      }
-      const port = addr.port;
-      srv.close((err) => {
-        if (err) reject(err);
-        else resolve(port);
-      });
-    });
-  });
+  return nextTestPort++;
 }
 
 async function getFreeGatewayPort(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 4] });
+  return nextTestPort++ + 4;
 }
 
 const runtime = {

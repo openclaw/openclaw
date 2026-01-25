@@ -3,6 +3,8 @@ export type TuiOptions = {
   token?: string;
   password?: string;
   session?: string;
+  agent?: string;
+  newSession?: boolean;
   deliver?: boolean;
   thinking?: string;
   timeoutMs?: number;

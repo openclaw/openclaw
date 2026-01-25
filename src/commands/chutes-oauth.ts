@@ -121,6 +121,7 @@ export async function loginChutes(params: {
   timeoutMs?: number;
   createPkce?: typeof generateChutesPkce;
   createState?: () => string;
+  waitForCallback?: typeof waitForLocalCallback;
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
@@ -154,7 +155,8 @@ export async function loginChutes(params: {
     if (parsed.state !== state) throw new Error("Invalid OAuth state");
     codeAndState = parsed;
   } else {
-    const callback = waitForLocalCallback({
+    const waitForCallback = params.waitForCallback ?? waitForLocalCallback;
+    const callback = waitForCallback({
       redirectUri: params.app.redirectUri,
       expectedState: state,
       timeoutMs,

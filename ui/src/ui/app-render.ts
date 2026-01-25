@@ -5,12 +5,12 @@ import type { AppViewState } from "./app-view-state";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import {
   TAB_GROUPS,
-  iconForTab,
   pathForTab,
   subtitleForTab,
   titleForTab,
   type Tab,
 } from "./navigation";
+import { icon } from "./icons";
 import type { UiSettings } from "./storage";
 import type { ThemeMode } from "./theme";
 import type { ThemeTransitionContext } from "./theme-transition";
@@ -39,8 +39,14 @@ import { renderInstances } from "./views/instances";
 import { renderLogs } from "./views/logs";
 import { renderNodes } from "./views/nodes";
 import { renderOverview } from "./views/overview";
+import { renderOverseer } from "./views/overseer";
 import { renderSessions } from "./views/sessions";
 import { renderExecApprovalPrompt } from "./views/exec-approval";
+import {
+  renderCommandPalette,
+  createDefaultCommands,
+  type Command,
+} from "./components/command-palette";
 import {
   approveDevicePairing,
   loadDevices,
@@ -52,7 +58,13 @@ import { renderSkills } from "./views/skills";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers";
 import { loadChannels } from "./controllers/channels";
 import { loadPresence } from "./controllers/presence";
-import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
+import {
+  agentSessionKey,
+  deleteSession,
+  findSessionForAgent,
+  loadSessions,
+  patchSession,
+} from "./controllers/sessions";
 import {
   installSkill,
   loadSkills,
@@ -99,6 +111,58 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   return identity?.avatarUrl;
 }
 
+function applySessionSelection(state: AppViewState, sessionKey: string) {
+  state.sessionKey = sessionKey;
+  state.chatMessage = "";
+  state.chatStream = null;
+  state.chatStreamStartedAt = null;
+  state.chatRunId = null;
+  state.chatQueue = [];
+  state.resetToolStream();
+  state.resetChatScroll();
+  state.applySettings({
+    ...state.settings,
+    sessionKey,
+    lastActiveSessionKey: sessionKey,
+  });
+  void state.loadAssistantIdentity();
+}
+
+async function resolveAgentSessionKey(
+  state: AppViewState,
+  agentId: string,
+): Promise<string> {
+  const trimmed = agentId.trim();
+  const localMatch = findSessionForAgent(state.sessionsResult, trimmed);
+  if (localMatch) return localMatch;
+
+  if (state.client && state.connected) {
+    try {
+      const res = (await state.client.request("sessions.list", {
+        agentId: trimmed,
+        limit: 1,
+        includeGlobal: false,
+        includeUnknown: false,
+      })) as SessionsListResult | undefined;
+      const key = res?.sessions?.[0]?.key;
+      if (typeof key === "string" && key.trim()) return key.trim();
+    } catch {
+      // Fall through to starting a new session.
+    }
+  }
+
+  const mainKey = state.agentsList?.mainKey;
+  const fallbackKey = agentSessionKey(trimmed, mainKey);
+  if (state.client && state.connected) {
+    try {
+      await state.client.request("sessions.reset", { key: fallbackKey });
+    } catch {
+      // Ignore reset failures; the session might still be usable.
+    }
+  }
+  return fallbackKey;
+}
+
 export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
@@ -124,7 +188,7 @@ export function renderApp(state: AppViewState) {
             title="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
             aria-label="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
           >
-            <span class="nav-collapse-toggle__icon">☰</span>
+            <span class="nav-collapse-toggle__icon">${icon(state.settings.navCollapsed ? "panel-left" : "menu", { size: 18 })}</span>
           </button>
           <div class="brand">
             <div class="brand-title">CLAWDBOT</div>
@@ -159,7 +223,7 @@ export function renderApp(state: AppViewState) {
                 aria-expanded=${!isGroupCollapsed}
               >
                 <span class="nav-label__text">${group.label}</span>
-                <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
+                <span class="nav-label__chevron">${icon("chevron-down", { size: 14 })}</span>
               </button>
               <div class="nav-group__items">
                 ${group.tabs.map((tab) => renderTab(state, tab))}
@@ -179,7 +243,7 @@ export function renderApp(state: AppViewState) {
               rel="noreferrer"
               title="Docs (opens in new tab)"
             >
-              <span class="nav-item__icon" aria-hidden="true">📚</span>
+              <span class="nav-item__icon" aria-hidden="true">${icon("book-open", { size: 18 })}</span>
               <span class="nav-item__text">Docs</span>
             </a>
           </div>
@@ -252,7 +316,16 @@ export function renderApp(state: AppViewState) {
               onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
               onWhatsAppWait: () => state.handleWhatsAppWait(),
               onWhatsAppLogout: () => state.handleWhatsAppLogout(),
-              onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
+              onConfigPatch: (path, value) => {
+                updateConfigFormValue(state, path, value);
+                // Mark wizard as dirty when editing through the wizard
+                if (state.channelWizardState.open) {
+                  state.channelWizardState = {
+                    ...state.channelWizardState,
+                    isDirty: true,
+                  };
+                }
+              },
               onConfigSave: () => state.handleChannelConfigSave(),
               onConfigReload: () => state.handleChannelConfigReload(),
               onNostrProfileEdit: (accountId, profile) =>
@@ -263,6 +336,15 @@ export function renderApp(state: AppViewState) {
               onNostrProfileSave: () => state.handleNostrProfileSave(),
               onNostrProfileImport: () => state.handleNostrProfileImport(),
               onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
+              // Channel wizard props
+              wizardState: state.channelWizardState,
+              onWizardOpen: (channelId) => state.handleChannelWizardOpen(channelId),
+              onWizardClose: () => state.handleChannelWizardClose(),
+              onWizardSave: () => state.handleChannelWizardSave(),
+              onWizardDiscard: () => state.handleChannelWizardDiscard(),
+              onWizardSectionChange: (sectionId) => state.handleChannelWizardSectionChange(sectionId),
+              onWizardConfirmClose: () => state.handleChannelWizardConfirmClose(),
+              onWizardCancelClose: () => state.handleChannelWizardCancelClose(),
             })
           : nothing}
 
@@ -286,17 +368,27 @@ export function renderApp(state: AppViewState) {
               includeGlobal: state.sessionsIncludeGlobal,
               includeUnknown: state.sessionsIncludeUnknown,
               basePath: state.basePath,
+              agents: state.agentsList,
+              onSessionOpen: (sessionKey) => {
+                applySessionSelection(state, sessionKey);
+                state.setTab("chat");
+              },
               onFiltersChange: (next) => {
                 state.sessionsFilterActive = next.activeMinutes;
                 state.sessionsFilterLimit = next.limit;
                 state.sessionsIncludeGlobal = next.includeGlobal;
                 state.sessionsIncludeUnknown = next.includeUnknown;
-	              },
-	              onRefresh: () => loadSessions(state),
-	              onPatch: (key, patch) => patchSession(state, key, patch),
-	              onDelete: (key) => deleteSession(state, key),
-	            })
-	          : nothing}
+              },
+              onRefresh: () => loadSessions(state),
+              onPatch: (key, patch) => patchSession(state, key, patch),
+              onDelete: (key) => deleteSession(state, key),
+              onAgentSessionOpen: async (agentId) => {
+                const sessionKey = await resolveAgentSessionKey(state, agentId);
+                applySessionSelection(state, sessionKey);
+                state.setTab("chat");
+              },
+            })
+          : nothing}
 
         ${state.tab === "cron"
           ? renderCron({
@@ -339,6 +431,52 @@ export function renderApp(state: AppViewState) {
               onSaveKey: (key) => saveSkillApiKey(state, key),
               onInstall: (skillKey, name, installId) =>
                 installSkill(state, skillKey, name, installId),
+            })
+          : nothing}
+
+        ${state.tab === "overseer"
+          ? renderOverseer({
+              loading: state.overseerLoading,
+              error: state.overseerError,
+              status: state.overseerStatus,
+              goalLoading: state.overseerGoalLoading,
+              goalError: state.overseerGoalError,
+              goal: state.overseerGoal,
+              selectedGoalId: state.overseerSelectedGoalId,
+              showOverseerGraph: state.showOverseerGraph,
+              showSystemGraph: state.showSystemGraph,
+              overseerViewport: state.overseerViewport,
+              overseerDrag: state.overseerDrag,
+              systemViewport: state.systemViewport,
+              systemDrag: state.systemDrag,
+              selectedOverseerNodeId: state.overseerSelectedNodeId,
+              selectedSystemNodeId: state.systemSelectedNodeId,
+              drawerOpen: state.overseerDrawerOpen,
+              drawerKind: state.overseerDrawerKind,
+              drawerNodeId: state.overseerDrawerNodeId,
+              nodes: state.nodes,
+              presenceEntries: state.presenceEntries,
+              cronJobs: state.cronJobs,
+              cronRunsJobId: state.cronRunsJobId,
+              cronRuns: state.cronRuns,
+              skillsReport: state.skillsReport,
+              agents: state.agentsList,
+              sessions: state.sessionsResult,
+              channels: state.channelsSnapshot,
+              onRefresh: () => state.handleOverseerRefresh(),
+              onTick: () => state.handleOverseerTick(),
+              onSelectGoal: (goalId) => state.handleOverseerSelectGoal(goalId),
+              onToggleOverseerGraph: (next) =>
+                state.handleOverseerToggleGraph("overseer", next),
+              onToggleSystemGraph: (next) =>
+                state.handleOverseerToggleGraph("system", next),
+              onSelectOverseerNode: (nodeId) => state.handleOverseerSelectOverseerNode(nodeId),
+              onSelectSystemNode: (nodeId) => state.handleOverseerSelectSystemNode(nodeId),
+              onViewportChange: (kind, next) =>
+                state.handleOverseerViewportChange(kind, next),
+              onDragChange: (kind, next) => state.handleOverseerDragChange(kind, next),
+              onDrawerClose: () => state.handleOverseerDrawerClose(),
+              onLoadCronRuns: (jobId) => state.handleOverseerLoadCronRuns(jobId),
             })
           : nothing}
 
@@ -454,6 +592,12 @@ export function renderApp(state: AppViewState) {
               queue: state.chatQueue,
               connected: state.connected,
               canSend: state.connected,
+              audioInputSupported: state.audioInputSupported,
+              audioRecording: state.audioRecording,
+              audioInputError: state.audioInputError,
+              readAloudSupported: state.readAloudSupported,
+              readAloudActive: state.readAloudActive,
+              readAloudError: state.readAloudError,
               disabledReason: chatDisabledReason,
               error: state.lastError,
               sessions: state.sessionsResult,
@@ -474,6 +618,8 @@ export function renderApp(state: AppViewState) {
               onSend: () => state.handleSendChat(),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
+              onToggleAudioRecording: () => state.handleToggleAudioRecording(),
+              onReadAloud: (text) => state.handleReadAloudToggle(text),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
               onNewSession: () =>
                 state.handleSendChat("/new", { restoreDraft: true }),
@@ -487,6 +633,15 @@ export function renderApp(state: AppViewState) {
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
+              // Task sidebar props
+              taskSidebarOpen: state.taskSidebarOpen,
+              tasks: state.chatTasks,
+              activityLog: state.chatActivityLog,
+              expandedTaskIds: state.taskSidebarExpandedIds,
+              taskCount: state.chatTasks.length,
+              onOpenTaskSidebar: () => state.handleOpenTaskSidebar(),
+              onCloseTaskSidebar: () => state.handleCloseTaskSidebar(),
+              onToggleTaskExpanded: (taskId: string) => state.handleToggleTaskExpanded(taskId),
             })
           : nothing}
 
@@ -557,18 +712,54 @@ export function renderApp(state: AppViewState) {
               levelFilters: state.logsLevelFilters,
               autoFollow: state.logsAutoFollow,
               truncated: state.logsTruncated,
+              showRelativeTime: state.logsShowRelativeTime,
+              showSidebar: state.logsShowSidebar,
+              showFilters: state.logsShowFilters,
+              subsystemFilters: state.logsSubsystemFilters,
+              availableSubsystems: [
+                ...new Set(state.logsEntries.map((e) => e.subsystem).filter(Boolean) as string[]),
+              ].sort(),
               onFilterTextChange: (next) => (state.logsFilterText = next),
               onLevelToggle: (level, enabled) => {
                 state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
               },
               onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
+              onToggleRelativeTime: (next) => (state.logsShowRelativeTime = next),
               onRefresh: () => loadLogs(state, { reset: true }),
+              onClear: () => state.clearLogs(),
               onExport: (lines, label) => state.exportLogs(lines, label),
               onScroll: (event) => state.handleLogsScroll(event),
+              onJumpToBottom: () => state.jumpToLogsBottom(),
+              onToggleSidebar: () => state.handleLogsToggleSidebar(),
+              onToggleFilters: () => state.handleLogsToggleFilters(),
+              onSubsystemToggle: (subsystem) => state.handleLogsSubsystemToggle(subsystem),
             })
           : nothing}
       </main>
       ${renderExecApprovalPrompt(state)}
+      ${renderCommandPalette({
+        state: {
+          open: state.commandPaletteOpen,
+          query: state.commandPaletteQuery,
+          selectedIndex: state.commandPaletteSelectedIndex,
+        },
+        commands: createDefaultCommands(
+          (tab) => state.setTab(tab),
+          () => state.loadOverview(),
+          () => state.handleSendChat("/new", { restoreDraft: true }),
+          () => {
+            const nextTheme = state.theme === "dark" ? "light" : state.theme === "light" ? "system" : "dark";
+            state.setTheme(nextTheme);
+          }
+        ),
+        onClose: () => state.closeCommandPalette(),
+        onQueryChange: (query) => state.setCommandPaletteQuery(query),
+        onIndexChange: (index) => state.setCommandPaletteSelectedIndex(index),
+        onSelect: (command: Command) => {
+          command.action();
+          state.closeCommandPalette();
+        },
+      })}
     </div>
   `;
 }

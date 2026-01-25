@@ -1,5 +1,14 @@
+/* Design System v2 - Tailwind-based */
+@import "./styles/design-system.css";
+
+/* Legacy styles (being migrated) */
 @import "./styles/base.css";
 @import "./styles/layout.css";
 @import "./styles/layout.mobile.css";
 @import "./styles/components.css";
 @import "./styles/config.css";
+
+/* New modular view styles */
+@import "./styles/logs.css";
+@import "./styles/channel-wizard.css";
+@import "./styles/chat/task-sidebar.css";

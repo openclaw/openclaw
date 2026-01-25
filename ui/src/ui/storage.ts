@@ -16,7 +16,24 @@ export type UiSettings = {
 };
 
 export function loadSettings(): UiSettings {
+  const runtimeDefaultGatewayUrl =
+    typeof window !== "undefined" &&
+    typeof (window as unknown as { __CLAWDBOT_CONTROL_UI_DEFAULT_GATEWAY_URL__?: unknown })
+      .__CLAWDBOT_CONTROL_UI_DEFAULT_GATEWAY_URL__ === "string"
+      ? String(
+          (window as unknown as { __CLAWDBOT_CONTROL_UI_DEFAULT_GATEWAY_URL__?: string })
+            .__CLAWDBOT_CONTROL_UI_DEFAULT_GATEWAY_URL__,
+        ).trim()
+      : "";
+  const envDefaultGatewayUrl =
+    typeof import.meta !== "undefined" &&
+    typeof import.meta.env?.VITE_CLAWDBOT_CONTROL_UI_DEFAULT_GATEWAY_URL === "string"
+      ? import.meta.env.VITE_CLAWDBOT_CONTROL_UI_DEFAULT_GATEWAY_URL.trim()
+      : "";
+
   const defaultUrl = (() => {
+    if (runtimeDefaultGatewayUrl) return runtimeDefaultGatewayUrl;
+    if (envDefaultGatewayUrl) return envDefaultGatewayUrl;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     return `${proto}://${location.host}`;
   })();

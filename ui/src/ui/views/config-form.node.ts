@@ -7,6 +7,7 @@ import {
   isSensitivePath,
   pathKey,
   schemaType,
+  type ConfigValidationMap,
   type JsonSchema,
 } from "./config-form.shared";
 
@@ -43,6 +44,7 @@ export function renderNode(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
+  validation?: ConfigValidationMap;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult | typeof nothing {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
@@ -52,6 +54,13 @@ export function renderNode(params: {
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
   const key = pathKey(path);
+  const validationIssues = params.validation?.[key] ?? [];
+  const severity =
+    validationIssues.find((issue) => issue.severity === "error")?.severity ??
+    validationIssues.find((issue) => issue.severity === "warn")?.severity ??
+    validationIssues[0]?.severity ??
+    null;
+  const validationMessage = validationIssues[0]?.message ?? "";
 
   if (unsupported.has(key)) {
     return html`<div class="cfg-field cfg-field--error">
@@ -84,9 +93,15 @@ export function renderNode(params: {
       // Use segmented control for small sets
       const resolvedValue = value ?? schema.default;
       return html`
-        <div class="cfg-field">
+        <div
+          class="cfg-field ${severity ? `cfg-field--invalid cfg-field--${severity}` : ""}"
+          data-config-path=${key}
+        >
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+          ${severity
+            ? html`<div class="cfg-field__validation">${validationMessage}</div>`
+            : nothing}
           <div class="cfg-segmented">
             ${literals.map((lit, idx) => html`
               <button
@@ -143,9 +158,15 @@ export function renderNode(params: {
     if (options.length <= 5) {
       const resolvedValue = value ?? schema.default;
       return html`
-        <div class="cfg-field">
+        <div
+          class="cfg-field ${severity ? `cfg-field--invalid cfg-field--${severity}` : ""}"
+          data-config-path=${key}
+        >
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+          ${severity
+            ? html`<div class="cfg-field__validation">${validationMessage}</div>`
+            : nothing}
           <div class="cfg-segmented">
             ${options.map((opt) => html`
               <button
@@ -178,10 +199,16 @@ export function renderNode(params: {
   if (type === "boolean") {
     const displayValue = typeof value === "boolean" ? value : typeof schema.default === "boolean" ? schema.default : false;
     return html`
-      <label class="cfg-toggle-row ${disabled ? 'disabled' : ''}">
+      <label
+        class="cfg-toggle-row ${disabled ? 'disabled' : ''} ${severity ? `cfg-field--invalid cfg-field--${severity}` : ""}"
+        data-config-path=${key}
+      >
         <div class="cfg-toggle-row__content">
           <span class="cfg-toggle-row__label">${label}</span>
           ${help ? html`<span class="cfg-toggle-row__help">${help}</span>` : nothing}
+          ${severity
+            ? html`<span class="cfg-field__validation">${validationMessage}</span>`
+            : nothing}
         </div>
         <div class="cfg-toggle">
           <input
@@ -222,6 +249,7 @@ function renderTextInput(params: {
   hints: ConfigUiHints;
   disabled: boolean;
   showLabel?: boolean;
+  validation?: ConfigValidationMap;
   inputType: "text" | "number";
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
@@ -235,11 +263,23 @@ function renderTextInput(params: {
     hint?.placeholder ??
     (isSensitive ? "••••" : schema.default !== undefined ? `Default: ${schema.default}` : "");
   const displayValue = value ?? "";
+  const key = pathKey(path);
+  const validationIssues = params.validation?.[key] ?? [];
+  const severity =
+    validationIssues.find((issue) => issue.severity === "error")?.severity ??
+    validationIssues.find((issue) => issue.severity === "warn")?.severity ??
+    validationIssues[0]?.severity ??
+    null;
+  const validationMessage = validationIssues[0]?.message ?? "";
 
   return html`
-    <div class="cfg-field">
+    <div
+      class="cfg-field ${severity ? `cfg-field--invalid cfg-field--${severity}` : ""}"
+      data-config-path=${key}
+    >
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${severity ? html`<div class="cfg-field__validation">${validationMessage}</div>` : nothing}
       <div class="cfg-input-wrap">
         <input
           type=${isSensitive ? "password" : inputType}
@@ -282,6 +322,7 @@ function renderNumberInput(params: {
   hints: ConfigUiHints;
   disabled: boolean;
   showLabel?: boolean;
+  validation?: ConfigValidationMap;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
@@ -291,11 +332,23 @@ function renderNumberInput(params: {
   const help = hint?.help ?? schema.description;
   const displayValue = value ?? schema.default ?? "";
   const numValue = typeof displayValue === "number" ? displayValue : 0;
+  const key = pathKey(path);
+  const validationIssues = params.validation?.[key] ?? [];
+  const severity =
+    validationIssues.find((issue) => issue.severity === "error")?.severity ??
+    validationIssues.find((issue) => issue.severity === "warn")?.severity ??
+    validationIssues[0]?.severity ??
+    null;
+  const validationMessage = validationIssues[0]?.message ?? "";
 
   return html`
-    <div class="cfg-field">
+    <div
+      class="cfg-field ${severity ? `cfg-field--invalid cfg-field--${severity}` : ""}"
+      data-config-path=${key}
+    >
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${severity ? html`<div class="cfg-field__validation">${validationMessage}</div>` : nothing}
       <div class="cfg-number">
         <button
           type="button"
@@ -332,6 +385,7 @@ function renderSelect(params: {
   hints: ConfigUiHints;
   disabled: boolean;
   showLabel?: boolean;
+  validation?: ConfigValidationMap;
   options: unknown[];
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
@@ -345,11 +399,23 @@ function renderSelect(params: {
     (opt) => opt === resolvedValue || String(opt) === String(resolvedValue),
   );
   const unset = "__unset__";
+  const key = pathKey(path);
+  const validationIssues = params.validation?.[key] ?? [];
+  const severity =
+    validationIssues.find((issue) => issue.severity === "error")?.severity ??
+    validationIssues.find((issue) => issue.severity === "warn")?.severity ??
+    validationIssues[0]?.severity ??
+    null;
+  const validationMessage = validationIssues[0]?.message ?? "";
 
   return html`
-    <div class="cfg-field">
+    <div
+      class="cfg-field ${severity ? `cfg-field--invalid cfg-field--${severity}` : ""}"
+      data-config-path=${key}
+    >
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${severity ? html`<div class="cfg-field__validation">${validationMessage}</div>` : nothing}
       <select
         class="cfg-select"
         ?disabled=${disabled}
@@ -376,6 +442,7 @@ function renderObject(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
+  validation?: ConfigValidationMap;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
@@ -415,6 +482,7 @@ function renderObject(params: {
             hints,
             unsupported,
             disabled,
+            validation: params.validation,
             onPatch,
           })
         )}
@@ -426,6 +494,7 @@ function renderObject(params: {
           unsupported,
           disabled,
           reservedKeys: reserved,
+          validation: params.validation,
           onPatch,
         }) : nothing}
       </div>
@@ -434,7 +503,7 @@ function renderObject(params: {
 
   // Nested objects get collapsible treatment
   return html`
-    <details class="cfg-object" open>
+    <details class="cfg-object" open data-config-path=${pathKey(path)}>
       <summary class="cfg-object__header">
         <span class="cfg-object__title">${label}</span>
         <span class="cfg-object__chevron">${icons.chevronDown}</span>
@@ -449,6 +518,7 @@ function renderObject(params: {
             hints,
             unsupported,
             disabled,
+            validation: params.validation,
             onPatch,
           })
         )}
@@ -460,6 +530,7 @@ function renderObject(params: {
           unsupported,
           disabled,
           reservedKeys: reserved,
+          validation: params.validation,
           onPatch,
         }) : nothing}
       </div>
@@ -475,6 +546,7 @@ function renderArray(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
+  validation?: ConfigValidationMap;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
@@ -496,7 +568,7 @@ function renderArray(params: {
   const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
 
   return html`
-    <div class="cfg-array">
+    <div class="cfg-array" data-config-path=${pathKey(path)}>
       <div class="cfg-array__header">
         ${showLabel ? html`<span class="cfg-array__label">${label}</span>` : nothing}
         <span class="cfg-array__count">${arr.length} item${arr.length !== 1 ? 's' : ''}</span>
@@ -548,6 +620,7 @@ function renderArray(params: {
                   unsupported,
                   disabled,
                   showLabel: false,
+                  validation: params.validation,
                   onPatch,
                 })}
               </div>
@@ -567,6 +640,7 @@ function renderMapField(params: {
   unsupported: Set<string>;
   disabled: boolean;
   reservedKeys: Set<string>;
+  validation?: ConfigValidationMap;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, unsupported, disabled, reservedKeys, onPatch } = params;
@@ -657,6 +731,7 @@ function renderMapField(params: {
                         unsupported,
                         disabled,
                         showLabel: false,
+                        validation: params.validation,
                         onPatch,
                       })}
                 </div>

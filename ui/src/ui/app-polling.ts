@@ -1,12 +1,14 @@
 import { loadLogs } from "./controllers/logs";
 import { loadNodes } from "./controllers/nodes";
 import { loadDebug } from "./controllers/debug";
+import { refreshOverseer } from "./controllers/overseer";
 import type { ClawdbotApp } from "./app";
 
 type PollingHost = {
   nodesPollInterval: number | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  overseerPollInterval: number | null;
   tab: string;
 };
 
@@ -50,4 +52,18 @@ export function stopDebugPolling(host: PollingHost) {
   if (host.debugPollInterval == null) return;
   clearInterval(host.debugPollInterval);
   host.debugPollInterval = null;
+}
+
+export function startOverseerPolling(host: PollingHost) {
+  if (host.overseerPollInterval != null) return;
+  host.overseerPollInterval = window.setInterval(() => {
+    if (host.tab !== "overseer") return;
+    void refreshOverseer(host as unknown as ClawdbotApp, { quiet: true });
+  }, 5000);
+}
+
+export function stopOverseerPolling(host: PollingHost) {
+  if (host.overseerPollInterval == null) return;
+  clearInterval(host.overseerPollInterval);
+  host.overseerPollInterval = null;
 }

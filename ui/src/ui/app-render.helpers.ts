@@ -2,19 +2,22 @@ import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
 import type { AppViewState } from "./app-view-state";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
+import { pathForTab, titleForTab, type Tab } from "./navigation";
 import { loadChatHistory } from "./controllers/chat";
 import { syncUrlWithSessionKey } from "./app-settings";
 import type { SessionsListResult } from "./types";
 import type { ThemeMode } from "./theme";
 import type { ThemeTransitionContext } from "./theme-transition";
+import { iconForTabSvg, icon } from "./icons";
 
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
+  const isActive = state.tab === tab;
   return html`
     <a
       href=${href}
-      class="nav-item ${state.tab === tab ? "active" : ""}"
+      class="nav-item ${isActive ? "active" : ""}"
+      aria-current=${isActive ? "page" : "false"}
       @click=${(event: MouseEvent) => {
         if (
           event.defaultPrevented ||
@@ -31,7 +34,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
       }}
       title=${titleForTab(tab)}
     >
-      <span class="nav-item__icon" aria-hidden="true">${iconForTab(tab)}</span>
+      <span class="nav-item__icon" aria-hidden="true">${iconForTabSvg(tab, { size: 18 })}</span>
       <span class="nav-item__text">${titleForTab(tab)}</span>
     </a>
   `;
@@ -89,6 +92,7 @@ export function renderChatControls(state: AppViewState) {
           void loadChatHistory(state);
         }}
         title="Refresh chat history"
+        aria-label="Refresh chat history"
       >
         ${refreshIcon}
       </button>
@@ -104,6 +108,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
+        aria-label=${disableThinkingToggle
+          ? "Toggle thinking (disabled during onboarding)"
+          : "Toggle assistant thinking/working output"}
         title=${disableThinkingToggle
           ? "Disabled during onboarding"
           : "Toggle assistant thinking/working output"}
@@ -121,6 +128,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
+        aria-label=${disableFocusToggle
+          ? "Toggle focus mode (disabled during onboarding)"
+          : "Toggle focus mode (hide sidebar + page header)"}
         title=${disableFocusToggle
           ? "Disabled during onboarding"
           : "Toggle focus mode (hide sidebar + page header)"}

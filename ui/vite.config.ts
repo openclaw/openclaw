@@ -15,6 +15,7 @@ function normalizeBase(input: string): string {
 export default defineConfig(({ command }) => {
   const envBase = process.env.CLAWDBOT_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
+  const proxyTarget = process.env.CLAWDBOT_CONTROL_UI_PROXY_TARGET?.trim();
   return {
     base,
     publicDir: path.resolve(here, "public"),
@@ -30,6 +31,14 @@ export default defineConfig(({ command }) => {
       host: true,
       port: 5173,
       strictPort: true,
+      proxy: proxyTarget
+        ? {
+            // When developing the UI against an already-running gateway, proxy
+            // gateway-owned HTTP endpoints to avoid cross-origin/CORS issues.
+            "/api": { target: proxyTarget, changeOrigin: true, secure: false },
+            "/avatar": { target: proxyTarget, changeOrigin: true, secure: false },
+          }
+        : undefined,
     },
   };
 });

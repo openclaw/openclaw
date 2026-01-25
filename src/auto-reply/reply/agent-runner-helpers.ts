@@ -1,8 +1,12 @@
 import { loadSessionStore } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isAudioFileName } from "../../media/mime.js";
+import { emitRunCompletion } from "../continuation/emit.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { scheduleFollowupDrain } from "./queue.js";
+import type { FollowupRun } from "./queue/types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const hasAudioMedia = (urls?: string[]): boolean =>
@@ -57,11 +61,44 @@ export const createShouldEmitToolOutput = (params: {
   };
 };
 
-export const finalizeWithFollowup = <T>(
+export type RunCompletionContext = {
+  runId: string;
+  sessionId: string;
+  sessionKey: string;
+  payloads: ReplyPayload[];
+  autoCompactionCompleted: boolean;
+  model: string;
+  provider: string;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+};
+
+export const finalizeWithFollowup = async <T>(
   value: T,
   queueKey: string,
   runFollowupTurn: Parameters<typeof scheduleFollowupDrain>[1],
-): T => {
+  continuationContext?: RunCompletionContext,
+): Promise<T> => {
+  // Check for continuation before scheduling drain
+  if (continuationContext) {
+    const decision = await emitRunCompletion({
+      ...continuationContext,
+      queueKey,
+    });
+
+    if (decision.action !== "none" && decision.nextPrompt) {
+      enqueueFollowupRun(
+        queueKey,
+        {
+          prompt: decision.nextPrompt,
+          run: continuationContext.followupRun.run,
+          enqueuedAt: Date.now(),
+        },
+        { mode: "followup" },
+      );
+    }
+  }
+
   scheduleFollowupDrain(queueKey, runFollowupTurn);
   return value;
 };

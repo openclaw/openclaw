@@ -2,6 +2,7 @@ import { loadChatHistory } from "./controllers/chat";
 import { loadDevices } from "./controllers/devices";
 import { loadNodes } from "./controllers/nodes";
 import { loadAgents } from "./controllers/agents";
+import { toast } from "./components/toast";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway";
 import { GatewayBrowserClient } from "./gateway";
 import type { EventLogEntry } from "./app-events";
@@ -126,6 +127,7 @@ export function connectGateway(host: GatewayHost) {
       host.connected = true;
       host.hello = hello;
       applySnapshot(host, hello);
+      toast.success("Connected to gateway");
       void loadAssistantIdentity(host as unknown as ClawdbotApp);
       void loadAgents(host as unknown as ClawdbotApp);
       void loadNodes(host as unknown as ClawdbotApp, { quiet: true });
@@ -135,6 +137,7 @@ export function connectGateway(host: GatewayHost) {
     onClose: ({ code, reason }) => {
       host.connected = false;
       host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+      toast.warning("Disconnected from gateway");
     },
     onEvent: (evt) => handleGatewayEvent(host, evt),
     onGap: ({ expected, received }) => {

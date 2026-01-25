@@ -1,6 +1,8 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 
+import { emitTurnCompletion } from "../auto-reply/continuation/emit.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { parseStructuredUpdateFromTexts } from "../infra/overseer/monitor.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
@@ -72,6 +74,20 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onAgentEvent?.({
     stream: "lifecycle",
     data: { phase: "end" },
+  });
+
+  // Emit turn completion for continuation system (fire-and-forget)
+  // Parse any structured Overseer update from agent response
+  const structuredUpdate = parseStructuredUpdateFromTexts(ctx.state.assistantTexts);
+  emitTurnCompletion({
+    runId: ctx.params.runId,
+    sessionId: ctx.params.sessionId ?? "",
+    sessionKey: ctx.params.sessionKey,
+    assistantTexts: ctx.state.assistantTexts.slice(),
+    toolMetas: ctx.state.toolMetas.slice(),
+    didSendViaMessagingTool: ctx.state.messagingToolSentTexts.length > 0,
+    lastToolError: ctx.state.lastToolError,
+    structuredUpdate,
   });
 
   if (ctx.params.onBlockReply) {

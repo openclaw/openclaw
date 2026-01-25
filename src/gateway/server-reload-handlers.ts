@@ -2,6 +2,12 @@ import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { OverseerRunner } from "../infra/overseer/runner.js";
+import {
+  startOverseerContinuationBridge,
+  stopOverseerContinuationBridge,
+} from "../infra/overseer/continuation-bridge.js";
+import { resolveOverseerStorePath } from "../infra/overseer/store.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   authorizeGatewaySigusr1Restart,
@@ -19,6 +25,7 @@ import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   heartbeatRunner: HeartbeatRunner;
+  overseerRunner: OverseerRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
 };
@@ -58,6 +65,17 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
+    }
+    if (plan.restartOverseer) {
+      nextState.overseerRunner.updateConfig(nextConfig);
+      // Restart continuation bridge with new config
+      stopOverseerContinuationBridge();
+      if (nextConfig.overseer?.enabled) {
+        startOverseerContinuationBridge({
+          storePath: resolveOverseerStorePath(nextConfig),
+          autoTriggerTick: true,
+        });
+      }
     }
 
     resetDirectoryCache();

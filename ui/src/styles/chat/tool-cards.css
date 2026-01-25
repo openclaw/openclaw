@@ -1,21 +1,42 @@
-/* Tool Card Styles */
+/* =============================================
+   TOOL CARDS - Modern Collapsible Design
+   ============================================= */
+
+/* Tool Card Container */
 .chat-tool-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+  background: linear-gradient(
+    135deg,
+    rgba(134, 142, 150, 0.12),
+    rgba(134, 142, 150, 0.06)
+  );
+  border: 1px solid rgba(134, 142, 150, 0.2);
+  border-radius: 12px;
+  padding: 12px 14px;
   margin-top: 8px;
-  transition: border-color 150ms ease-out, background 150ms ease-out;
-  /* Fixed max-height to ensure cards don't expand too much */
+  transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
   max-height: 120px;
   overflow: hidden;
 }
 
-.chat-tool-card:hover {
-  border-color: var(--accent);
-  background: rgba(0, 0, 0, 0.06);
+:root[data-theme="light"] .chat-tool-card {
+  background: linear-gradient(
+    135deg,
+    rgba(134, 142, 150, 0.08),
+    rgba(134, 142, 150, 0.04)
+  );
 }
 
-/* First tool card in a group - no top margin */
+.chat-tool-card:hover {
+  border-color: rgba(52, 199, 183, 0.4);
+  background: linear-gradient(
+    135deg,
+    rgba(52, 199, 183, 0.1),
+    rgba(52, 199, 183, 0.05)
+  );
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
 .chat-tool-card:first-child {
   margin-top: 0;
 }
@@ -29,102 +50,147 @@
   outline-offset: 2px;
 }
 
-/* Header with title and chevron */
+/* Tool Card Header */
 .chat-tool-card__header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .chat-tool-card__title {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-weight: 600;
   font-size: 13px;
-  line-height: 1.2;
+  line-height: 1.3;
+  color: var(--text);
 }
 
 .chat-tool-card__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   font-size: 14px;
   line-height: 1;
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  vertical-align: middle;
+  color: var(--accent-2);
   flex-shrink: 0;
 }
 
-/* "View >" action link */
+.chat-tool-card__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* View action link */
 .chat-tool-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
-  color: var(--accent);
+  font-weight: 500;
+  color: var(--accent-2);
   opacity: 0.8;
-  transition: opacity 150ms ease-out;
+  transition: all 150ms ease-out;
+}
+
+.chat-tool-card__action svg {
+  width: 14px;
+  height: 14px;
 }
 
 .chat-tool-card--clickable:hover .chat-tool-card__action {
   opacity: 1;
+  transform: translateX(2px);
 }
 
-/* Status indicator for completed/empty results */
+/* Status indicator */
 .chat-tool-card__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   font-size: 14px;
   color: var(--ok);
 }
 
+.chat-tool-card__status svg {
+  width: 16px;
+  height: 16px;
+}
+
 .chat-tool-card__status-text {
   font-size: 11px;
+  color: var(--muted);
   margin-top: 4px;
 }
 
 .chat-tool-card__detail {
   font-size: 12px;
   color: var(--muted);
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
-/* Collapsed preview - fixed height with truncation */
+/* Preview content */
 .chat-tool-card__preview {
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
-  margin-top: 8px;
-  padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.08);
-  border-radius: 6px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
   white-space: pre-wrap;
   overflow: hidden;
   max-height: 44px;
   line-height: 1.4;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+:root[data-theme="light"] .chat-tool-card__preview {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.05);
 }
 
 .chat-tool-card--clickable:hover .chat-tool-card__preview {
-  background: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.2);
   border-color: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="light"] .chat-tool-card--clickable:hover .chat-tool-card__preview {
+  background: rgba(0, 0, 0, 0.06);
 }
 
 /* Short inline output */
 .chat-tool-card__inline {
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--text);
-  margin-top: 6px;
-  padding: 6px 8px;
-  background: rgba(0, 0, 0, 0.06);
-  border-radius: 4px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-/* Reading Indicator */
+/* =============================================
+   READING/TYPING INDICATOR - Bouncing Dots
+   ============================================= */
+
 .chat-reading-indicator {
-  background: transparent;
-  border: 1px solid var(--border);
-  padding: 12px;
+  background: linear-gradient(
+    135deg,
+    rgba(52, 199, 183, 0.12),
+    rgba(52, 199, 183, 0.06)
+  );
+  border: 1px solid rgba(52, 199, 183, 0.25);
+  border-radius: 18px 18px 18px 6px;
+  padding: 14px 18px;
   display: inline-flex;
 }
 
@@ -135,11 +201,11 @@
 }
 
 .chat-reading-indicator__dots span {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: var(--muted);
-  animation: reading-pulse 1.4s ease-in-out infinite;
+  background: var(--accent-2);
+  animation: typing-bounce 1.4s ease-in-out infinite;
 }
 
 .chat-reading-indicator__dots span:nth-child(1) {
@@ -154,14 +220,117 @@
   animation-delay: 0.4s;
 }
 
-@keyframes reading-pulse {
+@keyframes typing-bounce {
   0%, 60%, 100% {
-    opacity: 0.3;
-    transform: scale(0.8);
+    opacity: 0.4;
+    transform: translateY(0);
   }
   30% {
     opacity: 1;
-    transform: scale(1);
+    transform: translateY(-8px);
   }
 }
 
+/* =============================================
+   THINKING/REASONING BLOCKS
+   ============================================= */
+
+.chat-thinking {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px dashed rgba(139, 92, 246, 0.35);
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.08),
+    rgba(139, 92, 246, 0.04)
+  );
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+:root[data-theme="light"] .chat-thinking {
+  border-color: rgba(139, 92, 246, 0.3);
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.06),
+    rgba(139, 92, 246, 0.02)
+  );
+}
+
+.chat-thinking::before {
+  content: "Thinking...";
+  display: block;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(139, 92, 246, 0.8);
+  margin-bottom: 8px;
+}
+
+/* Collapsible thinking block */
+.thinking-block {
+  margin-bottom: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  overflow: hidden;
+  transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.thinking-block__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.1),
+    rgba(139, 92, 246, 0.05)
+  );
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(139, 92, 246, 0.9);
+  transition: background 150ms ease-out;
+}
+
+.thinking-block__header:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.15),
+    rgba(139, 92, 246, 0.08)
+  );
+}
+
+.thinking-block__header svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 180ms ease;
+}
+
+.thinking-block--expanded .thinking-block__header svg {
+  transform: rotate(90deg);
+}
+
+.thinking-block__content {
+  padding: 12px 14px;
+  background: rgba(139, 92, 246, 0.04);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 200ms ease-out, padding 200ms ease-out;
+}
+
+.thinking-block--expanded .thinking-block__content {
+  max-height: 500px;
+  padding: 12px 14px;
+}
+
+.thinking-block--collapsed .thinking-block__content {
+  max-height: 0;
+  padding: 0 14px;
+}

@@ -38,7 +38,9 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest("SHA-256", publicKey);
+  // Create a new ArrayBuffer to avoid SharedArrayBuffer type issues
+  const buffer = new Uint8Array(publicKey).buffer;
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
   return bytesToHex(new Uint8Array(hash));
 }
 

@@ -53,6 +53,16 @@ function canConnect(port: number): Promise<boolean> {
   });
 }
 
+async function canListenOnLoopback(): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.listen(0, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
 describe("attachChildProcessBridge", () => {
   const children: Array<{ kill: (signal?: NodeJS.Signals) => boolean }> = [];
   const detachments: Array<() => void> = [];
@@ -77,6 +87,7 @@ describe("attachChildProcessBridge", () => {
   });
 
   it("forwards SIGTERM to the wrapped child", async () => {
+    if (!(await canListenOnLoopback())) return;
     const childPath = path.resolve(process.cwd(), "test/fixtures/child-process-bridge/child.js");
 
     const beforeSigterm = new Set(process.listeners("SIGTERM"));

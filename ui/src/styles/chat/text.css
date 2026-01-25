@@ -1,28 +1,13 @@
 /* =============================================
-   CHAT TEXT STYLING
+   CHAT TEXT STYLING - Modern Typography
    ============================================= */
-
-.chat-thinking {
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-:root[data-theme="light"] .chat-thinking {
-  border-color: rgba(16, 24, 40, 0.18);
-  background: rgba(16, 24, 40, 0.03);
-}
 
 .chat-text {
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
   word-wrap: break-word;
   overflow-wrap: break-word;
+  color: var(--chat-text);
 }
 
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
@@ -30,7 +15,7 @@
 }
 
 .chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
-  margin-top: 0.75em;
+  margin-top: 0.875em;
 }
 
 .chat-text :where(ul, ol) {
@@ -38,51 +23,271 @@
 }
 
 .chat-text :where(li + li) {
-  margin-top: 0.25em;
+  margin-top: 0.35em;
 }
 
+/* Links */
 .chat-text :where(a) {
   color: var(--accent);
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(245, 159, 74, 0.4);
+  transition: all 150ms ease;
 }
 
 .chat-text :where(a:hover) {
-  opacity: 0.8;
+  text-decoration-color: var(--accent);
+  opacity: 0.9;
 }
 
+/* Inline code */
 .chat-text :where(code) {
   font-family: var(--mono);
-  font-size: 0.9em;
+  font-size: 0.875em;
 }
 
 .chat-text :where(:not(pre) > code) {
-  background: rgba(0, 0, 0, 0.15);
-  padding: 0.15em 0.4em;
-  border-radius: 4px;
+  background: rgba(52, 199, 183, 0.12);
+  border: 1px solid rgba(52, 199, 183, 0.2);
+  padding: 0.2em 0.5em;
+  border-radius: 6px;
+  color: var(--accent-2);
 }
 
+:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
+  background: rgba(52, 199, 183, 0.1);
+  border-color: rgba(52, 199, 183, 0.15);
+}
+
+/* Code blocks with modern styling */
 .chat-text :where(pre) {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
-  padding: 10px 12px;
+  position: relative;
+  background: linear-gradient(
+    135deg,
+    rgba(0, 0, 0, 0.25),
+    rgba(0, 0, 0, 0.2)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
   overflow-x: auto;
+  margin: 12px 0;
+}
+
+:root[data-theme="light"] .chat-text :where(pre) {
+  background: linear-gradient(
+    135deg,
+    rgba(0, 0, 0, 0.06),
+    rgba(0, 0, 0, 0.04)
+  );
+  border-color: rgba(0, 0, 0, 0.1);
 }
 
 .chat-text :where(pre code) {
   background: none;
+  border: none;
   padding: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
+/* Blockquotes */
 .chat-text :where(blockquote) {
-  border-left: 3px solid var(--border);
-  padding-left: 12px;
+  border-left: 3px solid var(--accent);
+  padding-left: 14px;
+  margin-left: 0;
   color: var(--muted);
+  font-style: italic;
 }
 
+/* Horizontal rules */
 .chat-text :where(hr) {
   border: none;
   border-top: 1px solid var(--border);
-  margin: 1em 0;
+  margin: 1.25em 0;
 }
 
+/* Tables */
+.chat-text :where(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 12px 0;
+}
+
+.chat-text :where(th, td) {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.chat-text :where(th) {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+
+:root[data-theme="light"] .chat-text :where(th) {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.chat-text :where(tr:nth-child(even)) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+:root[data-theme="light"] .chat-text :where(tr:nth-child(even)) {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+/* Strong/bold text */
+.chat-text :where(strong, b) {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Emphasis/italic */
+.chat-text :where(em, i) {
+  font-style: italic;
+}
+
+/* Strikethrough */
+.chat-text :where(del, s) {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* =============================================
+   CODE BLOCK WITH COPY BUTTON
+   ============================================= */
+
+.code-block {
+  position: relative;
+  margin: 12px 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(
+    135deg,
+    rgba(0, 0, 0, 0.25),
+    rgba(0, 0, 0, 0.2)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="light"] .code-block {
+  background: linear-gradient(
+    135deg,
+    rgba(0, 0, 0, 0.06),
+    rgba(0, 0, 0, 0.04)
+  );
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.code-block__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="light"] .code-block__header {
+  background: rgba(0, 0, 0, 0.03);
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+.code-block__language {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.code-block__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.code-block__copy:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.code-block__copy svg {
+  width: 14px;
+  height: 14px;
+}
+
+.code-block__copy--copied {
+  background: rgba(52, 199, 183, 0.15);
+  border-color: rgba(52, 199, 183, 0.4);
+  color: var(--accent-2);
+}
+
+.code-block__content {
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+
+.code-block__content pre {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.code-block__content code {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* Syntax highlighting colors */
+.code-block .hljs-keyword,
+.code-block .hljs-selector-tag,
+.code-block .hljs-built_in {
+  color: #ff7b72;
+}
+
+.code-block .hljs-string,
+.code-block .hljs-attr {
+  color: #a5d6ff;
+}
+
+.code-block .hljs-number,
+.code-block .hljs-literal {
+  color: #79c0ff;
+}
+
+.code-block .hljs-comment {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.code-block .hljs-function,
+.code-block .hljs-title {
+  color: #d2a8ff;
+}
+
+.code-block .hljs-variable,
+.code-block .hljs-params {
+  color: #ffa657;
+}
+
+.code-block .hljs-type,
+.code-block .hljs-class {
+  color: #7ee787;
+}

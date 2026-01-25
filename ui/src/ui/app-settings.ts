@@ -1,4 +1,5 @@
-import { loadConfig, loadConfigSchema } from "./controllers/config";
+import { loadAgents } from "./controllers/agents";
+import { loadConfig, loadConfigSchema, saveConfig } from "./controllers/config";
 import { loadCronJobs, loadCronStatus } from "./controllers/cron";
 import { loadChannels } from "./controllers/channels";
 import { loadDebug } from "./controllers/debug";
@@ -9,16 +10,30 @@ import { loadExecApprovals } from "./controllers/exec-approvals";
 import { loadPresence } from "./controllers/presence";
 import { loadSessions } from "./controllers/sessions";
 import { loadSkills } from "./controllers/skills";
+import { refreshOverseer } from "./controllers/overseer";
 import { inferBasePathFromPathname, normalizeBasePath, normalizePath, pathForTab, tabFromPath, type Tab } from "./navigation";
 import { saveSettings, type UiSettings } from "./storage";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition";
-import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
-import { startLogsPolling, stopLogsPolling, startDebugPolling, stopDebugPolling } from "./app-polling";
+import { jumpToLogsBottom, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
+import { startLogsPolling, stopLogsPolling, startDebugPolling, stopDebugPolling, startOverseerPolling, stopOverseerPolling } from "./app-polling";
 import { refreshChat } from "./app-chat";
 import type { ClawdbotApp } from "./app";
+import { setupLogsKeyboardShortcuts } from "./views/logs";
+import { setupConfigKeyboardShortcuts } from "./views/config";
+import { setupOverseerKeyboardShortcuts } from "./views/overseer";
+import { analyzeConfigSchema } from "./views/config-form";
 
+/**
+ * Internal type for app-settings helper functions.
+ * This includes both public properties from AppViewState and internal/private
+ * properties from ClawdbotApp that these helpers need to access.
+ *
+ * Note: Functions here are called with ClawdbotApp instances and use
+ * `as unknown as ClawdbotApp` casts when they need full class access.
+ */
 type SettingsHost = {
+  // Public properties (from AppViewState)
   settings: UiSettings;
   theme: ThemeMode;
   themeResolved: ResolvedTheme;
@@ -26,11 +41,18 @@ type SettingsHost = {
   sessionKey: string;
   tab: Tab;
   connected: boolean;
-  chatHasAutoScrolled: boolean;
   logsAtBottom: boolean;
+  logsAutoFollow: boolean;
+  logsFilterText: string;
+  logsShowRelativeTime: boolean;
   eventLog: unknown[];
-  eventLogBuffer: unknown[];
   basePath: string;
+  // Internal properties (private on ClawdbotApp, needed by these helpers)
+  chatHasAutoScrolled: boolean;
+  logsKeyboardCleanup: (() => void) | null;
+  configKeyboardCleanup: (() => void) | null;
+  overseerKeyboardCleanup: (() => void) | null;
+  eventLogBuffer: unknown[];
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
 };
@@ -77,7 +99,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   if (passwordRaw != null) {
     const password = passwordRaw.trim();
     if (password) {
-      (host as { password: string }).password = password;
+      (host as unknown as { password: string }).password = password;
     }
     params.delete("password");
     shouldCleanUrl = true;
@@ -113,12 +135,29 @@ export function applySettingsFromUrl(host: SettingsHost) {
 export function setTab(host: SettingsHost, next: Tab) {
   if (host.tab !== next) host.tab = next;
   if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs")
+  if (next === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+    setupLogsKeyboardShortcutsForHost(host);
+  } else {
+    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+    cleanupLogsKeyboardShortcuts(host);
+  }
+  if (next === "config") {
+    setupConfigKeyboardShortcutsForHost(host);
+  } else {
+    cleanupConfigKeyboardShortcuts(host);
+  }
   if (next === "debug")
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  if (next === "overseer")
+    startOverseerPolling(host as unknown as Parameters<typeof startOverseerPolling>[0]);
+  else stopOverseerPolling(host as unknown as Parameters<typeof stopOverseerPolling>[0]);
+  if (next === "overseer") {
+    setupOverseerKeyboardShortcutsForHost(host);
+  } else {
+    cleanupOverseerKeyboardShortcuts(host);
+  }
   void refreshActiveTab(host);
   syncUrlWithTab(host, next, false);
 }
@@ -145,9 +184,26 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "overview") await loadOverview(host);
   if (host.tab === "channels") await loadChannelsTab(host);
   if (host.tab === "instances") await loadPresence(host as unknown as ClawdbotApp);
-  if (host.tab === "sessions") await loadSessions(host as unknown as ClawdbotApp);
+  if (host.tab === "sessions") {
+    await Promise.all([
+      loadSessions(host as unknown as ClawdbotApp),
+      loadAgents(host as unknown as ClawdbotApp),
+    ]);
+  }
   if (host.tab === "cron") await loadCron(host);
   if (host.tab === "skills") await loadSkills(host as unknown as ClawdbotApp);
+  if (host.tab === "overseer") {
+    await refreshOverseer(host as unknown as ClawdbotApp);
+    await Promise.all([
+      loadAgents(host as unknown as ClawdbotApp),
+      loadNodes(host as unknown as ClawdbotApp),
+      loadSessions(host as unknown as ClawdbotApp),
+      loadChannels(host as unknown as ClawdbotApp, false),
+      loadPresence(host as unknown as ClawdbotApp),
+      loadCron(host),
+      loadSkills(host as unknown as ClawdbotApp),
+    ]);
+  }
   if (host.tab === "nodes") {
     await loadNodes(host as unknown as ClawdbotApp);
     await loadDevices(host as unknown as ClawdbotApp);
@@ -261,9 +317,13 @@ export function onPopState(host: SettingsHost) {
 export function setTabFromRoute(host: SettingsHost, next: Tab) {
   if (host.tab !== next) host.tab = next;
   if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs")
+  if (next === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+    setupLogsKeyboardShortcutsForHost(host);
+  } else {
+    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+    cleanupLogsKeyboardShortcuts(host);
+  }
   if (next === "debug")
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
@@ -294,7 +354,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
 }
 
 export function syncUrlWithSessionKey(
-  host: SettingsHost,
+  _host: unknown,
   sessionKey: string,
   replace: boolean,
 ) {
@@ -329,4 +389,103 @@ export async function loadCron(host: SettingsHost) {
     loadCronStatus(host as unknown as ClawdbotApp),
     loadCronJobs(host as unknown as ClawdbotApp),
   ]);
+}
+
+function setupLogsKeyboardShortcutsForHost(host: SettingsHost) {
+  // Clean up any existing shortcuts first
+  cleanupLogsKeyboardShortcuts(host);
+
+  host.logsKeyboardCleanup = setupLogsKeyboardShortcuts({
+    onFocusSearch: () => {
+      const input = document.getElementById("logs-search-input") as HTMLInputElement | null;
+      input?.focus();
+    },
+    onJumpToBottom: () => {
+      jumpToLogsBottom(host as unknown as Parameters<typeof jumpToLogsBottom>[0]);
+    },
+    onRefresh: () => {
+      void loadLogs(host as unknown as ClawdbotApp, { reset: true });
+    },
+    onToggleAutoFollow: () => {
+      host.logsAutoFollow = !host.logsAutoFollow;
+    },
+  });
+}
+
+function cleanupLogsKeyboardShortcuts(host: SettingsHost) {
+  if (host.logsKeyboardCleanup) {
+    host.logsKeyboardCleanup();
+    host.logsKeyboardCleanup = null;
+  }
+}
+
+function setupConfigKeyboardShortcutsForHost(host: SettingsHost) {
+  cleanupConfigKeyboardShortcuts(host);
+
+  const state = host as unknown as ClawdbotApp;
+
+  host.configKeyboardCleanup = setupConfigKeyboardShortcuts({
+    getFormMode: () => state.configFormMode,
+    getSearchQuery: () => state.configSearchQuery,
+    getCanSave: () => {
+      if (!state.connected) return false;
+      if (state.configSaving) return false;
+      if (state.configLoading) return false;
+
+      const hasChanges =
+        state.configFormMode === "raw"
+          ? state.configRaw !== state.configRawOriginal
+          : Boolean(state.configFormDirty);
+      if (!hasChanges) return false;
+
+      if (state.configFormMode === "form") {
+        if (!state.configForm) return false;
+        const analysis = analyzeConfigSchema(state.configSchema);
+        if (analysis.schema && analysis.unsupportedPaths.length > 0) return false;
+      }
+
+      return true;
+    },
+    getIsDirty: () => {
+      const hasChanges =
+        state.configFormMode === "raw"
+          ? state.configRaw !== state.configRawOriginal
+          : Boolean(state.configFormDirty);
+      return hasChanges;
+    },
+    onFocusSearch: () => {
+      const input = document.getElementById("config-search-input") as HTMLInputElement | null;
+      input?.focus();
+    },
+    onClearSearch: () => {
+      state.configSearchQuery = "";
+    },
+    onSave: () => {
+      void saveConfig(state);
+    },
+  });
+}
+
+function cleanupConfigKeyboardShortcuts(host: SettingsHost) {
+  if (host.configKeyboardCleanup) {
+    host.configKeyboardCleanup();
+    host.configKeyboardCleanup = null;
+  }
+}
+
+function setupOverseerKeyboardShortcutsForHost(host: SettingsHost) {
+  cleanupOverseerKeyboardShortcuts(host);
+
+  const state = host as unknown as ClawdbotApp;
+  host.overseerKeyboardCleanup = setupOverseerKeyboardShortcuts({
+    getDrawerOpen: () => state.overseerDrawerOpen,
+    onCloseDrawer: () => state.handleOverseerDrawerClose(),
+  });
+}
+
+function cleanupOverseerKeyboardShortcuts(host: SettingsHost) {
+  if (host.overseerKeyboardCleanup) {
+    host.overseerKeyboardCleanup();
+    host.overseerKeyboardCleanup = null;
+  }
 }

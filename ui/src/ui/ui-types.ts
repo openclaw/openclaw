@@ -27,3 +27,17 @@ export type CronFormState = {
   timeoutSeconds: string;
   postToMainPrefix: string;
 };
+
+export type GraphViewport = {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+export type GraphDragState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+};

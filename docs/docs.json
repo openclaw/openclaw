@@ -1087,6 +1087,7 @@
           "scripts",
           "reference/session-management-compaction",
           "reference/rpc",
+          "reference/overseer",
           "reference/device-models",
           "reference/test",
           "reference/RELEASING",

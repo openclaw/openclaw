@@ -12,6 +12,7 @@ import {
   formatReasoningMarkdown,
 } from "./message-extract";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
+import { icon } from "../icons";
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity) {
   return html`
@@ -124,14 +125,6 @@ function renderAvatar(
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
-  const initial =
-    normalized === "user"
-      ? "U"
-      : normalized === "assistant"
-        ? assistantName.charAt(0).toUpperCase() || "A"
-        : normalized === "tool"
-          ? "⚙"
-          : "?";
   const className =
     normalized === "user"
       ? "user"
@@ -141,6 +134,7 @@ function renderAvatar(
           ? "tool"
           : "other";
 
+  // For assistant with custom avatar URL/emoji
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
       return html`<img
@@ -152,7 +146,21 @@ function renderAvatar(
     return html`<div class="chat-avatar ${className}">${assistantAvatar}</div>`;
   }
 
-  return html`<div class="chat-avatar ${className}">${initial}</div>`;
+  // Use SVG icons for default avatars
+  if (normalized === "user") {
+    return html`<div class="chat-avatar ${className}">${icon("user", { size: 18 })}</div>`;
+  }
+
+  if (normalized === "assistant") {
+    return html`<div class="chat-avatar ${className}">${icon("sparkles", { size: 18 })}</div>`;
+  }
+
+  if (normalized === "tool") {
+    return html`<div class="chat-avatar ${className}">${icon("zap", { size: 18 })}</div>`;
+  }
+
+  // Fallback for other/unknown roles
+  return html`<div class="chat-avatar ${className}">${icon("message-square", { size: 18 })}</div>`;
 }
 
 function isAvatarUrl(value: string): boolean {

@@ -144,6 +144,50 @@ export type ToolPolicyConfig = {
   profile?: ToolProfileId;
 };
 
+export type CodingTaskPermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
+
+export type CodingTaskSettingSource = "user" | "project" | "local";
+
+export type CodingTaskToolPreset = "readonly" | "claude_code";
+
+export type CodingTaskToolConfig = {
+  /**
+   * Enable the experimental `coding_task` tool (Claude Agent SDK wrapper).
+   * Disabled by default; when enabled, the tool is still subject to tool policy allow/deny.
+   */
+  enabled?: boolean;
+  /**
+   * Claude Agent SDK permission mode. Prefer leaving this as "default" and using
+   * `allowedTools` / `disallowedTools` to control capabilities deterministically.
+   */
+  permissionMode?: CodingTaskPermissionMode;
+  /**
+   * Controls the base Claude Code tool set exposed to the SDK run.
+   * - "readonly": only read/search style tools (no edits/exec)
+   * - "claude_code": Claude Code default tool preset (then gated by allow/deny)
+   */
+  toolPreset?: CodingTaskToolPreset;
+  /**
+   * Tool allowlist (Claude Agent SDK tool names). When set, only these tools are
+   * permitted to run (best-effort; final behavior depends on permissionMode).
+   */
+  allowedTools?: string[];
+  /**
+   * Tool denylist (Claude Agent SDK tool names). Denied tools are blocked even
+   * if included via tool preset or allowlist.
+   */
+  disallowedTools?: string[];
+  /**
+   * Optional Claude Code setting sources to load (user/project/local).
+   * Defaults to none to avoid surprising host-specific behavior.
+   */
+  settingSources?: CodingTaskSettingSource[];
+  /**
+   * Additional directories the SDK is allowed to access, outside `cwd`.
+   */
+  additionalDirectories?: string[];
+};
+
 export type GroupToolPolicyConfig = {
   allow?: string[];
   deny?: string[];
@@ -315,6 +359,8 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Experimental: Claude Agent SDK wrapper tool (plan-only first). */
+  codingTask?: CodingTaskToolConfig;
   web?: {
     search?: {
       /** Enable web search tool (default: true when API key is present). */

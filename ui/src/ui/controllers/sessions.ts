@@ -1,6 +1,31 @@
 import type { GatewayBrowserClient } from "../gateway";
+import { buildAgentMainSessionKey } from "../../../../src/routing/session-key.js";
+import { toast } from "../components/toast";
 import { toNumber } from "../format";
 import type { SessionsListResult } from "../types";
+
+/**
+ * Build the main session key for an agent.
+ */
+export function agentSessionKey(agentId: string, mainKey?: string): string {
+  return buildAgentMainSessionKey({ agentId, mainKey });
+}
+
+/**
+ * Find an existing session for the given agent.
+ * Returns the session key if found, or null if no session exists.
+ */
+export function findSessionForAgent(
+  sessions: SessionsListResult | null,
+  agentId: string,
+): string | null {
+  if (!sessions?.sessions) return null;
+  const prefix = `agent:${agentId.toLowerCase()}:`;
+  const match = sessions.sessions.find(
+    (s) => s.key.toLowerCase().startsWith(prefix),
+  );
+  return match?.key ?? null;
+}
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -74,9 +99,11 @@ export async function deleteSession(state: SessionsState, key: string) {
   state.sessionsError = null;
   try {
     await state.client.request("sessions.delete", { key, deleteTranscript: true });
+    toast.success("Session deleted");
     await loadSessions(state);
   } catch (err) {
     state.sessionsError = String(err);
+    toast.error("Failed to delete session");
   } finally {
     state.sessionsLoading = false;
   }

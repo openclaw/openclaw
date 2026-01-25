@@ -38,6 +38,7 @@ type CommandHandlerContext = {
   abortActive: () => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
+  newSessionToken?: string;
 };
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -57,11 +58,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     abortActive,
     setActivityStatus,
     formatSessionKey,
+    newSessionToken,
   } = context;
 
-  const setAgent = async (id: string) => {
+  const setAgent = async (id: string, opts?: { preserveSession?: boolean }) => {
     state.currentAgentId = normalizeAgentId(id);
-    await setSession("");
+    if (!opts?.preserveSession) {
+      await setSession("");
+    }
   };
 
   const openModelSelector = async () => {
@@ -106,7 +110,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     }
   };
 
-  const openAgentSelector = async () => {
+  const openAgentSelector = async (opts?: { createNewSession?: boolean }) => {
     await refreshAgents();
     if (state.agents.length === 0) {
       chatLog.addSystem("no agents found");
@@ -122,7 +126,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     selector.onSelect = (item) => {
       void (async () => {
         closeOverlay();
-        await setAgent(item.value);
+        if (opts?.createNewSession && newSessionToken) {
+          await setAgent(item.value, { preserveSession: true });
+          await setSession(newSessionToken);
+        } else {
+          await setAgent(item.value);
+        }
         tui.requestRender();
       })();
     };

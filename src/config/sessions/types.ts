@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { GoalState } from "../../auto-reply/continuation/types.js";
 import type { NormalizedChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -92,6 +93,9 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+
+  /** Active goal for long-horizon task continuation */
+  activeGoal?: GoalState;
 };
 
 export function mergeSessionEntry(

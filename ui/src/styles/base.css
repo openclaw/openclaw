@@ -8,6 +8,7 @@
   --bg-overlay: rgba(255, 255, 255, 0.05);
   --bg-glow: rgba(245, 159, 74, 0.12);
   --panel: rgba(14, 20, 30, 0.88);
+  --panel-rgb: 14, 20, 30;
   --panel-strong: rgba(18, 26, 38, 0.96);
   --chrome: rgba(9, 14, 20, 0.72);
   --chrome-strong: rgba(9, 14, 20, 0.86);
@@ -17,6 +18,7 @@
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.16);
   --accent: #f59f4a;
+  --accent-glow: rgba(245, 159, 74, 0.4);
   --accent-2: #34c7b7;
   --ok: #2bd97f;
   --warn: #f2c94c;
@@ -40,6 +42,7 @@
   --bg-overlay: rgba(28, 32, 46, 0.05);
   --bg-glow: rgba(52, 199, 183, 0.14);
   --panel: rgba(255, 255, 255, 0.9);
+  --panel-rgb: 255, 255, 255;
   --panel-strong: rgba(255, 255, 255, 0.97);
   --chrome: rgba(255, 255, 255, 0.75);
   --chrome-strong: rgba(255, 255, 255, 0.88);
@@ -49,6 +52,7 @@
   --border: rgba(18, 24, 40, 0.12);
   --border-strong: rgba(18, 24, 40, 0.2);
   --accent: #e28a3f;
+  --accent-glow: rgba(226, 138, 63, 0.4);
   --accent-2: #1ba99d;
   --ok: #1aa86c;
   --warn: #b3771c;

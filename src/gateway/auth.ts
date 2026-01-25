@@ -71,7 +71,7 @@ function resolveRequestClientIp(
   });
 }
 
-function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
+export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
   if (!req) return false;
   const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
   if (!isLoopbackAddress(clientIp)) return false;

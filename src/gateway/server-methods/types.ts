@@ -9,6 +9,7 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { OverseerRunner } from "../../infra/overseer/runner.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -84,6 +85,7 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  overseerRunner: OverseerRunner;
 };
 
 export type GatewayRequestOptions = {

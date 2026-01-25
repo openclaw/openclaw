@@ -7,6 +7,7 @@ import type {
   AgentsListResult,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
+  ConfigUiHints,
   CronJob,
   CronRunLogEntry,
   CronStatus,
@@ -19,7 +20,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import type { ChatQueueItem, CronFormState } from "./ui-types";
+import type { ChatQueueItem, CronFormState, GraphDragState, GraphViewport } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import type { SkillMessage } from "./controllers/skills";
 import type {
@@ -29,6 +30,13 @@ import type {
 import type { DevicePairingList } from "./controllers/devices";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
+import type { ChannelWizardState } from "./views/channel-config-wizard";
+import type { CompactionStatus } from "./app-tool-stream";
+import type { ChatTask, ChatActivityLog } from "./types/task-types";
+import type {
+  OverseerGoalStatusResult,
+  OverseerStatusResult,
+} from "./types/overseer";
 
 export type AppViewState = {
   settings: UiSettings;
@@ -46,6 +54,7 @@ export type AppViewState = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   sessionKey: string;
+  applySessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
@@ -56,6 +65,14 @@ export type AppViewState = {
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
+  chatStreamStartedAt: number | null;
+  compactionStatus: CompactionStatus | null;
+  audioInputSupported: boolean;
+  audioRecording: boolean;
+  audioInputError: string | null;
+  readAloudSupported: boolean;
+  readAloudActive: boolean;
+  readAloudError: string | null;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   devicesLoading: boolean;
@@ -83,10 +100,14 @@ export type AppViewState = {
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown | null;
   configSchemaLoading: boolean;
-  configUiHints: Record<string, unknown>;
+  configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
   configFormMode: "form" | "raw";
+  configSchemaVersion: string | null;
+  configSearchQuery: string;
+  configActiveSection: string | null;
+  configActiveSubsection: string | null;
   channelsLoading: boolean;
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
@@ -97,6 +118,7 @@ export type AppViewState = {
   whatsappBusy: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
+  channelWizardState: ChannelWizardState;
   configFormDirty: boolean;
   presenceLoading: boolean;
   presenceEntries: PresenceEntry[];
@@ -140,10 +162,61 @@ export type AppViewState = {
   logsError: string | null;
   logsFile: string | null;
   logsEntries: LogEntry[];
+  logsCursor: number | null;
+  logsLastFetchAt: number | null;
+  logsLimit: number;
+  logsMaxBytes: number;
   logsFilterText: string;
   logsLevelFilters: Record<LogLevel, boolean>;
   logsAutoFollow: boolean;
   logsTruncated: boolean;
+  logsShowRelativeTime: boolean;
+  logsShowSidebar: boolean;
+  logsShowFilters: boolean;
+  logsSubsystemFilters: Set<string>;
+  logsAtBottom: boolean;
+  overseerLoading: boolean;
+  overseerError: string | null;
+  overseerStatus: OverseerStatusResult | null;
+  overseerGoalLoading: boolean;
+  overseerGoalError: string | null;
+  overseerGoal: OverseerGoalStatusResult | null;
+  overseerSelectedGoalId: string | null;
+  overseerSelectedNodeId: string | null;
+  systemSelectedNodeId: string | null;
+  showOverseerGraph: boolean;
+  showSystemGraph: boolean;
+  overseerViewport: GraphViewport;
+  overseerDrag: GraphDragState | null;
+  systemViewport: GraphViewport;
+  systemDrag: GraphDragState | null;
+  overseerDrawerOpen: boolean;
+  overseerDrawerKind:
+    | "cron"
+    | "session"
+    | "skill"
+    | "channel"
+    | "node"
+    | "instance"
+    | null;
+  overseerDrawerNodeId: string | null;
+  // Command palette state
+  commandPaletteOpen: boolean;
+  commandPaletteQuery: string;
+  commandPaletteSelectedIndex: number;
+  openCommandPalette: () => void;
+  closeCommandPalette: () => void;
+  setCommandPaletteQuery: (query: string) => void;
+  setCommandPaletteSelectedIndex: (index: number) => void;
+  sidebarOpen: boolean;
+  sidebarContent: string | null;
+  sidebarError: string | null;
+  splitRatio: number;
+  // Task sidebar state
+  taskSidebarOpen: boolean;
+  chatTasks: ChatTask[];
+  chatActivityLog: ChatActivityLog[];
+  taskSidebarExpandedIds: Set<string>;
   client: GatewayBrowserClient | null;
   connect: () => void;
   setTab: (tab: Tab) => void;
@@ -163,43 +236,45 @@ export type AppViewState = {
   handleNostrProfileSave: () => Promise<void>;
   handleNostrProfileImport: () => Promise<void>;
   handleNostrProfileToggleAdvanced: () => void;
+  handleChannelWizardOpen: (channelId: string) => void;
+  handleChannelWizardClose: () => void;
+  handleChannelWizardSave: () => Promise<void>;
+  handleChannelWizardDiscard: () => void;
+  handleChannelWizardSectionChange: (sectionId: string) => void;
+  handleChannelWizardConfirmClose: () => void;
+  handleChannelWizardCancelClose: () => void;
   handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
-  handleConfigLoad: () => Promise<void>;
-  handleConfigSave: () => Promise<void>;
-  handleConfigApply: () => Promise<void>;
-  handleConfigFormUpdate: (path: string, value: unknown) => void;
-  handleConfigFormModeChange: (mode: "form" | "raw") => void;
-  handleConfigRawChange: (raw: string) => void;
-  handleInstallSkill: (key: string) => Promise<void>;
-  handleUpdateSkill: (key: string) => Promise<void>;
-  handleToggleSkillEnabled: (key: string, enabled: boolean) => Promise<void>;
-  handleUpdateSkillEdit: (key: string, value: string) => void;
-  handleSaveSkillApiKey: (key: string, apiKey: string) => Promise<void>;
-  handleCronToggle: (jobId: string, enabled: boolean) => Promise<void>;
-  handleCronRun: (jobId: string) => Promise<void>;
-  handleCronRemove: (jobId: string) => Promise<void>;
-  handleCronAdd: () => Promise<void>;
-  handleCronRunsLoad: (jobId: string) => Promise<void>;
-  handleCronFormUpdate: (path: string, value: unknown) => void;
-  handleSessionsLoad: () => Promise<void>;
-  handleSessionsPatch: (key: string, patch: unknown) => Promise<void>;
-  handleLoadNodes: () => Promise<void>;
-  handleLoadPresence: () => Promise<void>;
-  handleLoadSkills: () => Promise<void>;
-  handleLoadDebug: () => Promise<void>;
-  handleLoadLogs: () => Promise<void>;
-  handleDebugCall: () => Promise<void>;
-  handleRunUpdate: () => Promise<void>;
-  setPassword: (next: string) => void;
-  setSessionKey: (next: string) => void;
-  setChatMessage: (next: string) => void;
-  handleChatSend: () => Promise<void>;
-  handleChatAbort: () => Promise<void>;
-  handleChatSelectQueueItem: (id: string) => void;
-  handleChatDropQueueItem: (id: string) => void;
-  handleChatClearQueue: () => void;
-  handleLogsFilterChange: (next: string) => void;
-  handleLogsLevelFilterToggle: (level: LogLevel) => void;
-  handleLogsAutoFollowToggle: (next: boolean) => void;
-  handleCallDebugMethod: (method: string, params: string) => Promise<void>;
+  handleOverseerRefresh: () => Promise<void>;
+  handleOverseerTick: () => Promise<void>;
+  handleOverseerSelectGoal: (goalId: string | null) => Promise<void>;
+  handleOverseerSelectOverseerNode: (nodeId: string | null) => void;
+  handleOverseerSelectSystemNode: (nodeId: string | null) => void;
+  handleOverseerViewportChange: (kind: "overseer" | "system", next: GraphViewport) => void;
+  handleOverseerDragChange: (kind: "overseer" | "system", next: GraphDragState | null) => void;
+  handleOverseerToggleGraph: (kind: "overseer" | "system", next: boolean) => void;
+  handleOverseerDrawerClose: () => void;
+  handleOverseerLoadCronRuns: (jobId: string) => Promise<void>;
+  handleChatScroll: (event: Event) => void;
+  handleSendChat: (message?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+  handleAbortChat: () => Promise<void>;
+  handleToggleAudioRecording: () => void;
+  handleReadAloudToggle: (text?: string | null) => void;
+  removeQueuedMessage: (id: string) => void;
+  handleLogsToggleSidebar: () => void;
+  handleLogsToggleFilters: () => void;
+  handleLogsSubsystemToggle: (subsystem: string) => void;
+  handleLogsScroll: (event: Event) => void;
+  exportLogs: (lines: string[], label: string) => void;
+  clearLogs: () => void;
+  jumpToLogsBottom: () => void;
+  handleOpenSidebar: (content: string) => void;
+  handleCloseSidebar: () => void;
+  handleSplitRatioChange: (ratio: number) => void;
+  resetToolStream: () => void;
+  resetChatScroll: () => void;
+  // Task sidebar handlers
+  handleOpenTaskSidebar: () => void;
+  handleCloseTaskSidebar: () => void;
+  handleToggleTaskExpanded: (taskId: string) => void;
+  syncTasksFromToolStream: () => void;
 };

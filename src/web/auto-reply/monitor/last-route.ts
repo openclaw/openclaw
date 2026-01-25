@@ -2,6 +2,7 @@ import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { loadConfig } from "../../../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { formatError } from "../../session.js";
+import { isErrno } from "./errno.js";
 
 export function trackBackgroundTask(
   backgroundTasks: Set<Promise<unknown>>,
@@ -37,6 +38,7 @@ export function updateLastRouteInBackground(params: {
     },
     ctx: params.ctx,
   }).catch((err) => {
+    if (isErrno(err, "ENOENT")) return;
     params.warn(
       {
         error: formatError(err),

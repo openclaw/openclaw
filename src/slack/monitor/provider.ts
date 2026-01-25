@@ -8,7 +8,7 @@ import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/reso
 import { loadConfig } from "../../config/config.js";
 import type { SessionScope } from "../../config/sessions.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
-import { warn } from "../../globals.js";
+import { danger, warn } from "../../globals.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -123,6 +123,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const channelKeys = channelsConfig
+    ? Object.keys(channelsConfig).filter((key) => key !== "*")
+    : [];
+  const channelWildcard = channelsConfig
+    ? Object.prototype.hasOwnProperty.call(channelsConfig, "*")
+    : false;
+  const allowFromCount = Array.isArray(allowFrom) ? allowFrom.length : 0;
+  runtime.log?.(
+    `slack: init account=${account.accountId} mode=${slackMode} dm=${
+      dmEnabled ? dmPolicy : "disabled"
+    } groupPolicy=${groupPolicy} channels=${channelKeys.length}${
+      channelWildcard ? "+*" : ""
+    } allowFrom=${allowFromCount} requireMentionDefault=${slackCfg.requireMention ?? true}`,
+  );
 
   const receiver =
     slackMode === "http"
@@ -146,6 +160,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           clientOptions,
         },
   );
+  app.error((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    runtime.error?.(danger(`slack app error: ${message}`));
+  });
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
@@ -163,8 +181,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     botUserId = auth.user_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
+    runtime.log?.(
+      `slack: auth ok team=${teamId || "unknown"} botUser=${botUserId || "unknown"} app=${
+        apiAppId || "unknown"
+      }`,
+    );
   } catch {
     // auth test failing is non-fatal; message handler falls back to regex mentions.
+    runtime.log?.("slack: auth test failed (mentions may rely on regex; check bot token + scopes)");
   }
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {

@@ -1,9 +1,8 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 
 import { formatAgo } from "../format";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { renderChannelConfigSection } from "./channels.config";
+import { renderChannelIntegrationCard, type ChannelCardFrame } from "./channels.shared";
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
@@ -20,10 +19,12 @@ function truncatePubkey(pubkey: string | null | undefined): string {
 }
 
 export function renderNostrCard(params: {
-  props: ChannelsProps;
   nostr?: NostrStatus | null;
   nostrAccounts: ChannelAccountSnapshot[];
-  accountCountLabel: unknown;
+  frame: ChannelCardFrame;
+  actions: TemplateResult;
+  facts: TemplateResult;
+  error: string | null;
   /** Profile form state (optional - if provided, shows form) */
   profileFormState?: NostrProfileFormState | null;
   /** Profile form callbacks */
@@ -32,10 +33,12 @@ export function renderNostrCard(params: {
   onEditProfile?: () => void;
 }) {
   const {
-    props,
     nostr,
     nostrAccounts,
-    accountCountLabel,
+    frame,
+    actions,
+    facts,
+    error,
     profileFormState,
     profileFormCallbacks,
     onEditProfile,
@@ -166,52 +169,44 @@ export function renderNostrCard(params: {
     `;
   };
 
-  return html`
-    <div class="card">
-      <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
-      ${accountCountLabel}
-
-      ${hasMultipleAccounts
-        ? html`
-            <div class="account-card-list">
-              ${nostrAccounts.map((account) => renderAccountCard(account))}
+  const details = html`
+    ${hasMultipleAccounts
+      ? html`
+          <div class="account-card-list">
+            ${nostrAccounts.map((account) => renderAccountCard(account))}
+          </div>
+        `
+      : html`
+          <div class="status-list" style="margin-top: 16px;">
+            <div>
+              <span class="label">Configured</span>
+              <span>${summaryConfigured ? "Yes" : "No"}</span>
             </div>
-          `
-        : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">Configured</span>
-                <span>${summaryConfigured ? "Yes" : "No"}</span>
-              </div>
-              <div>
-                <span class="label">Running</span>
-                <span>${summaryRunning ? "Yes" : "No"}</span>
-              </div>
-              <div>
-                <span class="label">Public Key</span>
-                <span class="monospace" title="${summaryPublicKey ?? ""}"
-                  >${truncatePubkey(summaryPublicKey)}</span
-                >
-              </div>
-              <div>
-                <span class="label">Last start</span>
-                <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : "n/a"}</span>
-              </div>
+            <div>
+              <span class="label">Running</span>
+              <span>${summaryRunning ? "Yes" : "No"}</span>
             </div>
-          `}
+            <div>
+              <span class="label">Public Key</span>
+              <span class="monospace" title="${summaryPublicKey ?? ""}"
+                >${truncatePubkey(summaryPublicKey)}</span
+              >
+            </div>
+            <div>
+              <span class="label">Last start</span>
+              <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : "n/a"}</span>
+            </div>
+          </div>
+        `}
 
-      ${summaryLastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
-        : nothing}
-
-      ${renderProfileSection()}
-
-      ${renderChannelConfigSection({ channelId: "nostr", props })}
-
-      <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(false)}>Refresh</button>
-      </div>
-    </div>
+    ${renderProfileSection()}
   `;
+
+  return renderChannelIntegrationCard({
+    frame,
+    actions,
+    facts,
+    details,
+    error: error ?? (summaryLastError ?? null),
+  });
 }

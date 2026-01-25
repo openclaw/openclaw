@@ -1,74 +1,63 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 
 import { formatAgo } from "../format";
 import type { GoogleChatStatus } from "../types";
-import { renderChannelConfigSection } from "./channels.config";
-import type { ChannelsProps } from "./channels.types";
+import { renderChannelIntegrationCard, type ChannelCardFrame } from "./channels.shared";
 
 export function renderGoogleChatCard(params: {
-  props: ChannelsProps;
-  googleChat?: GoogleChatStatus | null;
-  accountCountLabel: unknown;
+  googlechat?: GoogleChatStatus | null;
+  frame: ChannelCardFrame;
+  actions: TemplateResult;
+  facts: TemplateResult;
+  error: string | null;
 }) {
-  const { props, googleChat, accountCountLabel } = params;
+  const { googlechat, frame, actions, facts, error } = params;
 
-  return html`
-    <div class="card">
-      <div class="card-title">Google Chat</div>
-      <div class="card-sub">Chat API webhook status and channel configuration.</div>
-      ${accountCountLabel}
-
-      <div class="status-list" style="margin-top: 16px;">
-        <div>
-          <span class="label">Configured</span>
-          <span>${googleChat ? (googleChat.configured ? "Yes" : "No") : "n/a"}</span>
-        </div>
-        <div>
-          <span class="label">Running</span>
-          <span>${googleChat ? (googleChat.running ? "Yes" : "No") : "n/a"}</span>
-        </div>
-        <div>
-          <span class="label">Credential</span>
-          <span>${googleChat?.credentialSource ?? "n/a"}</span>
-        </div>
-        <div>
-          <span class="label">Audience</span>
-          <span>
-            ${googleChat?.audienceType
-              ? `${googleChat.audienceType}${googleChat.audience ? ` · ${googleChat.audience}` : ""}`
-              : "n/a"}
-          </span>
-        </div>
-        <div>
-          <span class="label">Last start</span>
-          <span>${googleChat?.lastStartAt ? formatAgo(googleChat.lastStartAt) : "n/a"}</span>
-        </div>
-        <div>
-          <span class="label">Last probe</span>
-          <span>${googleChat?.lastProbeAt ? formatAgo(googleChat.lastProbeAt) : "n/a"}</span>
-        </div>
+  const details = html`
+    <div class="status-list" style="margin-top: 16px;">
+      <div>
+        <span class="label">Configured</span>
+        <span>${googlechat ? (googlechat.configured ? "Yes" : "No") : "n/a"}</span>
       </div>
-
-      ${googleChat?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${googleChat.lastError}
-          </div>`
-        : nothing}
-
-      ${googleChat?.probe
-        ? html`<div class="callout" style="margin-top: 12px;">
-            Probe ${googleChat.probe.ok ? "ok" : "failed"} ·
-            ${googleChat.probe.status ?? ""} ${googleChat.probe.error ?? ""}
-          </div>`
-        : nothing}
-
-      ${renderChannelConfigSection({ channelId: "googlechat", props })}
-
-      <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
-        </button>
+      <div>
+        <span class="label">Running</span>
+        <span>${googlechat ? (googlechat.running ? "Yes" : "No") : "n/a"}</span>
+      </div>
+      <div>
+        <span class="label">Credential</span>
+        <span>${googlechat?.credentialSource ?? "n/a"}</span>
+      </div>
+      <div>
+        <span class="label">Audience</span>
+        <span>
+          ${googlechat?.audienceType
+            ? `${googlechat.audienceType}${googlechat.audience ? ` · ${googlechat.audience}` : ""}`
+            : "n/a"}
+        </span>
+      </div>
+      <div>
+        <span class="label">Last start</span>
+        <span>${googlechat?.lastStartAt ? formatAgo(googlechat.lastStartAt) : "n/a"}</span>
+      </div>
+      <div>
+        <span class="label">Last probe</span>
+        <span>${googlechat?.lastProbeAt ? formatAgo(googlechat.lastProbeAt) : "n/a"}</span>
       </div>
     </div>
+
+    ${googlechat?.probe
+      ? html`<div class="callout callout--info" style="margin-top: 12px;">
+          Probe ${googlechat.probe.ok ? "ok" : "failed"} · ${googlechat.probe.status ?? ""}
+          ${googlechat.probe.error ?? ""}
+        </div>`
+      : nothing}
   `;
+
+  return renderChannelIntegrationCard({
+    frame,
+    actions,
+    facts,
+    details,
+    error: error ?? null,
+  });
 }

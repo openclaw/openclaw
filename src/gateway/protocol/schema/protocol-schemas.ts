@@ -52,6 +52,16 @@ import {
   CronUpdateParamsSchema,
 } from "./cron.js";
 import {
+  OverseerGoalCreateParamsSchema,
+  OverseerGoalCreateResultSchema,
+  OverseerGoalStatusParamsSchema,
+  OverseerGoalStatusResultSchema,
+  OverseerStatusParamsSchema,
+  OverseerStatusResultSchema,
+  OverseerTickParamsSchema,
+  OverseerWorkUpdateParamsSchema,
+} from "./overseer.js";
+import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
   ExecApprovalsNodeSetParamsSchema,
@@ -201,6 +211,14 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   CronRemoveParams: CronRemoveParamsSchema,
   CronRunParams: CronRunParamsSchema,
   CronRunsParams: CronRunsParamsSchema,
+  OverseerStatusParams: OverseerStatusParamsSchema,
+  OverseerStatusResult: OverseerStatusResultSchema,
+  OverseerGoalCreateParams: OverseerGoalCreateParamsSchema,
+  OverseerGoalCreateResult: OverseerGoalCreateResultSchema,
+  OverseerGoalStatusParams: OverseerGoalStatusParamsSchema,
+  OverseerGoalStatusResult: OverseerGoalStatusResultSchema,
+  OverseerWorkUpdateParams: OverseerWorkUpdateParamsSchema,
+  OverseerTickParams: OverseerTickParamsSchema,
   CronRunLogEntry: CronRunLogEntrySchema,
   LogsTailParams: LogsTailParamsSchema,
   LogsTailResult: LogsTailResultSchema,

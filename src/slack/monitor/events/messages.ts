@@ -1,6 +1,6 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 
-import { danger } from "../../../globals.js";
+import { danger, logVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
@@ -24,6 +24,13 @@ export function registerSlackMessageEvents(params: {
       if (ctx.shouldDropMismatchedSlackEvent(body)) return;
 
       const message = event as SlackMessageEvent;
+      logVerbose(
+        `slack: event message subtype=${message.subtype ?? "message"} channel=${
+          message.channel ?? "unknown"
+        } user=${message.user ?? message.bot_id ?? "unknown"} ts=${
+          message.ts ?? message.event_ts ?? "unknown"
+        }`,
+      );
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
         const channelId = changed.channel;
@@ -122,6 +129,11 @@ export function registerSlackMessageEvents(params: {
       if (ctx.shouldDropMismatchedSlackEvent(body)) return;
 
       const mention = event as SlackAppMentionEvent;
+      logVerbose(
+        `slack: event app_mention channel=${mention.channel ?? "unknown"} user=${
+          mention.user ?? "unknown"
+        } ts=${mention.ts ?? mention.event_ts ?? "unknown"}`,
+      );
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",
         wasMentioned: true,

@@ -333,6 +333,7 @@ describe("runHeartbeatOnce", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: { every: "5m", target: "whatsapp" },
           },
         },
@@ -461,6 +462,7 @@ describe("runHeartbeatOnce", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: {
               every: "5m",
               target: "last",
@@ -597,6 +599,7 @@ describe("runHeartbeatOnce", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: {
               every: "5m",
               target: "whatsapp",
@@ -668,6 +671,7 @@ describe("runHeartbeatOnce", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
+            workspace: tmpDir,
             heartbeat: {
               every: "5m",
               target: "whatsapp",
@@ -737,7 +741,7 @@ describe("runHeartbeatOnce", () => {
     try {
       const cfg: ClawdbotConfig = {
         agents: {
-          defaults: { heartbeat: { every: "5m" } },
+          defaults: { workspace: tmpDir, heartbeat: { every: "5m" } },
           list: [{ id: "work", default: true }],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },

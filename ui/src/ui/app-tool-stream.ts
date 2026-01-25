@@ -205,12 +205,13 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
   const args = phase === "start" ? data.args : undefined;
-  const output =
+  const outputRaw =
     phase === "update"
       ? formatToolOutput(data.partialResult)
       : phase === "result"
         ? formatToolOutput(data.result)
         : undefined;
+  const output = outputRaw ?? undefined;
 
   const now = Date.now();
   let entry = host.toolStreamById.get(toolCallId);

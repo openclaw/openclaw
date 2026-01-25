@@ -1,10 +1,16 @@
 import { html, nothing } from "lit";
+
+import { toast } from "../components/toast";
 import type { ConfigUiHints } from "../types";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form";
 import {
+  pathKey,
   hintForPath,
   humanize,
   schemaType,
+  type ConfigIssueSeverity,
+  type ConfigValidationIssue,
+  type ConfigValidationMap,
   type JsonSchema,
 } from "./config-form.shared";
 
@@ -98,6 +104,128 @@ type SubsectionEntry = {
 
 const ALL_SUBSECTION = "__all__";
 
+type NormalizedConfigIssue = {
+  severity: ConfigIssueSeverity;
+  message: string;
+  path: Array<string | number> | null;
+  sectionKey: string | null;
+  raw: unknown;
+};
+
+function normalizeIssueSeverity(raw: unknown): ConfigIssueSeverity {
+  const s = String(raw ?? "").toLowerCase();
+  if (s.includes("warn")) return "warn";
+  if (s.includes("info")) return "info";
+  if (s.includes("error")) return "error";
+  return "error";
+}
+
+function parsePathSegments(raw: unknown): Array<string | number> | null {
+  if (!raw) return null;
+  if (Array.isArray(raw)) {
+    const out: Array<string | number> = [];
+    for (const seg of raw) {
+      if (typeof seg === "string" || typeof seg === "number") out.push(seg);
+      else if (seg != null) out.push(String(seg));
+    }
+    return out.length ? out : null;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith("/")) {
+      const parts = trimmed.split("/").filter(Boolean).map(decodeURIComponent);
+      return parts.length ? parts : null;
+    }
+    if (trimmed.includes(".")) {
+      const parts = trimmed.split(".").filter(Boolean);
+      return parts.length ? parts : null;
+    }
+    return [trimmed];
+  }
+  return null;
+}
+
+function normalizeIssue(issue: unknown): NormalizedConfigIssue {
+  // Default: preserve the raw issue and show it in details.
+  let severity: ConfigIssueSeverity = "error";
+  let message = "";
+  let path: Array<string | number> | null = null;
+
+  if (typeof issue === "string") {
+    message = issue;
+  } else if (issue && typeof issue === "object") {
+    const obj = issue as Record<string, unknown>;
+    severity =
+      normalizeIssueSeverity(obj.severity ?? obj.level ?? obj.type ?? obj.kind ?? "error");
+
+    const msgCandidate =
+      obj.message ??
+      obj.msg ??
+      obj.error ??
+      obj.summary ??
+      obj.reason ??
+      obj.keyword;
+    message = msgCandidate != null ? String(msgCandidate) : "";
+
+    // Common JSON schema validator shapes (Ajv-style).
+    path =
+      parsePathSegments(obj.path) ??
+      parsePathSegments(obj.instancePath) ??
+      parsePathSegments(obj.dataPath) ??
+      parsePathSegments(obj.pointer) ??
+      parsePathSegments(obj.field) ??
+      null;
+
+    if (!message) {
+      try {
+        message = JSON.stringify(issue);
+      } catch {
+        message = String(issue);
+      }
+    }
+  } else {
+    message = String(issue);
+  }
+
+  const sectionKey =
+    path && path.length > 0 && typeof path[0] === "string" ? String(path[0]) : null;
+
+  return {
+    severity,
+    message,
+    path,
+    sectionKey,
+    raw: issue,
+  };
+}
+
+function applyDiagnosticsFilters(dialog: HTMLElement) {
+  const filter = (dialog.getAttribute("data-diag-filter") ?? "all").toLowerCase();
+  const q = (dialog.getAttribute("data-diag-query") ?? "").toLowerCase();
+  const items = Array.from(dialog.querySelectorAll("[data-diag-item]")) as HTMLElement[];
+
+  for (const el of items) {
+    const sev = (el.getAttribute("data-diag-sev") ?? "").toLowerCase();
+    const text = (el.getAttribute("data-diag-text") ?? "").toLowerCase();
+    const matchesSev = filter === "all" || sev === filter;
+    const matchesQuery = !q || text.includes(q);
+    el.hidden = !(matchesSev && matchesQuery);
+  }
+
+  // Hide empty groups.
+  const groups = Array.from(dialog.querySelectorAll("[data-diag-group]")) as HTMLElement[];
+  for (const group of groups) {
+    const groupItems = Array.from(group.querySelectorAll("[data-diag-item]")) as HTMLElement[];
+    group.hidden = !groupItems.some((i) => !i.hidden);
+  }
+
+  const visible = items.filter((i) => !i.hidden).length;
+  const total = items.length;
+  const counter = dialog.querySelector("#config-diagnostics-count") as HTMLElement | null;
+  if (counter) counter.textContent = `Showing ${visible} of ${total}`;
+}
+
 function getSectionIcon(key: string) {
   return sidebarIcons[key as keyof typeof sidebarIcons] ?? sidebarIcons.default;
 }
@@ -181,6 +309,159 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
+function copyText(text: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    void navigator.clipboard.writeText(text).then(() => {
+      toast.success("Copied to clipboard");
+    });
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-10000px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+  toast.success("Copied to clipboard");
+}
+
+type DiffChunk = { type: "equal" | "insert" | "delete"; lines: string[] };
+
+// Minimal line diff (LCS). Good enough for config-sized documents.
+function diffLines(aText: string, bText: string): DiffChunk[] {
+  const a = aText.split("\n");
+  const b = bText.split("\n");
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    Array(n + 1).fill(0),
+  );
+
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] =
+        a[i] === b[j]
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const chunks: DiffChunk[] = [];
+  const push = (type: DiffChunk["type"], line: string) => {
+    const last = chunks[chunks.length - 1];
+    if (last && last.type === type) last.lines.push(line);
+    else chunks.push({ type, lines: [line] });
+  };
+
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      push("equal", a[i]);
+      i++;
+      j++;
+      continue;
+    }
+    if (dp[i + 1][j] >= dp[i][j + 1]) {
+      push("delete", a[i]);
+      i++;
+      continue;
+    }
+    push("insert", b[j]);
+    j++;
+  }
+  while (i < m) {
+    push("delete", a[i]);
+    i++;
+  }
+  while (j < n) {
+    push("insert", b[j]);
+    j++;
+  }
+
+  return chunks;
+}
+
+function formatUnifiedDiff(params: {
+  fromLabel: string;
+  toLabel: string;
+  fromText: string;
+  toText: string;
+}): string {
+  const { fromLabel, toLabel, fromText, toText } = params;
+  if (fromText === toText) return "";
+  const chunks = diffLines(fromText, toText);
+  const out: string[] = [`--- ${fromLabel}`, `+++ ${toLabel}`];
+  for (const chunk of chunks) {
+    const prefix =
+      chunk.type === "equal" ? " " : chunk.type === "delete" ? "-" : "+";
+    for (const line of chunk.lines) out.push(prefix + line);
+  }
+  return out.join("\n");
+}
+
+export function setupConfigKeyboardShortcuts(props: {
+  getFormMode: () => "form" | "raw";
+  getSearchQuery: () => string;
+  getCanSave: () => boolean;
+  getIsDirty: () => boolean;
+  onFocusSearch: () => void;
+  onClearSearch: () => void;
+  onSave: () => void;
+}): () => void {
+  const handler = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    const isInput = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+    const isSearchInput =
+      (target as HTMLElement | null)?.id === "config-search-input";
+
+    if (isInput) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (isSearchInput && props.getSearchQuery()) props.onClearSearch();
+        (target as HTMLElement).blur();
+      }
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      if (props.getCanSave()) props.onSave();
+      return;
+    }
+
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "/") {
+      if (props.getFormMode() !== "form") return;
+      e.preventDefault();
+      props.onFocusSearch();
+      return;
+    }
+
+    if (e.key === "Escape" && props.getSearchQuery()) {
+      e.preventDefault();
+      props.onClearSearch();
+    }
+  };
+
+  const beforeUnload = (e: BeforeUnloadEvent) => {
+    if (!props.getIsDirty()) return;
+    e.preventDefault();
+    // Per spec, browsers ignore custom strings but require returnValue to be set.
+    e.returnValue = "";
+  };
+
+  document.addEventListener("keydown", handler);
+  window.addEventListener("beforeunload", beforeUnload);
+  return () => {
+    document.removeEventListener("keydown", handler);
+    window.removeEventListener("beforeunload", beforeUnload);
+  };
+}
+
 export function renderConfig(props: ConfigProps) {
   const validity =
     props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
@@ -188,6 +469,31 @@ export function renderConfig(props: ConfigProps) {
   const formUnsafe = analysis.schema
     ? analysis.unsupportedPaths.length > 0
     : false;
+
+  const normalizedIssues = (props.issues ?? []).map(normalizeIssue);
+  const issueCounts = normalizedIssues.reduce(
+    (acc, issue) => {
+      acc.total += 1;
+      if (issue.severity === "error") acc.errors += 1;
+      else if (issue.severity === "warn") acc.warns += 1;
+      else acc.infos += 1;
+      return acc;
+    },
+    { total: 0, errors: 0, warns: 0, infos: 0 },
+  );
+
+  const validation: ConfigValidationMap = {};
+  for (const issue of normalizedIssues) {
+    if (!issue.path) continue;
+    const key = pathKey(issue.path);
+    if (!key) continue;
+    const entry: ConfigValidationIssue = {
+      severity: issue.severity,
+      message: issue.message,
+      raw: issue.raw,
+    };
+    (validation[key] ||= []).push(entry);
+  }
 
   // Get available sections from schema
   const schemaProps = analysis.schema?.properties ?? {};
@@ -249,12 +555,119 @@ export function renderConfig(props: ConfigProps) {
     (props.formMode === "raw" ? true : canSaveForm);
   const canUpdate = props.connected && !props.applying && !props.updating;
 
+  const unifiedDiff = hasChanges
+    ? formatUnifiedDiff({
+        fromLabel: "saved",
+        toLabel: "pending",
+        fromText: props.originalRaw,
+        toText: props.raw,
+      })
+    : "";
+  const pendingDialogId = "config-pending-changes-dialog";
+  const diagnosticsDialogId = "config-diagnostics-dialog";
+
+  const openDialog = (id: string) => {
+    const dialog = document.getElementById(id) as HTMLDialogElement | null;
+    dialog?.showModal?.();
+    if (id === diagnosticsDialogId) {
+      // Ensure counts/groups are correct on open (default filter/query is "all"/empty).
+      setTimeout(() => {
+        const el = document.getElementById(diagnosticsDialogId) as HTMLElement | null;
+        if (el) applyDiagnosticsFilters(el);
+      }, 0);
+    }
+  };
+
+  const closeDialog = (event: Event) => {
+    const dialog = (event.currentTarget as HTMLElement | null)?.closest(
+      "dialog",
+    ) as HTMLDialogElement | null;
+    dialog?.close?.();
+  };
+
+  const setDiagnosticsStatus = (msg: string) => {
+    const el = document.getElementById("config-diagnostics-status") as HTMLElement | null;
+    if (el) el.textContent = msg;
+  };
+
+  const jumpToPath = (path: Array<string | number>) => {
+    setDiagnosticsStatus("");
+    if (props.formMode !== "form") {
+      // Best-effort: allow jumping by switching to form if schema is available.
+      if (props.schema && !props.schemaLoading) props.onFormModeChange("form");
+    }
+
+    const section =
+      path.length > 0 && typeof path[0] === "string" ? String(path[0]) : null;
+    if (section) props.onSectionChange(section);
+
+    const key = pathKey(path);
+    const tryFocus = (): boolean => {
+      const escapedKey =
+        typeof CSS !== "undefined" && typeof CSS.escape === "function"
+          ? CSS.escape(key)
+          : key;
+      const el = document.querySelector(
+        `[data-config-path="${escapedKey}"]`,
+      ) as HTMLElement | null;
+      if (!el) return false;
+
+      // Expand any collapsed parent <details> so the field is visible.
+      let parent: HTMLElement | null = el;
+      while (parent) {
+        if (parent instanceof HTMLDetailsElement) parent.open = true;
+        parent = parent.parentElement;
+      }
+
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      const input = el.querySelector(
+        "input, select, textarea, button",
+      ) as HTMLElement | null;
+      input?.focus?.();
+      return true;
+    };
+
+    // Re-render + layout needs a beat.
+    setTimeout(() => {
+      if (tryFocus()) return;
+      if (section) {
+        const fallback = document.getElementById(`config-section-${section}`) as HTMLElement | null;
+        fallback?.scrollIntoView({ block: "start", behavior: "smooth" });
+      }
+    }, 50);
+    setTimeout(() => {
+      if (tryFocus()) return;
+      setDiagnosticsStatus(
+        "Could not locate the exact field for this issue; jumped to the section instead.",
+      );
+    }, 250);
+  };
+
   return html`
     <div class="config-layout">
       <!-- Sidebar -->
       <aside class="config-sidebar">
         <div class="config-sidebar__header">
           <div class="config-sidebar__title">Settings</div>
+          <label class="config-jump">
+            <span class="sr-only">Jump to section</span>
+            <select
+              class="config-jump__select"
+              .value=${props.activeSection ?? ""}
+              @change=${(e: Event) => {
+                const value = (e.target as HTMLSelectElement).value;
+                props.onSectionChange(value ? value : null);
+              }}
+            >
+              <option value="">All</option>
+              ${allSections.map(
+                (section) => html`<option value=${section.key}>${section.label}</option>`,
+              )}
+            </select>
+          </label>
+          ${hasChanges
+            ? html`<span class="pill pill--sm pill--warn" title="You have unsaved changes">unsaved</span>`
+            : nothing}
           <span class="pill pill--sm ${validity === "valid" ? "pill--ok" : validity === "invalid" ? "pill--danger" : ""}">${validity}</span>
         </div>
         
@@ -267,8 +680,12 @@ export function renderConfig(props: ConfigProps) {
           <input
             type="text"
             class="config-search__input"
-            placeholder="Search settings..."
+            id="config-search-input"
+            placeholder=${props.formMode === "form"
+              ? "Search settings..."
+              : "Search works in Form view"}
             .value=${props.searchQuery}
+            ?disabled=${props.formMode !== "form"}
             @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
           />
           ${props.searchQuery ? html`
@@ -331,13 +748,55 @@ export function renderConfig(props: ConfigProps) {
             `}
           </div>
           <div class="config-actions__right">
-            <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
+            ${issueCounts.total > 0
+              ? html`
+                  <button
+                    class="btn btn--sm danger"
+                    type="button"
+                    @click=${() => openDialog(diagnosticsDialogId)}
+                    title="Diagnostics: view, filter, and jump to fixes"
+                  >
+                    Diagnostics (${issueCounts.total})
+                  </button>
+                `
+              : nothing}
+            ${hasChanges ? html`
+              <button
+                class="btn btn--sm"
+                type="button"
+                @click=${() => {
+                  const payload =
+                    props.formMode === "form"
+                      ? JSON.stringify({ mode: "form", changes: diff }, null, 2)
+                      : JSON.stringify({ mode: "raw", diff: unifiedDiff || "(no diff)" }, null, 2);
+                  copyText(payload);
+                }}
+                title="Copy a JSON summary of pending changes"
+              >
+                Copy pending changes
+              </button>
+              <button
+                class="btn btn--sm"
+                type="button"
+                @click=${() => {
+                  const dialog = document.getElementById(
+                    pendingDialogId,
+                  ) as HTMLDialogElement | null;
+                  dialog?.showModal?.();
+                }}
+                title="Open a full review panel with summary + unified diff"
+              >
+                View pending changes
+              </button>
+            ` : nothing}
+            <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload} title="Reload config from the gateway">
               ${props.loading ? "Loading…" : "Reload"}
             </button>
             <button
               class="btn btn--sm primary"
               ?disabled=${!canSave}
               @click=${props.onSave}
+              title="Save: write config to the gateway (does not necessarily apply/restart)"
             >
               ${props.saving ? "Saving…" : "Save"}
             </button>
@@ -345,6 +804,7 @@ export function renderConfig(props: ConfigProps) {
               class="btn btn--sm"
               ?disabled=${!canApply}
               @click=${props.onApply}
+              title="Apply: apply the saved config to the active session"
             >
               ${props.applying ? "Applying…" : "Apply"}
             </button>
@@ -352,22 +812,57 @@ export function renderConfig(props: ConfigProps) {
               class="btn btn--sm"
               ?disabled=${!canUpdate}
               @click=${props.onUpdate}
+              title="Update: run gateway update (may take time)"
             >
               ${props.updating ? "Updating…" : "Update"}
             </button>
           </div>
+        </div>
+        <div class="config-actions__hint muted">
+          Save writes config; Apply activates it; Update updates the gateway binary. (Tip: Cmd/Ctrl+S saves.)
         </div>
         
         <!-- Diff panel (form mode only - raw mode doesn't have granular diff) -->
         ${hasChanges && props.formMode === "form" ? html`
           <details class="config-diff">
             <summary class="config-diff__summary">
-              <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>
+              <span>Quick preview: ${diff.length} change${diff.length !== 1 ? "s" : ""}</span>
               <svg class="config-diff__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="6 9 12 15 18 9"></polyline>
               </svg>
             </summary>
             <div class="config-diff__content">
+              <div class="config-diff__actions">
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  @click=${() =>
+                    copyText(
+                      JSON.stringify(
+                        {
+                          mode: "form",
+                          changes: diff,
+                        },
+                        null,
+                        2,
+                      ),
+                    )}
+                >
+                  Copy pending changes
+                </button>
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  @click=${() => {
+                    const dialog = document.getElementById(
+                      pendingDialogId,
+                    ) as HTMLDialogElement | null;
+                    dialog?.showModal?.();
+                  }}
+                >
+                  View pending changes
+                </button>
+              </div>
               ${diff.map(change => html`
                 <div class="config-diff__item">
                   <div class="config-diff__path">${change.path}</div>
@@ -437,6 +932,7 @@ export function renderConfig(props: ConfigProps) {
                       value: props.formValue,
                       disabled: props.loading || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,
+                      validation,
                       onPatch: props.onFormPatch,
                       searchQuery: props.searchQuery,
                       activeSection: props.activeSection,
@@ -450,6 +946,21 @@ export function renderConfig(props: ConfigProps) {
                   : nothing}
               `
             : html`
+                <div class="callout info" style="margin-bottom: 12px;">
+                  Raw mode is powerful, but Search and diagnostics “Jump to fix” work best in Form view.
+                  ${props.schema && !props.schemaLoading
+                    ? html`
+                        <button
+                          class="btn btn--sm"
+                          type="button"
+                          style="margin-left: 10px;"
+                          @click=${() => props.onFormModeChange("form")}
+                        >
+                          Switch to Form
+                        </button>
+                      `
+                    : nothing}
+                </div>
                 <label class="field config-raw-field">
                   <span>Raw JSON5</span>
                   <textarea
@@ -461,12 +972,343 @@ export function renderConfig(props: ConfigProps) {
               `}
         </div>
 
-        ${props.issues.length > 0
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-              <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
-            </div>`
+        ${issueCounts.total > 0
+          ? html`
+              <div class="config-issues" role="region" aria-label="Config diagnostics">
+                <div class="config-issues__summary">
+                  <div class="config-issues__title">
+                    Diagnostics
+                    <span class="config-issues__counts">
+                      ${issueCounts.errors ? html`<span class="config-issues__count config-issues__count--error">${issueCounts.errors} error${issueCounts.errors !== 1 ? "s" : ""}</span>` : nothing}
+                      ${issueCounts.warns ? html`<span class="config-issues__count config-issues__count--warn">${issueCounts.warns} warning${issueCounts.warns !== 1 ? "s" : ""}</span>` : nothing}
+                      ${issueCounts.infos ? html`<span class="config-issues__count config-issues__count--info">${issueCounts.infos} info</span>` : nothing}
+                    </span>
+                  </div>
+                  <div class="config-issues__actions">
+                    <button class="btn btn--sm danger" type="button" @click=${() => openDialog(diagnosticsDialogId)}>
+                      Open diagnostics
+                    </button>
+                    <button
+                      class="btn btn--sm"
+                      type="button"
+                      @click=${() =>
+                        copyText(
+                          JSON.stringify(
+                            {
+                              valid: props.valid,
+                              counts: issueCounts,
+                              issues: props.issues,
+                              pending: hasChanges
+                                ? {
+                                    mode: props.formMode,
+                                    diff: props.formMode === "form" ? diff : undefined,
+                                    unifiedDiff,
+                                  }
+                                : null,
+                            },
+                            null,
+                            2,
+                          ),
+                        )}
+                    >
+                      Copy diagnostics
+                    </button>
+                  </div>
+                </div>
+
+                <details class="config-issues__raw">
+                  <summary>Raw issues (JSON)</summary>
+                  <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+                </details>
+              </div>
+            `
           : nothing}
       </main>
+
+      <dialog id=${pendingDialogId} class="config-pending-dialog">
+        <div class="config-pending-dialog__header">
+          <div class="config-pending-dialog__title">Pending changes</div>
+          <div class="config-pending-dialog__actions">
+            <button
+              class="btn btn--sm"
+              type="button"
+              @click=${() => copyText(unifiedDiff || "(no diff)")}
+            >
+              Copy diff
+            </button>
+            <button
+              class="btn btn--sm"
+              type="button"
+              @click=${() =>
+                copyText(
+                  JSON.stringify(
+                    {
+                      mode: props.formMode,
+                      raw: props.raw,
+                    },
+                    null,
+                    2,
+                  ),
+                )}
+            >
+              Copy effective config
+            </button>
+            <button
+              class="btn btn--sm"
+              type="button"
+              @click=${(e: Event) => {
+                const dialog = (e.currentTarget as HTMLElement | null)?.closest(
+                  "dialog",
+                ) as HTMLDialogElement | null;
+                dialog?.close?.();
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div class="config-pending-dialog__body">
+          ${props.formMode === "form"
+            ? html`
+                <div class="config-pending-dialog__panel">
+                  <div class="config-pending-dialog__panel-title">Summary</div>
+                  <div class="config-pending-dialog__summary">
+                    ${diff.length === 0
+                      ? html`<div class="muted">No changes.</div>`
+                      : diff.map(
+                          (change) => html`
+                            <div class="config-diff__item">
+                              <div class="config-diff__path">${change.path}</div>
+                              <div class="config-diff__values">
+                                <span class="config-diff__from">${truncateValue(change.from, 80)}</span>
+                                <span class="config-diff__arrow">→</span>
+                                <span class="config-diff__to">${truncateValue(change.to, 80)}</span>
+                              </div>
+                            </div>
+                          `,
+                        )}
+                  </div>
+                </div>
+              `
+            : html`
+                <div class="config-pending-dialog__panel">
+                  <div class="config-pending-dialog__panel-title">Summary</div>
+                  <div class="muted">
+                    Raw edits are tracked as a full-document change. Use the diff panel to review the exact text changes.
+                  </div>
+                </div>
+              `}
+
+          <div class="config-pending-dialog__panel">
+            <div class="config-pending-dialog__panel-title">Diff (saved → pending)</div>
+            <pre class="code-block config-pending-dialog__diff">${unifiedDiff || "(no diff)"}</pre>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        id=${diagnosticsDialogId}
+        class="config-diagnostics-dialog"
+        data-diag-filter="all"
+        data-diag-query=""
+      >
+        <div class="config-diagnostics-dialog__header">
+          <div class="config-diagnostics-dialog__title">
+            Diagnostics
+            <span class="config-diagnostics-dialog__subtitle" title="Issue totals">
+              ${issueCounts.errors ? `${issueCounts.errors} error${issueCounts.errors !== 1 ? "s" : ""}` : "0 errors"}
+              ${issueCounts.warns ? ` · ${issueCounts.warns} warning${issueCounts.warns !== 1 ? "s" : ""}` : ""}
+              ${issueCounts.infos ? ` · ${issueCounts.infos} info` : ""}
+            </span>
+            <span id="config-diagnostics-count" class="config-diagnostics-dialog__subtitle" title="Visible items after filtering">
+              Showing ${issueCounts.total} of ${issueCounts.total}
+            </span>
+          </div>
+          <div class="config-diagnostics-dialog__actions">
+            <button
+              class="btn btn--sm"
+              type="button"
+              @click=${() =>
+                copyText(
+                  JSON.stringify(
+                    {
+                      valid: props.valid,
+                      counts: issueCounts,
+                      issues: props.issues,
+                    },
+                    null,
+                    2,
+                  ),
+                )}
+            >
+              Copy diagnostics
+            </button>
+            <button class="btn btn--sm" type="button" @click=${closeDialog}>Close</button>
+          </div>
+        </div>
+
+        <div class="config-diagnostics-dialog__body">
+          <div class="config-diagnostics-dialog__controls">
+            <label class="config-diagnostics-dialog__search">
+              <span class="sr-only">Filter diagnostics</span>
+              <input
+                class="config-diagnostics-dialog__search-input"
+                type="text"
+                placeholder="Filter diagnostics…"
+                @input=${(e: Event) => {
+                  const dialog = document.getElementById(diagnosticsDialogId) as HTMLElement | null;
+                  if (!dialog) return;
+                  const q = (e.target as HTMLInputElement).value.trim();
+                  dialog.setAttribute("data-diag-query", q);
+                  applyDiagnosticsFilters(dialog);
+                }}
+              />
+            </label>
+            <div class="config-diagnostics-dialog__filters" role="group" aria-label="Severity filter">
+              <button
+                class="btn btn--sm active"
+                type="button"
+                @click=${(e: Event) => {
+                  const dialog = document.getElementById(diagnosticsDialogId) as HTMLElement | null;
+                  if (!dialog) return;
+                  dialog.setAttribute("data-diag-filter", "all");
+                  applyDiagnosticsFilters(dialog);
+                  (e.currentTarget as HTMLElement | null)?.parentElement?.querySelectorAll("button")?.forEach((b) => b.classList.remove("active"));
+                  (e.currentTarget as HTMLElement | null)?.classList.add("active");
+                }}
+              >
+                All
+              </button>
+              <button
+                class="btn btn--sm"
+                type="button"
+                @click=${(e: Event) => {
+                  const dialog = document.getElementById(diagnosticsDialogId) as HTMLElement | null;
+                  if (!dialog) return;
+                  dialog.setAttribute("data-diag-filter", "error");
+                  applyDiagnosticsFilters(dialog);
+                  (e.currentTarget as HTMLElement | null)?.parentElement?.querySelectorAll("button")?.forEach((b) => b.classList.remove("active"));
+                  (e.currentTarget as HTMLElement | null)?.classList.add("active");
+                }}
+              >
+                Errors
+              </button>
+              <button
+                class="btn btn--sm"
+                type="button"
+                @click=${(e: Event) => {
+                  const dialog = document.getElementById(diagnosticsDialogId) as HTMLElement | null;
+                  if (!dialog) return;
+                  dialog.setAttribute("data-diag-filter", "warn");
+                  applyDiagnosticsFilters(dialog);
+                  (e.currentTarget as HTMLElement | null)?.parentElement?.querySelectorAll("button")?.forEach((b) => b.classList.remove("active"));
+                  (e.currentTarget as HTMLElement | null)?.classList.add("active");
+                }}
+              >
+                Warnings
+              </button>
+              <button
+                class="btn btn--sm"
+                type="button"
+                @click=${(e: Event) => {
+                  const dialog = document.getElementById(diagnosticsDialogId) as HTMLElement | null;
+                  if (!dialog) return;
+                  dialog.setAttribute("data-diag-filter", "info");
+                  applyDiagnosticsFilters(dialog);
+                  (e.currentTarget as HTMLElement | null)?.parentElement?.querySelectorAll("button")?.forEach((b) => b.classList.remove("active"));
+                  (e.currentTarget as HTMLElement | null)?.classList.add("active");
+                }}
+              >
+                Info
+              </button>
+            </div>
+          </div>
+
+          <div id="config-diagnostics-status" class="config-diagnostics-dialog__status muted"></div>
+
+          <div class="config-diagnostics-dialog__content">
+            ${(() => {
+              const order: ConfigIssueSeverity[] = ["error", "warn", "info"];
+              const groups = new Map<string, NormalizedConfigIssue[]>();
+              for (const issue of normalizedIssues) {
+                const groupKey = issue.sectionKey ?? "general";
+                const arr = groups.get(groupKey) ?? [];
+                arr.push(issue);
+                groups.set(groupKey, arr);
+              }
+              const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+
+              return keys.map((groupKey) => {
+                const groupIssues = groups.get(groupKey) ?? [];
+                groupIssues.sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
+
+                const meta =
+                  groupKey !== "general" ? resolveSectionMeta(groupKey, undefined) : null;
+                const title = meta?.label ?? (groupKey === "general" ? "General" : humanize(groupKey));
+
+                return html`
+                  <div class="config-diagnostics-group" data-diag-group>
+                    <div class="config-diagnostics-group__header">
+                      <div class="config-diagnostics-group__title">${title}</div>
+                      <div class="config-diagnostics-group__count">${groupIssues.length}</div>
+                    </div>
+                    <div class="config-diagnostics-group__list">
+                      ${groupIssues.map((issue, idx) => {
+                        const pathText = issue.path ? pathKey(issue.path) : "";
+                        const text = `${issue.severity} ${issue.message} ${pathText} ${title}`;
+                        return html`
+                          <details
+                            class="config-diagnostics-item config-diagnostics-item--${issue.severity}"
+                            data-diag-item
+                            data-diag-sev=${issue.severity}
+                            data-diag-text=${text}
+                          >
+                            <summary class="config-diagnostics-item__summary">
+                              <span class="config-diagnostics-item__sev">${issue.severity}</span>
+                              <span class="config-diagnostics-item__msg">${issue.message}</span>
+                              ${pathText ? html`<span class="config-diagnostics-item__path">${pathText}</span>` : nothing}
+                            </summary>
+                            <div class="config-diagnostics-item__body">
+                              <div class="config-diagnostics-item__actions">
+                                ${issue.path ? html`
+                                  <button
+                                    class="btn btn--sm"
+                                    type="button"
+                                    @click=${() => jumpToPath(issue.path!)}
+                                  >
+                                    Jump to fix
+                                  </button>
+                                ` : nothing}
+                                <button
+                                  class="btn btn--sm"
+                                  type="button"
+                                  @click=${() => copyText(JSON.stringify(issue.raw, null, 2))}
+                                >
+                                  Copy raw issue
+                                </button>
+                              </div>
+                              <details class="config-diagnostics-item__raw">
+                                <summary>Raw details</summary>
+                                <pre class="code-block">${JSON.stringify(issue.raw, null, 2)}</pre>
+                              </details>
+                            </div>
+                          </details>
+                        `;
+                      })}
+                    </div>
+                  </div>
+                `;
+              });
+            })()}
+
+            <details class="config-diagnostics-rawall">
+              <summary>All raw issues (JSON)</summary>
+              <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+            </details>
+          </div>
+        </div>
+      </dialog>
     </div>
   `;
 }

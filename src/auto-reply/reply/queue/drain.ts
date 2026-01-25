@@ -5,7 +5,9 @@ import {
   hasCrossChannelItems,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
+import { emitQueueCompletion } from "../../continuation/emit.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { enqueueFollowupRun } from "./enqueue.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -17,9 +19,11 @@ export function scheduleFollowupDrain(
   if (!queue || queue.draining) return;
   queue.draining = true;
   void (async () => {
+    let itemsProcessed = 0;
     try {
       let forceIndividualCollect = false;
       while (queue.items.length > 0 || queue.droppedCount > 0) {
+        itemsProcessed++;
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
@@ -113,10 +117,41 @@ export function scheduleFollowupDrain(
       defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;
-      if (queue.items.length === 0 && queue.droppedCount === 0) {
-        FOLLOWUP_QUEUES.delete(key);
-      } else {
-        scheduleFollowupDrain(key, runFollowup);
+      const queueEmpty = queue.items.length === 0 && queue.droppedCount === 0;
+      let continuationEnqueued = false;
+
+      // Check for continuation when queue empties
+      if (queueEmpty && queue.lastRun) {
+        const decision = await emitQueueCompletion({
+          queueKey: key,
+          sessionKey: queue.lastRun.sessionKey,
+          queueEmpty: true,
+          itemsProcessed,
+          lastRun: queue.lastRun,
+        });
+
+        if (decision.action !== "none" && decision.nextPrompt) {
+          // Re-enqueue continuation and process it
+          enqueueFollowupRun(
+            key,
+            {
+              prompt: decision.nextPrompt,
+              run: queue.lastRun,
+              enqueuedAt: Date.now(),
+            },
+            { mode: queue.mode ?? "followup" },
+          );
+          scheduleFollowupDrain(key, runFollowup);
+          continuationEnqueued = true;
+        }
+      }
+
+      if (!continuationEnqueued) {
+        if (queueEmpty) {
+          FOLLOWUP_QUEUES.delete(key);
+        } else {
+          scheduleFollowupDrain(key, runFollowup);
+        }
       }
     }
   })();

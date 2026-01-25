@@ -146,6 +146,22 @@ import {
   SessionsResetParamsSchema,
   type SessionsResolveParams,
   SessionsResolveParamsSchema,
+  type OverseerGoalCreateParams,
+  OverseerGoalCreateParamsSchema,
+  type OverseerGoalCreateResult,
+  OverseerGoalCreateResultSchema,
+  type OverseerGoalStatusParams,
+  OverseerGoalStatusParamsSchema,
+  type OverseerGoalStatusResult,
+  OverseerGoalStatusResultSchema,
+  type OverseerStatusParams,
+  OverseerStatusParamsSchema,
+  type OverseerStatusResult,
+  OverseerStatusResultSchema,
+  type OverseerTickParams,
+  OverseerTickParamsSchema,
+  type OverseerWorkUpdateParams,
+  OverseerWorkUpdateParamsSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
@@ -276,6 +292,19 @@ export const validateCronUpdateParams = ajv.compile<CronUpdateParams>(CronUpdate
 export const validateCronRemoveParams = ajv.compile<CronRemoveParams>(CronRemoveParamsSchema);
 export const validateCronRunParams = ajv.compile<CronRunParams>(CronRunParamsSchema);
 export const validateCronRunsParams = ajv.compile<CronRunsParams>(CronRunsParamsSchema);
+export const validateOverseerStatusParams = ajv.compile<OverseerStatusParams>(
+  OverseerStatusParamsSchema,
+);
+export const validateOverseerGoalCreateParams = ajv.compile<OverseerGoalCreateParams>(
+  OverseerGoalCreateParamsSchema,
+);
+export const validateOverseerGoalStatusParams = ajv.compile<OverseerGoalStatusParams>(
+  OverseerGoalStatusParamsSchema,
+);
+export const validateOverseerWorkUpdateParams = ajv.compile<OverseerWorkUpdateParams>(
+  OverseerWorkUpdateParamsSchema,
+);
+export const validateOverseerTickParams = ajv.compile<OverseerTickParams>(OverseerTickParamsSchema);
 export const validateDevicePairListParams = ajv.compile<DevicePairListParams>(
   DevicePairListParamsSchema,
 );
@@ -420,6 +449,14 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  OverseerStatusParamsSchema,
+  OverseerStatusResultSchema,
+  OverseerGoalCreateParamsSchema,
+  OverseerGoalCreateResultSchema,
+  OverseerGoalStatusParamsSchema,
+  OverseerGoalStatusResultSchema,
+  OverseerWorkUpdateParamsSchema,
+  OverseerTickParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   ChatHistoryParamsSchema,
@@ -509,6 +546,14 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
+  OverseerStatusParams,
+  OverseerStatusResult,
+  OverseerGoalCreateParams,
+  OverseerGoalCreateResult,
+  OverseerGoalStatusParams,
+  OverseerGoalStatusResult,
+  OverseerWorkUpdateParams,
+  OverseerTickParams,
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,

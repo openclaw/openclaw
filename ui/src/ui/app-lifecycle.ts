@@ -16,6 +16,8 @@ import {
   stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
+  startOverseerPolling,
+  stopOverseerPolling,
 } from "./app-polling";
 
 type LifecycleHost = {
@@ -35,6 +37,12 @@ type LifecycleHost = {
 
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
+  // Apply URL settings FIRST, before syncing tab - this ensures the session key
+  // from the URL is set before syncTabWithLocation calls syncUrlWithTab, which
+  // would otherwise overwrite the URL's session param with the old/default value.
+  applySettingsFromUrl(
+    host as unknown as Parameters<typeof applySettingsFromUrl>[0],
+  );
   syncTabWithLocation(
     host as unknown as Parameters<typeof syncTabWithLocation>[0],
     true,
@@ -46,9 +54,6 @@ export function handleConnected(host: LifecycleHost) {
     host as unknown as Parameters<typeof attachThemeListener>[0],
   );
   window.addEventListener("popstate", host.popStateHandler);
-  applySettingsFromUrl(
-    host as unknown as Parameters<typeof applySettingsFromUrl>[0],
-  );
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {
@@ -56,6 +61,9 @@ export function handleConnected(host: LifecycleHost) {
   }
   if (host.tab === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
+  }
+  if (host.tab === "overseer") {
+    startOverseerPolling(host as unknown as Parameters<typeof startOverseerPolling>[0]);
   }
 }
 
@@ -68,6 +76,7 @@ export function handleDisconnected(host: LifecycleHost) {
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  stopOverseerPolling(host as unknown as Parameters<typeof stopOverseerPolling>[0]);
   detachThemeListener(
     host as unknown as Parameters<typeof detachThemeListener>[0],
   );

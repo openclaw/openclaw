@@ -7,6 +7,7 @@ import { statusCommand } from "../../commands/status.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getFlagValue, getPositiveIntFlagValue, getVerboseFlag, hasFlag } from "../argv.js";
 import { registerBrowserCli } from "../browser-cli.js";
+import { registerOverseerCli } from "../overseer-cli.js";
 import { registerConfigCli } from "../config-cli.js";
 import { registerMemoryCli, runMemoryStatus } from "../memory-cli.js";
 import { registerAgentCommands } from "./register.agent.js";
@@ -151,6 +152,10 @@ export const commandRegistry: CommandRegistration[] = [
   {
     id: "browser",
     register: ({ program }) => registerBrowserCli(program),
+  },
+  {
+    id: "overseer",
+    register: ({ program }) => registerOverseerCli(program),
   },
 ];
 

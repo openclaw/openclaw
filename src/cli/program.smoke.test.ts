@@ -93,6 +93,20 @@ describe("cli program (smoke)", () => {
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
   });
 
+  it("runs tui with --new", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["tui", "--new"], { from: "user" });
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ newSession: true }));
+  });
+
+  it("runs tui with --new and --agent", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["tui", "--new", "--agent", "ops"], { from: "user" });
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ newSession: true, agent: "ops" }),
+    );
+  });
+
   it("warns and ignores invalid tui timeout override", async () => {
     const program = buildProgram();
     await program.parseAsync(["tui", "--timeout-ms", "nope"], { from: "user" });

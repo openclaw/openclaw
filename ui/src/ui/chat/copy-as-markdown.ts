@@ -1,5 +1,6 @@
 import { html, type TemplateResult } from "lit";
 import { renderEmojiIcon, setEmojiIcon } from "../icons";
+import { toast } from "../components/toast";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
@@ -20,8 +21,10 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 
   try {
     await navigator.clipboard.writeText(text);
+    toast.success("Copied as markdown");
     return true;
   } catch {
+    toast.error("Copy failed");
     return false;
   }
 }

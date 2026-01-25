@@ -13,6 +13,8 @@ export function registerTuiCli(program: Command) {
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (if required)")
     .option("--session <key>", 'Session key (default: "main", or "global" when scope is global)')
+    .option("--agent <id>", "Agent id (used for new sessions)")
+    .option("--new", "Start a new session for the selected agent", false)
     .option("--deliver", "Deliver assistant replies", false)
     .option("--thinking <level>", "Thinking level override")
     .option("--message <text>", "Send an initial message after connecting")
@@ -36,6 +38,8 @@ export function registerTuiCli(program: Command) {
           token: opts.token as string | undefined,
           password: opts.password as string | undefined,
           session: opts.session as string | undefined,
+          agent: opts.agent as string | undefined,
+          newSession: Boolean(opts.new),
           deliver: Boolean(opts.deliver),
           thinking: opts.thinking as string | undefined,
           message: opts.message as string | undefined,

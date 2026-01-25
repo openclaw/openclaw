@@ -244,6 +244,20 @@
     gap: 8px;
   }
 
+  .chat-compose__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chat-compose__actions-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .chat-compose__actions-group--right {
+    margin-left: 0;
+  }
+
   .chat-compose__field textarea {
     min-height: 60px;
     padding: 8px 10px;

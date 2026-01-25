@@ -231,6 +231,46 @@ export const ClawdbotSchema = z
       })
       .strict()
       .optional(),
+    overseer: z
+      .object({
+        enabled: z.boolean().optional(),
+        tickEvery: z.string().optional(),
+        idleAfter: z.string().optional(),
+        maxRetries: z.number().int().nonnegative().optional(),
+        minResendInterval: z.string().optional(),
+        backoff: z
+          .object({
+            base: z.string().optional(),
+            max: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        planner: z
+          .object({
+            model: z.string().optional(),
+            maxPlanPhases: z.number().int().min(1).optional(),
+            maxTasksPerPhase: z.number().int().min(1).optional(),
+            maxSubtasksPerTask: z.number().int().min(1).optional(),
+            maxRepairAttempts: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+        policy: z
+          .object({
+            allowAgents: z.array(z.string()).optional(),
+            allowCrossAgent: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        storage: z
+          .object({
+            dir: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     hooks: z
       .object({
         enabled: z.boolean().optional(),

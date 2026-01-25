@@ -3,16 +3,20 @@ import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../types";
 import type { ChatQueueItem } from "../ui-types";
 import type { ChatItem, MessageGroup } from "../types/chat-types";
+import type { ChatTask, ChatActivityLog } from "../types/task-types";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
 } from "../chat/message-normalizer";
+import { extractText } from "../chat/message-extract";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render";
 import { renderMarkdownSidebar } from "./markdown-sidebar";
+import { renderChatTaskSidebar } from "./chat-task-sidebar";
+import { icon } from "../icons";
 import "../components/resizable-divider";
 
 export type CompactionIndicatorStatus = {
@@ -39,6 +43,12 @@ export type ChatProps = {
   queue: ChatQueueItem[];
   connected: boolean;
   canSend: boolean;
+  audioInputSupported: boolean;
+  audioRecording: boolean;
+  audioInputError: string | null;
+  readAloudSupported: boolean;
+  readAloudActive: boolean;
+  readAloudError: string | null;
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
@@ -57,12 +67,23 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onAbort?: () => void;
+  onToggleAudioRecording: () => void;
+  onReadAloud: (text?: string | null) => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Task sidebar props
+  taskSidebarOpen?: boolean;
+  tasks?: ChatTask[];
+  activityLog?: ChatActivityLog[];
+  expandedTaskIds?: Set<string>;
+  taskCount?: number;
+  onOpenTaskSidebar?: () => void;
+  onCloseTaskSidebar?: () => void;
+  onToggleTaskExpanded?: (taskId: string) => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -94,9 +115,28 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   return nothing;
 }
 
+function resolveReadAloudText(props: ChatProps, maxMessages = 1): string | null {
+  const streamText = props.stream?.trim();
+  if (streamText) return streamText;
+  const collected: string[] = [];
+  for (let i = props.messages.length - 1; i >= 0; i -= 1) {
+    const message = props.messages[i];
+    const normalized = normalizeMessage(message);
+    const role = normalizeRoleForGrouping(normalized.role);
+    if (role !== "assistant") continue;
+    const text = extractText(message)?.trim();
+    if (!text) continue;
+    collected.push(text);
+    if (collected.length >= maxMessages) break;
+  }
+  if (collected.length === 0) return null;
+  return collected.reverse().join("\n\n");
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
+  const canSend = props.canSend && !props.audioRecording;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find(
     (row) => row.key === props.sessionKey,
@@ -111,6 +151,32 @@ export function renderChat(props: ChatProps) {
   const composePlaceholder = props.connected
     ? "Message (↩ to send, Shift+↩ for line breaks)"
     : "Connect to the gateway to start chatting…";
+
+  const readAloudText = resolveReadAloudText(props, 1);
+  const canReadAloud = props.readAloudSupported && Boolean(readAloudText);
+  const canRecordAudio = props.audioInputSupported && props.connected;
+  const audioStatus = props.audioRecording
+    ? "Listening…"
+    : props.audioInputError
+      ? props.audioInputError
+      : null;
+  const audioStatusClass = props.audioRecording
+    ? "is-recording"
+    : props.audioInputError
+      ? "is-error"
+      : "";
+  const recordTitle = !props.audioInputSupported
+    ? "Audio input is not supported in this browser"
+    : !props.connected
+      ? "Connect to start recording"
+      : props.audioRecording
+        ? "Stop recording"
+        : "Record audio";
+  const playTitle = !props.readAloudSupported
+    ? "Read-aloud is not supported in this browser"
+    : !readAloudText
+      ? "No assistant reply to play yet"
+      : "Play last reply";
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
@@ -171,7 +237,7 @@ export function renderChat(props: ChatProps) {
               aria-label="Exit focus mode"
               title="Exit focus mode"
             >
-              ✕
+              ${icon("x", { size: 16 })}
             </button>
           `
         : nothing}
@@ -223,7 +289,7 @@ export function renderChat(props: ChatProps) {
                         aria-label="Remove queued message"
                         @click=${() => props.onQueueRemove(item.id)}
                       >
-                        ✕
+                        ${icon("x", { size: 14 })}
                       </button>
                     </div>
                   `,
@@ -244,31 +310,110 @@ export function renderChat(props: ChatProps) {
               if (e.isComposing || e.keyCode === 229) return;
               if (e.shiftKey) return; // Allow Shift+Enter for line breaks
               if (!props.connected) return;
+              if (props.audioRecording) return;
               e.preventDefault();
               if (canCompose) props.onSend();
             }}
             @input=${(e: Event) =>
               props.onDraftChange((e.target as HTMLTextAreaElement).value)}
             placeholder=${composePlaceholder}
+            ?readonly=${props.audioRecording}
           ></textarea>
         </label>
         <div class="chat-compose__actions">
-          <button
-            class="btn"
-            ?disabled=${!props.connected || (!canAbort && props.sending)}
-            @click=${canAbort ? props.onAbort : props.onNewSession}
-          >
-            ${canAbort ? "Stop" : "New session"}
-          </button>
-          <button
-            class="btn primary"
-            ?disabled=${!props.connected}
-            @click=${props.onSend}
-          >
-            ${isBusy ? "Queue" : "Send"}
-          </button>
+          <div class="chat-compose__actions-group">
+            <button
+              class="chat-compose__record ${props.audioRecording ? "is-recording" : ""}"
+              type="button"
+              ?disabled=${!canRecordAudio}
+              @click=${props.onToggleAudioRecording}
+              title=${recordTitle}
+              aria-pressed=${props.audioRecording}
+            >
+              ${icon(props.audioRecording ? "stop" : "mic", { size: 16 })}
+              <span>${props.audioRecording ? "Stop" : "Record"}</span>
+            </button>
+            <button
+              class="chat-compose__play ${props.readAloudActive ? "is-playing" : ""}"
+              type="button"
+              ?disabled=${!canReadAloud}
+              @click=${() => props.onReadAloud(readAloudText)}
+              title=${playTitle}
+              aria-pressed=${props.readAloudActive}
+            >
+              ${icon(props.readAloudActive ? "pause" : "play", { size: 16 })}
+              <span>${props.readAloudActive ? "Pause" : "Play"}</span>
+            </button>
+            ${audioStatus
+              ? html`<div class="chat-compose__recording-pill ${audioStatusClass}">
+                  ${audioStatus}
+                </div>`
+              : nothing}
+            ${props.readAloudError
+              ? html`<div class="chat-compose__audio-error">${props.readAloudError}</div>`
+              : nothing}
+          </div>
+          <div class="chat-compose__actions-group chat-compose__actions-group--right">
+            ${isBusy && canAbort
+              ? html`
+                  <button
+                    class="chat-compose__abort"
+                    type="button"
+                    @click=${props.onAbort}
+                  >
+                    ${icon("stop", { size: 16 })}
+                    <span>Stop</span>
+                  </button>
+                `
+              : html`
+                  <button
+                    class="chat-compose__send"
+                    type="button"
+                    ?disabled=${!canSend || !props.draft.trim()}
+                    @click=${props.onSend}
+                  >
+                    ${icon("send", { size: 16 })}
+                    <span>${isBusy ? "Queue" : "Send"}</span>
+                  </button>
+                `}
+            <button
+              class="btn btn--secondary"
+              type="button"
+              @click=${props.onNewSession}
+              title="New session"
+            >
+              ${icon("plus", { size: 16 })}
+              <span>New</span>
+            </button>
+            ${props.onOpenTaskSidebar
+              ? html`
+                  <button
+                    class="chat-task-toggle ${props.taskSidebarOpen ? "chat-task-toggle--active" : ""}"
+                    type="button"
+                    @click=${props.onOpenTaskSidebar}
+                    title="View task breakdown"
+                  >
+                    ${icon("layers", { size: 16 })}
+                    ${(props.taskCount ?? 0) > 0
+                      ? html`<span class="chat-task-toggle__count">${props.taskCount}</span>`
+                      : nothing}
+                  </button>
+                `
+              : nothing}
+          </div>
         </div>
       </div>
+      ${props.taskSidebarOpen && props.onCloseTaskSidebar
+        ? renderChatTaskSidebar({
+            open: props.taskSidebarOpen,
+            tasks: props.tasks ?? [],
+            activityLog: props.activityLog ?? [],
+            expandedIds: props.expandedTaskIds ?? new Set(),
+            onClose: props.onCloseTaskSidebar,
+            onToggleExpanded: (taskId) => props.onToggleTaskExpanded?.(taskId),
+            onOpenToolOutput: props.onOpenSidebar,
+          })
+        : nothing}
     </section>
   `;
 }

@@ -42,6 +42,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "cron",
     "message",
     "gateway",
+    "coding_task",
     "agents_list",
     "sessions_list",
     "sessions_history",
@@ -61,7 +62,9 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: ["session_status"],
   },
   coding: {
-    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
+    // `coding_task` is an opt-in tool gated by config; include it in the coding profile so
+    // enabling it doesn't require switching profiles (profile allowlists are not additive).
+    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image", "coding_task"],
   },
   messaging: {
     allow: [
