@@ -17,6 +17,9 @@ vi.mock("grammy", () => ({
       public fileName?: string,
     ) {}
   },
+  GrammyError: class GrammyError extends Error {
+    description = "";
+  },
 }));
 
 describe("deliverReplies", () => {
