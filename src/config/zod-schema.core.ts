@@ -454,6 +454,26 @@ export const ToolsMediaSchema = z
   .strict()
   .optional();
 
+export const LinkModelSchema = z
+  .object({
+    type: z.literal("cli").optional(),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const ToolsLinksSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    scope: MediaUnderstandingScopeSchema,
+    maxLinks: z.number().int().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    models: z.array(LinkModelSchema).optional(),
+  })
+  .strict()
+  .optional();
+
 export const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
 
 export const ProviderCommandsSchema = z
