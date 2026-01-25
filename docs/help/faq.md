@@ -451,7 +451,12 @@ How it works in the cloud: the **Gateway runs on the server**, and you access it
 from your laptop/phone via the Control UI (or Tailscale/SSH). Your state + workspace
 live on the server, so treat the host as the source of truth and back it up.
 
+You can pair **nodes** (Mac/iOS/Android/headless) to that cloud Gateway to access
+local screen/camera/canvas or run commands on your laptop while keeping the
+Gateway in the cloud.
+
 Hub: [Platforms](/platforms). Remote access: [Gateway remote](/gateway/remote).
+Nodes: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
 
 ### Can I ask Clawd to update itself?
 
