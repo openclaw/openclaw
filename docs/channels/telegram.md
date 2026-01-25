@@ -525,6 +525,7 @@ Provider options:
 - `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
+- `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
