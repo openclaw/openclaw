@@ -19,6 +19,7 @@ Docs: https://docs.clawd.bot
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Heartbeat: normalize target identifiers for consistent routing.
+- TUI: reload history after gateway reconnect to restore session state. (#1663)
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Exec: keep approvals for elevated ask unless full mode. (#1616) Thanks @ivancasco.
 - Agents: auto-compact on context overflow prompt errors before failing. (#1627) Thanks @rodrigouroz.
