@@ -96,13 +96,22 @@ export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolP
 
 type ToolPolicyConfig = {
   allow?: string[];
+  alsoAllow?: string[];
   deny?: string[];
   profile?: string;
 };
 
+function unionAllow(base?: string[], extra?: string[]) {
+  if (!Array.isArray(extra) || extra.length === 0) return base;
+  if (!Array.isArray(base) || base.length === 0) return base;
+  return Array.from(new Set([...base, ...extra]));
+}
+
 function pickToolPolicy(config?: ToolPolicyConfig): SandboxToolPolicy | undefined {
   if (!config) return undefined;
-  const allow = Array.isArray(config.allow) ? config.allow : undefined;
+  const allow = Array.isArray(config.allow)
+    ? unionAllow(config.allow, config.alsoAllow)
+    : undefined;
   const deny = Array.isArray(config.deny) ? config.deny : undefined;
   if (!allow && !deny) return undefined;
   return { allow, deny };
@@ -195,6 +204,17 @@ export function resolveEffectiveToolPolicy(params: {
     agentProviderPolicy: pickToolPolicy(agentProviderPolicy),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
+    // alsoAllow is applied at the profile stage (to avoid being filtered out early).
+    profileAlsoAllow: Array.isArray(agentTools?.alsoAllow)
+      ? agentTools?.alsoAllow
+      : Array.isArray(globalTools?.alsoAllow)
+        ? globalTools?.alsoAllow
+        : undefined,
+    providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
+      ? agentProviderPolicy?.alsoAllow
+      : Array.isArray(providerPolicy?.alsoAllow)
+        ? providerPolicy?.alsoAllow
+        : undefined,
   };
 }
 
