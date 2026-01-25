@@ -19,6 +19,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 describe("extractGeminiCliCredentials", () => {
+  const normalizePath = (value: string) => value.replace(/\\/g, "/");
   const FAKE_CLIENT_ID = "123456789-abcdef.apps.googleusercontent.com";
   const FAKE_CLIENT_SECRET = "GOCSPX-FakeSecretValue123";
   const FAKE_OAUTH2_CONTENT = `
@@ -57,8 +58,9 @@ describe("extractGeminiCliCredentials", () => {
     process.env.PATH = fakeBinDir;
 
     mockExistsSync.mockImplementation((p: string) => {
-      if (p === fakeGeminiPath) return true;
-      if (p === fakeOauth2Path) return true;
+      const normalized = normalizePath(p);
+      if (normalized === normalizePath(fakeGeminiPath)) return true;
+      if (normalized === normalizePath(fakeOauth2Path)) return true;
       return false;
     });
     mockRealpathSync.mockReturnValue(fakeResolvedPath);
@@ -81,7 +83,9 @@ describe("extractGeminiCliCredentials", () => {
 
     process.env.PATH = fakeBinDir;
 
-    mockExistsSync.mockImplementation((p: string) => p === fakeGeminiPath);
+    mockExistsSync.mockImplementation(
+      (p: string) => normalizePath(p) === normalizePath(fakeGeminiPath),
+    );
     mockRealpathSync.mockReturnValue(fakeResolvedPath);
     mockReaddirSync.mockReturnValue([]); // Empty directory for recursive search
 
@@ -100,8 +104,9 @@ describe("extractGeminiCliCredentials", () => {
     process.env.PATH = fakeBinDir;
 
     mockExistsSync.mockImplementation((p: string) => {
-      if (p === fakeGeminiPath) return true;
-      if (p === fakeOauth2Path) return true;
+      const normalized = normalizePath(p);
+      if (normalized === normalizePath(fakeGeminiPath)) return true;
+      if (normalized === normalizePath(fakeOauth2Path)) return true;
       return false;
     });
     mockRealpathSync.mockReturnValue(fakeResolvedPath);
@@ -122,8 +127,9 @@ describe("extractGeminiCliCredentials", () => {
     process.env.PATH = fakeBinDir;
 
     mockExistsSync.mockImplementation((p: string) => {
-      if (p === fakeGeminiPath) return true;
-      if (p === fakeOauth2Path) return true;
+      const normalized = normalizePath(p);
+      if (normalized === normalizePath(fakeGeminiPath)) return true;
+      if (normalized === normalizePath(fakeOauth2Path)) return true;
       return false;
     });
     mockRealpathSync.mockReturnValue(fakeResolvedPath);
