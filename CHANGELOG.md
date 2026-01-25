@@ -7,6 +7,9 @@ Docs: https://docs.clawd.bot
 ### Changes
 - TBD.
 
+### Fixes
+- Gateway: harden reverse proxy handling for local-client detection and unauthenticated proxied connects. (#1795) Thanks @orlyjamie.
+
 ## 2026.1.24-2
 
 ### Fixes
