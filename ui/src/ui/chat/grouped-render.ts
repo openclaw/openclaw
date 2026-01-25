@@ -191,7 +191,7 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
 
 function isAvatarUrl(value: string): boolean {
   return (
-    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith('/') // Relative paths from avatar endpoint
+    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/") // Relative paths from avatar endpoint
   );
 }
 
