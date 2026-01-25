@@ -339,6 +339,7 @@ export async function startGatewayServer(
       ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
       : undefined,
     wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
+    tailscaleMode,
     logDiscovery,
   });
   bonjourStop = discovery.bonjourStop;

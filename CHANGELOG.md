@@ -21,7 +21,6 @@ Docs: https://docs.clawd.bot
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Web UI: show Stop button during active runs, swap back to New session when idle. (#1664) Thanks @ndbroadbent.
-- Web UI: keep raw config edits from toggling channel save state; enable save/apply on raw changes only. (#1673) Thanks @Glucksberg.
 - Heartbeat: normalize target identifiers for consistent routing.
 - TUI: reload history after gateway reconnect to restore session state. (#1663)
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
@@ -29,7 +28,7 @@ Docs: https://docs.clawd.bot
 - Agents: auto-compact on context overflow prompt errors before failing. (#1627) Thanks @rodrigouroz.
 - Agents: use the active auth profile for auto-compaction recovery.
 - Models: default missing custom provider fields so minimal configs are accepted.
-- Gateway: honor trusted proxy client IPs for local pairing + HTTP checks. (#1654) Thanks @ndbroadbent.
+- Gateway: skip Tailscale DNS probing when tailscale.mode is off. (#1671)
 - Gateway: reduce log noise for late invokes + remote node probes; debounce skills refresh. (#1607) Thanks @petter-b.
 - macOS: default direct-transport `ws://` URLs to port 18789; document `gateway.remote.transport`. (#1603) Thanks @ngutman.
 - Voice Call: return stream TwiML for outbound conversation calls on initial Twilio webhook. (#1634)
