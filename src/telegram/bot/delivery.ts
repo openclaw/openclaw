@@ -36,8 +36,11 @@ export async function deliverReplies(params: {
   chunkMode?: ChunkMode;
   /** Callback invoked before sending a voice message to switch typing indicator. */
   onVoiceRecording?: () => Promise<void> | void;
+  /** Controls whether link previews are shown. Default: true (previews enabled). */
+  linkPreview?: boolean;
 }) {
-  const { replies, chatId, runtime, bot, replyToMode, textLimit, messageThreadId } = params;
+  const { replies, chatId, runtime, bot, replyToMode, textLimit, messageThreadId, linkPreview } =
+    params;
   const chunkMode = params.chunkMode ?? "length";
   const threadParams = buildTelegramThreadParams(messageThreadId);
   let hasReplied = false;
@@ -85,6 +88,7 @@ export async function deliverReplies(params: {
           messageThreadId,
           textMode: "html",
           plainText: chunk.text,
+          linkPreview,
         });
         if (replyToId && !hasReplied) {
           hasReplied = true;
@@ -180,6 +184,7 @@ export async function deliverReplies(params: {
             messageThreadId,
             textMode: "html",
             plainText: chunk.text,
+            linkPreview,
           });
           if (replyToId && !hasReplied) {
             hasReplied = true;
@@ -248,17 +253,22 @@ async function sendTelegramText(
     messageThreadId?: number;
     textMode?: "markdown" | "html";
     plainText?: string;
+    linkPreview?: boolean;
   },
 ): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     messageThreadId: opts?.messageThreadId,
   });
+  // Add link_preview_options when link preview is disabled.
+  const linkPreviewEnabled = opts?.linkPreview ?? true;
+  const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   try {
     const res = await bot.api.sendMessage(chatId, htmlText, {
       parse_mode: "HTML",
+      ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
       ...baseParams,
     });
     return res.message_id;
@@ -268,6 +278,7 @@ async function sendTelegramText(
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
       const fallbackText = opts?.plainText ?? text;
       const res = await bot.api.sendMessage(chatId, fallbackText, {
+        ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
         ...baseParams,
       });
       return res.message_id;

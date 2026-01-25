@@ -151,6 +151,7 @@ export const dispatchTelegramMessage = async ({
           tableMode,
           chunkMode,
           onVoiceRecording: sendRecordVoice,
+          linkPreview: telegramCfg.linkPreview,
         });
       },
       onError: (err, info) => {

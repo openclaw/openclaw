@@ -42,6 +42,8 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  /** Controls whether link previews are shown. Default: true (previews enabled). */
+  linkPreview?: boolean;
 };
 
 type TelegramSendResult = {
@@ -198,20 +200,21 @@ export async function sendMessageTelegram(
   });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
 
+  // Resolve link preview setting: explicit opt > config > default (enabled).
+  const linkPreviewEnabled = opts.linkPreview ?? account.config.linkPreview ?? true;
+  const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
+
   const sendTelegramText = async (
     rawText: string,
     params?: Record<string, unknown>,
     fallbackText?: string,
   ) => {
     const htmlText = renderHtmlText(rawText);
-    const sendParams = params
-      ? {
-          parse_mode: "HTML" as const,
-          ...params,
-        }
-      : {
-          parse_mode: "HTML" as const,
-        };
+    const sendParams = {
+      parse_mode: "HTML" as const,
+      ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+      ...params,
+    };
     const res = await request(() => api.sendMessage(chatId, htmlText, sendParams), "message").catch(
       async (err) => {
         // Telegram rejects malformed HTML (e.g., unsupported tags or entities).

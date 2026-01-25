@@ -108,4 +108,60 @@ describe("deliverReplies", () => {
       }),
     );
   });
+
+  it("includes link_preview_options when linkPreview is false", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 3,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Check https://example.com" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      linkPreview: false,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+  });
+
+  it("does not include link_preview_options when linkPreview is true", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 4,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Check https://example.com" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      linkPreview: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.not.objectContaining({
+        link_preview_options: expect.anything(),
+      }),
+    );
+  });
 });
