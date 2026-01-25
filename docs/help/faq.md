@@ -60,6 +60,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
   - [The bot freezes while doing heavy work. How do I offload that?](#the-bot-freezes-while-doing-heavy-work-how-do-i-offload-that)
+  - [Cron or reminders do not fire. What should I check?](#cron-or-reminders-do-not-fire-what-should-i-check)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
   - [Can Clawdbot run tasks on a schedule or continuously in the background?](#can-clawdbot-run-tasks-on-a-schedule-or-continuously-in-the-background)
   - [Can I run Apple/macOS-only skills from Linux?](#can-i-run-applemacos-only-skills-from-linux)
@@ -69,6 +70,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Is there a dedicated sandboxing doc?](#is-there-a-dedicated-sandboxing-doc)
   - [How do I bind a host folder into the sandbox?](#how-do-i-bind-a-host-folder-into-the-sandbox)
   - [How does memory work?](#how-does-memory-work)
+  - [Memory keeps forgetting things. How do I make it stick?](#memory-keeps-forgetting-things-how-do-i-make-it-stick)
   - [Does semantic memory search require an OpenAI API key?](#does-semantic-memory-search-require-an-openai-api-key)
 - [Where things live on disk](#where-things-live-on-disk)
   - [Is all data used with Clawdbot saved locally?](#is-all-data-used-with-clawdbot-saved-locally)
@@ -84,12 +86,14 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Why do I need a token on localhost now?](#why-do-i-need-a-token-on-localhost-now)
   - [Do I have to restart after changing config?](#do-i-have-to-restart-after-changing-config)
   - [How do I enable web search (and web fetch)?](#how-do-i-enable-web-search-and-web-fetch)
+  - [config.apply wiped my config. How do I recover and avoid this?](#configapply-wiped-my-config-how-do-i-recover-and-avoid-this)
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
   - [Can the Clawdbot browser run headless?](#can-the-clawdbot-browser-run-headless)
   - [How do I use Brave for browser control?](#how-do-i-use-brave-for-browser-control)
 - [Remote gateways + nodes](#remote-gateways-nodes)
   - [How do commands propagate between Telegram, the gateway, and nodes?](#how-do-commands-propagate-between-telegram-the-gateway-and-nodes)
   - [How can my agent access my computer if the Gateway is hosted remotely?](#how-can-my-agent-access-my-computer-if-the-gateway-is-hosted-remotely)
+  - [Tailscale is connected but I get no replies. What now?](#tailscale-is-connected-but-i-get-no-replies-what-now)
   - [Can two Clawdbots talk to each other (local + VPS)?](#can-two-clawdbots-talk-to-each-other-local--vps)
   - [Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?](#is-there-a-benefit-to-using-a-node-on-my-personal-laptop-instead-of-ssh-from-a-vps)
   - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
@@ -154,6 +158,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I closed my terminal on Windows - how do I restart Clawdbot?](#i-closed-my-terminal-on-windows--how-do-i-restart-clawdbot)
   - [The Gateway is up but replies never arrive. What should I check?](#the-gateway-is-up-but-replies-never-arrive-what-should-i-check)
   - ["Disconnected from gateway: no reason" - what now?](#disconnected-from-gateway-no-reason---what-now)
+  - [Telegram setMyCommands fails with network errors. What should I check?](#telegram-setmycommands-fails-with-network-errors-what-should-i-check)
+  - [TUI shows no output. What should I check?](#tui-shows-no-output-what-should-i-check)
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `clawdbot gateway restart` vs `clawdbot gateway`](#eli5-clawdbot-gateway-restart-vs-clawdbot-gateway)
   - [What’s the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
@@ -854,6 +860,24 @@ cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
 Docs: [Sub-agents](/tools/subagents).
 
+### Cron or reminders do not fire. What should I check?
+
+Cron runs inside the Gateway process. If the Gateway is not running continuously,
+scheduled jobs will not run.
+
+Checklist:
+- Confirm cron is enabled (`cron.enabled`) and `CLAWDBOT_SKIP_CRON` is not set.
+- Check the Gateway is running 24/7 (no sleep/restarts).
+- Verify timezone settings for the job (`--tz` vs host timezone).
+
+Debug:
+```bash
+clawdbot cron run <jobId> --force
+clawdbot cron runs --id <jobId> --limit 50
+```
+
+Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat).
+
 ### How do I install skills on Linux?
 
 Use **ClawdHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn’t available on Linux.
@@ -983,6 +1007,15 @@ Clawdbot memory is just Markdown files in the agent workspace:
 Clawdbot also runs a **silent pre-compaction memory flush** to remind the model
 to write durable notes before auto-compaction. This only runs when the workspace
 is writable (read-only sandboxes skip it). See [Memory](/concepts/memory).
+
+### Memory keeps forgetting things. How do I make it stick?
+
+Ask the bot to **write the fact to memory**. Long-term notes belong in `MEMORY.md`,
+short-term context goes into `memory/YYYY-MM-DD.md`.
+
+If it keeps forgetting, verify the Gateway is using the same workspace on every run.
+
+Docs: [Memory](/concepts/memory), [Agent workspace](/concepts/agent-workspace).
 
 ### Does semantic memory search require an OpenAI API key?
 
@@ -1257,6 +1290,20 @@ pair devices you trust, and review [Security](/gateway/security).
 
 Docs: [Nodes](/nodes), [Gateway protocol](/gateway/protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
 
+### Tailscale is connected but I get no replies. What now?
+
+Check the basics:
+- Gateway is running: `clawdbot gateway status`
+- Gateway health: `clawdbot status`
+- Channel health: `clawdbot channels status`
+
+Then verify auth and routing:
+- If you use Tailscale Serve, make sure `gateway.auth.allowTailscale` is set correctly.
+- If you connect via SSH tunnel, confirm the local tunnel is up and points at the right port.
+- Confirm your allowlists (DM or group) include your account.
+
+Docs: [Tailscale](/gateway/tailscale), [Remote access](/gateway/remote), [Channels](/channels).
+
 ### Can two Clawdbots talk to each other (local + VPS)?
 
 Yes. There is no built-in "bot-to-bot" bridge, but you can wire it up in a few
@@ -1319,6 +1366,21 @@ A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
 ### Is there an API / RPC way to apply config?
 
 Yes. `config.apply` validates + writes the full config and restarts the Gateway as part of the operation.
+
+### config.apply wiped my config. How do I recover and avoid this?
+
+`config.apply` replaces the **entire config**. If you send a partial object, everything
+else is removed.
+
+Recover:
+- Restore from backup (git or a copied `~/.clawdbot/clawdbot.json`).
+- If you have no backup, re-run `clawdbot doctor` and reconfigure channels/models.
+
+Avoid it:
+- Use `clawdbot config set` for small changes.
+- Use `clawdbot configure` for interactive edits.
+
+Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
 
 ### What’s a minimal “sane” config for a first install?
 
@@ -2228,6 +2290,35 @@ clawdbot logs --follow
 ```
 
 Docs: [Dashboard](/web/dashboard), [Remote access](/gateway/remote), [Troubleshooting](/gateway/troubleshooting).
+
+### Telegram setMyCommands fails with network errors. What should I check?
+
+Start with logs and channel status:
+
+```bash
+clawdbot channels status
+clawdbot channels logs --channel telegram
+```
+
+If you are on a VPS or behind a proxy, confirm outbound HTTPS is allowed and DNS works.
+If the Gateway is remote, make sure you are looking at logs on the Gateway host.
+
+Docs: [Telegram](/channels/telegram), [Channel troubleshooting](/channels/troubleshooting).
+
+### TUI shows no output. What should I check?
+
+First confirm the Gateway is reachable and the agent can run:
+
+```bash
+clawdbot status
+clawdbot models status
+clawdbot logs --follow
+```
+
+In the TUI, use `/status` to see the current state. If you expect replies in a chat
+channel, make sure delivery is enabled (`/deliver on`).
+
+Docs: [TUI](/tui), [Slash commands](/tools/slash-commands).
 
 ### How do I completely stop then start the Gateway?
 
