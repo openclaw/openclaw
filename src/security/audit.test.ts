@@ -53,6 +53,30 @@ describe("security audit", () => {
     ).toBe(true);
   });
 
+  it("warns when loopback control UI lacks trusted proxies", async () => {
+    const cfg: ClawdbotConfig = {
+      gateway: {
+        bind: "loopback",
+        controlUi: { enabled: true },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.trusted_proxies_missing",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
   it("flags logging.redactSensitive=off", async () => {
     const cfg: ClawdbotConfig = {
       logging: { redactSensitive: "off" },
