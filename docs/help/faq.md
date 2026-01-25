@@ -172,6 +172,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Security and access control](#security-and-access-control)
   - [Is it safe to expose Clawdbot to inbound DMs?](#is-it-safe-to-expose-clawdbot-to-inbound-dms)
   - [Is prompt injection only a concern for public bots?](#is-prompt-injection-only-a-concern-for-public-bots)
+  - [Should my bot have its own email GitHub account or phone number](#should-my-bot-have-its-own-email-github-account-or-phone-number)
   - [Can I use cheaper models for personal assistant tasks?](#can-i-use-cheaper-models-for-personal-assistant-tasks)
   - [I ran `/start` in Telegram but didn’t get a pairing code](#i-ran-start-in-telegram-but-didnt-get-a-pairing-code)
   - [WhatsApp: will it message my contacts? How does pairing work?](#whatsapp-will-it-message-my-contacts-how-does-pairing-work)
@@ -2448,6 +2449,17 @@ exfiltrating context or calling tools on your behalf. Reduce the blast radius by
 - sandboxing and strict tool allowlists
 
 Details: [Security](/gateway/security).
+
+### Should my bot have its own email GitHub account or phone number
+
+Yes, for most setups. Isolating the bot with separate accounts and phone numbers
+reduces the blast radius if something goes wrong. This also makes it easier to rotate
+credentials or revoke access without impacting your personal accounts.
+
+Start small. Give access only to the tools and accounts you actually need, and expand
+later if required.
+
+Docs: [Security](/gateway/security), [Pairing](/start/pairing).
 
 ### Can I use cheaper models for personal assistant tasks
 
