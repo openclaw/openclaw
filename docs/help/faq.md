@@ -24,6 +24,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I try the latest bits?](#how-do-i-try-the-latest-bits)
   - [How long does install and onboarding usually take?](#how-long-does-install-and-onboarding-usually-take)
   - [Installer stuck? How do I get more feedback?](#installer-stuck-how-do-i-get-more-feedback)
+  - [Windows install says git not found or clawdbot not recognized](#windows-install-says-git-not-found-or-clawdbot-not-recognized)
   - [The docs didn’t answer my question - how do I get a better answer?](#the-docs-didnt-answer-my-question-how-do-i-get-a-better-answer)
   - [How do I install Clawdbot on Linux?](#how-do-i-install-clawdbot-on-linux)
   - [How do I install Clawdbot on a VPS?](#how-do-i-install-clawdbot-on-a-vps)
@@ -39,6 +40,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Is AWS Bedrock supported?](#is-aws-bedrock-supported)
   - [How does Codex auth work?](#how-does-codex-auth-work)
   - [Do you support OpenAI subscription auth (Codex OAuth)?](#do-you-support-openai-subscription-auth-codex-oauth)
+  - [How do I set up Gemini CLI OAuth](#how-do-i-set-up-gemini-cli-oauth)
   - [Is a local model OK for casual chats?](#is-a-local-model-ok-for-casual-chats)
   - [How do I keep hosted model traffic in a specific region?](#how-do-i-keep-hosted-model-traffic-in-a-specific-region)
   - [Do I have to buy a Mac Mini to install this?](#do-i-have-to-buy-a-mac-mini-to-install-this)
@@ -511,6 +513,26 @@ curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git --verb
 
 More options: [Installer flags](/install/installer).
 
+### Windows install says git not found or clawdbot not recognized
+
+Two common Windows issues:
+
+**1) npm error spawn git / git not found**
+- Install **Git for Windows** and make sure `git` is on your PATH.
+- Close and reopen PowerShell, then re-run the installer.
+
+**2) clawdbot is not recognized after install**
+- Your npm global bin folder is not on PATH.
+- Check the path:
+  ```powershell
+  npm config get prefix
+  ```
+- Ensure `<prefix>\\bin` is on PATH (on most systems it is `%AppData%\\npm`).
+- Close and reopen PowerShell after updating PATH.
+
+If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
+Docs: [Windows](/platforms/windows).
+
 ### The docs didnt answer my question how do I get a better answer
 
 Use the **hackable (git) install** so you have the full source and docs locally, then ask
@@ -663,6 +685,16 @@ existing Codex CLI login (`~/.codex/auth.json`) on the gateway host. The onboard
 can import the CLI login or run the OAuth flow for you.
 
 See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
+
+### How do I set up Gemini CLI OAuth
+
+Gemini CLI uses a **plugin auth flow**, not a client id or secret in `clawdbot.json`.
+
+Steps:
+1) Enable the plugin: `clawdbot plugins enable google-gemini-cli-auth`
+2) Login: `clawdbot models auth login --provider google-gemini-cli --set-default`
+
+This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
 ### Is a local model OK for casual chats
 
