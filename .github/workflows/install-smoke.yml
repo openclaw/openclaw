@@ -14,11 +14,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
-          version: 10
-      - name: Enable Corepack
-        run: corepack enable
+          version: 10.23.0
+          run_install: false
 
       - name: Install pnpm deps (minimal)
         run: pnpm install --ignore-scripts --frozen-lockfile

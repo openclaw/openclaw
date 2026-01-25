@@ -32,19 +32,20 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+          run_install: false
+
       - name: Runtime versions
         run: |
           node -v
           npm -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies (frozen)
         env:
@@ -108,6 +109,12 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+          run_install: false
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -118,15 +125,10 @@ jobs:
           node -v
           npm -v
           bun -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies
         env:
@@ -212,6 +214,12 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+          run_install: false
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -222,15 +230,10 @@ jobs:
           node -v
           npm -v
           bun -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies
         env:
@@ -279,19 +282,20 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+          run_install: false
+
       - name: Runtime versions
         run: |
           node -v
           npm -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies
         env:
