@@ -12,12 +12,7 @@ import {
   SYNTHETIC_BASE_URL,
   SYNTHETIC_MODEL_CATALOG,
 } from "./synthetic-models.js";
-import {
-  buildVeniceModelDefinition,
-  discoverVeniceModels,
-  VENICE_BASE_URL,
-  VENICE_MODEL_CATALOG,
-} from "./venice-models.js";
+import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 
 type ModelsConfig = NonNullable<ClawdbotConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];

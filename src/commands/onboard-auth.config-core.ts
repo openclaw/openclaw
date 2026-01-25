@@ -353,9 +353,7 @@ export function applyVeniceProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   const veniceModels = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   const mergedModels = [
     ...existingModels,
-    ...veniceModels.filter(
-      (model) => !existingModels.some((existing) => existing.id === model.id),
-    ),
+    ...veniceModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
   ];
   const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
     string,
