@@ -7,10 +7,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Table of contents
 
-- [What is Clawdbot?](#what-is-clawdbot)
-  - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
-  - [What’s the value proposition?](#whats-the-value-proposition)
 - [Quick start and first-run setup](#quick-start-and-first-run-setup)
+  - [I'm stuck — what's the fastest way to get unstuck?](#im-stuck--whats-the-fastest-way-to-get-unstuck)
   - [What’s the recommended way to install and set up Clawdbot?](#whats-the-recommended-way-to-install-and-set-up-clawdbot)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
@@ -50,6 +48,9 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What’s the difference between the hackable (git) install and npm install?](#whats-the-difference-between-the-hackable-git-install-and-npm-install)
   - [Can I switch between npm and git installs later?](#can-i-switch-between-npm-and-git-installs-later)
   - [Should I run the Gateway on my laptop or a VPS?](#should-i-run-the-gateway-on-my-laptop-or-a-vps)
+- [What is Clawdbot?](#what-is-clawdbot)
+  - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
+  - [What’s the value proposition?](#whats-the-value-proposition)
 - [Skills and automation](#skills-and-automation)
   - [How do I customize skills without keeping the repo dirty?](#how-do-i-customize-skills-without-keeping-the-repo-dirty)
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
@@ -205,35 +206,35 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    ```
    Asks the running gateway for a full snapshot (WS-only). See [Health](/gateway/health).
 
-## What is Clawdbot?
-
-### What is Clawdbot, in one paragraph?
-
-Clawdbot is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Google Chat, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
-
-### What’s the value proposition?
-
-Clawdbot is not “just a Claude wrapper.” It’s a **local-first control plane** that lets you run a
-capable assistant on **your own hardware**, reachable from the chat apps you already use, with
-stateful sessions, memory, and tools — without handing control of your workflows to a hosted
-SaaS.
-
-Highlights:
-- **Your devices, your data:** run the Gateway wherever you want (Mac, Linux, VPS) and keep the
-  workspace + session history local.  
-- **Real channels, not a web sandbox:** WhatsApp/Telegram/Slack/Discord/Signal/iMessage/etc,
-  plus mobile voice and Canvas on supported platforms.  
-- **Model-agnostic:** use Anthropic, OpenAI, MiniMax, OpenRouter, etc., with per‑agent routing
-  and failover.  
-- **Local-only option:** run local models so **all data can stay on your device** if you want.
-- **Multi-agent routing:** separate agents per channel, account, or task, each with its own
-  workspace and defaults.  
-- **Open source and hackable:** inspect, extend, and self-host without vendor lock‑in.
-
-Docs: [Gateway](/gateway), [Channels](/channels), [Multi‑agent](/concepts/multi-agent),
-[Memory](/concepts/memory).
-
 ## Quick start and first-run setup
+
+### I'm stuck — what's the fastest way to get unstuck?
+
+Use a local AI agent that can **see your machine**. That is far more effective than asking
+in Discord, because most "I'm stuck" cases are **local config or environment issues** that
+remote helpers cannot inspect.
+
+- **Claude Code**: https://www.anthropic.com/claude-code/
+- **OpenAI Codex**: https://openai.com/codex/
+
+These tools can read the repo, run commands, inspect logs, and help fix your machine-level
+setup (PATH, services, permissions, auth files). Give them the **full source checkout** via
+the hackable (git) install:
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git
+```
+
+This installs Clawdbot **from a git checkout**, so the agent can read the code + docs and
+reason about the exact version you are running. You can always switch back to stable later
+by re-running the installer without `--install-method git`.
+
+If you discover a real bug or fix, please file a GitHub issue or send a PR:
+https://github.com/clawdbot/clawdbot/issues
+https://github.com/clawdbot/clawdbot/pulls
+
+Quick debug loop: [First 60 seconds if something's broken](#first-60-seconds-if-somethings-broken).
+Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
 ### What’s the recommended way to install and set up Clawdbot?
 
@@ -701,6 +702,34 @@ lowest friction and you’re okay with sleep/restarts, run it locally.
 **Clawdbot-specific note:** WhatsApp/Telegram/Slack/Mattermost (plugin)/Discord all work fine from a VPS. The only real trade-off is **headless browser** vs a visible window. See [Browser](/tools/browser).
 
 **Recommended default:** VPS if you had gateway disconnects before. Local is great when you’re actively using the Mac and want local file access or UI automation with a visible browser.
+
+## What is Clawdbot?
+
+### What is Clawdbot, in one paragraph?
+
+Clawdbot is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Google Chat, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
+
+### What’s the value proposition?
+
+Clawdbot is not “just a Claude wrapper.” It’s a **local-first control plane** that lets you run a
+capable assistant on **your own hardware**, reachable from the chat apps you already use, with
+stateful sessions, memory, and tools — without handing control of your workflows to a hosted
+SaaS.
+
+Highlights:
+- **Your devices, your data:** run the Gateway wherever you want (Mac, Linux, VPS) and keep the
+  workspace + session history local.  
+- **Real channels, not a web sandbox:** WhatsApp/Telegram/Slack/Discord/Signal/iMessage/etc,
+  plus mobile voice and Canvas on supported platforms.  
+- **Model-agnostic:** use Anthropic, OpenAI, MiniMax, OpenRouter, etc., with per‑agent routing
+  and failover.  
+- **Local-only option:** run local models so **all data can stay on your device** if you want.
+- **Multi-agent routing:** separate agents per channel, account, or task, each with its own
+  workspace and defaults.  
+- **Open source and hackable:** inspect, extend, and self-host without vendor lock‑in.
+
+Docs: [Gateway](/gateway), [Channels](/channels), [Multi‑agent](/concepts/multi-agent),
+[Memory](/concepts/memory).
 
 ## Skills and automation
 
