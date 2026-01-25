@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../agents/model-catalog.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
@@ -984,6 +989,26 @@ export async function runCapability(params: {
       outputs: [],
       decision: { capability, outcome: "disabled", attachments: [] },
     };
+  }
+
+  // Skip image understanding when the primary model supports vision natively.
+  // The image will be injected directly into the model context instead.
+  if (capability === "image" && params.activeModel?.provider) {
+    const catalog = await loadModelCatalog({ config: cfg });
+    const entry = findModelInCatalog(
+      catalog,
+      params.activeModel.provider,
+      params.activeModel.model ?? "",
+    );
+    if (modelSupportsVision(entry)) {
+      if (shouldLogVerbose()) {
+        logVerbose("Skipping image understanding: primary model supports vision natively");
+      }
+      return {
+        outputs: [],
+        decision: { capability, outcome: "skipped", attachments: [] },
+      };
+    }
   }
 
   const attachmentPolicy = config?.attachments;
