@@ -74,6 +74,28 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
 };
 
+export type SlackOverseerChannelsConfig = {
+  /** Channel for activity notifications (status changes). e.g., "#cb-activity" or "C0123456789". */
+  activity?: string;
+  /** Channel for escalations and goal completions. e.g., "#cb-notifications". */
+  notifications?: string;
+  /** Channel for interactive questions/decisions. e.g., "#cb-questions". */
+  questions?: string;
+};
+
+export type SlackOverseerConfig = {
+  /** Enable Overseer → Slack integration. Default: false. */
+  enabled?: boolean;
+  /** Channel configuration for Overseer notifications. */
+  channels?: SlackOverseerChannelsConfig;
+  /** User IDs to @mention on escalations. */
+  escalationMentions?: string[];
+  /** Timeout for decisions in milliseconds. Default: 1800000 (30 minutes). */
+  decisionTimeoutMs?: number;
+  /** Include a link to the dashboard in messages. Default: true. */
+  includeDashboardLink?: boolean;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -139,6 +161,8 @@ export type SlackAccountConfig = {
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Overseer integration settings for this Slack account. */
+  overseer?: SlackOverseerConfig;
 };
 
 export type SlackConfig = {
