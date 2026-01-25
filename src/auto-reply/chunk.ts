@@ -177,69 +177,39 @@ export function chunkByNewline(
 export function chunkByParagraph(text: string, limit: number): string[] {
   if (!text) return [];
   if (limit <= 0) return [text];
-  if (text.length <= limit) return [text];
 
   // Normalize to \n so blank line detection is consistent.
   const normalized = text.replace(/\r\n?/g, "\n");
 
-  const parts: string[] = [];
-  const seps: string[] = [];
+  // Fast-path: if there are no blank-line paragraph separators, do not split.
+  // (We *do not* early-return based on `limit` — newline mode is about paragraph
+  // boundaries, not only exceeding a length limit.)
+  const paragraphRe = /\n[\t ]*\n+/;
+  if (!paragraphRe.test(normalized)) {
+    return normalized.length <= limit ? [normalized] : chunkText(normalized, limit);
+  }
 
+  const parts: string[] = [];
   const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
   let lastIndex = 0;
   for (const match of normalized.matchAll(re)) {
     const idx = match.index ?? 0;
     parts.push(normalized.slice(lastIndex, idx));
-    seps.push(match[0]);
     lastIndex = idx + match[0].length;
   }
   parts.push(normalized.slice(lastIndex));
 
   const chunks: string[] = [];
-  let current = "";
-  let pendingSep = "";
-
-  const flush = () => {
-    const out = current.trimEnd();
-    if (out) chunks.push(out);
-    current = "";
-  };
-
-  for (let i = 0; i < parts.length; i++) {
-    const paragraph = parts[i] ?? "";
-    if (!paragraph.trim() && i === parts.length - 1) break;
-
-    const prefix = pendingSep;
-    pendingSep = seps[i] ?? "";
-
-    const candidate = current
-      ? `${current}${prefix}${paragraph}`
-      : // Cap leading blank lines so we never exceed `limit` with just prefixes.
-        `${prefix.slice(0, Math.max(0, limit - 1))}${paragraph}`;
-
-    if (candidate.length <= limit) {
-      current = candidate;
-      continue;
+  for (const part of parts) {
+    const paragraph = part.replace(/\s+$/g, "");
+    if (!paragraph.trim()) continue;
+    if (paragraph.length <= limit) {
+      chunks.push(paragraph);
+    } else {
+      chunks.push(...chunkText(paragraph, limit));
     }
-
-    // Can't fit this paragraph into the current chunk.
-    if (current) flush();
-
-    const paragraphWithPrefix = `${prefix}${paragraph}`;
-    if (paragraphWithPrefix.length <= limit) {
-      current = paragraphWithPrefix;
-      continue;
-    }
-
-    // Paragraph itself is too long; split it by length (preferring newlines/whitespace).
-    const prefixCap = prefix.slice(0, Math.max(0, limit - 1));
-    const remainingLimit = Math.max(1, limit - prefixCap.length);
-    const [first, ...rest] = chunkText(paragraph, remainingLimit);
-    if (first) chunks.push(prefixCap + first);
-    chunks.push(...rest);
   }
 
-  if (current.trim()) flush();
   return chunks;
 }
 
