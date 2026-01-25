@@ -643,6 +643,52 @@ public actor GatewayChannelActor {
         return Data() // Should not happen, but tolerate empty payloads.
     }
 
+    public func send(method: String, params: [String: AnyCodable]?) async throws {
+        do {
+            try await self.connect()
+        } catch {
+            throw self.wrap(error, context: "gateway connect")
+        }
+        let id = UUID().uuidString
+        let paramsObject: ProtoAnyCodable? = params.map { entries in
+            let dict = entries.reduce(into: [String: ProtoAnyCodable]()) { dict, entry in
+                dict[entry.key] = ProtoAnyCodable(entry.value.value)
+            }
+            return ProtoAnyCodable(dict)
+        }
+        let frame = RequestFrame(
+            type: "req",
+            id: id,
+            method: method,
+            params: paramsObject)
+        let data: Data
+        do {
+            data = try self.encoder.encode(frame)
+        } catch {
+            self.logger.error(
+                "gateway send encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+        guard let task = self.task else {
+            throw NSError(
+                domain: "Gateway",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
+        }
+        do {
+            try await task.send(.data(data))
+        } catch {
+            let wrapped = self.wrap(error, context: "gateway send \(method)")
+            self.connected = false
+            self.task?.cancel(with: .goingAway, reason: nil)
+            Task { [weak self] in
+                guard let self else { return }
+                await self.scheduleReconnect()
+            }
+            throw wrapped
+        }
+    }
+
     // Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
         if let urlError = error as? URLError {
