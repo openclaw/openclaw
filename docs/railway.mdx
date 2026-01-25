@@ -3,6 +3,16 @@ title: Deploy on Railway
 ---
 
 Deploy Clawdbot on Railway with a one-click template and finish setup in your browser.
+This is the easiest “no terminal on the server” path: Railway runs the Gateway for you,
+and you configure everything via the `/setup` web wizard.
+
+## Quick checklist (new users)
+
+1) Click **Deploy on Railway** (below).
+2) Add a **Volume** mounted at `/data`.
+3) Set the required **Variables** (at least `SETUP_PASSWORD`).
+4) Enable **HTTP Proxy** on port `8080`.
+5) Open `https://<your-railway-domain>/setup` and finish the wizard.
 
 ## One-click deploy
 
