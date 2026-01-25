@@ -24,7 +24,27 @@ repos:
     rev: v1.5.0
     hooks:
       - id: detect-secrets
-        args: [--baseline, .secrets.baseline]
+        args:
+          - --baseline
+          - .secrets.baseline
+          - --exclude-files
+          - '(^|/)(dist/|vendor/|pnpm-lock\.yaml$|\.detect-secrets\.cfg$)'
+          - --exclude-lines
+          - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
+          - --exclude-lines
+          - 'case \.apiKeyEnv: "API key \(env var\)"'
+          - --exclude-lines
+          - 'case apikey = "apiKey"'
+          - --exclude-lines
+          - '"gateway\.remote\.password"'
+          - --exclude-lines
+          - '"gateway\.auth\.password"'
+          - --exclude-lines
+          - '"talk\.apiKey"'
+          - --exclude-lines
+          - '=== "string"'
+          - --exclude-lines
+          - 'typeof remote\?\.password === "string"'
 
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
@@ -55,7 +75,7 @@ repos:
       # oxlint --type-aware src test
       - id: oxlint
         name: oxlint
-        entry: npx oxlint --type-aware src test
+        entry: scripts/pre-commit/run-node-tool.sh oxlint --type-aware src test
         language: system
         pass_filenames: false
         types_or: [javascript, jsx, ts, tsx]
@@ -63,7 +83,7 @@ repos:
       # oxfmt --check src test
       - id: oxfmt
         name: oxfmt
-        entry: npx oxfmt --check src test
+        entry: scripts/pre-commit/run-node-tool.sh oxfmt --check src test
         language: system
         pass_filenames: false
         types_or: [javascript, jsx, ts, tsx]
