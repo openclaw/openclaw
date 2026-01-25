@@ -18,6 +18,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
+import { buildInlineKeyboard } from "../send.js";
 import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
 
@@ -81,8 +82,18 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     if (mediaList.length === 0) {
+      // Extract Telegram buttons from channelData
+      const telegramData = reply.channelData?.telegram as
+        | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+        | undefined;
+      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
+
       const chunks = chunkText(reply.text || "");
-      for (const chunk of chunks) {
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (!chunk) continue;
+        // Only attach buttons to the first chunk
+        const shouldAttachButtons = i === 0 && replyMarkup;
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
           replyToMessageId:
             replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
@@ -90,6 +101,7 @@ export async function deliverReplies(params: {
           textMode: "html",
           plainText: chunk.text,
           linkPreview,
+          replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
         if (replyToId && !hasReplied) {
           hasReplied = true;
@@ -322,6 +334,7 @@ async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
+    replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
@@ -337,6 +350,7 @@ async function sendTelegramText(
     const res = await bot.api.sendMessage(chatId, htmlText, {
       parse_mode: "HTML",
       ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+      ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
       ...baseParams,
     });
     return res.message_id;
@@ -347,6 +361,7 @@ async function sendTelegramText(
       const fallbackText = opts?.plainText ?? text;
       const res = await bot.api.sendMessage(chatId, fallbackText, {
         ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
         ...baseParams,
       });
       return res.message_id;
