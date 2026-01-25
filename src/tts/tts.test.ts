@@ -437,16 +437,25 @@ describe("tts", () => {
   describe("maybeApplyTtsToPayload", () => {
     const baseCfg = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-      messages: { tts: { enabled: true, onlyWhenInboundAudio: true } },
+      messages: {
+        tts: {
+          enabled: true,
+          onlyWhenInboundAudio: true,
+          provider: "openai",
+          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+        },
+      },
     };
 
     it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
       const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
       process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const spy = vi.spyOn(tts, "textToSpeech").mockResolvedValue({
-        success: false,
-        error: "nope",
-      });
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
 
       const payload = { text: "Hello world" };
       const result = await maybeApplyTtsToPayload({
@@ -457,30 +466,33 @@ describe("tts", () => {
       });
 
       expect(result).toBe(payload);
-      expect(spy).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
 
-      spy.mockRestore();
+      globalThis.fetch = originalFetch;
       process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
     });
 
     it("attempts auto-TTS when inbound audio gating is on and the message is audio", async () => {
       const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
       process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const spy = vi.spyOn(tts, "textToSpeech").mockResolvedValue({
-        success: false,
-        error: "nope",
-      });
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      await maybeApplyTtsToPayload({
+      const result = await maybeApplyTtsToPayload({
         payload: { text: "Hello world" },
         cfg: baseCfg,
         kind: "final",
         inboundAudio: true,
       });
 
-      expect(spy).toHaveBeenCalledTimes(1);
+      expect(result.mediaUrl).toBeDefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      spy.mockRestore();
+      globalThis.fetch = originalFetch;
       process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
     });
   });
