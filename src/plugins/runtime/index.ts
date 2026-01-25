@@ -1,6 +1,13 @@
 import { createRequire } from "node:module";
 
-import { chunkMarkdownText, chunkText, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import {
+  chunkByNewline,
+  chunkMarkdownText,
+  chunkText,
+  chunkTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
 import {
   hasControlCommand,
   isControlCommandMessage,
@@ -160,8 +167,11 @@ export function createPluginRuntime(): PluginRuntime {
     },
     channel: {
       text: {
+        chunkByNewline,
         chunkMarkdownText,
         chunkText,
+        chunkTextWithMode,
+        resolveChunkMode,
         resolveTextChunkLimit,
         hasControlCommand,
         resolveMarkdownTableMode,

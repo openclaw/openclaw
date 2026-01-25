@@ -212,7 +212,8 @@ export async function deliverOutboundPayloads(params: {
       results.push(await handler.sendText(text));
       return;
     }
-    for (const chunk of handler.chunker(text, textLimit)) {
+    const chunks = handler.chunker(text, textLimit);
+    for (const chunk of chunks) {
       throwIfAborted(abortSignal);
       results.push(await handler.sendText(chunk));
     }

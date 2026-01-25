@@ -7,7 +7,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   listDeliverableMessageChannels,
 } from "../../utils/message-channel.js";
-import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
+import { resolveChunkMode, resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
@@ -68,6 +68,17 @@ export function resolveBlockStreamingChunking(
     fallbackLimit: providerChunkLimit,
   });
   const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
+
+  // BlueBubbles-only: if chunkMode is "newline", use newline-based streaming
+  const channelChunkMode = resolveChunkMode(cfg, providerKey, accountId);
+  if (channelChunkMode === "newline") {
+    // For newline mode: use very low minChars to flush quickly on newlines
+    const minChars = Math.max(1, Math.floor(chunkCfg?.minChars ?? 1));
+    const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? textLimit));
+    const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
+    return { minChars, maxChars, breakPreference: "newline" };
+  }
+
   const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX));
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
   const minFallback = DEFAULT_BLOCK_STREAM_MIN;
@@ -91,6 +102,13 @@ export function resolveBlockStreamingCoalescing(
   },
 ): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
+
+  // BlueBubbles-only: when chunkMode is "newline", disable coalescing to send each line immediately
+  const channelChunkMode = resolveChunkMode(cfg, providerKey, accountId);
+  if (channelChunkMode === "newline") {
+    return undefined;
+  }
+
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
     ? getChannelDock(providerId)?.outbound?.textChunkLimit
