@@ -782,10 +782,6 @@
       "destination": "/plugin"
     },
     {
-      "source": "/railway/",
-      "destination": "/railway"
-    },
-    {
       "source": "/install/railway",
       "destination": "/railway"
     },
