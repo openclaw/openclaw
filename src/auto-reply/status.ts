@@ -17,7 +17,7 @@ import {
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
-  isTtsEnabled,
+  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
 } from "../tts/tts.js";
@@ -252,15 +252,23 @@ const formatMediaUnderstandingLine = (decisions?: MediaUnderstandingDecision[]) 
   return `📎 Media: ${parts.join(" · ")}`;
 };
 
-const formatVoiceModeLine = (config?: ClawdbotConfig): string | null => {
+const formatVoiceModeLine = (
+  config?: ClawdbotConfig,
+  sessionEntry?: SessionEntry,
+): string | null => {
   if (!config) return null;
   const ttsConfig = resolveTtsConfig(config);
   const prefsPath = resolveTtsPrefsPath(ttsConfig);
-  if (!isTtsEnabled(ttsConfig, prefsPath)) return null;
+  const autoMode = resolveTtsAutoMode({
+    config: ttsConfig,
+    prefsPath,
+    sessionAuto: sessionEntry?.ttsAuto,
+  });
+  if (autoMode === "off") return null;
   const provider = getTtsProvider(ttsConfig, prefsPath);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
-  return `🔊 Voice: on · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
+  return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -398,7 +406,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config);
+  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
 
   return [
     versionLine,
