@@ -120,6 +120,13 @@ You can add custom commands to the menu via config:
 }
 ```
 
+## Troubleshooting
+
+- `setMyCommands failed` in logs usually means outbound HTTPS/DNS is blocked to `api.telegram.org`.
+- If you see `sendMessage` or `sendChatAction` failures, check IPv6 routing and DNS.
+
+More help: [Channel troubleshooting](/channels/troubleshooting).
+
 Notes:
 - Custom commands are **menu entries only**; Clawdbot does not implement them unless you handle them elsewhere.
 - Command names are normalized (leading `/` stripped, lowercased) and must match `a-z`, `0-9`, `_` (1–32 chars).

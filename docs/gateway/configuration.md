@@ -46,6 +46,9 @@ better forms without hard-coding config knowledge.
 Use `config.apply` to validate + write the full config and restart the Gateway in one step.
 It writes a restart sentinel and pings the last active session after the Gateway comes back.
 
+Warning: `config.apply` replaces the **entire config**. If you want to change only a few keys,
+use `config.patch` or `clawdbot config set`. Keep a backup of `~/.clawdbot/clawdbot.json`.
+
 Params:
 - `raw` (string) — JSON5 payload for the entire config
 - `baseHash` (optional) — config hash from `config.get` (required when a config already exists)

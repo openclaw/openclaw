@@ -1013,7 +1013,9 @@ is writable (read-only sandboxes skip it). See [Memory](/concepts/memory).
 Ask the bot to **write the fact to memory**. Long-term notes belong in `MEMORY.md`,
 short-term context goes into `memory/YYYY-MM-DD.md`.
 
-If it keeps forgetting, verify the Gateway is using the same workspace on every run.
+This is still an area we are improving. It helps to remind the model to store memories;
+it will know what to do. If it keeps forgetting, verify the Gateway is using the same
+workspace on every run.
 
 Docs: [Memory](/concepts/memory), [Agent workspace](/concepts/agent-workspace).
 
@@ -1375,6 +1377,8 @@ else is removed.
 Recover:
 - Restore from backup (git or a copied `~/.clawdbot/clawdbot.json`).
 - If you have no backup, re-run `clawdbot doctor` and reconfigure channels/models.
+- If this was unexpected, file a bug and include your last known config or any backup.
+- A local coding agent can often reconstruct a working config from logs or history.
 
 Avoid it:
 - Use `clawdbot config set` for small changes.
