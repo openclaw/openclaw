@@ -17,7 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
-import { resolveTelegramAccount } from "./accounts.js";
+import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 import { renderTelegramHtmlText } from "./format.js";
@@ -75,6 +75,25 @@ function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
     const detail = redactSensitiveText(formatUncaughtError(err.error ?? err));
     diagLogger.warn(`telegram http error (${label}): ${detail}`);
   };
+}
+
+function resolveTelegramClientOptions(
+  account: ResolvedTelegramAccount,
+): ApiClientOptions | undefined {
+  const proxyUrl = account.config.proxy?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const fetchImpl = resolveTelegramFetch(proxyFetch);
+  const timeoutSeconds =
+    typeof account.config.timeoutSeconds === "number" &&
+    Number.isFinite(account.config.timeoutSeconds)
+      ? Math.max(1, Math.floor(account.config.timeoutSeconds))
+      : undefined;
+  return fetchImpl || timeoutSeconds
+    ? {
+        ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
+        ...(timeoutSeconds ? { timeoutSeconds } : {}),
+      }
+    : undefined;
 }
 
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
@@ -163,21 +182,7 @@ export async function sendMessageTelegram(
   const chatId = normalizeChatId(target.chatId);
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
-  const proxyUrl = account.config.proxy;
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl as string) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch);
-  const timeoutSeconds =
-    typeof account.config.timeoutSeconds === "number" &&
-    Number.isFinite(account.config.timeoutSeconds)
-      ? Math.max(1, Math.floor(account.config.timeoutSeconds))
-      : undefined;
-  const client: ApiClientOptions | undefined =
-    fetchImpl || timeoutSeconds
-      ? {
-          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
-          ...(timeoutSeconds ? { timeoutSeconds } : {}),
-        }
-      : undefined;
+  const client = resolveTelegramClientOptions(account);
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
   const mediaUrl = opts.mediaUrl?.trim();
   const replyMarkup = buildInlineKeyboard(opts.buttons);
@@ -419,12 +424,7 @@ export async function reactMessageTelegram(
   const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
-  const proxyUrl = account.config.proxy;
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl as string) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch);
-  const client: ApiClientOptions | undefined = fetchImpl
-    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-    : undefined;
+  const client = resolveTelegramClientOptions(account);
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
@@ -473,12 +473,7 @@ export async function deleteMessageTelegram(
   const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
-  const proxyUrl = account.config.proxy;
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl as string) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch);
-  const client: ApiClientOptions | undefined = fetchImpl
-    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-    : undefined;
+  const client = resolveTelegramClientOptions(account);
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
