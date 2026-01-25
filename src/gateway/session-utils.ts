@@ -401,10 +401,7 @@ function mergeSessionEntryIntoCombined(params: {
     combined[canonicalKey] = {
       ...existing,
       ...entry,
-      spawnedBy: canonicalizeSpawnedByForAgent(
-        agentId,
-        entry.spawnedBy ?? existing?.spawnedBy,
-      ),
+      spawnedBy: canonicalizeSpawnedByForAgent(agentId, entry.spawnedBy ?? existing?.spawnedBy),
     };
   }
 }
