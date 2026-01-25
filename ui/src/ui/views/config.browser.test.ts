@@ -38,7 +38,7 @@ describe("config view", () => {
     onSubsectionChange: vi.fn(),
   });
 
-  it("disables save when form is unsafe", () => {
+  it("allows save when form is unsafe", () => {
     const container = document.createElement("div");
     render(
       renderConfig({
@@ -55,6 +55,28 @@ describe("config view", () => {
         uiHints: {},
         formMode: "form",
         formValue: { mixed: "x" },
+      }),
+      container,
+    );
+
+    const saveButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((btn) => btn.textContent?.trim() === "Save") as
+      | HTMLButtonElement
+      | undefined;
+    expect(saveButton).not.toBeUndefined();
+    expect(saveButton?.disabled).toBe(false);
+  });
+
+  it("disables save when schema is missing", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        schema: null,
+        formMode: "form",
+        formValue: { gateway: { mode: "local" } },
+        originalValue: {},
       }),
       container,
     );
