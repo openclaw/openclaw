@@ -4,13 +4,16 @@ import type {
   ReactionType,
   ReactionTypeEmoji,
 } from "@grammyjs/types";
-import { type ApiClientOptions, Bot, InputFile } from "grammy";
+import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
@@ -59,6 +62,19 @@ type TelegramReactionOpts = {
 };
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+const diagLogger = createSubsystemLogger("telegram/diagnostic");
+
+function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
+  const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
+  if (!enabled) {
+    return () => {};
+  }
+  return (label: string, err: unknown) => {
+    if (!(err instanceof HttpError)) return;
+    const detail = redactSensitiveText(formatUncaughtError(err.error ?? err));
+    diagLogger.warn(`telegram http error (${label}): ${detail}`);
+  };
+}
 
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
   if (explicit?.trim()) return explicit.trim();
@@ -178,7 +194,12 @@ export async function sendMessageTelegram(
     configRetry: account.config.retry,
     verbose: opts.verbose,
   });
-
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    request(fn, label).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
   const wrapChatNotFound = (err: unknown) => {
     if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) return err;
     return new Error(
@@ -217,30 +238,31 @@ export async function sendMessageTelegram(
       parse_mode: "HTML" as const,
       ...baseParams,
     };
-    const res = await request(() => api.sendMessage(chatId, htmlText, sendParams), "message").catch(
-      async (err) => {
-        // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
-        // When that happens, fall back to plain text so the message still delivers.
-        const errText = formatErrorMessage(err);
-        if (PARSE_ERR_RE.test(errText)) {
-          if (opts.verbose) {
-            console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
-          }
-          const fallback = fallbackText ?? rawText;
-          const plainParams = hasBaseParams ? baseParams : undefined;
-          return await request(
-            () =>
-              plainParams
-                ? api.sendMessage(chatId, fallback, plainParams)
-                : api.sendMessage(chatId, fallback),
-            "message-plain",
-          ).catch((err2) => {
-            throw wrapChatNotFound(err2);
-          });
+    const res = await requestWithDiag(
+      () => api.sendMessage(chatId, htmlText, sendParams),
+      "message",
+    ).catch(async (err) => {
+      // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
+      // When that happens, fall back to plain text so the message still delivers.
+      const errText = formatErrorMessage(err);
+      if (PARSE_ERR_RE.test(errText)) {
+        if (opts.verbose) {
+          console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
         }
-        throw wrapChatNotFound(err);
-      },
-    );
+        const fallback = fallbackText ?? rawText;
+        const plainParams = hasBaseParams ? baseParams : undefined;
+        return await requestWithDiag(
+          () =>
+            plainParams
+              ? api.sendMessage(chatId, fallback, plainParams)
+              : api.sendMessage(chatId, fallback),
+          "message-plain",
+        ).catch((err2) => {
+          throw wrapChatNotFound(err2);
+        });
+      }
+      throw wrapChatNotFound(err);
+    });
     return res;
   };
 
@@ -277,19 +299,20 @@ export async function sendMessageTelegram(
       | Awaited<ReturnType<typeof api.sendAnimation>>
       | Awaited<ReturnType<typeof api.sendDocument>>;
     if (isGif) {
-      result = await request(() => api.sendAnimation(chatId, file, mediaParams), "animation").catch(
-        (err) => {
-          throw wrapChatNotFound(err);
-        },
-      );
+      result = await requestWithDiag(
+        () => api.sendAnimation(chatId, file, mediaParams),
+        "animation",
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
     } else if (kind === "image") {
-      result = await request(() => api.sendPhoto(chatId, file, mediaParams), "photo").catch(
+      result = await requestWithDiag(() => api.sendPhoto(chatId, file, mediaParams), "photo").catch(
         (err) => {
           throw wrapChatNotFound(err);
         },
       );
     } else if (kind === "video") {
-      result = await request(() => api.sendVideo(chatId, file, mediaParams), "video").catch(
+      result = await requestWithDiag(() => api.sendVideo(chatId, file, mediaParams), "video").catch(
         (err) => {
           throw wrapChatNotFound(err);
         },
@@ -302,24 +325,27 @@ export async function sendMessageTelegram(
         logFallback: logVerbose,
       });
       if (useVoice) {
-        result = await request(() => api.sendVoice(chatId, file, mediaParams), "voice").catch(
-          (err) => {
-            throw wrapChatNotFound(err);
-          },
-        );
+        result = await requestWithDiag(
+          () => api.sendVoice(chatId, file, mediaParams),
+          "voice",
+        ).catch((err) => {
+          throw wrapChatNotFound(err);
+        });
       } else {
-        result = await request(() => api.sendAudio(chatId, file, mediaParams), "audio").catch(
-          (err) => {
-            throw wrapChatNotFound(err);
-          },
-        );
+        result = await requestWithDiag(
+          () => api.sendAudio(chatId, file, mediaParams),
+          "audio",
+        ).catch((err) => {
+          throw wrapChatNotFound(err);
+        });
       }
     } else {
-      result = await request(() => api.sendDocument(chatId, file, mediaParams), "document").catch(
-        (err) => {
-          throw wrapChatNotFound(err);
-        },
-      );
+      result = await requestWithDiag(
+        () => api.sendDocument(chatId, file, mediaParams),
+        "document",
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
     }
     const mediaMessageId = String(result?.message_id ?? "unknown");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
@@ -400,6 +426,12 @@ export async function reactMessageTelegram(
     configRetry: account.config.retry,
     verbose: opts.verbose,
   });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    request(fn, label).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
   // Build the reaction array. We cast emoji to the grammY union type since
@@ -411,7 +443,7 @@ export async function reactMessageTelegram(
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
-  await request(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
+  await requestWithDiag(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
   return { ok: true };
 }
 
@@ -446,7 +478,13 @@ export async function deleteMessageTelegram(
     configRetry: account.config.retry,
     verbose: opts.verbose,
   });
-  await request(() => api.deleteMessage(chatId, messageId), "deleteMessage");
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    request(fn, label).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+  await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
   logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
   return { ok: true };
 }
