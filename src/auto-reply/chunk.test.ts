@@ -343,6 +343,17 @@ describe("chunkMarkdownTextWithMode", () => {
     const text = "```js\nconst a = 1;\nconst b = 2;\n```\nAfter";
     expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([text]);
   });
+
+  it("does not split on blank lines inside a fenced code block", () => {
+    const text = "```python\ndef my_function():\n    x = 1\n\n    y = 2\n    return x + y\n```";
+    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([text]);
+  });
+
+  it("splits on blank lines between a code fence and following paragraph", () => {
+    const fence = "```python\ndef my_function():\n    x = 1\n\n    y = 2\n    return x + y\n```";
+    const text = `${fence}\n\nAfter`;
+    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([fence, "After"]);
+  });
 });
 
 describe("resolveChunkMode", () => {
