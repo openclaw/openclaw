@@ -632,9 +632,10 @@ Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
 Yes. You can authenticate with **Claude Code CLI OAuth** or a **setup-token**
 instead of an API key. This is the subscription path.
 
-Important: you must verify with Anthropic that this usage is allowed under
-their subscription policy and terms. If you want the most explicit, supported
-path, use an Anthropic API key.
+Claude Pro/Max subscriptions **do not include an API key**, so this is the
+correct approach for subscription accounts. Important: you must verify with
+Anthropic that this usage is allowed under their subscription policy and terms.
+If you want the most explicit, supported path, use an Anthropic API key.
 
 ### How does Anthropic setuptoken auth work
 
