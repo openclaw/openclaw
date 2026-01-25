@@ -131,12 +131,12 @@ All logging configuration lives under `logging` in `~/.clawdbot/clawdbot.json`.
 
 ### Redaction
 
-Tool summaries can redact sensitive tokens before they hit the console:
+Clawdbot can redact common secrets (passwords, tokens, API keys) before they hit logs:
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: list of regex strings to override the default set
 
-Redaction affects **console output only** and does not alter file logs.
+Redaction applies to both **console output** and **file logs**.
 
 ## Diagnostics + OpenTelemetry
 

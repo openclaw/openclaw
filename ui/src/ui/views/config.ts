@@ -1164,6 +1164,21 @@ export function renderConfig(props: ConfigProps) {
                   applyDiagnosticsFilters(dialog);
                 }}
               />
+              <button
+                type="button"
+                class="config-diagnostics-dialog__search-clear"
+                aria-label="Clear filter"
+                @click=${(e: Event) => {
+                  const dialog = document.getElementById(diagnosticsDialogId) as HTMLElement | null;
+                  const input = (e.currentTarget as HTMLElement).previousElementSibling as HTMLInputElement | null;
+                  if (!dialog || !input) return;
+                  input.value = "";
+                  dialog.setAttribute("data-diag-query", "");
+                  applyDiagnosticsFilters(dialog);
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
             </label>
             <div class="config-diagnostics-dialog__filters" role="group" aria-label="Severity filter">
               <button

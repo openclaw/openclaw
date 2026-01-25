@@ -1,4 +1,6 @@
+import { promises as fs } from "node:fs";
 import { loadConfig } from "../../config/config.js";
+import { detectMime } from "../../media/mime.js";
 import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
@@ -65,6 +67,10 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.convert": async ({ params, respond }) => {
     const text = typeof params.text === "string" ? params.text.trim() : "";
+    const returnBase64 =
+      typeof (params as Record<string, unknown>)?.returnBase64 === "boolean"
+        ? ((params as Record<string, unknown>).returnBase64 as boolean)
+        : false;
     if (!text) {
       respond(
         false,
@@ -78,6 +84,25 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
       const result = await textToSpeech({ text, cfg, channel });
       if (result.success && result.audioPath) {
+        if (returnBase64) {
+          try {
+            const buffer = await fs.readFile(result.audioPath);
+            const audioMime =
+              (await detectMime({ buffer, filePath: result.audioPath })) ?? "audio/mpeg";
+            respond(true, {
+              audioBase64: buffer.toString("base64"),
+              audioMime,
+              provider: result.provider,
+              outputFormat: result.outputFormat,
+              voiceCompatible: result.voiceCompatible,
+            });
+            void fs.rm(result.audioPath, { force: true });
+            return;
+          } catch (err) {
+            respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+            return;
+          }
+        }
         respond(true, {
           audioPath: result.audioPath,
           provider: result.provider,

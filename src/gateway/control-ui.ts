@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
-import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
@@ -19,8 +18,6 @@ export type ControlUiRequestOptions = {
   basePath?: string;
   config?: ClawdbotConfig;
   agentId?: string;
-  resolvedAuth?: ResolvedGatewayAuth;
-  trustedProxies?: string[];
 };
 
 function resolveControlUiRoot(): string | null {
@@ -173,26 +170,20 @@ interface ControlUiInjectionOpts {
   basePath: string;
   assistantName?: string;
   assistantAvatar?: string;
-  gatewayPassword?: string;
 }
 
 function injectControlUiConfig(html: string, opts: ControlUiInjectionOpts): string {
-  const { basePath, assistantName, assistantAvatar, gatewayPassword } = opts;
-  const parts = [
-    `window.__CLAWDBOT_CONTROL_UI_BASE_PATH__=${JSON.stringify(basePath)};`,
+  const { basePath, assistantName, assistantAvatar } = opts;
+  const script =
+    `<script>` +
+    `window.__CLAWDBOT_CONTROL_UI_BASE_PATH__=${JSON.stringify(basePath)};` +
     `window.__CLAWDBOT_ASSISTANT_NAME__=${JSON.stringify(
       assistantName ?? DEFAULT_ASSISTANT_IDENTITY.name,
-    )};`,
+    )};` +
     `window.__CLAWDBOT_ASSISTANT_AVATAR__=${JSON.stringify(
       assistantAvatar ?? DEFAULT_ASSISTANT_IDENTITY.avatar,
-    )};`,
-  ];
-  if (gatewayPassword) {
-    parts.push(
-      `window.__CLAWDBOT_CONTROL_UI_DEFAULT_GATEWAY_PASSWORD__=${JSON.stringify(gatewayPassword)};`,
-    );
-  }
-  const script = `<script>${parts.join("")}</script>`;
+    )};` +
+    `</script>`;
   // Check if already injected
   if (html.includes("__CLAWDBOT_ASSISTANT_NAME__")) return html;
   const headClose = html.indexOf("</head>");
@@ -206,11 +197,10 @@ interface ServeIndexHtmlOpts {
   basePath: string;
   config?: ClawdbotConfig;
   agentId?: string;
-  gatewayPassword?: string;
 }
 
 function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndexHtmlOpts) {
-  const { basePath, config, agentId, gatewayPassword } = opts;
+  const { basePath, config, agentId } = opts;
   const identity = config
     ? resolveAssistantIdentity({ cfg: config, agentId })
     : DEFAULT_ASSISTANT_IDENTITY;
@@ -232,7 +222,6 @@ function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndex
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue,
-      gatewayPassword,
     }),
   );
 }
@@ -311,18 +300,12 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  // For local requests, auto-populate the gateway password so the UI can
-  // connect without manual configuration.
-  const isLocal = isLocalDirectRequest(req, opts?.trustedProxies);
-  const gatewayPassword = isLocal ? opts?.resolvedAuth?.password : undefined;
-
   if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
     if (path.basename(filePath) === "index.html") {
       serveIndexHtml(res, filePath, {
         basePath,
         config: opts?.config,
         agentId: opts?.agentId,
-        gatewayPassword,
       });
       return true;
     }
@@ -337,7 +320,6 @@ export function handleControlUiHttpRequest(
       basePath,
       config: opts?.config,
       agentId: opts?.agentId,
-      gatewayPassword,
     });
     return true;
   }

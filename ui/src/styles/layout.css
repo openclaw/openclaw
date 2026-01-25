@@ -8,7 +8,7 @@
   height: 100vh;
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
-  grid-template-rows: var(--shell-topbar-height) 1fr;
+  grid-template-rows: minmax(var(--shell-topbar-height), auto) 1fr;
   grid-template-areas:
     "topbar topbar"
     "nav content";
@@ -71,7 +71,7 @@
   align-items: center;
   gap: 16px;
   padding: 0 20px;
-  height: var(--shell-topbar-height);
+  min-height: var(--shell-topbar-height);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(
     180deg,
@@ -506,6 +506,7 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
   padding: 0 6px;
   overflow: hidden;
   transform-origin: top center;
@@ -513,7 +514,7 @@
     transform var(--shell-focus-duration) var(--shell-focus-ease),
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
-  max-height: 90px;
+  max-height: 160px;
 }
 
 .shell--chat-focus .content-header {
@@ -539,6 +540,7 @@
 .page-meta {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* Chat view: header and controls side by side */
@@ -644,6 +646,7 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+    padding: 12px 20px;
   }
 
   .topbar-status {

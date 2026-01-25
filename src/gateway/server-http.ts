@@ -274,8 +274,6 @@ export function createGatewayHttpServer(opts: {
           handleControlUiHttpRequest(req, res, {
             basePath: controlUiBasePath,
             config: configSnapshot,
-            resolvedAuth,
-            trustedProxies,
           })
         )
           return;

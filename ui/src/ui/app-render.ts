@@ -598,6 +598,10 @@ export function renderApp(state: AppViewState) {
               readAloudSupported: state.readAloudSupported,
               readAloudActive: state.readAloudActive,
               readAloudError: state.readAloudError,
+              ttsLoading: state.ttsLoading,
+              ttsError: state.ttsError,
+              ttsProviders: state.ttsProviders,
+              ttsActiveProvider: state.ttsActiveProvider,
               disabledReason: chatDisabledReason,
               error: state.lastError,
               sessions: state.sessionsResult,
@@ -620,6 +624,7 @@ export function renderApp(state: AppViewState) {
               onAbort: () => void state.handleAbortChat(),
               onToggleAudioRecording: () => state.handleToggleAudioRecording(),
               onReadAloud: (text) => state.handleReadAloudToggle(text),
+              onTtsProviderChange: (provider) => state.handleTtsProviderChange(provider),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
               onNewSession: () =>
                 state.handleSendChat("/new", { restoreDraft: true }),

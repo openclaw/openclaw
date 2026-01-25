@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../gateway";
 import { buildAgentMainSessionKey } from "../../../../src/routing/session-key.js";
 import { toast } from "../components/toast";
+import { showDangerConfirmDialog } from "../components/confirm-dialog";
 import { toNumber } from "../format";
 import type { SessionsListResult } from "../types";
 
@@ -91,8 +92,10 @@ export async function patchSession(
 export async function deleteSession(state: SessionsState, key: string) {
   if (!state.client || !state.connected) return;
   if (state.sessionsLoading) return;
-  const confirmed = window.confirm(
-    `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
+  const confirmed = await showDangerConfirmDialog(
+    "Delete Session",
+    `Delete session "${key}"? This will delete the session entry and archive its transcript.`,
+    "Delete",
   );
   if (!confirmed) return;
   state.sessionsLoading = true;

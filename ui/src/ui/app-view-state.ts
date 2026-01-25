@@ -23,6 +23,7 @@ import type {
 import type { ChatQueueItem, CronFormState, GraphDragState, GraphViewport } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import type { SkillMessage } from "./controllers/skills";
+import type { TtsProviderId, TtsProviderInfo } from "./controllers/tts";
 import type {
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
@@ -73,6 +74,10 @@ export type AppViewState = {
   readAloudSupported: boolean;
   readAloudActive: boolean;
   readAloudError: string | null;
+  ttsLoading: boolean;
+  ttsError: string | null;
+  ttsProviders: TtsProviderInfo[];
+  ttsActiveProvider: TtsProviderId | null;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   devicesLoading: boolean;
@@ -259,6 +264,7 @@ export type AppViewState = {
   handleAbortChat: () => Promise<void>;
   handleToggleAudioRecording: () => void;
   handleReadAloudToggle: (text?: string | null) => void;
+  handleTtsProviderChange: (provider: TtsProviderId) => void;
   removeQueuedMessage: (id: string) => void;
   handleLogsToggleSidebar: () => void;
   handleLogsToggleFilters: () => void;

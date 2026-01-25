@@ -4,6 +4,7 @@ import type { SessionsListResult } from "../types";
 import type { ChatQueueItem } from "../ui-types";
 import type { ChatItem, MessageGroup } from "../types/chat-types";
 import type { ChatTask, ChatActivityLog } from "../types/task-types";
+import type { TtsProviderId, TtsProviderInfo } from "../controllers/tts";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
@@ -49,6 +50,10 @@ export type ChatProps = {
   readAloudSupported: boolean;
   readAloudActive: boolean;
   readAloudError: string | null;
+  ttsLoading: boolean;
+  ttsError: string | null;
+  ttsProviders: TtsProviderInfo[];
+  ttsActiveProvider: TtsProviderId | null;
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
@@ -69,6 +74,7 @@ export type ChatProps = {
   onAbort?: () => void;
   onToggleAudioRecording: () => void;
   onReadAloud: (text?: string | null) => void;
+  onTtsProviderChange: (provider: TtsProviderId) => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
   onOpenSidebar?: (content: string) => void;
@@ -87,6 +93,48 @@ export type ChatProps = {
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
+
+/**
+ * Render skeleton loading state for chat messages
+ */
+function renderChatSkeleton() {
+  return html`
+    <div class="chat-skeleton" aria-busy="true" aria-label="Loading chat history">
+      <!-- User message skeleton -->
+      <div class="chat-skeleton__bubble chat-skeleton__bubble--user">
+        <div class="chat-skeleton__avatar skeleton skeleton--circle"></div>
+        <div class="chat-skeleton__content">
+          <div class="skeleton skeleton--text" style="width: 60%;"></div>
+          <div class="skeleton skeleton--text" style="width: 40%;"></div>
+        </div>
+      </div>
+      <!-- Assistant message skeleton -->
+      <div class="chat-skeleton__bubble chat-skeleton__bubble--assistant">
+        <div class="chat-skeleton__avatar skeleton skeleton--circle"></div>
+        <div class="chat-skeleton__content">
+          <div class="skeleton skeleton--text" style="width: 80%;"></div>
+          <div class="skeleton skeleton--text" style="width: 70%;"></div>
+          <div class="skeleton skeleton--text" style="width: 50%;"></div>
+        </div>
+      </div>
+      <!-- Another user message skeleton -->
+      <div class="chat-skeleton__bubble chat-skeleton__bubble--user">
+        <div class="chat-skeleton__avatar skeleton skeleton--circle"></div>
+        <div class="chat-skeleton__content">
+          <div class="skeleton skeleton--text" style="width: 45%;"></div>
+        </div>
+      </div>
+      <!-- Another assistant message skeleton -->
+      <div class="chat-skeleton__bubble chat-skeleton__bubble--assistant">
+        <div class="chat-skeleton__avatar skeleton skeleton--circle"></div>
+        <div class="chat-skeleton__content">
+          <div class="skeleton skeleton--text" style="width: 90%;"></div>
+          <div class="skeleton skeleton--text" style="width: 75%;"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
   if (!status) return nothing;
@@ -115,22 +163,21 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   return nothing;
 }
 
-function resolveReadAloudText(props: ChatProps, maxMessages = 1): string | null {
-  const streamText = props.stream?.trim();
-  if (streamText) return streamText;
-  const collected: string[] = [];
+function resolveReadAloudText(props: ChatProps): string | null {
   for (let i = props.messages.length - 1; i >= 0; i -= 1) {
     const message = props.messages[i];
     const normalized = normalizeMessage(message);
     const role = normalizeRoleForGrouping(normalized.role);
     if (role !== "assistant") continue;
     const text = extractText(message)?.trim();
-    if (!text) continue;
-    collected.push(text);
-    if (collected.length >= maxMessages) break;
+    if (text) return text;
   }
-  if (collected.length === 0) return null;
-  return collected.reverse().join("\n\n");
+  return null;
+}
+
+function formatTtsProviderLabel(provider: TtsProviderInfo): string {
+  const base = provider.id === "edge" ? "Local (Edge)" : provider.name;
+  return provider.configured ? base : `${base} (not configured)`;
 }
 
 export function renderChat(props: ChatProps) {
@@ -152,7 +199,7 @@ export function renderChat(props: ChatProps) {
     ? "Message (↩ to send, Shift+↩ for line breaks)"
     : "Connect to the gateway to start chatting…";
 
-  const readAloudText = resolveReadAloudText(props, 1);
+  const readAloudText = resolveReadAloudText(props);
   const canReadAloud = props.readAloudSupported && Boolean(readAloudText);
   const canRecordAudio = props.audioInputSupported && props.connected;
   const audioStatus = props.audioRecording
@@ -177,6 +224,21 @@ export function renderChat(props: ChatProps) {
     : !readAloudText
       ? "No assistant reply to play yet"
       : "Play last reply";
+  const ttsProviders = Array.isArray(props.ttsProviders) ? props.ttsProviders : [];
+  const configuredTtsProviders = ttsProviders.filter((provider) => provider.configured);
+  const hasServerTts = configuredTtsProviders.length > 0;
+  const ttsSelectValue =
+    props.ttsActiveProvider ??
+    configuredTtsProviders[0]?.id ??
+    ttsProviders[0]?.id ??
+    "";
+  const ttsSelectDisabled = !props.connected || props.ttsLoading || ttsProviders.length === 0;
+  const ttsSelectTitle = !props.connected
+    ? "Connect to select a server voice"
+    : hasServerTts
+      ? "Select server TTS provider"
+      : "Configure a server TTS provider to enable server playback";
+  const audioError = props.readAloudError ?? props.ttsError;
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
@@ -187,7 +249,7 @@ export function renderChat(props: ChatProps) {
       aria-live="polite"
       @scroll=${props.onChatScroll}
     >
-      ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
+      ${props.loading && props.messages.length === 0 ? renderChatSkeleton() : nothing}
       ${repeat(buildChatItems(props), (item) => item.key, (item) => {
         if (item.kind === "reading-indicator") {
           return renderReadingIndicatorGroup(assistantIdentity);
@@ -344,13 +406,36 @@ export function renderChat(props: ChatProps) {
               ${icon(props.readAloudActive ? "pause" : "play", { size: 16 })}
               <span>${props.readAloudActive ? "Pause" : "Play"}</span>
             </button>
+            ${ttsProviders.length
+              ? html`
+                  <label class="chat-compose__tts-select" title=${ttsSelectTitle}>
+                    <span class="sr-only">TTS provider</span>
+                    <select
+                      .value=${ttsSelectValue}
+                      ?disabled=${ttsSelectDisabled}
+                      @change=${(e: Event) =>
+                        props.onTtsProviderChange(
+                          (e.target as HTMLSelectElement).value as TtsProviderId,
+                        )}
+                    >
+                      ${ttsProviders.map(
+                        (provider) => html`
+                          <option value=${provider.id}>
+                            ${formatTtsProviderLabel(provider)}
+                          </option>
+                        `,
+                      )}
+                    </select>
+                  </label>
+                `
+              : nothing}
             ${audioStatus
               ? html`<div class="chat-compose__recording-pill ${audioStatusClass}">
                   ${audioStatus}
                 </div>`
               : nothing}
-            ${props.readAloudError
-              ? html`<div class="chat-compose__audio-error">${props.readAloudError}</div>`
+            ${audioError
+              ? html`<div class="chat-compose__audio-error">${audioError}</div>`
               : nothing}
           </div>
           <div class="chat-compose__actions-group chat-compose__actions-group--right">

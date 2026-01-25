@@ -266,6 +266,27 @@ function countActiveFilters(levelFilters: Record<LogLevel, boolean>, subsystemFi
 }
 
 /**
+ * Render skeleton loading state for log entries
+ */
+function renderLogsSkeleton() {
+  const skeletonCount = 8;
+  return html`
+    <div class="logs-output logs-output--skeleton">
+      ${Array.from({ length: skeletonCount }, (_, index) => html`
+        <div class="log-entry log-entry--skeleton">
+          <span class="log-entry__ln skeleton skeleton--text" style="width: 2rem;"></span>
+          <span class="log-entry__time skeleton skeleton--text" style="width: 4rem;"></span>
+          <span class="log-entry__level skeleton skeleton--text" style="width: 3rem;"></span>
+          <div class="log-entry__content">
+            <span class="skeleton skeleton--text" style="width: ${60 + (index % 3) * 15}%;"></span>
+          </div>
+        </div>
+      `)}
+    </div>
+  `;
+}
+
+/**
  * Render the session sidebar
  */
 function renderSidebar(props: LogsProps) {
@@ -545,20 +566,22 @@ export function renderLogs(props: LogsProps) {
         <!-- Terminal Viewer -->
         <div class="logs-viewer">
           <div class="logs-viewer__scroll" @scroll=${props.onScroll}>
-            ${filtered.length === 0
-              ? html`
-                  <div class="logs-empty">
-                    <div class="logs-empty__icon">
-                      ${icon("scroll-text", { size: 32 })}
+            ${props.loading && props.entries.length === 0
+              ? renderLogsSkeleton()
+              : filtered.length === 0
+                ? html`
+                    <div class="logs-empty">
+                      <div class="logs-empty__icon">
+                        ${icon("scroll-text", { size: 32 })}
+                      </div>
+                      <div class="logs-empty__title">No log entries</div>
+                      <div class="logs-empty__desc">
+                        ${props.entries.length > 0
+                          ? "No entries match your current filters. Try adjusting your search or level filters."
+                          : "Gateway logs will appear here when the gateway is running."}
+                      </div>
                     </div>
-                    <div class="logs-empty__title">No log entries</div>
-                    <div class="logs-empty__desc">
-                      ${props.entries.length > 0
-                        ? "No entries match your current filters. Try adjusting your search or level filters."
-                        : "Gateway logs will appear here when the gateway is running."}
-                    </div>
-                  </div>
-                `
+                  `
               : html`
                   <div class="logs-output">
                     ${filtered.map(
@@ -580,7 +603,8 @@ export function renderLogs(props: LogsProps) {
                           <button
                             class="log-entry__copy"
                             @click=${(e: Event) => copyToClipboard(entry.raw, e.currentTarget as HTMLButtonElement)}
-                            title="Copy"
+                            title="Copy log entry"
+                            aria-label="Copy log entry to clipboard"
                           >
                             ${icon("copy", { size: 12 })}
                           </button>

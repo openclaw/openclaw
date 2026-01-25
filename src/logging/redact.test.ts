@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
+import { getDefaultRedactPatterns, redactSensitiveText, redactSensitiveValue } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
 
@@ -82,6 +82,38 @@ describe("redactSensitiveText", () => {
       patterns: ["/token=([A-Za-z0-9]+)/i"],
     });
     expect(output).toBe("token=abcdef…ghij");
+  });
+
+  it("masks util.inspect style fields", () => {
+    const input = "{ password: 'abcdef1234567890ghij' }";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("{ password: '***' }");
+  });
+
+  it("keeps partial masking for long util.inspect tokens", () => {
+    const input = "{ token: 'abcdef1234567890ghij' }";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("{ token: 'abcdef…ghij' }");
+  });
+
+  it("masks sensitive keys in objects while keeping other fields", () => {
+    const input = {
+      mode: "password",
+      password: "rmgDAriaMG$",
+      allowTailscale: true,
+    };
+    const output = redactSensitiveValue(input, { mode: "tools", patterns: defaults });
+    expect(output).toEqual({
+      mode: "password",
+      password: "***",
+      allowTailscale: true,
+    });
   });
 
   it("skips redaction when mode is off", () => {

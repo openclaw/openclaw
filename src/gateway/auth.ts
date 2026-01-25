@@ -159,7 +159,13 @@ export async function authorizeGatewayConnect(params: {
   const { auth, connectAuth, req, trustedProxies } = params;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
-  if (auth.allowTailscale && !localDirect) {
+  // Local direct requests (localhost without forwarding headers) are
+  // automatically authenticated - no password/token needed.
+  if (localDirect) {
+    return { ok: true, method: "none" };
+  }
+
+  if (auth.allowTailscale) {
     const tailscaleUser = getTailscaleUser(req);
     const tailscaleProxy = isTailscaleProxyRequest(req);
 

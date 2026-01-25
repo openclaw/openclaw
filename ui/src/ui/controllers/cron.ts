@@ -2,6 +2,8 @@ import { toNumber } from "../format";
 import type { GatewayBrowserClient } from "../gateway";
 import type { CronJob, CronRunLogEntry, CronStatus } from "../types";
 import type { CronFormState } from "../ui-types";
+import { showDangerConfirmDialog } from "../components/confirm-dialog";
+import { toast } from "../components/toast";
 
 export type CronState = {
   client: GatewayBrowserClient | null;
@@ -160,6 +162,13 @@ export async function runCronJob(state: CronState, job: CronJob) {
 
 export async function removeCronJob(state: CronState, job: CronJob) {
   if (!state.client || !state.connected || state.cronBusy) return;
+  const jobLabel = job.name?.trim() || job.id;
+  const confirmed = await showDangerConfirmDialog(
+    "Delete Cron Job",
+    `Delete cron job "${jobLabel}"? This action cannot be undone.`,
+    "Delete",
+  );
+  if (!confirmed) return;
   state.cronBusy = true;
   state.cronError = null;
   try {
@@ -168,10 +177,12 @@ export async function removeCronJob(state: CronState, job: CronJob) {
       state.cronRunsJobId = null;
       state.cronRuns = [];
     }
+    toast.success("Cron job deleted");
     await loadCronJobs(state);
     await loadCronStatus(state);
   } catch (err) {
     state.cronError = String(err);
+    toast.error("Failed to delete cron job");
   } finally {
     state.cronBusy = false;
   }

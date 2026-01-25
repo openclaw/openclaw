@@ -123,6 +123,20 @@ describe("enableConsoleCapture", () => {
     console.log(payload);
     expect(log).toHaveBeenCalledWith(payload);
   });
+
+  it("redacts sensitive object fields before printing", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const log = vi.fn();
+    console.log = log;
+    enableConsoleCapture();
+    console.log({ mode: "password", password: "secret", allowTailscale: true });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]?.[0]).toEqual({
+      mode: "password",
+      password: "***",
+      allowTailscale: true,
+    });
+  });
 });
 
 function tempLogPath() {

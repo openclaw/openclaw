@@ -67,13 +67,13 @@
 | Session deletion failure | ✅ `toast.error("Failed to delete session")` |
 | Log export complete | ✅ `toast.success("Logs exported (N entries)")` |
 
-### Improvement: Add Toasts for Remaining Operations
+### ✅ COMPLETED: Add Toasts for Remaining Operations
 
-- [ ] Channel probe success: `toast.info("Channel probe complete")`
-- [ ] Channel probe failure: `toast.error("Channel probe failed")`
-- [ ] Skill installation: `toast.success("Skill installed successfully")`
-- [ ] Device pairing approved: `toast.success("Device paired")`
-- [ ] Device pairing rejected: `toast.info("Device pairing rejected")`
+- ✅ Channel probe success: `toast.success("Channels probed successfully")`
+- ✅ Channel probe failure: `toast.error("Channel probe failed")`
+- ✅ Skill installation: `toast.success("Skill installed")`
+- ✅ Device pairing rejected: `toast.success("Device pairing rejected")`
+- ✅ Device token revoked: `toast.success("Token revoked")`
 - [ ] RPC call success: `toast.success("RPC call completed")`
 - [ ] RPC call failure: `toast.error("RPC call failed")`
 
@@ -116,18 +116,18 @@ Features:
 - ✅ Focus management
 - ✅ ARIA attributes (role="dialog", aria-modal, aria-labelledby)
 
-### Improvement: Wire ConfirmDialog to Existing Usages
+### ✅ COMPLETED: Wire ConfirmDialog to Existing Usages
 
 Replace `window.confirm()` calls:
-- [ ] `controllers/sessions.ts` - Delete session confirmation
-- [ ] `controllers/devices.ts` - Reject device pairing
-- [ ] `controllers/devices.ts` - Revoke device pairing
+- ✅ `controllers/sessions.ts` - Delete session confirmation
+- ✅ `controllers/devices.ts` - Reject device pairing
+- ✅ `controllers/devices.ts` - Revoke device token
 
-### Improvement: Add Confirmation for Destructive Actions
+### ✅ COMPLETED: Add Confirmation for Destructive Actions
 
-- [ ] Clear all logs
+- ✅ Clear all logs (with count)
 - [ ] Reset config to defaults
-- [ ] Delete cron job
+- ✅ Delete cron job (with job name)
 - [ ] Disconnect channel
 - [ ] Clear chat history
 
@@ -247,10 +247,10 @@ skeletonList(count, itemHeight)                  // Line 217
 
 ### Improvement: Skeleton Loaders by View
 
-**Chat View**:
-- [ ] Message bubble skeletons while loading
-- [ ] 3-4 stacked bubble shapes
-- [ ] Alternate left/right alignment
+**Chat View**: ✅ COMPLETED
+- ✅ Message bubble skeletons while loading
+- ✅ 4 stacked bubble shapes
+- ✅ Alternate left/right alignment (user/assistant)
 
 **Sessions View**: ✅ COMPLETED
 - ✅ Table row skeletons (5 rows)
@@ -262,19 +262,20 @@ skeletonList(count, itemHeight)                  // Line 217
 - ✅ Icon + text placeholders
 - ✅ Staggered animation with `aria-busy`
 
-**Logs View**:
-- [ ] Log entry skeletons
-- [ ] Timestamp + message shapes
-- [ ] Level indicator dots
+**Logs View**: ✅ COMPLETED
+- ✅ Log entry skeletons
+- ✅ Timestamp + message shapes
+- ✅ Level indicator placeholders
 
 **Config View**:
 - [ ] Form field skeletons (already good)
 - [ ] Section header skeletons
 - [ ] Toggle row skeletons
 
-**Nodes View**:
-- [ ] Node card skeletons
-- [ ] Status indicator placeholders
+**Nodes View**: ✅ COMPLETED
+- ✅ Node card skeletons
+- ✅ Device card skeletons
+- ✅ Status indicator placeholders
 
 ### Improvement: Loading Component
 
@@ -496,13 +497,13 @@ emptyState({ icon, title, description, action }): TemplateResult
 - [ ] Add `aria-expanded` for open state
 - [ ] Trap focus within palette when open
 
-### Improvement: Modal/Dialog Accessibility
+### ✅ COMPLETED: Modal/Dialog Accessibility
 
-- [ ] Add `role="dialog"` or `role="alertdialog"`
-- [ ] Add `aria-modal="true"`
-- [ ] Add `aria-labelledby` pointing to title
-- [ ] Implement focus trap
-- [ ] Return focus on close
+- ✅ Add `role="dialog"` or `role="alertdialog"`
+- ✅ Add `aria-modal="true"`
+- ✅ Add `aria-labelledby` pointing to title
+- ✅ Implement focus trap (Tab cycles within modal)
+- ✅ Return focus on close
 
 ### Improvement: Form Accessibility
 
@@ -530,8 +531,10 @@ Skills view:
 - ✅ Install skill button
 
 Remaining icon-only buttons need:
-- [ ] Copy buttons in other views
-- [ ] Close buttons in modals/dialogs
+- ✅ Copy buttons in logs view (`aria-label="Copy log entry to clipboard"`)
+- ✅ Close button in confirm dialog
+- [ ] Copy buttons in other views (debug, config)
+- [ ] Close buttons in other modals/dialogs
 
 ### ✅ COMPLETED: Loading State Accessibility
 
@@ -702,8 +705,10 @@ async function copyWithFeedback(text: string, label: string) {
 ### ✅ COMPLETED: Search UX
 
 - ✅ Clear button in Skills search input (with aria-label)
+- ✅ Clear button in Logs search input
+- ✅ Clear button in Config search input
+- ✅ Clear button in Diagnostics filter dialog
 - ✅ CSS for `.field__clear` button added
-- [ ] Clear button in other search inputs
 - [ ] Search debouncing
 - [ ] Empty search results state
 - [ ] Recent searches (optional)
@@ -862,11 +867,17 @@ async function copyWithFeedback(text: string, label: string) {
 
 ### Medium Priority
 
-| Item | Impact | Effort | Category |
-|------|--------|--------|----------|
-| Wire ConfirmDialog to usages | High | Low | Components |
-| Expand command palette | High | Medium | Command Palette |
-| Add global keyboard shortcuts | Medium | Medium | Navigation |
+| Item | Impact | Effort | Category | Status |
+|------|--------|--------|----------|--------|
+| Wire ConfirmDialog to usages | High | Low | Components | ✅ Done |
+| Expand command palette | High | Medium | Command Palette | |
+| Add global keyboard shortcuts | Medium | Medium | Navigation | |
+| Skeleton for Logs view | Medium | Low | Loading | ✅ Done |
+| Skeleton for Nodes view | Medium | Low | Loading | ✅ Done |
+| Clear button in search inputs | Medium | Low | UX | ✅ Done |
+| Focus trap for modals | Medium | Medium | Accessibility | ✅ Done |
+| Toast for channel/skill ops | Medium | Low | Toast | ✅ Done |
+| aria-label for copy buttons | Medium | Low | Accessibility | ✅ Done |
 
 ### Lower Priority
 
@@ -874,8 +885,8 @@ async function copyWithFeedback(text: string, label: string) {
 |------|--------|--------|----------|
 | Tooltip component | Medium | Medium | Components |
 | Advanced log filtering | Medium | Medium | Search |
-| Focus trap for modals | Medium | Medium | Accessibility |
 | Empty state illustrations | Low | Medium | Empty States |
+| Keyboard shortcuts help modal | Medium | Medium | Navigation |
 
 ---
 

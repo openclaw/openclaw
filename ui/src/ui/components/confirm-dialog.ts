@@ -26,6 +26,43 @@ const state: DialogState = {
   resolve: null,
 };
 
+/**
+ * Focus trap handler to keep focus within the modal
+ */
+function createFocusTrap(container: HTMLElement): (e: KeyboardEvent) => void {
+  return (e: KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+
+    const focusableElements = container.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const focusable = Array.from(focusableElements).filter(
+      (el) => !el.hasAttribute("disabled") && el.offsetParent !== null
+    );
+
+    if (focusable.length === 0) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    if (e.shiftKey) {
+      // Shift+Tab: if on first, go to last
+      if (document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      // Tab: if on last, go to first
+      if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
+}
+
+let focusTrapCleanup: (() => void) | null = null;
+
 function getOrCreateContainer(): HTMLElement {
   let container = document.getElementById("confirm-dialog-container");
   if (!container) {
@@ -119,14 +156,28 @@ function renderDialog() {
 
   render(template, container);
 
-  // Focus the confirm button after render
+  // Focus the confirm button and set up focus trap after render
   requestAnimationFrame(() => {
+    const modal = container.querySelector(".modal") as HTMLElement | null;
+    if (modal) {
+      // Set up focus trap
+      const trapHandler = createFocusTrap(modal);
+      document.addEventListener("keydown", trapHandler);
+      focusTrapCleanup = () => document.removeEventListener("keydown", trapHandler);
+    }
+
     const confirmBtn = container.querySelector(".modal-footer .btn--primary, .modal-footer .btn--danger") as HTMLButtonElement | null;
     confirmBtn?.focus();
   });
 }
 
 function closeDialog() {
+  // Clean up focus trap
+  if (focusTrapCleanup) {
+    focusTrapCleanup();
+    focusTrapCleanup = null;
+  }
+
   state.open = false;
   state.options = null;
   state.resolve = null;

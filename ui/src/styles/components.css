@@ -5656,11 +5656,17 @@
   font-size: 12px;
 }
 
+.config-diagnostics-dialog__search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
 .config-diagnostics-dialog__search-input {
   width: min(440px, 70vw);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 10px 32px 10px 12px;
   background: rgba(0, 0, 0, 0.22);
   color: var(--text);
   outline: none;
@@ -5669,6 +5675,28 @@
 .config-diagnostics-dialog__search-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus);
+}
+
+.config-diagnostics-dialog__search-clear {
+  position: absolute;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.config-diagnostics-dialog__search-clear:hover {
+  color: var(--text);
+  background: var(--bg-overlay);
 }
 
 .config-diagnostics-dialog__filters {
@@ -5989,6 +6017,46 @@
 .nodes-empty__desc {
   font-size: 13px;
   color: var(--muted);
+}
+
+/* Nodes Skeleton Loading */
+.nodes-skeleton,
+.devices-skeleton {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.node-card--skeleton,
+.device-card--skeleton {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.node-card--skeleton .skeleton,
+.device-card--skeleton .skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: nodes-skeleton-shimmer 1.5s infinite;
+}
+
+.skeleton--circle {
+  border-radius: 50%;
+}
+
+.skeleton--text {
+  border-radius: 4px;
+}
+
+@keyframes nodes-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 /* Node Tree Visualization */
@@ -9785,6 +9853,198 @@ textarea:focus-visible {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
+}
+
+/* =============================================================================
+   KEYBOARD SHORTCUTS MODAL
+   ============================================================================= */
+
+.keyboard-shortcuts-modal {
+  max-width: 640px;
+  width: 90vw;
+}
+
+.keyboard-shortcuts-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.keyboard-shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 24px;
+}
+
+.keyboard-shortcuts-category {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.keyboard-shortcuts-category__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.keyboard-shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.keyboard-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+}
+
+.keyboard-shortcut__keys {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.keyboard-shortcut__key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.keyboard-shortcut__desc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.keyboard-shortcut__when {
+  font-size: 10px;
+  color: var(--text-tertiary, var(--muted));
+  background: var(--surface-1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0.7;
+}
+
+.keyboard-shortcuts-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.keyboard-shortcuts-tip {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.keyboard-shortcuts-tip kbd {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* =============================================================================
+   SEARCH HIGHLIGHTING
+   ============================================================================= */
+
+.search-highlight,
+mark.search-highlight {
+  background: var(--accent-muted, rgba(99, 102, 241, 0.3));
+  color: inherit;
+  padding: 0.1em 0.2em;
+  border-radius: 3px;
+  font-weight: inherit;
+}
+
+/* Dark mode adjustments */
+:root[data-theme="dark"] .search-highlight,
+:root[data-theme="dark"] mark.search-highlight {
+  background: rgba(99, 102, 241, 0.35);
+}
+
+/* Light mode adjustments */
+:root[data-theme="light"] .search-highlight,
+:root[data-theme="light"] mark.search-highlight {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+/* =============================================================================
+   SAVE BUTTON STATE MACHINE
+   ============================================================================= */
+
+.btn--saving {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.btn--saving .btn__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.6s linear infinite;
+}
+
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
+.btn--saved {
+  background: var(--ok) !important;
+  border-color: var(--ok) !important;
+  color: white !important;
+}
+
+.btn--saved .btn__icon {
+  animation: btn-check-bounce 0.3s ease-out;
+}
+
+@keyframes btn-check-bounce {
+  0% { transform: scale(0); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.btn--error {
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+  color: white !important;
+  animation: btn-shake 0.4s ease-in-out;
+}
+
+@keyframes btn-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
 }
 
 /* Reduced motion preference */

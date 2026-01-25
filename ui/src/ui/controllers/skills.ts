@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway";
 import type { SkillStatusReport } from "../types";
+import { toast } from "../components/toast";
 
 export type SkillsState = {
   client: GatewayBrowserClient | null;
@@ -131,10 +132,12 @@ export async function installSkill(
       timeoutMs: 120000,
     })) as { ok?: boolean; message?: string };
     await loadSkills(state);
+    const successMsg = result?.message ?? "Installed";
     setSkillMessage(state, skillKey, {
       kind: "success",
-      message: result?.message ?? "Installed",
+      message: successMsg,
     });
+    toast.success(`Skill "${name}" installed`);
   } catch (err) {
     const message = getErrorMessage(err);
     state.skillsError = message;
@@ -142,6 +145,7 @@ export async function installSkill(
       kind: "error",
       message,
     });
+    toast.error(`Failed to install skill "${name}"`);
   } finally {
     state.skillsBusyKey = null;
   }

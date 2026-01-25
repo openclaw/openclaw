@@ -8,6 +8,7 @@ import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
 import { readLoggingConfig } from "./config.js";
 import { loggingState } from "./state.js";
+import { createSensitiveRedactor, getConfiguredRedactOptions } from "./redact.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
 type ConsoleSettings = {
@@ -157,6 +158,8 @@ export function enableConsoleCapture(): void {
   if (loggingState.consolePatched) return;
   loggingState.consolePatched = true;
 
+  const redactor = createSensitiveRedactor(getConfiguredRedactOptions());
+
   let logger: ReturnType<typeof getLogger> | null = null;
   const getLoggerLazy = () => {
     if (!logger) {
@@ -183,7 +186,8 @@ export function enableConsoleCapture(): void {
   const forward =
     (level: LogLevel, orig: (...args: unknown[]) => void) =>
     (...args: unknown[]) => {
-      const formatted = util.format(...args);
+      const redactedArgs = redactor.redactArgs(args);
+      const formatted = util.format(...redactedArgs);
       if (shouldSuppressConsoleMessage(formatted)) return;
       const trimmed = stripAnsi(formatted).trimStart();
       const shouldPrefixTimestamp =
@@ -225,18 +229,18 @@ export function enableConsoleCapture(): void {
       } else {
         try {
           if (!timestamp) {
-            orig.apply(console, args as []);
+            orig.apply(console, redactedArgs as []);
             return;
           }
-          if (args.length === 0) {
+          if (redactedArgs.length === 0) {
             orig.call(console, timestamp);
             return;
           }
-          if (typeof args[0] === "string") {
-            orig.call(console, `${timestamp} ${args[0]}`, ...args.slice(1));
+          if (typeof redactedArgs[0] === "string") {
+            orig.call(console, `${timestamp} ${redactedArgs[0]}`, ...redactedArgs.slice(1));
             return;
           }
-          orig.call(console, timestamp, ...args);
+          orig.call(console, timestamp, ...redactedArgs);
         } catch (err) {
           if (isEpipeError(err)) return;
           throw err;

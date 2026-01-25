@@ -55,6 +55,39 @@ toast.info = (message: string, title?: string) =>
 toast.dismiss = (id: string) => globalToastContainer?.dismissToast(id);
 toast.dismissAll = () => globalToastContainer?.dismissAll();
 
+/**
+ * Toast promise helper - shows loading, then success or error based on promise result
+ * @param promise The promise to track
+ * @param messages Messages to show for loading, success, and error states
+ * @returns The promise result (for chaining)
+ */
+toast.promise = async <T>(
+  promise: Promise<T>,
+  messages: {
+    loading: string;
+    success: string | ((data: T) => string);
+    error: string | ((err: unknown) => string);
+  }
+): Promise<T> => {
+  const loadingId = toast({ type: "info", message: messages.loading, duration: 0 });
+  try {
+    const result = await promise;
+    toast.dismiss(loadingId);
+    const successMsg = typeof messages.success === "function"
+      ? messages.success(result)
+      : messages.success;
+    toast.success(successMsg);
+    return result;
+  } catch (err) {
+    toast.dismiss(loadingId);
+    const errorMsg = typeof messages.error === "function"
+      ? messages.error(err)
+      : messages.error;
+    toast.error(errorMsg);
+    throw err;
+  }
+};
+
 @customElement("toast-container")
 export class ToastContainer extends LitElement {
   static styles = css`

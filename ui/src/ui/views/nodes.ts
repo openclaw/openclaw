@@ -119,22 +119,46 @@ function renderTabs(activeTab: NodesTab, onTabChange?: (tab: NodesTab) => void) 
   `;
 }
 
+/**
+ * Render skeleton loading state for nodes
+ */
+function renderNodesSkeleton() {
+  return html`
+    <div class="nodes-skeleton">
+      ${Array.from({ length: 3 }, () => html`
+        <div class="node-card node-card--modern node-card--skeleton">
+          <div class="node-card__header">
+            <div class="node-card__icon skeleton skeleton--circle" style="width: 36px; height: 36px;"></div>
+            <div class="node-card__info">
+              <div class="skeleton skeleton--text" style="width: 8rem; height: 1rem; margin-bottom: 0.5rem;"></div>
+              <div class="skeleton skeleton--text" style="width: 12rem; height: 0.75rem;"></div>
+            </div>
+            <div class="skeleton skeleton--text" style="width: 4rem; height: 1.5rem; border-radius: 9999px;"></div>
+          </div>
+        </div>
+      `)}
+    </div>
+  `;
+}
+
 function renderNodesTab(props: NodesProps) {
   const connectedNodes = props.nodes.filter((n) => Boolean(n.connected));
   const offlineNodes = props.nodes.filter((n) => !Boolean(n.connected));
 
   return html`
     <div class="nodes-tab-content">
-      ${props.nodes.length === 0
-        ? html`
-            <div class="nodes-empty">
-              <div class="nodes-empty__icon">
-                ${icon("server", { size: 32 })}
+      ${props.loading && props.nodes.length === 0
+        ? renderNodesSkeleton()
+        : props.nodes.length === 0
+          ? html`
+              <div class="nodes-empty">
+                <div class="nodes-empty__icon">
+                  ${icon("server", { size: 32 })}
+                </div>
+                <div class="nodes-empty__title">No nodes connected</div>
+                <div class="nodes-empty__desc">Nodes will appear here when they connect to the gateway</div>
               </div>
-              <div class="nodes-empty__title">No nodes connected</div>
-              <div class="nodes-empty__desc">Nodes will appear here when they connect to the gateway</div>
-            </div>
-          `
+            `
         : html`
             <div class="node-tree">
               <div class="node-tree__gateway">
@@ -234,6 +258,31 @@ function renderNodeCard(node: Record<string, unknown>, isOnline: boolean) {
   `;
 }
 
+/**
+ * Render skeleton loading state for devices
+ */
+function renderDevicesSkeleton() {
+  return html`
+    <div class="devices-skeleton">
+      ${Array.from({ length: 2 }, () => html`
+        <div class="device-card device-card--modern device-card--skeleton">
+          <div class="device-card__header">
+            <div class="device-card__icon skeleton skeleton--circle" style="width: 32px; height: 32px;"></div>
+            <div class="device-card__info">
+              <div class="skeleton skeleton--text" style="width: 10rem; height: 1rem; margin-bottom: 0.5rem;"></div>
+              <div class="skeleton skeleton--text" style="width: 8rem; height: 0.75rem;"></div>
+            </div>
+            <div class="skeleton skeleton--text" style="width: 4rem; height: 1.25rem; border-radius: 9999px;"></div>
+          </div>
+          <div class="device-card__meta" style="margin-top: 0.75rem;">
+            <div class="skeleton skeleton--text" style="width: 50%; height: 0.75rem;"></div>
+          </div>
+        </div>
+      `)}
+    </div>
+  `;
+}
+
 function renderDevicesTab(props: NodesProps) {
   const list = props.devicesList ?? { pending: [], paired: [] };
   const pending = Array.isArray(list.pending) ? list.pending : [];
@@ -295,17 +344,19 @@ function renderDevicesTab(props: NodesProps) {
           `
         : nothing}
 
-      ${pending.length === 0 && paired.length === 0
-        ? html`
-            <div class="nodes-empty">
-              <div class="nodes-empty__icon">
-                ${icon("monitor", { size: 32 })}
+      ${props.devicesLoading && pending.length === 0 && paired.length === 0
+        ? renderDevicesSkeleton()
+        : pending.length === 0 && paired.length === 0
+          ? html`
+              <div class="nodes-empty">
+                <div class="nodes-empty__icon">
+                  ${icon("monitor", { size: 32 })}
+                </div>
+                <div class="nodes-empty__title">No devices</div>
+                <div class="nodes-empty__desc">Paired devices will appear here</div>
               </div>
-              <div class="nodes-empty__title">No devices</div>
-              <div class="nodes-empty__desc">Paired devices will appear here</div>
-            </div>
-          `
-        : nothing}
+            `
+          : nothing}
     </div>
   `;
 }

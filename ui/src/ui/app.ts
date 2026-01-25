@@ -2,6 +2,8 @@ import { LitElement, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
+import { showDangerConfirmDialog } from "./components/confirm-dialog";
+import { toast } from "./components/toast";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity";
 import { loadSettings, type UiSettings } from "./storage";
 import { renderApp } from "./app-render";
@@ -38,6 +40,11 @@ import type {
 import type { DevicePairingList } from "./controllers/devices";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import type { SkillMessage } from "./controllers/skills";
+import type { TtsProviderId, TtsProviderInfo } from "./controllers/tts";
+import {
+  loadTtsProviders as loadTtsProvidersInternal,
+  setTtsProvider as setTtsProviderInternal,
+} from "./controllers/tts";
 import {
   resetToolStream as resetToolStreamInternal,
   type ToolStreamEntry,
@@ -209,6 +216,10 @@ export class ClawdbotApp extends LitElement {
   @state() readAloudSupported = false;
   @state() readAloudActive = false;
   @state() readAloudError: string | null = null;
+  @state() ttsLoading = false;
+  @state() ttsError: string | null = null;
+  @state() ttsProviders: TtsProviderInfo[] = [];
+  @state() ttsActiveProvider: TtsProviderId | null = null;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -392,7 +403,11 @@ export class ClawdbotApp extends LitElement {
   private audioDraftBase = "";
   private audioTranscriptFinal = "";
   private audioTranscriptInterim = "";
+  private browserReadAloudSupported = false;
   private readAloudUtterance: SpeechSynthesisUtterance | null = null;
+  private readAloudAudio: HTMLAudioElement | null = null;
+  private readAloudAudioUrl: string | null = null;
+  private ttsProvidersLoaded = false;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
   basePath = "";
@@ -423,7 +438,8 @@ export class ClawdbotApp extends LitElement {
     super.connectedCallback();
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
     this.audioInputSupported = Boolean(resolveSpeechRecognitionCtor());
-    this.readAloudSupported = resolveSpeechSynthesisSupport();
+    this.browserReadAloudSupported = resolveSpeechSynthesisSupport();
+    this.readAloudSupported = this.browserReadAloudSupported;
     window.addEventListener("keydown", this.commandPaletteKeyHandler);
   }
 
@@ -444,6 +460,14 @@ export class ClawdbotApp extends LitElement {
       this as unknown as Parameters<typeof handleUpdated>[0],
       changed,
     );
+    if (changed.has("connected")) {
+      this.syncReadAloudSupport();
+      if (this.connected) {
+        void this.loadTtsProviders({ quiet: true });
+      } else {
+        this.ttsProvidersLoaded = false;
+      }
+    }
   }
 
   connect() {
@@ -472,10 +496,18 @@ export class ClawdbotApp extends LitElement {
     );
   }
 
-  clearLogs() {
+  async clearLogs() {
+    if (this.logsEntries.length === 0) return;
+    const confirmed = await showDangerConfirmDialog(
+      "Clear Logs",
+      `Clear all ${this.logsEntries.length} log entries? This cannot be undone.`,
+      "Clear",
+    );
+    if (!confirmed) return;
     this.logsEntries = [];
     this.logsCursor = null;
     this.logsTruncated = false;
+    toast.success("Logs cleared");
   }
 
   exportLogs(lines: string[], label: string) {
@@ -571,6 +603,47 @@ export class ClawdbotApp extends LitElement {
     );
   }
 
+  async loadTtsProviders(opts?: { quiet?: boolean }) {
+    await loadTtsProvidersInternal(
+      this as unknown as Parameters<typeof loadTtsProvidersInternal>[0],
+      opts,
+    );
+    if (this.ttsProviders.length > 0) {
+      this.ttsProvidersLoaded = true;
+    }
+    this.syncReadAloudSupport();
+  }
+
+  handleTtsProviderChange(provider: TtsProviderId) {
+    void this.setTtsProvider(provider);
+  }
+
+  private async setTtsProvider(provider: TtsProviderId) {
+    await setTtsProviderInternal(
+      this as unknown as Parameters<typeof setTtsProviderInternal>[0],
+      provider,
+    );
+    if (this.ttsProviders.length > 0) {
+      this.ttsProvidersLoaded = true;
+    }
+    this.syncReadAloudSupport();
+  }
+
+  private hasConfiguredTtsProviders(): boolean {
+    return this.ttsProviders.some((provider) => provider.configured);
+  }
+
+  private syncReadAloudSupport() {
+    this.readAloudSupported =
+      this.browserReadAloudSupported || (this.connected && this.hasConfiguredTtsProviders());
+  }
+
+  private async ensureTtsProvidersLoaded() {
+    if (!this.connected || !this.client) return;
+    if (this.ttsProvidersLoaded || this.ttsLoading) return;
+    await this.loadTtsProviders({ quiet: true });
+  }
+
   handleToggleAudioRecording() {
     if (this.audioRecording) {
       this.stopAudioRecording();
@@ -588,16 +661,13 @@ export class ClawdbotApp extends LitElement {
       this.stopReadAloud();
       return;
     }
-    if (!this.readAloudSupported) {
-      this.readAloudError = "Read-aloud is not supported in this browser.";
-      return;
-    }
     const text = textOverride?.trim() || this.resolveReadAloudText();
     if (!text) {
       this.readAloudError = "No assistant reply to read yet.";
       return;
     }
-    this.startReadAloud(text);
+    this.readAloudError = null;
+    void this.startReadAloud(text);
   }
 
   private startAudioRecording() {
@@ -698,30 +768,79 @@ export class ClawdbotApp extends LitElement {
       : transcript;
   }
 
-  private resolveReadAloudText(maxMessages = 1): string | null {
-    const streamText = this.chatStream?.trim();
-    if (streamText) return streamText;
-
-    const collected: string[] = [];
+  private resolveReadAloudText(): string | null {
     for (let i = this.chatMessages.length - 1; i >= 0; i -= 1) {
       const message = this.chatMessages[i];
       const normalized = normalizeMessage(message);
       const role = normalizeRoleForGrouping(normalized.role);
       if (role !== "assistant") continue;
       const text = extractText(message)?.trim();
-      if (!text) continue;
-      collected.push(text);
-      if (collected.length >= maxMessages) break;
+      if (text) return text;
     }
-    if (collected.length === 0) return null;
-    return collected.reverse().join("\n\n");
+    return null;
   }
 
-  private startReadAloud(text: string) {
+  private async startReadAloud(text: string) {
+    await this.ensureTtsProvidersLoaded();
+    if (this.connected && this.hasConfiguredTtsProviders()) {
+      const ok = await this.startReadAloudServer(text);
+      if (ok) return;
+    }
+    if (this.browserReadAloudSupported) {
+      this.startReadAloudBrowser(text);
+      return;
+    }
+    if (!this.readAloudError) {
+      this.readAloudError = "Read-aloud is not supported in this browser.";
+    }
+  }
+
+  private async startReadAloudServer(text: string): Promise<boolean> {
+    if (!this.client || !this.connected) return false;
+    try {
+      const res = (await this.client.request("tts.convert", {
+        text,
+        channel: "web",
+        returnBase64: true,
+      })) as { audioBase64?: unknown; audioMime?: unknown };
+      const base64 = typeof res?.audioBase64 === "string" ? res.audioBase64 : "";
+      if (!base64) {
+        throw new Error("Server did not return audio.");
+      }
+      const mime =
+        typeof res.audioMime === "string" && res.audioMime.trim()
+          ? res.audioMime.trim()
+          : "audio/mpeg";
+      this.stopReadAloud();
+      const audio = this.buildReadAloudAudio(base64, mime);
+      audio.onended = () => {
+        this.readAloudActive = false;
+        this.cleanupReadAloudAudio();
+      };
+      audio.onerror = () => {
+        this.readAloudActive = false;
+        this.cleanupReadAloudAudio();
+        this.readAloudError = "Read-aloud failed.";
+      };
+      this.readAloudAudio = audio;
+      await audio.play();
+      this.readAloudActive = true;
+      this.readAloudError = null;
+      return true;
+    } catch (err) {
+      this.readAloudActive = false;
+      this.cleanupReadAloudAudio();
+      this.readAloudError = err instanceof Error ? err.message : String(err);
+      return false;
+    }
+  }
+
+  private startReadAloudBrowser(text: string) {
     if (typeof window === "undefined" || !window.speechSynthesis) {
       this.readAloudError = "Speech synthesis is unavailable.";
       return;
     }
+    this.stopReadAloud();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.onend = () => {
       this.readAloudActive = false;
@@ -743,8 +862,34 @@ export class ClawdbotApp extends LitElement {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
+    if (this.readAloudAudio) {
+      this.readAloudAudio.pause();
+    }
+    this.cleanupReadAloudAudio();
     this.readAloudActive = false;
     this.readAloudUtterance = null;
+  }
+
+  private buildReadAloudAudio(base64: string, mime: string) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: mime });
+    this.readAloudAudioUrl = URL.createObjectURL(blob);
+    return new Audio(this.readAloudAudioUrl);
+  }
+
+  private cleanupReadAloudAudio() {
+    if (this.readAloudAudio) {
+      this.readAloudAudio.src = "";
+      this.readAloudAudio = null;
+    }
+    if (this.readAloudAudioUrl) {
+      URL.revokeObjectURL(this.readAloudAudioUrl);
+      this.readAloudAudioUrl = null;
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {

@@ -160,7 +160,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           clientOptions,
         },
   );
-  app.error((error) => {
+  app.error(async (error) => {
     const message = error instanceof Error ? error.message : String(error);
     runtime.error?.(danger(`slack app error: ${message}`));
   });

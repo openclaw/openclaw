@@ -8,6 +8,11 @@ import type { ClawdbotConfig } from "../config/types.js";
 import type { ConsoleStyle } from "./console.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { readLoggingConfig } from "./config.js";
+import {
+  createSensitiveRedactor,
+  getConfiguredRedactOptions,
+  type SensitiveRedactor,
+} from "./redact.js";
 import { loggingState } from "./state.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
@@ -40,11 +45,16 @@ export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const externalTransports = new Set<LogTransport>();
 
-function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
+function attachExternalTransport(
+  logger: TsLogger<LogObj>,
+  transport: LogTransport,
+  redactor: SensitiveRedactor,
+): void {
   logger.attachTransport((logObj: LogObj) => {
     if (!externalTransports.has(transport)) return;
     try {
-      transport(logObj as LogTransportRecord);
+      const record = redactor.redactValue(logObj) as LogTransportRecord;
+      transport(record);
     } catch {
       // never block on logging failures
     }
@@ -87,6 +97,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
+  const redactor = createSensitiveRedactor(getConfiguredRedactOptions());
   const logger = new TsLogger<LogObj>({
     name: "clawdbot",
     minLevel: levelToMinLevel(settings.level),
@@ -96,14 +107,15 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   logger.attachTransport((logObj: LogObj) => {
     try {
       const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
-      const line = JSON.stringify({ ...logObj, time });
+      const record = redactor.redactValue({ ...logObj, time });
+      const line = JSON.stringify(record);
       fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
     } catch {
       // never block on logging failures
     }
   });
   for (const transport of externalTransports) {
-    attachExternalTransport(logger, transport);
+    attachExternalTransport(logger, transport, redactor);
   }
 
   return logger;
@@ -190,7 +202,8 @@ export function registerLogTransport(transport: LogTransport): () => void {
   externalTransports.add(transport);
   const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   if (logger) {
-    attachExternalTransport(logger, transport);
+    const redactor = createSensitiveRedactor(getConfiguredRedactOptions());
+    attachExternalTransport(logger, transport, redactor);
   }
   return () => {
     externalTransports.delete(transport);

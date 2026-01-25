@@ -310,6 +310,34 @@
   color: var(--accent);
 }
 
+.chat-compose__tts-select {
+  display: inline-flex;
+  align-items: center;
+}
+
+.chat-compose__tts-select select {
+  height: 34px;
+  padding: 6px 28px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--chat-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-compose__tts-select select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+:root[data-theme="light"] .chat-compose__tts-select select {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: rgba(16, 24, 40, 0.9);
+}
+
 .chat-compose__recording-pill {
   display: inline-flex;
   align-items: center;
@@ -618,4 +646,78 @@
   .chat-queue {
     margin: 0 16px;
   }
+}
+
+/* =============================================================================
+   CHAT SKELETON LOADING
+   ============================================================================= */
+
+.chat-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px;
+  opacity: 0.7;
+}
+
+.chat-skeleton__bubble {
+  display: flex;
+  gap: 12px;
+  max-width: 70%;
+}
+
+.chat-skeleton__bubble--user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.chat-skeleton__bubble--assistant {
+  align-self: flex-start;
+}
+
+.chat-skeleton__avatar {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.chat-skeleton__content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface-1);
+  border-radius: 16px;
+  min-width: 200px;
+}
+
+.chat-skeleton__bubble--user .chat-skeleton__content {
+  background: var(--accent-muted);
+  border-radius: 16px 16px 4px 16px;
+}
+
+.chat-skeleton__bubble--assistant .chat-skeleton__content {
+  border-radius: 16px 16px 16px 4px;
+}
+
+.chat-skeleton .skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: chat-skeleton-shimmer 1.5s infinite;
+  border-radius: 4px;
+  height: 14px;
+}
+
+.chat-skeleton .skeleton--circle {
+  border-radius: 50%;
+}
+
+@keyframes chat-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }

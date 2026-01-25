@@ -9,6 +9,7 @@ import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger } from "./logger.js";
 import { loggingState } from "./state.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
+import { createSensitiveRedactor, getConfiguredRedactOptions } from "./redact.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -200,6 +201,7 @@ function logToFile(
 }
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
+  const redactor = createSensitiveRedactor(getConfiguredRedactOptions());
   let fileLogger: TsLogger<LogObj> | null = null;
   const getFileLogger = () => {
     if (!fileLogger) fileLogger = getChildLogger({ subsystem });
@@ -218,10 +220,18 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
-    logToFile(getFileLogger(), level, message, fileMeta);
+
+    const redactedMessage = redactor.redactText(message);
+    const redactedMeta =
+      fileMeta && Object.keys(fileMeta).length > 0
+        ? (redactor.redactValue(fileMeta) as Record<string, unknown>)
+        : undefined;
+
+    logToFile(getFileLogger(), level, redactedMessage, redactedMeta);
     if (!shouldLogToConsole(level, { level: consoleSettings.level })) return;
     if (!shouldLogSubsystemToConsole(subsystem)) return;
-    const consoleMessage = consoleMessageOverride ?? message;
+    const consoleMessageRaw = consoleMessageOverride ?? message;
+    const consoleMessage = redactor.redactText(consoleMessageRaw);
     if (
       !isVerbose() &&
       subsystem === "agent/embedded" &&
@@ -232,9 +242,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     const line = formatConsoleLine({
       level,
       subsystem,
-      message: consoleSettings.style === "json" ? message : consoleMessage,
+      message: consoleSettings.style === "json" ? redactedMessage : consoleMessage,
       style: consoleSettings.style,
-      meta: fileMeta,
+      meta: redactedMeta,
     });
     writeConsoleLine(level, line);
   };
