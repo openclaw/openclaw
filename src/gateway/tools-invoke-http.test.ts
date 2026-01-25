@@ -83,6 +83,34 @@ describe("POST /tools/invoke", () => {
     await server.close();
   });
 
+  it("supports tools.alsoAllow without allow/profile (implicit allow-all)", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main" }],
+    } as any;
+
+    await fs.mkdir(path.dirname(CONFIG_PATH_CLAWDBOT), { recursive: true });
+    await fs.writeFile(
+      CONFIG_PATH_CLAWDBOT,
+      JSON.stringify({ tools: { alsoAllow: ["sessions_list"] } }, null, 2),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, { bind: "loopback" });
+
+    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+
+    await server.close();
+  });
+
   it("accepts password auth when bearer token matches", async () => {
     testState.agentsConfig = {
       list: [
