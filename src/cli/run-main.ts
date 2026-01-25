@@ -50,12 +50,11 @@ export async function runCli(argv: string[] = process.argv) {
   });
 
   const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
-  if (hasHelpOrVersion(parseArgv)) {
-    const primary = getPrimaryCommand(parseArgv);
-    if (primary) {
-      const { registerSubCliByName } = await import("./program/register.subclis.js");
-      await registerSubCliByName(program, primary);
-    }
+  // Register the primary subcommand if one exists (for lazy-loading)
+  const primary = getPrimaryCommand(parseArgv);
+  if (primary) {
+    const { registerSubCliByName } = await import("./program/register.subclis.js");
+    await registerSubCliByName(program, primary);
   }
   await program.parseAsync(parseArgv);
 }
