@@ -52,6 +52,7 @@ Status: unreleased.
 - Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
 - Security: wrap external hook content by default with a per-hook opt-out. (#1827) Thanks @mertcicekci0.
 - Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).
+- Onboarding: remove unsupported gateway auth "off" choice from onboarding/configure flows and CLI flags.
 
 ## 2026.1.24-3
 
