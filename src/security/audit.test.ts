@@ -82,7 +82,7 @@ describe("security audit", () => {
       gateway: {
         bind: "loopback",
         controlUi: { enabled: true },
-        auth: { mode: "none" as any },
+        auth: {},
       },
     };
 
