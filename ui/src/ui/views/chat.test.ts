@@ -70,19 +70,22 @@ describe("chat view", () => {
       renderChat(
         createProps({
           canAbort: true,
+          sending: true,
           onAbort,
         }),
       ),
       container,
     );
 
-    const stopButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Stop",
-    );
-    expect(stopButton).not.toBeUndefined();
+    const stopButton = container.querySelector("button.chat-compose__abort") as
+      | HTMLButtonElement
+      | null;
+    expect(stopButton).not.toBeNull();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("New session");
+
+    const sendButton = container.querySelector("button.chat-compose__send");
+    expect(sendButton).toBeNull();
   });
 
   it("shows a new session button when aborting is unavailable", () => {
@@ -98,12 +101,14 @@ describe("chat view", () => {
       container,
     );
 
-    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "New session",
-    );
-    expect(newSessionButton).not.toBeUndefined();
+    const newSessionButton = container.querySelector(
+      'button[title="New session"]',
+    ) as HTMLButtonElement | null;
+    expect(newSessionButton).not.toBeNull();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("Stop");
+
+    const stopButton = container.querySelector("button.chat-compose__abort");
+    expect(stopButton).toBeNull();
   });
 });

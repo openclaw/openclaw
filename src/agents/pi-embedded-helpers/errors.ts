@@ -12,11 +12,17 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("context window") ||
     lower.includes("context length") ||
     lower.includes("maximum context length");
+  const hasMaxContextLengthIs =
+    lower.includes("maximum context length is") ||
+    lower.includes("this model's maximum context length is") ||
+    lower.includes("the maximum context length for this model is");
   return (
     lower.includes("request_too_large") ||
+    lower.includes("context_length_exceeded") ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
+    hasMaxContextLengthIs ||
     lower.includes("prompt is too long") ||
     lower.includes("exceeds model context window") ||
     (hasRequestSizeExceeds && hasContextWindow) ||

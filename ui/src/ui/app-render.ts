@@ -5,7 +5,6 @@ import type { AppViewState } from "./app-view-state";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import {
   TAB_GROUPS,
-  pathForTab,
   subtitleForTab,
   titleForTab,
   type Tab,
@@ -62,6 +61,7 @@ import { loadChannels } from "./controllers/channels";
 import { loadPresence } from "./controllers/presence";
 import {
   agentSessionKey,
+  deleteSessionsBulk,
   deleteSession,
   findSessionForAgent,
   loadSessions,
@@ -417,6 +417,7 @@ export function renderApp(state: AppViewState) {
               loading: state.sessionsLoading,
               result: state.sessionsResult,
               error: state.sessionsError,
+              activeTasks: state.sessionsActiveTasksByKey,
               activeMinutes: state.sessionsFilterActive,
               limit: state.sessionsFilterLimit,
               includeGlobal: state.sessionsIncludeGlobal,
@@ -428,14 +429,17 @@ export function renderApp(state: AppViewState) {
               kindFilter: state.sessionsKindFilter,
 	              statusFilter: state.sessionsStatusFilter,
 	              agentLabelFilter: state.sessionsAgentLabelFilter,
-	              laneFilter: state.sessionsLaneFilter,
-	              tagFilter: state.sessionsTagFilter,
-	              viewMode: state.sessionsViewMode,
-	              drawerKey: state.sessionsDrawerKey,
-	              drawerExpanded: state.sessionsDrawerExpanded,
-	              drawerPreviewLoading: state.sessionsPreviewLoading,
-	              drawerPreviewError: state.sessionsPreviewError,
-	              drawerPreview: state.sessionsPreviewEntry,
+		              laneFilter: state.sessionsLaneFilter,
+		              tagFilter: state.sessionsTagFilter,
+		              viewMode: state.sessionsViewMode,
+		              showHidden: state.sessionsShowHidden,
+		              autoHideCompletedMinutes: state.sessionsAutoHideCompletedMinutes,
+		              autoHideErroredMinutes: state.sessionsAutoHideErroredMinutes,
+		              drawerKey: state.sessionsDrawerKey,
+		              drawerExpanded: state.sessionsDrawerExpanded,
+		              drawerPreviewLoading: state.sessionsPreviewLoading,
+		              drawerPreviewError: state.sessionsPreviewError,
+		              drawerPreview: state.sessionsPreviewEntry,
               onDrawerOpen: (sessionKey) => state.handleSessionsDrawerOpen(sessionKey),
               onDrawerOpenExpanded: (sessionKey) => state.handleSessionsDrawerOpenExpanded(sessionKey),
               onDrawerClose: () => state.handleSessionsDrawerClose(),
@@ -477,22 +481,52 @@ export function renderApp(state: AppViewState) {
 	              onLaneFilterChange: (lane) => {
 	                state.sessionsLaneFilter = lane;
 	              },
-	              onViewModeChange: (mode) => {
-	                state.sessionsViewMode = mode;
-	                try {
-	                  window.localStorage.setItem(
-	                    "clawdbot.control.ui.sessions.viewMode.v1",
-	                    mode,
-	                  );
-	                } catch {
-	                  // Ignore storage errors
-	                }
-	              },
-	              onRefresh: () => loadSessions(state),
-	              onPatch: (key, patch) => patchSession(state, key, patch),
-	              onDelete: (key) => deleteSession(state, key),
-	            })
-	          : nothing}
+		              onViewModeChange: (mode) => {
+		                state.sessionsViewMode = mode;
+		                try {
+		                  window.localStorage.setItem(
+		                    "clawdbot.control.ui.sessions.viewMode.v1",
+		                    mode,
+		                  );
+		                } catch {
+		                  // Ignore storage errors
+		                }
+		              },
+		              onShowHiddenChange: (next) => {
+		                state.sessionsShowHidden = next;
+		                try {
+		                  window.localStorage.setItem(
+		                    "clawdbot.control.ui.sessions.showHidden.v1",
+		                    next ? "true" : "false",
+		                  );
+		                } catch {
+		                  // Ignore storage errors
+		                }
+		              },
+		              onAutoHideChange: (next) => {
+		                state.sessionsAutoHideCompletedMinutes = next.completedMinutes;
+		                state.sessionsAutoHideErroredMinutes = next.erroredMinutes;
+		                try {
+		                  window.localStorage.setItem(
+		                    "clawdbot.control.ui.sessions.autoHide.completedMinutes.v1",
+		                    String(next.completedMinutes),
+		                  );
+		                  window.localStorage.setItem(
+		                    "clawdbot.control.ui.sessions.autoHide.erroredMinutes.v1",
+		                    String(next.erroredMinutes),
+		                  );
+		                } catch {
+		                  // Ignore storage errors
+		                }
+		              },
+		              onDeleteMany: async (keys) => {
+		                await deleteSessionsBulk(state, keys);
+		              },
+		              onRefresh: () => loadSessions(state),
+		              onPatch: (key, patch) => patchSession(state, key, patch),
+		              onDelete: (key) => deleteSession(state, key),
+		            })
+		          : nothing}
 
         ${state.tab === "cron"
           ? renderCron({

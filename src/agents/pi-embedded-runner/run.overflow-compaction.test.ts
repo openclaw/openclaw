@@ -131,6 +131,7 @@ vi.mock("../pi-embedded-helpers.js", async () => {
       const lower = msg.toLowerCase();
       return lower.includes("request_too_large") || lower.includes("request size exceeds");
     },
+    getApiErrorPayloadFingerprint: () => null,
     isFailoverAssistantError: vi.fn(() => false),
     isFailoverErrorMessage: vi.fn(() => false),
     isAuthAssistantError: vi.fn(() => false),
@@ -217,6 +218,41 @@ describe("overflow compaction in run loop", () => {
     );
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining("auto-compaction succeeded"));
     // Should not be an error result
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("retries after successful compaction on context overflow assistant error", async () => {
+    const lastAssistant = {
+      stopReason: "error",
+      errorMessage: "request_too_large: Request size exceeds model context window",
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null, lastAssistant }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null, lastAssistant: undefined }));
+
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      },
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "context overflow detected (assistant error); attempting auto-compaction",
+      ),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("auto-compaction succeeded (assistant error)"),
+    );
     expect(result.meta.error).toBeUndefined();
   });
 

@@ -4,7 +4,7 @@ import { toast } from "../components/toast";
 import { skeleton } from "../components/design-utils";
 import { formatAgo } from "../format";
 import { formatSessionTokens } from "../presenter";
-import { pathForTab } from "../navigation";
+import { hrefForTab } from "../navigation";
 import { icon } from "../icons";
 import { inferSessionType } from "../session-meta";
 import type { GatewaySessionRow, SessionsListResult, SessionsPreviewEntry } from "../types";
@@ -25,6 +25,11 @@ export type SessionLaneFilter = "all" | "cron" | "regular";
 export type SessionViewMode = "list" | "table";
 
 const UNLABELED_AGENT_KEY = "__unlabeled__";
+
+function isSubagentSessionKey(key: string): boolean {
+  const trimmed = key.trim();
+  return trimmed.startsWith("subagent:") || trimmed.includes(":subagent:");
+}
 
 function parseAgentIdFromSessionKey(key: string): string | null {
   const trimmed = key.trim();
@@ -83,6 +88,9 @@ export type SessionsProps = {
   laneFilter: SessionLaneFilter;
   tagFilter: string[];
   viewMode: SessionViewMode;
+  showHidden: boolean;
+  autoHideCompletedMinutes: number;
+  autoHideErroredMinutes: number;
   drawerKey: string | null;
   drawerExpanded: boolean;
   drawerPreviewLoading: boolean;
@@ -110,6 +118,9 @@ export type SessionsProps = {
   onTagFilterChange: (tags: string[]) => void;
   onLaneFilterChange: (lane: SessionLaneFilter) => void;
   onViewModeChange: (mode: SessionViewMode) => void;
+  onShowHiddenChange: (show: boolean) => void;
+  onAutoHideChange: (next: { completedMinutes: number; erroredMinutes: number }) => void;
+  onDeleteMany: (keys: string[]) => void;
   onRefresh: () => void;
   onPatch: (
     key: string,
@@ -231,7 +242,8 @@ function truncateKey(key: string, maxLen = 28): string {
 const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 const IDLE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
-function deriveSessionStatus(row: GatewaySessionRow): SessionStatus {
+function deriveSessionStatus(row: GatewaySessionRow, activeTasks?: SessionActiveTask[]): SessionStatus {
+  if (activeTasks && activeTasks.length > 0) return "active";
   if (!row.updatedAt) return "completed";
   const age = Date.now() - row.updatedAt;
   if (age < ACTIVE_THRESHOLD_MS) return "active";
@@ -248,6 +260,27 @@ function getStatusBadgeClass(status: SessionStatus): string {
     case "completed":
       return "badge--muted";
   }
+}
+
+function shouldAutoHideSession(params: {
+  row: GatewaySessionRow;
+  now: number;
+  activeTasks: SessionActiveTask[];
+  autoHideCompletedMinutes: number;
+  autoHideErroredMinutes: number;
+}): boolean {
+  const { row, now, activeTasks, autoHideCompletedMinutes, autoHideErroredMinutes } = params;
+  if (!row.updatedAt) return false;
+  if (activeTasks.some((t) => t.status === "in-progress")) return false;
+
+  const ageMs = Math.max(0, now - row.updatedAt);
+  if (row.abortedLastRun && autoHideErroredMinutes > 0) {
+    return ageMs >= autoHideErroredMinutes * 60_000;
+  }
+  if (deriveSessionStatus(row, activeTasks) === "completed" && autoHideCompletedMinutes > 0) {
+    return ageMs >= autoHideCompletedMinutes * 60_000;
+  }
+  return false;
 }
 
 function matchesSearch(row: GatewaySessionRow, search: string): boolean {
@@ -292,7 +325,10 @@ function filterSessionsTags(
   });
 }
 
-function countSessionStatuses(rows: GatewaySessionRow[]): {
+function countSessionStatuses(
+  rows: GatewaySessionRow[],
+  activeTasksByKey?: Map<string, SessionActiveTask[]>,
+): {
   total: number;
   active: number;
   idle: number;
@@ -304,7 +340,7 @@ function countSessionStatuses(rows: GatewaySessionRow[]): {
   let completed = 0;
   for (const row of rows) {
     total += 1;
-    const status = deriveSessionStatus(row);
+    const status = deriveSessionStatus(row, activeTasksByKey?.get(row.key));
     if (status === "active") active += 1;
     else if (status === "idle") idle += 1;
     else completed += 1;
@@ -340,6 +376,7 @@ function sortSessions(
   rows: GatewaySessionRow[],
   sort: SessionSortColumn,
   sortDir: SessionSortDir,
+  activeTasksByKey?: Map<string, SessionActiveTask[]>,
 ): GatewaySessionRow[] {
   const sorted = [...rows];
   const dir = sortDir === "asc" ? 1 : -1;
@@ -362,8 +399,8 @@ function sortSessions(
       }
       case "status": {
         const statusOrder = { active: 0, idle: 1, completed: 2 };
-        const statusA = statusOrder[deriveSessionStatus(a)];
-        const statusB = statusOrder[deriveSessionStatus(b)];
+        const statusA = statusOrder[deriveSessionStatus(a, activeTasksByKey?.get(a.key))];
+        const statusB = statusOrder[deriveSessionStatus(b, activeTasksByKey?.get(b.key))];
         return (statusA - statusB) * dir;
       }
       case "kind": {
@@ -469,27 +506,50 @@ function renderSortIcon(column: SessionSortColumn, props: SessionsProps) {
 
 export function renderSessions(props: SessionsProps) {
   const allRows = props.result?.sessions ?? [];
+  const now = Date.now();
+  const hiddenKeys = new Set<string>();
+  const visibleRows: GatewaySessionRow[] = [];
+  for (const row of allRows) {
+    const activeTasks = props.activeTasks?.get(row.key) ?? [];
+    if (
+      shouldAutoHideSession({
+        row,
+        now,
+        activeTasks,
+        autoHideCompletedMinutes: props.autoHideCompletedMinutes,
+        autoHideErroredMinutes: props.autoHideErroredMinutes,
+      })
+    ) {
+      hiddenKeys.add(row.key);
+    } else {
+      visibleRows.push(row);
+    }
+  }
+  const hiddenCount = hiddenKeys.size;
+  const displayRows = props.showHidden ? allRows : visibleRows;
   const defaults = props.result?.defaults ?? null;
   const resolvedDefaults = resolveSessionDefaults(defaults);
-  const baseRowsIgnoringStatus = filterSessionsBaseIgnoringStatus(allRows, props);
+  const baseRowsIgnoringStatus = filterSessionsBaseIgnoringStatus(displayRows, props);
   const baseRowsIgnoringStatusWithTags = filterSessionsTags(
     baseRowsIgnoringStatus,
     props.tagFilter,
   );
   const laneCounts = countSessionTypes(baseRowsIgnoringStatusWithTags);
   const laneFilteredRowsIgnoringStatus = filterSessionsLane(baseRowsIgnoringStatusWithTags, props);
-  const statusCounts = countSessionStatuses(laneFilteredRowsIgnoringStatus);
+  const statusCounts = countSessionStatuses(laneFilteredRowsIgnoringStatus, props.activeTasks);
   const statusFilteredRows =
     props.statusFilter === "all"
       ? laneFilteredRowsIgnoringStatus
       : laneFilteredRowsIgnoringStatus.filter(
-          (row) => deriveSessionStatus(row) === props.statusFilter,
+          (row) =>
+            deriveSessionStatus(row, props.activeTasks?.get(row.key)) === props.statusFilter,
         );
-  const rows = sortSessions(statusFilteredRows, props.sort, props.sortDir);
+  const rows = sortSessions(statusFilteredRows, props.sort, props.sortDir, props.activeTasks);
   const drawerSession = props.drawerKey
     ? allRows.find((row) => row.key === props.drawerKey) ?? null
     : null;
-  const totalCount = allRows.length;
+  const fetchedCount = allRows.length;
+  const totalCount = displayRows.length;
   const filteredCount = statusFilteredRows.length;
   const tagCountsSource = baseRowsIgnoringStatus;
   const tagCounts = (() => {
@@ -649,8 +709,14 @@ export function renderSessions(props: SessionsProps) {
             <div class="table-header-card__title">Sessions</div>
             <div class="table-header-card__subtitle">
               ${hasFilters
-                ? `${filteredCount} of ${totalCount} session${totalCount !== 1 ? "s" : ""}`
-                : `${totalCount} session${totalCount !== 1 ? "s" : ""}`}
+                ? `${filteredCount} of ${totalCount} shown`
+                : `${totalCount} shown`}
+              ${fetchedCount !== totalCount ? html` <span class="muted">(of ${fetchedCount} fetched)</span>` : nothing}
+              ${hiddenCount > 0
+                ? props.showHidden
+                  ? html` <span class="muted">(incl. ${hiddenCount} hidden)</span>`
+                  : html` <span class="muted">(${hiddenCount} hidden)</span>`
+                : nothing}
             </div>
           </div>
         </div>
@@ -692,11 +758,80 @@ export function renderSessions(props: SessionsProps) {
                       : nothing}
                   </div>
                 </div>
-              </div>
+	              </div>
 
-              <div class="sessions-filters-pane__section">
-                <div class="sessions-filters-pane__section-title">Slices</div>
-                <div class="sessions-slices">
+	              <details class="sessions-filters-pane__details">
+	                <summary class="sessions-filters-pane__details-summary">
+	                  ${icon("inbox", { size: 14 })}
+	                  <span>Display</span>
+	                </summary>
+	                <div class="sessions-filters-pane__details-body">
+	                  <div class="field--modern">
+	                    <label class="field__label">Auto-hide completed after (minutes)</label>
+	                    <input
+	                      class="field__input"
+	                      type="number"
+	                      min="0"
+	                      step="5"
+	                      inputmode="numeric"
+	                      .value=${String(props.autoHideCompletedMinutes)}
+	                      @input=${(e: Event) => {
+	                        const completedMinutes = Math.max(
+	                          0,
+	                          Math.min(
+	                            10_080,
+	                            Math.floor(Number((e.target as HTMLInputElement).value) || 0),
+	                          ),
+	                        );
+	                        props.onAutoHideChange({
+	                          completedMinutes,
+	                          erroredMinutes: props.autoHideErroredMinutes,
+	                        });
+	                      }}
+	                    />
+	                    <div class="muted" style="font-size: 11px;">0 = never</div>
+	                  </div>
+	                  <div class="field--modern">
+	                    <label class="field__label">Auto-hide errored after (minutes)</label>
+	                    <input
+	                      class="field__input"
+	                      type="number"
+	                      min="0"
+	                      step="5"
+	                      inputmode="numeric"
+	                      .value=${String(props.autoHideErroredMinutes)}
+	                      @input=${(e: Event) => {
+	                        const erroredMinutes = Math.max(
+	                          0,
+	                          Math.min(
+	                            10_080,
+	                            Math.floor(Number((e.target as HTMLInputElement).value) || 0),
+	                          ),
+	                        );
+	                        props.onAutoHideChange({
+	                          completedMinutes: props.autoHideCompletedMinutes,
+	                          erroredMinutes,
+	                        });
+	                      }}
+	                    />
+	                    <div class="muted" style="font-size: 11px;">0 = never</div>
+	                  </div>
+	                  <label class="table-filters__toggle ${props.showHidden ? "table-filters__toggle--active" : ""}">
+	                    <input
+	                      type="checkbox"
+	                      .checked=${props.showHidden}
+	                      @change=${(e: Event) =>
+	                        props.onShowHiddenChange((e.target as HTMLInputElement).checked)}
+	                    />
+	                    <span>Show hidden</span>
+	                    ${hiddenCount > 0 ? html`<span class="muted">(${hiddenCount})</span>` : nothing}
+	                  </label>
+	                </div>
+	              </details>
+
+	              <div class="sessions-filters-pane__section">
+	                <div class="sessions-filters-pane__section-title">Slices</div>
+	                <div class="sessions-slices">
                   <div class="sessions-slices__group">
                     <div class="sessions-slices__label">Status</div>
                     <div class="chip-row sessions-slices__chips">
@@ -764,13 +899,45 @@ export function renderSessions(props: SessionsProps) {
                       </button>
                     </div>
                   </div>
-                </div>
-              </div>
+	                </div>
+	              </div>
 
-              <details class="sessions-filters-pane__details">
-                <summary class="sessions-filters-pane__details-summary">
-                  ${icon("filter", { size: 14 })}
-                  <span>More filters</span>
+	              ${(() => {
+	                const subagentRows = allRows.filter((row) => isSubagentSessionKey(row.key));
+	                if (subagentRows.length === 0) return nothing;
+	                const candidates = subagentRows.filter((row) => {
+	                  const activeTasks = props.activeTasks?.get(row.key) ?? [];
+	                  if (activeTasks.some((t) => t.status === "in-progress")) return false;
+	                  return row.abortedLastRun || deriveSessionStatus(row, activeTasks) === "completed";
+	                });
+	                return html`
+	                  <div class="sessions-filters-pane__section">
+	                    <div class="sessions-filters-pane__section-title">Subagents</div>
+	                    <div class="muted" style="font-size: 11px;">
+	                      Subagent sessions are normally deleted by the gateway after a cooldown. Use
+	                      this to delete completed/errored subagent sessions immediately.
+	                    </div>
+	                    <div class="chip-row">
+	                      <span class="chip">Total ${subagentRows.length}</span>
+	                      <span class="chip">Done/errored ${candidates.length}</span>
+	                    </div>
+	                    <button
+	                      class="btn btn--secondary btn--sm"
+	                      ?disabled=${props.loading || candidates.length === 0}
+	                      @click=${() => props.onDeleteMany(candidates.map((r) => r.key))}
+	                      title="Delete completed/errored subagent sessions"
+	                    >
+	                      ${icon("trash-2", { size: 14 })}
+	                      <span>Clean up ${candidates.length}</span>
+	                    </button>
+	                  </div>
+	                `;
+	              })()}
+
+	              <details class="sessions-filters-pane__details">
+	                <summary class="sessions-filters-pane__details-summary">
+	                  ${icon("filter", { size: 14 })}
+	                  <span>More filters</span>
                 </summary>
                 <div class="sessions-filters-pane__details-body">
                   <div class="field--modern">
@@ -991,35 +1158,43 @@ export function renderSessions(props: SessionsProps) {
 
           <div class="sessions-dashboard__results">
             <div class="sessions-results-pane">
-              <div class="sessions-results-pane__toolbar">
-                <div class="sessions-results-pane__toolbar-left">
-                  ${hasFilters
-                    ? html`
-                      <span class="muted">${filteredCount} of ${totalCount}</span>
-                    `
-                    : html`<span class="muted">${totalCount} session${totalCount !== 1 ? "s" : ""}</span>`}
-                </div>
+	              <div class="sessions-results-pane__toolbar">
+	                <div class="sessions-results-pane__toolbar-left">
+	                  ${hasFilters
+	                    ? html`
+	                      <span class="muted">${filteredCount} of ${totalCount} shown</span>
+	                    `
+	                    : html`<span class="muted">${totalCount} shown</span>`}
+	                  ${fetchedCount !== totalCount ? html` <span class="muted">(of ${fetchedCount} fetched)</span>` : nothing}
+	                  ${hiddenCount > 0
+	                    ? props.showHidden
+	                      ? html` <span class="muted">(incl. ${hiddenCount} hidden)</span>`
+	                      : html` <span class="muted">(${hiddenCount} hidden)</span>`
+	                    : nothing}
+	                </div>
                 <div class="sessions-results-pane__toolbar-right">
-                  <div class="chip-row">
+                  <div class="sessions-toolbar__group sessions-toolbar__group--view">
                     <button
-                      class="chip ${props.viewMode === "list" ? "chip--accent" : ""}"
+                      class="sessions-view-toggle__btn ${props.viewMode === "list" ? "sessions-view-toggle__btn--active" : ""}"
                       type="button"
                       title="List view"
+                      aria-pressed=${props.viewMode === "list"}
                       @click=${() => props.onViewModeChange("list")}
                     >
-                      ${icon("list", { size: 14 })} List
+                      ${icon("list", { size: 14 })}<span>List</span>
                     </button>
                     <button
-                      class="chip ${props.viewMode === "table" ? "chip--accent" : ""}"
+                      class="sessions-view-toggle__btn ${props.viewMode === "table" ? "sessions-view-toggle__btn--active" : ""}"
                       type="button"
                       title="Table view"
+                      aria-pressed=${props.viewMode === "table"}
                       @click=${() => props.onViewModeChange("table")}
                     >
-                      ${icon("box", { size: 14 })} Table
+                      ${icon("box", { size: 14 })}<span>Table</span>
                     </button>
                   </div>
 
-                  <div class="sessions-sort">
+                  <div class="sessions-toolbar__group sessions-sort">
                     <select
                       class="field__input"
                       title="Sort by"
@@ -1218,7 +1393,7 @@ function renderListItem(
   });
   const displayName = row.displayName ?? row.key;
   const canLink = row.kind !== "global";
-  const status = deriveSessionStatus(row);
+  const status = deriveSessionStatus(row, activeTasks);
   const statusBadgeClass = getStatusBadgeClass(status);
 
   const sessionType = inferSessionType(row.key);
@@ -1516,7 +1691,8 @@ function renderSessionsDrawer(params: {
   subtitleParts.push(sessionIdPrefix);
   subtitleParts.push(session.kind);
   const subtitle = subtitleParts.join(" · ");
-  const status = deriveSessionStatus(session);
+  const activeTasks = props.activeTasks?.get(session.key) ?? [];
+  const status = deriveSessionStatus(session, activeTasks);
   const statusBadgeClass = getStatusBadgeClass(status);
   const updated = session.updatedAt ? formatAgo(session.updatedAt) : "n/a";
   const resolvedDefaults = resolveSessionDefaults(props.result?.defaults ?? null);
@@ -1918,9 +2094,9 @@ function renderRow(
   const displayName = row.displayName ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
-    ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
+    ? hrefForTab("chat", basePath, { session: row.key })
     : null;
-  const status = deriveSessionStatus(row);
+  const status = deriveSessionStatus(row, activeTasks);
   const statusBadgeClass = getStatusBadgeClass(status);
 
   const sessionType = inferSessionType(row.key);

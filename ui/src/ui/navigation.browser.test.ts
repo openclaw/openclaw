@@ -36,47 +36,51 @@ afterEach(() => {
 
 describe("control UI routing", () => {
   it("hydrates the tab from the location", async () => {
-    const app = mountApp("/sessions");
+    const app = mountApp("/#/sessions");
     await app.updateComplete;
 
     expect(app.tab).toBe("sessions");
-    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("#/sessions");
   });
 
   it("respects /ui base paths", async () => {
-    const app = mountApp("/ui/cron");
+    const app = mountApp("/ui/#/cron");
     await app.updateComplete;
 
     expect(app.basePath).toBe("/ui");
     expect(app.tab).toBe("cron");
-    expect(window.location.pathname).toBe("/ui/cron");
+    expect(window.location.pathname).toBe("/ui/");
+    expect(window.location.hash).toBe("#/cron");
   });
 
   it("infers nested base paths", async () => {
-    const app = mountApp("/apps/clawdbot/cron");
+    const app = mountApp("/apps/clawdbot/#/cron");
     await app.updateComplete;
 
     expect(app.basePath).toBe("/apps/clawdbot");
     expect(app.tab).toBe("cron");
-    expect(window.location.pathname).toBe("/apps/clawdbot/cron");
+    expect(window.location.pathname).toBe("/apps/clawdbot/");
+    expect(window.location.hash).toBe("#/cron");
   });
 
   it("honors explicit base path overrides", async () => {
     window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = "/clawdbot";
-    const app = mountApp("/clawdbot/sessions");
+    const app = mountApp("/clawdbot/#/sessions");
     await app.updateComplete;
 
     expect(app.basePath).toBe("/clawdbot");
     expect(app.tab).toBe("sessions");
-    expect(window.location.pathname).toBe("/clawdbot/sessions");
+    expect(window.location.pathname).toBe("/clawdbot/");
+    expect(window.location.hash).toBe("#/sessions");
   });
 
   it("updates the URL when clicking nav items", async () => {
-    const app = mountApp("/chat");
+    const app = mountApp("/#/chat");
     await app.updateComplete;
 
     const link = app.querySelector<HTMLAnchorElement>(
-      'a.nav-item[href="/channels"]',
+      'a.nav-item[href="/#/channels"]',
     );
     expect(link).not.toBeNull();
     link?.dispatchEvent(
@@ -85,11 +89,12 @@ describe("control UI routing", () => {
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
-    expect(window.location.pathname).toBe("/channels");
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("#/channels");
   });
 
   it("keeps chat and nav usable on narrow viewports", async () => {
-    const app = mountApp("/chat");
+    const app = mountApp("/#/chat");
     await app.updateComplete;
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
@@ -117,7 +122,7 @@ describe("control UI routing", () => {
   });
 
   it("auto-scrolls chat history to the latest message", async () => {
-    const app = mountApp("/chat");
+    const app = mountApp("/#/chat");
     await app.updateComplete;
 
     const initialContainer = app.querySelector(".chat-thread") as HTMLElement | null;
@@ -150,20 +155,22 @@ describe("control UI routing", () => {
   });
 
   it("hydrates token from URL params and strips it", async () => {
-    const app = mountApp("/ui/overview?token=abc123");
+    const app = mountApp("/ui/?token=abc123#/overview");
     await app.updateComplete;
 
     expect(app.settings.token).toBe("abc123");
-    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.pathname).toBe("/ui/");
+    expect(window.location.hash).toBe("#/overview");
     expect(window.location.search).toBe("");
   });
 
   it("hydrates password from URL params and strips it", async () => {
-    const app = mountApp("/ui/overview?password=sekret");
+    const app = mountApp("/ui/?password=sekret#/overview");
     await app.updateComplete;
 
     expect(app.password).toBe("sekret");
-    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.pathname).toBe("/ui/");
+    expect(window.location.hash).toBe("#/overview");
     expect(window.location.search).toBe("");
   });
 
@@ -172,11 +179,12 @@ describe("control UI routing", () => {
       "clawdbot.control.settings.v1",
       JSON.stringify({ token: "existing-token" }),
     );
-    const app = mountApp("/ui/overview?token=abc123");
+    const app = mountApp("/ui/?token=abc123#/overview");
     await app.updateComplete;
 
     expect(app.settings.token).toBe("abc123");
-    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.pathname).toBe("/ui/");
+    expect(window.location.hash).toBe("#/overview");
     expect(window.location.search).toBe("");
   });
 });

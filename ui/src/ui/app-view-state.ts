@@ -35,6 +35,7 @@ import type { NostrProfileFormState } from "./views/channels.nostr-profile-form"
 import type { ChannelWizardState } from "./views/channel-config-wizard";
 import type { CompactionStatus } from "./app-tool-stream";
 import type { ChatTask, ChatActivityLog } from "./types/task-types";
+import type { SessionActiveTask } from "./views/sessions";
 import type {
   OverseerGoalStatusResult,
   OverseerStatusResult,
@@ -154,11 +155,15 @@ export type AppViewState = {
   sessionsLaneFilter: "all" | "cron" | "regular";
   sessionsTagFilter: string[];
   sessionsViewMode: "list" | "table";
+  sessionsShowHidden: boolean;
+  sessionsAutoHideCompletedMinutes: number;
+  sessionsAutoHideErroredMinutes: number;
   sessionsDrawerKey: string | null;
   sessionsDrawerExpanded: boolean;
   sessionsPreviewLoading: boolean;
   sessionsPreviewError: string | null;
   sessionsPreviewEntry: SessionsPreviewEntry | null;
+  sessionsActiveTasksByKey: Map<string, SessionActiveTask[]>;
   cronLoading: boolean;
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;

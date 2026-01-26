@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   TAB_GROUPS,
+  hrefForTab,
   iconForTab,
   inferBasePathFromPathname,
+  parseHashRoute,
   normalizeBasePath,
   normalizePath,
+  rootPathForBasePath,
+  hashForTab,
   pathForTab,
   subtitleForTab,
+  tabFromHash,
   tabFromPath,
   titleForTab,
   type Tab,
@@ -149,6 +154,38 @@ describe("tabFromPath", () => {
   it("is case-insensitive", () => {
     expect(tabFromPath("/CHAT")).toBe("chat");
     expect(tabFromPath("/Overview")).toBe("overview");
+  });
+});
+
+describe("hash routing", () => {
+  it("parses hash routes into a path + query", () => {
+    const parsed = parseHashRoute("#/chat?session=main");
+    expect(parsed.path).toBe("/chat");
+    expect(parsed.searchParams.get("session")).toBe("main");
+  });
+
+  it("builds stable hash routes for tabs", () => {
+    expect(hashForTab("chat")).toBe("#/chat");
+    expect(hashForTab("landing")).toBe("#/");
+  });
+
+  it("returns tab for valid hashes", () => {
+    expect(tabFromHash("#/chat")).toBe("chat");
+    expect(tabFromHash("#/CHAT")).toBe("chat");
+    expect(tabFromHash("#/")).toBe("landing");
+  });
+
+  it("treats empty hashes as absent routing state", () => {
+    expect(tabFromHash("")).toBeNull();
+    expect(tabFromHash("#")).toBeNull();
+  });
+
+  it("builds hrefs that keep the app rooted at basePath", () => {
+    expect(rootPathForBasePath("")).toBe("/");
+    expect(rootPathForBasePath("/ui")).toBe("/ui/");
+    expect(hrefForTab("chat")).toBe("/#/chat");
+    expect(hrefForTab("chat", "/ui")).toBe("/ui/#/chat");
+    expect(hrefForTab("chat", "/ui", { session: "main" })).toBe("/ui/#/chat?session=main");
   });
 });
 

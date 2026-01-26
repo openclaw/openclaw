@@ -53,6 +53,7 @@ type GatewayHost = {
   chatRunId: string | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
+  handleAgentSessionActivity?: (payload?: AgentEventPayload) => void;
 };
 
 type SessionDefaultsSnapshot = {
@@ -166,6 +167,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "agent") {
     if (host.onboarding) return;
+    host.handleAgentSessionActivity?.(evt.payload as AgentEventPayload | undefined);
     handleAgentEvent(
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,

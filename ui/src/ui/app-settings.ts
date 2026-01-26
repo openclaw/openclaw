@@ -11,7 +11,16 @@ import { loadPresence } from "./controllers/presence";
 import { loadSessions } from "./controllers/sessions";
 import { loadSkills } from "./controllers/skills";
 import { refreshOverseer } from "./controllers/overseer";
-import { inferBasePathFromPathname, normalizeBasePath, normalizePath, pathForTab, tabFromPath, type Tab } from "./navigation";
+import {
+  hashForTab,
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  parseHashRoute,
+  rootPathForBasePath,
+  tabFromHash,
+  tabFromPath,
+  type Tab,
+} from "./navigation";
 import { saveSettings, type UiSettings } from "./storage";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition";
@@ -79,11 +88,12 @@ export function setLastActiveSessionKey(host: SettingsHost, next: string) {
 }
 
 export function applySettingsFromUrl(host: SettingsHost) {
-  if (!window.location.search) return;
+  if (!window.location.search && !window.location.hash) return;
   const params = new URLSearchParams(window.location.search);
+  const hashParams = parseHashRoute(window.location.hash).searchParams;
   const tokenRaw = params.get("token");
   const passwordRaw = params.get("password");
-  const sessionRaw = params.get("session");
+  const sessionRaw = params.get("session") ?? hashParams.get("session");
   const gatewayUrlRaw = params.get("gatewayUrl");
   let shouldCleanUrl = false;
 
@@ -293,18 +303,24 @@ export function detachThemeListener(host: SettingsHost) {
 
 export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
   if (typeof window === "undefined") return;
-  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
+  const resolved =
+    tabFromHash(window.location.hash) ??
+    tabFromPath(window.location.pathname, host.basePath) ??
+    "chat";
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }
 
 export function onPopState(host: SettingsHost) {
   if (typeof window === "undefined") return;
-  const resolved = tabFromPath(window.location.pathname, host.basePath);
+  const resolved =
+    tabFromHash(window.location.hash) ??
+    tabFromPath(window.location.pathname, host.basePath);
   if (!resolved) return;
 
   const url = new URL(window.location.href);
-  const session = url.searchParams.get("session")?.trim();
+  const hashSession = parseHashRoute(url.hash).searchParams.get("session")?.trim();
+  const session = (url.searchParams.get("session")?.trim() || hashSession) ?? "";
   if (session) {
     host.sessionKey = session;
     applySettings(host, {
@@ -335,19 +351,20 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
 
 export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   if (typeof window === "undefined") return;
-  const targetPath = normalizePath(pathForTab(tab, host.basePath));
-  const currentPath = normalizePath(window.location.pathname);
   const url = new URL(window.location.href);
+  const rootPath = rootPathForBasePath(host.basePath);
+  const targetHash = (() => {
+    const params = new URLSearchParams();
+    if (tab === "chat" && host.sessionKey) params.set("session", host.sessionKey);
+    return hashForTab(tab, params);
+  })();
 
-  if (tab === "chat" && host.sessionKey) {
-    url.searchParams.set("session", host.sessionKey);
-  } else {
-    url.searchParams.delete("session");
-  }
+  // Canonicalize the chat session param into the hash route query so we can
+  // reload and deep-link reliably on static/file hosts.
+  url.searchParams.delete("session");
 
-  if (currentPath !== targetPath) {
-    url.pathname = targetPath;
-  }
+  if (url.pathname !== rootPath) url.pathname = rootPath;
+  if (url.hash !== targetHash) url.hash = targetHash;
 
   if (replace) {
     window.history.replaceState({}, "", url.toString());
@@ -363,7 +380,10 @@ export function syncUrlWithSessionKey(
 ) {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
-  url.searchParams.set("session", sessionKey);
+  url.searchParams.delete("session");
+  const params = new URLSearchParams(parseHashRoute(url.hash).searchParams);
+  params.set("session", sessionKey);
+  url.hash = hashForTab("chat", params);
   if (replace) window.history.replaceState({}, "", url.toString());
   else window.history.pushState({}, "", url.toString());
 }

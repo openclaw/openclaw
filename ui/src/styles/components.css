@@ -2422,6 +2422,60 @@
   justify-content: flex-end;
 }
 
+.sessions-toolbar__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessions-toolbar__group--view {
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+}
+
+:root[data-theme="light"] .sessions-toolbar__group--view {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.sessions-view-toggle__btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 150ms ease, color 150ms ease;
+  min-height: 30px;
+}
+
+.sessions-view-toggle__btn:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="light"] .sessions-view-toggle__btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.sessions-view-toggle__btn--active {
+  color: var(--text);
+  background: rgba(245, 159, 74, 0.14);
+}
+
+.sessions-view-toggle__btn--active:hover:not(:disabled) {
+  background: rgba(245, 159, 74, 0.18);
+}
+
 .sessions-sort {
   display: inline-flex;
   align-items: center;
@@ -2430,6 +2484,30 @@
 
 .sessions-sort .field__input {
   min-width: 160px;
+  width: auto;
+  padding: 7px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  border-color: var(--border);
+  background: rgba(0, 0, 0, 0.16);
+  appearance: none;
+  line-height: 1;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) calc(50% - 2px), calc(100% - 9px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+:root[data-theme="light"] .sessions-sort .field__input {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.sessions-sort .btn--icon.btn--icon-sm {
+  border-radius: 999px;
+  height: 30px;
+  width: 30px;
 }
 
 .sessions-sort__dir-icon {

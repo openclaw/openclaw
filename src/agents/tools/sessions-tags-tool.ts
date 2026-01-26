@@ -89,8 +89,11 @@ export function createSessionsTagsTool(opts?: {
         });
       }
 
+      const target = loadSessionEntry(resolvedSession.key);
+      const canonicalKey = target.canonicalKey;
+
       const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
-      const targetAgentId = resolveAgentIdFromSessionKey(resolvedSession.key);
+      const targetAgentId = resolveAgentIdFromSessionKey(canonicalKey);
       if (requesterAgentId !== targetAgentId) {
         if (!a2aPolicy.enabled) {
           return jsonResult({
@@ -121,7 +124,7 @@ export function createSessionsTagsTool(opts?: {
           timeoutMs: 10_000,
         })) as { sessions?: Array<Record<string, unknown>> };
         const ok = (Array.isArray(sessions?.sessions) ? sessions.sessions : []).some(
-          (entry) => entry?.key === resolvedSession.key,
+          (entry) => entry?.key === canonicalKey,
         );
         if (!ok) {
           return jsonResult({
@@ -151,8 +154,7 @@ export function createSessionsTagsTool(opts?: {
       } else if (tagsParam !== undefined) {
         nextTags = tagsParam.length ? tagsParam : null;
       } else if (addParam?.length || removeParam?.length) {
-        const { entry } = loadSessionEntry(resolvedSession.key);
-        const current = normalizeTagList(entry?.tags);
+        const current = normalizeTagList(target.entry?.tags);
 
         const removeSet = new Set(normalizeTagList(removeParam ?? []).map((t) => t.toLowerCase()));
         const base = current.filter((t) => !removeSet.has(t.toLowerCase()));
@@ -172,7 +174,7 @@ export function createSessionsTagsTool(opts?: {
       const patched = (await callGateway({
         method: "sessions.patch",
         params: {
-          key: resolvedSession.key,
+          key: canonicalKey,
           tags: nextTags,
         },
         timeoutMs: 10_000,

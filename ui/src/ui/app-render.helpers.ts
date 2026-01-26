@@ -2,7 +2,7 @@ import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
 import type { AppViewState } from "./app-view-state";
-import { pathForTab, titleForTab, type Tab } from "./navigation";
+import { hrefForTab, titleForTab, type Tab } from "./navigation";
 import { loadChatHistory } from "./controllers/chat";
 import { syncUrlWithSessionKey } from "./app-settings";
 import type { SessionsListResult } from "./types";
@@ -11,7 +11,7 @@ import type { ThemeTransitionContext } from "./theme-transition";
 import { iconForTabSvg, icon } from "./icons";
 
 export function renderTab(state: AppViewState, tab: Tab) {
-  const href = pathForTab(tab, state.basePath);
+  const href = hrefForTab(tab, state.basePath);
   const isActive = state.tab === tab;
   return html`
     <a

@@ -29,6 +29,7 @@ import { ensureClawdbotModelsJson } from "../models-config.js";
 import {
   classifyFailoverReason,
   formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isCompactionFailureError,
   isContextOverflowError,
@@ -41,6 +42,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -292,6 +294,63 @@ export async function runEmbeddedPiAgent(
       }
 
       let overflowCompactionAttempted = false;
+      const emitManualCompactionEvent = (data: Record<string, unknown>) => {
+        // Mirror pi session compaction event shape so followup runners and UIs can
+        // treat manual overflow compactions the same way.
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "compaction",
+          data,
+          sessionKey: params.sessionKey ?? params.sessionId,
+        });
+        void params.onAgentEvent?.({
+          stream: "compaction",
+          data,
+        });
+      };
+
+      const emitOverflowDiagnostics = (payload: {
+        source: "prompt_error" | "assistant_error";
+        phase: "detected" | "compaction_start" | "compaction_end";
+        errorText: string;
+        compact?: {
+          ok: boolean;
+          compacted: boolean;
+          reason?: string;
+          tokensBefore?: number;
+          tokensAfter?: number;
+        };
+      }) => {
+        const fingerprint = getApiErrorPayloadFingerprint(payload.errorText) ?? undefined;
+        const errorPreview = payload.errorText.trim().slice(0, 240);
+        const meta = {
+          runId: params.runId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+          provider,
+          modelId,
+          source: payload.source,
+          phase: payload.phase,
+          fingerprint,
+          errorPreview,
+          ...(payload.compact
+            ? {
+                compactionOk: payload.compact.ok,
+                compacted: payload.compact.compacted,
+                compactionReason: payload.compact.reason,
+                tokensBefore: payload.compact.tokensBefore,
+                tokensAfter: payload.compact.tokensAfter,
+              }
+            : {}),
+        };
+        // One-line structured record for grepping.
+        log.warn("context overflow diagnostics", meta);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "error",
+          data: { kind: "context_overflow", ...meta },
+          sessionKey: params.sessionKey ?? params.sessionId,
+        });
+      };
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -360,6 +419,11 @@ export async function runEmbeddedPiAgent(
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
             if (isContextOverflowError(errorText)) {
+              emitOverflowDiagnostics({
+                source: "prompt_error",
+                phase: "detected",
+                errorText,
+              });
               const isCompactionFailure = isCompactionFailureError(errorText);
               // Attempt auto-compaction on context overflow (not compaction_failure)
               if (!isCompactionFailure && !overflowCompactionAttempted) {
@@ -367,6 +431,16 @@ export async function runEmbeddedPiAgent(
                   `context overflow detected; attempting auto-compaction for ${provider}/${modelId}`,
                 );
                 overflowCompactionAttempted = true;
+                emitOverflowDiagnostics({
+                  source: "prompt_error",
+                  phase: "compaction_start",
+                  errorText,
+                });
+                emitManualCompactionEvent({
+                  phase: "start",
+                  mode: "overflow_fallback",
+                  source: "prompt_error",
+                });
                 const compactResult = await compactEmbeddedPiSessionDirect({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
@@ -389,11 +463,57 @@ export async function runEmbeddedPiAgent(
                 });
                 if (compactResult.compacted) {
                   log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                  emitOverflowDiagnostics({
+                    source: "prompt_error",
+                    phase: "compaction_end",
+                    errorText,
+                    compact: {
+                      ok: compactResult.ok,
+                      compacted: compactResult.compacted,
+                      reason: compactResult.reason,
+                      tokensBefore: compactResult.result?.tokensBefore,
+                      tokensAfter: compactResult.result?.tokensAfter,
+                    },
+                  });
+                  emitManualCompactionEvent({
+                    phase: "end",
+                    willRetry: false,
+                    mode: "overflow_fallback",
+                    source: "prompt_error",
+                    ok: compactResult.ok,
+                    compacted: compactResult.compacted,
+                    reason: compactResult.reason,
+                    tokensBefore: compactResult.result?.tokensBefore,
+                    tokensAfter: compactResult.result?.tokensAfter,
+                  });
                   continue;
                 }
                 log.warn(
                   `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
                 );
+                emitOverflowDiagnostics({
+                  source: "prompt_error",
+                  phase: "compaction_end",
+                  errorText,
+                  compact: {
+                    ok: compactResult.ok,
+                    compacted: compactResult.compacted,
+                    reason: compactResult.reason,
+                    tokensBefore: compactResult.result?.tokensBefore,
+                    tokensAfter: compactResult.result?.tokensAfter,
+                  },
+                });
+                emitManualCompactionEvent({
+                  phase: "end",
+                  willRetry: false,
+                  mode: "overflow_fallback",
+                  source: "prompt_error",
+                  ok: compactResult.ok,
+                  compacted: compactResult.compacted,
+                  reason: compactResult.reason,
+                  tokensBefore: compactResult.result?.tokensBefore,
+                  tokensAfter: compactResult.result?.tokensAfter,
+                });
               }
               const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
               return {
@@ -480,6 +600,131 @@ export async function runEmbeddedPiAgent(
               });
             }
             throw promptError;
+          }
+
+          // Some providers surface context overflows as an assistant "error" message instead of throwing.
+          // Treat that the same as a thrown promptError: attempt one compaction + retry.
+          const assistantErrorText =
+            lastAssistant?.stopReason === "error" ? (lastAssistant.errorMessage ?? "").trim() : "";
+          if (!aborted && assistantErrorText && isContextOverflowError(assistantErrorText)) {
+            emitOverflowDiagnostics({
+              source: "assistant_error",
+              phase: "detected",
+              errorText: assistantErrorText,
+            });
+            const isCompactionFailure = isCompactionFailureError(assistantErrorText);
+            if (!isCompactionFailure && !overflowCompactionAttempted) {
+              log.warn(
+                `context overflow detected (assistant error); attempting auto-compaction for ${provider}/${modelId}`,
+              );
+              overflowCompactionAttempted = true;
+              emitOverflowDiagnostics({
+                source: "assistant_error",
+                phase: "compaction_start",
+                errorText: assistantErrorText,
+              });
+              emitManualCompactionEvent({
+                phase: "start",
+                mode: "overflow_fallback",
+                source: "assistant_error",
+              });
+              const compactResult = await compactEmbeddedPiSessionDirect({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                messageChannel: params.messageChannel,
+                messageProvider: params.messageProvider,
+                agentAccountId: params.agentAccountId,
+                authProfileId: lastProfileId,
+                sessionFile: params.sessionFile,
+                workspaceDir: params.workspaceDir,
+                agentDir,
+                config: params.config,
+                skillsSnapshot: params.skillsSnapshot,
+                provider,
+                model: modelId,
+                thinkLevel,
+                reasoningLevel: params.reasoningLevel,
+                bashElevated: params.bashElevated,
+                extraSystemPrompt: params.extraSystemPrompt,
+                ownerNumbers: params.ownerNumbers,
+              });
+              if (compactResult.compacted) {
+                log.info(
+                  `auto-compaction succeeded (assistant error) for ${provider}/${modelId}; retrying prompt`,
+                );
+                emitOverflowDiagnostics({
+                  source: "assistant_error",
+                  phase: "compaction_end",
+                  errorText: assistantErrorText,
+                  compact: {
+                    ok: compactResult.ok,
+                    compacted: compactResult.compacted,
+                    reason: compactResult.reason,
+                    tokensBefore: compactResult.result?.tokensBefore,
+                    tokensAfter: compactResult.result?.tokensAfter,
+                  },
+                });
+                emitManualCompactionEvent({
+                  phase: "end",
+                  willRetry: false,
+                  mode: "overflow_fallback",
+                  source: "assistant_error",
+                  ok: compactResult.ok,
+                  compacted: compactResult.compacted,
+                  reason: compactResult.reason,
+                  tokensBefore: compactResult.result?.tokensBefore,
+                  tokensAfter: compactResult.result?.tokensAfter,
+                });
+                continue;
+              }
+              log.warn(
+                `auto-compaction failed (assistant error) for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+              );
+              emitOverflowDiagnostics({
+                source: "assistant_error",
+                phase: "compaction_end",
+                errorText: assistantErrorText,
+                compact: {
+                  ok: compactResult.ok,
+                  compacted: compactResult.compacted,
+                  reason: compactResult.reason,
+                  tokensBefore: compactResult.result?.tokensBefore,
+                  tokensAfter: compactResult.result?.tokensAfter,
+                },
+              });
+              emitManualCompactionEvent({
+                phase: "end",
+                willRetry: false,
+                mode: "overflow_fallback",
+                source: "assistant_error",
+                ok: compactResult.ok,
+                compacted: compactResult.compacted,
+                reason: compactResult.reason,
+                tokensBefore: compactResult.result?.tokensBefore,
+                tokensAfter: compactResult.result?.tokensAfter,
+              });
+            }
+            const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            return {
+              payloads: [
+                {
+                  text:
+                    "Context overflow: prompt too large for the model. " +
+                    "Try again with less input or a larger-context model.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: {
+                  sessionId: sessionIdUsed,
+                  provider,
+                  model: model.id,
+                },
+                systemPromptReport: attempt.systemPromptReport,
+                error: { kind, message: assistantErrorText },
+              },
+            };
           }
 
           const fallbackThinking = pickFallbackThinkingLevel({

@@ -5,12 +5,15 @@ describe("isContextOverflowError", () => {
   it("matches known overflow hints", () => {
     const samples = [
       "request_too_large",
+      "context_length_exceeded",
       "Request exceeds the maximum size",
       "context length exceeded",
       "Maximum context length",
       "prompt is too long: 208423 tokens > 200000 maximum",
       "Context overflow: Summarization failed",
       "413 Request Entity Too Large",
+      "This model's maximum context length is 128000 tokens.",
+      "The maximum context length for this model is 8192 tokens.",
     ];
     for (const sample of samples) {
       expect(isContextOverflowError(sample)).toBe(true);

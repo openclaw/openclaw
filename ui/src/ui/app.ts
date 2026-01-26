@@ -49,10 +49,12 @@ import {
 } from "./controllers/tts";
 import {
   resetToolStream as resetToolStreamInternal,
+  type AgentEventPayload,
   type ToolStreamEntry,
 } from "./app-tool-stream";
 import type { ChatTask, ChatActivityLog } from "./types/task-types";
 import { deriveTasksFromToolStream } from "./controllers/chat-tasks";
+import type { SessionActiveTask } from "./views/sessions";
 import {
   exportLogs as exportLogsInternal,
   handleChatScroll as handleChatScrollInternal,
@@ -199,6 +201,36 @@ function readSessionsViewMode(): "list" | "table" {
   }
 }
 
+const SESSIONS_SHOW_HIDDEN_STORAGE_KEY = "clawdbot.control.ui.sessions.showHidden.v1";
+const SESSIONS_AUTO_HIDE_COMPLETED_MINUTES_KEY =
+  "clawdbot.control.ui.sessions.autoHide.completedMinutes.v1";
+const SESSIONS_AUTO_HIDE_ERRORED_MINUTES_KEY =
+  "clawdbot.control.ui.sessions.autoHide.erroredMinutes.v1";
+
+function readBooleanStorage(key: string, fallback = false): boolean {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return raw === "true" || raw === "1" || raw === "yes";
+  } catch {
+    return fallback;
+  }
+}
+
+function readNumberStorage(key: string, fallback = 0, min = 0, max = 10_080): number {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.floor(parsed)));
+  } catch {
+    return fallback;
+  }
+}
+
 @customElement("clawdbot-app")
 export class ClawdbotApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
@@ -342,11 +374,35 @@ export class ClawdbotApp extends LitElement {
   @state() sessionsLaneFilter: "all" | "cron" | "regular" = "all";
   @state() sessionsTagFilter: string[] = [];
   @state() sessionsViewMode: "list" | "table" = readSessionsViewMode();
+  @state() sessionsShowHidden: boolean = readBooleanStorage(SESSIONS_SHOW_HIDDEN_STORAGE_KEY, false);
+  @state() sessionsAutoHideCompletedMinutes: number = readNumberStorage(
+    SESSIONS_AUTO_HIDE_COMPLETED_MINUTES_KEY,
+    0,
+    0,
+    10_080,
+  );
+  @state() sessionsAutoHideErroredMinutes: number = readNumberStorage(
+    SESSIONS_AUTO_HIDE_ERRORED_MINUTES_KEY,
+    0,
+    0,
+    10_080,
+  );
   @state() sessionsDrawerKey: string | null = null;
   @state() sessionsDrawerExpanded = false;
   @state() sessionsPreviewLoading = false;
   @state() sessionsPreviewError: string | null = null;
   @state() sessionsPreviewEntry: SessionsPreviewEntry | null = null;
+  @state() sessionsActiveTasksByKey: Map<string, SessionActiveTask[]> = new Map();
+  private sessionsActiveTaskStateByKey = new Map<
+    string,
+    Map<
+      string,
+      SessionActiveTask & {
+        lastSeenAt: number;
+      }
+    >
+  >();
+  private sessionsActiveTasksLastPruneAt = 0;
 
   @state() cronLoading = false;
   @state() cronJobs: CronJob[] = [];
@@ -482,6 +538,10 @@ export class ClawdbotApp extends LitElement {
     onPopStateInternal(
       this as unknown as Parameters<typeof onPopStateInternal>[0],
     );
+  private hashChangeHandler = () =>
+    onPopStateInternal(
+      this as unknown as Parameters<typeof onPopStateInternal>[0],
+    );
   private themeMedia: MediaQueryList | null = null;
   private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
   private topbarObserver: ResizeObserver | null = null;
@@ -603,6 +663,169 @@ export class ClawdbotApp extends LitElement {
     resetToolStreamInternal(
       this as unknown as Parameters<typeof resetToolStreamInternal>[0],
     );
+  }
+
+  handleAgentSessionActivity(payload?: AgentEventPayload) {
+    if (!payload) return;
+    const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey.trim() : "";
+    if (!sessionKey) return;
+
+    const now = Date.now();
+    const STALE_MS = 6 * 60 * 60_000; // 6h
+    const PRUNE_EVERY_MS = 30_000;
+
+    if (now - this.sessionsActiveTasksLastPruneAt >= PRUNE_EVERY_MS) {
+      this.sessionsActiveTasksLastPruneAt = now;
+      let didPrune = false;
+      for (const [key, tasks] of this.sessionsActiveTaskStateByKey) {
+        for (const [taskKey, task] of tasks) {
+          if (now - task.lastSeenAt > STALE_MS) {
+            tasks.delete(taskKey);
+            didPrune = true;
+          }
+        }
+        if (tasks.size === 0) this.sessionsActiveTaskStateByKey.delete(key);
+      }
+      if (didPrune) {
+        const next = new Map<string, SessionActiveTask[]>();
+        for (const [key, tasks] of this.sessionsActiveTaskStateByKey) {
+          next.set(
+            key,
+            [...tasks.values()].map(({ lastSeenAt: _, ...rest }) => rest),
+          );
+        }
+        this.sessionsActiveTasksByKey = next;
+      }
+    }
+
+    const stream = typeof payload.stream === "string" ? payload.stream : "";
+    const data = payload.data ?? {};
+    const phase = typeof data.phase === "string" ? data.phase : "";
+    const runId = typeof payload.runId === "string" ? payload.runId : "";
+
+    const ensureTasksMap = () => {
+      const existing = this.sessionsActiveTaskStateByKey.get(sessionKey);
+      if (existing) return existing;
+      const created = new Map<string, SessionActiveTask & { lastSeenAt: number }>();
+      this.sessionsActiveTaskStateByKey.set(sessionKey, created);
+      return created;
+    };
+
+    let didChange = false;
+
+    const ensureRunTask = (tasks: Map<string, SessionActiveTask & { lastSeenAt: number }>) => {
+      if (!runId) return false;
+      const key = `run:${runId}`;
+      const existing = tasks.get(key);
+      if (existing) {
+        existing.lastSeenAt = now;
+        return false;
+      }
+      tasks.set(key, {
+        taskId: key,
+        taskName: "Run",
+        status: "in-progress",
+        startedAt: typeof payload.ts === "number" ? payload.ts : now,
+        lastSeenAt: now,
+      });
+      return true;
+    };
+
+    if (stream === "lifecycle") {
+      if (!runId) return;
+      const tasks = ensureTasksMap();
+      const runKey = `run:${runId}`;
+      if (phase === "start") {
+        didChange = ensureRunTask(tasks);
+      } else if (phase === "end") {
+        let removed = tasks.delete(runKey);
+        for (const key of [...tasks.keys()]) {
+          if (
+            key.startsWith(`${runId}:`) ||
+            key === `compaction:${runId}` ||
+            key.startsWith(`compaction:${runId}:`)
+          ) {
+            removed = tasks.delete(key) || removed;
+          }
+        }
+        didChange = removed;
+      } else {
+        const existing = tasks.get(runKey);
+        if (existing) {
+          existing.lastSeenAt = now;
+        }
+      }
+    } else if (stream === "tool") {
+      const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+      if (!toolCallId) return;
+      const toolName = typeof data.name === "string" ? data.name : "tool";
+      const key = `${runId}:${toolCallId}`;
+      const tasks = ensureTasksMap();
+      const runChanged = ensureRunTask(tasks);
+
+      if (phase === "result") {
+        didChange = tasks.delete(key) || runChanged;
+      } else {
+        const existing = tasks.get(key);
+        if (existing) {
+          existing.lastSeenAt = now;
+        } else {
+          tasks.set(key, {
+            taskId: key,
+            taskName: toolName,
+            status: "in-progress",
+            startedAt: typeof payload.ts === "number" ? payload.ts : now,
+            lastSeenAt: now,
+          });
+          didChange = true;
+        }
+        didChange = didChange || runChanged;
+      }
+    } else if (stream === "compaction") {
+      const key = `compaction:${runId || "unknown"}`;
+      const tasks = ensureTasksMap();
+      const runChanged = ensureRunTask(tasks);
+      if (phase === "end") {
+        didChange = tasks.delete(key) || runChanged;
+      } else if (phase === "start") {
+        if (!tasks.has(key)) {
+          tasks.set(key, {
+            taskId: key,
+            taskName: "Compaction",
+            status: "in-progress",
+            startedAt: typeof payload.ts === "number" ? payload.ts : now,
+            lastSeenAt: now,
+          });
+          didChange = true;
+        } else {
+          const existing = tasks.get(key);
+          if (existing) existing.lastSeenAt = now;
+        }
+        didChange = didChange || runChanged;
+      } else {
+        const existing = tasks.get(key);
+        if (existing) {
+          existing.lastSeenAt = now;
+        }
+        didChange = runChanged;
+      }
+    } else {
+      const tasks = ensureTasksMap();
+      didChange = ensureRunTask(tasks);
+    }
+
+    if (!didChange) return;
+
+    const tasks = this.sessionsActiveTaskStateByKey.get(sessionKey);
+    if (tasks && tasks.size === 0) this.sessionsActiveTaskStateByKey.delete(sessionKey);
+
+    const next = new Map(this.sessionsActiveTasksByKey);
+    const list = tasks
+      ? [...tasks.values()].map(({ lastSeenAt: _, ...rest }) => rest)
+      : [];
+    if (list.length === 0) next.delete(sessionKey);
+    else next.set(sessionKey, list);
+    this.sessionsActiveTasksByKey = next;
   }
 
   resetChatScroll() {

@@ -117,3 +117,33 @@ export async function deleteSession(state: SessionsState, key: string) {
     state.sessionsLoading = false;
   }
 }
+
+export async function deleteSessionsBulk(state: SessionsState, keys: string[]) {
+  if (!state.client || !state.connected) return;
+  if (state.sessionsLoading) return;
+  const unique = [...new Set(keys.map((k) => String(k ?? "").trim()).filter(Boolean))];
+  if (unique.length === 0) return;
+  const confirmed = await showDangerConfirmDialog(
+    "Delete Sessions",
+    `Delete ${unique.length} session${unique.length === 1 ? "" : "s"}? This will delete the session entries and delete their transcripts.`,
+    "Delete",
+  );
+  if (!confirmed) return;
+  state.sessionsLoading = true;
+  state.sessionsError = null;
+  let deleted = 0;
+  try {
+    for (const key of unique) {
+      await state.client.request("sessions.delete", { key, deleteTranscript: true });
+      deleted += 1;
+    }
+    toast.success(`Deleted ${deleted} session${deleted === 1 ? "" : "s"}`);
+    await loadSessions(state);
+  } catch (err) {
+    state.sessionsError = String(err);
+    toast.error(`Deleted ${deleted} session${deleted === 1 ? "" : "s"}, then failed`);
+    await loadSessions(state);
+  } finally {
+    state.sessionsLoading = false;
+  }
+}

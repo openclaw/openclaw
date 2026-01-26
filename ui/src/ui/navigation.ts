@@ -45,6 +45,11 @@ const PATH_TO_TAB = new Map(
   Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]),
 );
 
+export type HashRoute = {
+  path: string;
+  searchParams: URLSearchParams;
+};
+
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) return "";
   let base = basePath.trim();
@@ -70,6 +75,11 @@ export function pathForTab(tab: Tab, basePath = ""): string {
   return base ? `${base}${path}` : path;
 }
 
+export function rootPathForBasePath(basePath = ""): string {
+  const base = normalizeBasePath(basePath);
+  return base ? `${base}/` : "/";
+}
+
 export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   const base = normalizeBasePath(basePath);
   let path = pathname || "/";
@@ -84,6 +94,54 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   if (normalized.endsWith("/index.html")) normalized = "/";
   if (normalized === "/") return "landing";
   return PATH_TO_TAB.get(normalized) ?? null;
+}
+
+export function parseHashRoute(hash: string): HashRoute {
+  const trimmed = (hash ?? "").trim();
+  if (!trimmed || trimmed === "#") {
+    return { path: "/", searchParams: new URLSearchParams() };
+  }
+  const withoutHash = trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
+  const queryIndex = withoutHash.indexOf("?");
+  const pathRaw = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+  const queryRaw = queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : "";
+  let path = (pathRaw || "/").trim();
+  if (!path.startsWith("/")) path = `/${path}`;
+  return { path: normalizePath(path), searchParams: new URLSearchParams(queryRaw) };
+}
+
+export function buildHashRoute(path: string, searchParams?: URLSearchParams): string {
+  const normalizedPath = normalizePath(path);
+  const params = searchParams ? new URLSearchParams(searchParams) : new URLSearchParams();
+  const query = params.toString();
+  return query ? `#${normalizedPath}?${query}` : `#${normalizedPath}`;
+}
+
+export function hashForTab(tab: Tab, searchParams?: URLSearchParams): string {
+  return buildHashRoute(TAB_PATHS[tab], searchParams);
+}
+
+export function hrefForTab(
+  tab: Tab,
+  basePath = "",
+  query?: Record<string, string | undefined>,
+): string {
+  const params = new URLSearchParams();
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      if (typeof value === "string" && value.trim()) params.set(key, value);
+    }
+  }
+  const root = rootPathForBasePath(basePath);
+  return `${root}${hashForTab(tab, params)}`;
+}
+
+export function tabFromHash(hash: string): Tab | null {
+  const trimmed = (hash ?? "").trim();
+  if (!trimmed || trimmed === "#") return null;
+  const { path } = parseHashRoute(hash);
+  if (path === "/") return "landing";
+  return PATH_TO_TAB.get(path.toLowerCase()) ?? null;
 }
 
 export function inferBasePathFromPathname(pathname: string): string {

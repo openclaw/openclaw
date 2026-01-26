@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe("chat markdown rendering", () => {
   it("renders markdown inside tool output sidebar", async () => {
-    const app = mountApp("/chat");
+    const app = mountApp("/#/chat");
     await app.updateComplete;
 
     const timestamp = Date.now();
