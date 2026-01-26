@@ -13,6 +13,7 @@ Status: unreleased.
 - Docs: add Render deployment guide. (#1975) Thanks @anurag.
 - CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
 - macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.
+- Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
 
 ## 2026.1.24-3
 
