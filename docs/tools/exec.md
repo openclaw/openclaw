@@ -91,6 +91,13 @@ Example:
 /exec host=gateway security=allowlist ask=on-miss node=mac-1
 ```
 
+## Authorization model
+
+`/exec` is only honored for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+It updates **session state only** and does not write config. To hard-disable exec, deny it via tool
+policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless you explicitly set
+`security=full` and `ask=off`.
+
 ## Exec approvals (companion app / node host)
 
 Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
