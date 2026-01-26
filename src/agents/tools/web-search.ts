@@ -340,7 +340,9 @@ async function runSerperSearch(params: {
   country?: string;
   search_lang?: string;
   timeoutSeconds: number;
-}): Promise<{ results: Array<{ title: string; url: string; description: string; siteName?: string }> }> {
+}): Promise<{
+  results: Array<{ title: string; url: string; description: string; siteName?: string }>;
+}> {
   const body: Record<string, unknown> = {
     q: params.query,
     num: params.count,
