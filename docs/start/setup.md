@@ -115,6 +115,7 @@ Use this when debugging auth or deciding what to back up:
 - **Pairing allowlists**: `~/.clawdbot/credentials/<channel>-allowFrom.json`
 - **Model auth profiles**: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
 - **Legacy OAuth import**: `~/.clawdbot/credentials/oauth.json`
+More detail: [Security](/gateway/security#credential-storage-map).
 
 ## Updating (without wrecking your setup)
 
