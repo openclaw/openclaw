@@ -36,4 +36,30 @@ describe("telegramMessageActions", () => {
       cfg,
     );
   });
+
+  it("passes silent flag for silent sends", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as ClawdbotConfig;
+
+    await telegramMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "456",
+        message: "Silent notification test",
+        silent: true,
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "456",
+        content: "Silent notification test",
+        silent: true,
+      }),
+      cfg,
+    );
+  });
 });
