@@ -22,6 +22,7 @@ Status: unreleased.
 - TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
 - Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
 - Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
+- Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
 
 ## 2026.1.24-3
 
