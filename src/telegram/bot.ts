@@ -138,6 +138,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
 
+  // Catch all errors from bot middleware to prevent unhandled rejections
+  bot.catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    runtime.error?.(danger(`telegram bot error: ${message}`));
+  });
+
   const recentUpdates = createTelegramUpdateDedupe();
   let lastUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
