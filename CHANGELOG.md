@@ -9,6 +9,7 @@ Status: unreleased.
 - Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
 - Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.
 - Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
+- Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
 
 ## 2026.1.24-3
 
