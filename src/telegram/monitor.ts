@@ -40,6 +40,10 @@ export function createTelegramRunnerOptions(cfg: ClawdbotConfig): RunOptions<unk
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
+      // Retry failed getUpdates calls for up to 5 minutes before giving up
+      maxRetryTime: 5 * 60 * 1000,
+      // Use exponential backoff for retries
+      retryInterval: "exponential",
     },
   };
 }
@@ -67,6 +71,23 @@ const isGetUpdatesConflict = (err: unknown) => {
     .join(" ")
     .toLowerCase();
   return haystack.includes("getupdates");
+};
+
+const isRecoverableNetworkError = (err: unknown): boolean => {
+  if (!err) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  const lowerMessage = message.toLowerCase();
+  // Recoverable network errors that should trigger retry, not crash
+  return (
+    lowerMessage.includes("fetch failed") ||
+    lowerMessage.includes("network request") ||
+    lowerMessage.includes("econnrefused") ||
+    lowerMessage.includes("econnreset") ||
+    lowerMessage.includes("etimedout") ||
+    lowerMessage.includes("socket hang up") ||
+    lowerMessage.includes("enotfound") ||
+    lowerMessage.includes("abort")
+  );
 };
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
@@ -152,12 +173,18 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       if (opts.abortSignal?.aborted) {
         throw err;
       }
-      if (!isGetUpdatesConflict(err)) {
+      const isConflict = isGetUpdatesConflict(err);
+      const isNetworkError = isRecoverableNetworkError(err);
+      if (!isConflict && !isNetworkError) {
         throw err;
       }
       restartAttempts += 1;
       const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-      log(`Telegram getUpdates conflict; retrying in ${formatDurationMs(delayMs)}.`);
+      const reason = isConflict ? "getUpdates conflict" : "network error";
+      const errMsg = err instanceof Error ? err.message : String(err);
+      (opts.runtime?.error ?? console.error)(
+        `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`,
+      );
       try {
         await sleepWithAbort(delayMs, opts.abortSignal);
       } catch (sleepErr) {
