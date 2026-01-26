@@ -790,6 +790,17 @@
     {
       "source": "/install/railway/",
       "destination": "/railway"
+<<<<<<< HEAD
+>>>>>>> upstream/main
+=======
+    },
+    {
+      "source": "/gcp",
+      "destination": "/platforms/gcp"
+    },
+    {
+      "source": "/gcp/",
+      "destination": "/platforms/gcp"
 >>>>>>> upstream/main
     }
   ],
@@ -830,6 +841,7 @@
           "install/nix",
           "install/docker",
           "railway",
+          "render",
           "install/bun"
         ]
       },
@@ -986,6 +998,7 @@
           "bedrock",
           "providers/moonshot",
           "providers/minimax",
+          "providers/vercel-ai-gateway",
           "providers/openrouter",
           "providers/synthetic",
           "providers/opencode",
@@ -1058,6 +1071,7 @@
           "platforms/linux",
           "platforms/fly",
           "platforms/hetzner",
+          "platforms/gcp",
           "platforms/exe-dev"
         ]
       },

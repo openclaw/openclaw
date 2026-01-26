@@ -12,6 +12,7 @@ This folder is home. Treat it that way.
   - Core channel docs: `docs/channels/`
   - Core channel code: `src/telegram`, `src/discord`, `src/slack`, `src/signal`, `src/imessage`, `src/web` (WhatsApp web), `src/channels`, `src/routing`
   - Extensions (channel plugins): `extensions/*` (e.g. `extensions/msteams`, `extensions/matrix`, `extensions/zalo`, `extensions/zalouser`, `extensions/voice-call`)
+- When adding channels/extensions/apps/docs, review `.github/labeler.yml` for label coverage.
 
 ## Docs Linking (Mintlify)
 
