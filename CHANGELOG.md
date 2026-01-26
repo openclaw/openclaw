@@ -21,6 +21,7 @@ Status: unreleased.
 - Docs: add LINE channel guide.
 - Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
 - Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
+- Onboarding: strengthen security warning copy for beta + access control expectations.
 - Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
 - Gateway: prefer newest session metadata when combining stores. (#1823) Thanks @emanuelst.
 - Web UI: keep sub-agent announce replies visible in WebChat. (#1977) Thanks @andrescardonas7.
