@@ -11,6 +11,7 @@ Status: unreleased.
 - Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
 - Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
 - Docs: add Render deployment guide. (#1975) Thanks @anurag.
+- CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
 
 ## 2026.1.24-3
 
