@@ -43,6 +43,18 @@ Start with the smallest access that still works, then widen it as you gain confi
 
 If you run `--deep`, Clawdbot also attempts a best-effort live Gateway probe.
 
+## Credential storage map
+
+Use this when auditing access or deciding what to back up:
+
+- **WhatsApp**: `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Discord bot token**: config/env (token file not yet supported)
+- **Slack tokens**: config/env (`channels.slack.*`)
+- **Pairing allowlists**: `~/.clawdbot/credentials/<channel>-allowFrom.json`
+- **Model auth profiles**: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
+- **Legacy OAuth import**: `~/.clawdbot/credentials/oauth.json`
+
 ## Security Audit Checklist
 
 When the audit prints findings, treat this as a priority order:
