@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
+import { validateProviderConfig, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 
 function createBaseConfig(
   provider: "telnyx" | "twilio" | "plivo" | "mock",
@@ -68,7 +68,8 @@ describe("validateProviderConfig", () => {
     it("passes validation when credentials are in environment variables", () => {
       process.env.TWILIO_ACCOUNT_SID = "AC123";
       process.env.TWILIO_AUTH_TOKEN = "secret";
-      const config = createBaseConfig("twilio");
+      let config = createBaseConfig("twilio");
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
@@ -78,8 +79,9 @@ describe("validateProviderConfig", () => {
 
     it("passes validation with mixed config and env vars", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";
-      const config = createBaseConfig("twilio");
+      let config = createBaseConfig("twilio");
       config.twilio = { accountSid: "AC123" };
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
@@ -89,7 +91,8 @@ describe("validateProviderConfig", () => {
 
     it("fails validation when accountSid is missing everywhere", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";
-      const config = createBaseConfig("twilio");
+      let config = createBaseConfig("twilio");
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
@@ -101,7 +104,8 @@ describe("validateProviderConfig", () => {
 
     it("fails validation when authToken is missing everywhere", () => {
       process.env.TWILIO_ACCOUNT_SID = "AC123";
-      const config = createBaseConfig("twilio");
+      let config = createBaseConfig("twilio");
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
@@ -126,7 +130,8 @@ describe("validateProviderConfig", () => {
     it("passes validation when credentials are in environment variables", () => {
       process.env.TELNYX_API_KEY = "KEY123";
       process.env.TELNYX_CONNECTION_ID = "CONN456";
-      const config = createBaseConfig("telnyx");
+      let config = createBaseConfig("telnyx");
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
@@ -136,7 +141,8 @@ describe("validateProviderConfig", () => {
 
     it("fails validation when apiKey is missing everywhere", () => {
       process.env.TELNYX_CONNECTION_ID = "CONN456";
-      const config = createBaseConfig("telnyx");
+      let config = createBaseConfig("telnyx");
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
@@ -161,7 +167,8 @@ describe("validateProviderConfig", () => {
     it("passes validation when credentials are in environment variables", () => {
       process.env.PLIVO_AUTH_ID = "MA123";
       process.env.PLIVO_AUTH_TOKEN = "secret";
-      const config = createBaseConfig("plivo");
+      let config = createBaseConfig("plivo");
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
@@ -171,7 +178,8 @@ describe("validateProviderConfig", () => {
 
     it("fails validation when authId is missing everywhere", () => {
       process.env.PLIVO_AUTH_TOKEN = "secret";
-      const config = createBaseConfig("plivo");
+      let config = createBaseConfig("plivo");
+      config = resolveVoiceCallConfig(config);
 
       const result = validateProviderConfig(config);
 
