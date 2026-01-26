@@ -83,6 +83,8 @@ Notes:
 - Per-hook `model`/`thinking` in the mapping still overrides these defaults.
 - Fallback order: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → primary (auth/rate-limit/timeouts).
 - If `agents.defaults.models` is set, the Gmail model must be in the allowlist.
+- Gmail hook content is wrapped with external-content safety boundaries by default.
+  To disable (dangerous), set `hooks.gmail.allowUnsafeExternalContent: true`.
 
 To customize payload handling further, add `hooks.mappings` or a JS/TS transform module
 under `hooks.transformsDir` (see [Webhooks](/automation/webhook)).
