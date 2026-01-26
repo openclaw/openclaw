@@ -13,34 +13,34 @@ interface Testimonial {
 const TESTIMONIALS: Testimonial[] = [
   {
     id: '1',
-    quote: 'I had a business idea for years but never knew where to start. Clawdbrain researched the market, drafted a plan, and I launched in 6 weeks.',
-    author: 'Sarah K.',
-    role: 'First-time founder',
-    avatar: 'S',
-    transformation: 'Had an idea → Launched a business',
+    quote: 'We replaced a patchwork of scripts with an agent workflow. Clawdbrain now plans the run, opens PRs, and posts daily summaries.',
+    author: 'Alex P.',
+    role: 'Engineering lead',
+    avatar: 'A',
+    transformation: 'Manual ops → Automated runs',
   },
   {
     id: '2',
-    quote: 'It\'s like having a brilliant research assistant that never sleeps. I wake up to insights I never would have found myself.',
-    author: 'Marcus T.',
-    role: 'Content creator',
-    avatar: 'M',
-    transformation: 'Overwhelmed → In control',
+    quote: 'I give it a goal and get back a report with sources, drafts, and next steps. The shared memory means it keeps getting better.',
+    author: 'Jamie L.',
+    role: 'Product manager',
+    avatar: 'J',
+    transformation: 'Busywork → Leverage',
   },
   {
     id: '3',
-    quote: 'The proactive suggestions are uncanny. It surfaces opportunities I didn\'t even know existed for my work.',
-    author: 'Elena R.',
-    role: 'Freelance consultant',
-    avatar: 'E',
-    transformation: 'Reactive → Proactive',
+    quote: 'The approval gates are a game-changer. Agents move fast without risking customer comms or production changes.',
+    author: 'Priya S.',
+    role: 'Security & compliance',
+    avatar: 'P',
+    transformation: 'Risky automation → Guardrailed autonomy',
   },
 ];
 
 const TRUST_BADGES = [
   'No credit card required',
-  'Cancel anytime',
-  'Setup in 5 minutes',
+  'Approval gates included',
+  'Audit logs by default',
 ];
 
 @customElement('landing-social-proof')
@@ -49,16 +49,17 @@ export class LandingSocialProof extends LitElement {
     :host {
       display: block;
       font-family: var(--landing-font-body, inherit);
+      scroll-margin-top: var(--landing-scroll-offset, 92px);
     }
 
     /* Testimonials section */
     .testimonials-section {
       background: var(--landing-bg-dark);
-      padding: 8rem 2rem;
+      padding: var(--landing-section-padding-y, 8rem) var(--landing-padding-x, 2rem);
     }
 
     .section-container {
-      max-width: 1100px;
+      max-width: var(--landing-max-width, 1100px);
       margin: 0 auto;
     }
 
@@ -184,7 +185,7 @@ export class LandingSocialProof extends LitElement {
         var(--landing-bg-dark) 0%,
         var(--landing-bg-elevated) 100%
       );
-      padding: 8rem 2rem;
+      padding: var(--landing-section-padding-y, 8rem) var(--landing-padding-x, 2rem);
       text-align: center;
     }
 
@@ -277,15 +278,19 @@ export class LandingSocialProof extends LitElement {
     }
 
     /* Responsive */
-    @media (max-width: 900px) {
+    @media (max-width: 1024px) {
       .testimonials-grid {
-        grid-template-columns: 1fr;
-        max-width: 500px;
+        grid-template-columns: repeat(2, 1fr);
         margin: 0 auto;
       }
     }
 
-    @media (max-width: 600px) {
+    @media (max-width: 768px) {
+      .testimonials-grid {
+        grid-template-columns: 1fr;
+        max-width: 500px;
+      }
+
       .cta-buttons {
         flex-direction: column;
         max-width: 300px;
@@ -297,6 +302,12 @@ export class LandingSocialProof extends LitElement {
         flex-direction: column;
         align-items: center;
         gap: 0.75rem;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .testimonial-card {
+        padding: 1.5rem;
       }
     }
   `;
@@ -353,7 +364,7 @@ export class LandingSocialProof extends LitElement {
             <div class="section-header">
               <span class="section-label">Success Stories</span>
               <h2 class="section-headline">
-                People are realizing dreams they didn't think were possible.
+                Teams ship faster with orchestrated agents.
               </h2>
             </div>
 
@@ -365,12 +376,12 @@ export class LandingSocialProof extends LitElement {
 
         <div class="cta-section">
           <div class="section-container">
-            <h2 class="cta-headline">Ready to meet the AI that works for you?</h2>
-            <p class="cta-subheadline">Start building your second brain today.</p>
+            <h2 class="cta-headline">Start orchestrating your first agent team.</h2>
+            <p class="cta-subheadline">Connect tools, set a goal, and let Clawdbrain run—with memory and guardrails.</p>
 
             <div class="cta-buttons">
               <button class="cta-primary" @click=${this.handleGetStarted}>
-                Get Started Free
+                Get Started
               </button>
               <button class="cta-secondary" @click=${this.handleDemo}>
                 Book a Demo

@@ -169,6 +169,82 @@
   --font-display: "Unbounded", "Times New Roman", serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
+  /* =============================================================================
+     LANDING PAGE (CLAWDBRAIN)
+     Prefixed tokens avoid affecting app chrome.
+     ============================================================================= */
+
+  /* Primary brand colors */
+  --landing-primary: #6366f1; /* Indigo-500 */
+  --landing-primary-light: #818cf8; /* Indigo-400 */
+  --landing-primary-dark: #4f46e5; /* Indigo-600 */
+
+  /* Secondary accents */
+  --landing-accent-warm: #f59e0b; /* Amber-500 */
+  --landing-accent-coral: #fb7185; /* Rose-400 */
+  --landing-accent-teal: #2dd4bf; /* Teal-400 */
+  --landing-accent-lavender: #a78bfa; /* Violet-400 */
+
+  /* Neutral palette */
+  --landing-bg-dark: #0a0a0f; /* Near-black with blue tint */
+  --landing-bg-elevated: #12121a;
+  --landing-bg-surface: #1a1a24;
+  --landing-border: rgba(255, 255, 255, 0.08);
+  --landing-border-hover: rgba(255, 255, 255, 0.15);
+
+  /* Text hierarchy */
+  --landing-text-primary: #f8fafc; /* Slate-50 */
+  --landing-text-secondary: #94a3b8; /* Slate-400 */
+  --landing-text-muted: #64748b; /* Slate-500 */
+
+  /* Gradients */
+  --landing-gradient-hero: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.15) 0%,
+    rgba(168, 85, 247, 0.08) 50%,
+    rgba(45, 212, 191, 0.05) 100%
+  );
+
+  --landing-gradient-aurora: radial-gradient(
+    ellipse 80% 50% at 50% -20%,
+    rgba(99, 102, 241, 0.3) 0%,
+    transparent 70%
+  );
+
+  --landing-gradient-card: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.05) 0%,
+    rgba(255, 255, 255, 0.02) 100%
+  );
+
+  /* Shadows */
+  --landing-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --landing-shadow-md: 0 4px 20px rgba(0, 0, 0, 0.4);
+  --landing-shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.5);
+  --landing-shadow-glow: 0 0 40px rgba(99, 102, 241, 0.3);
+
+  /* Glassmorphism */
+  --landing-glass-bg: rgba(255, 255, 255, 0.03);
+  --landing-glass-border: rgba(255, 255, 255, 0.08);
+  --landing-glass-blur: blur(20px);
+
+  /* Typography */
+  --landing-font-display: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --landing-font-body: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --landing-font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Layout */
+  --landing-max-width: 1100px;
+  --landing-max-width-wide: 1200px;
+  --landing-max-width-narrow: 1000px;
+  --landing-padding-x: 2rem;
+  --landing-padding-x-tablet: 1.5rem;
+  --landing-padding-x-mobile: 1.25rem;
+  --landing-section-padding-y: 8rem;
+  --landing-section-padding-y-tablet: 6.5rem;
+  --landing-section-padding-y-mobile: 5.5rem;
+  --landing-scroll-offset: 92px;
+
   color-scheme: dark;
 }
 
@@ -224,7 +300,105 @@
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
   --grid-line: rgba(18, 24, 40, 0.06);
 
+  /* Landing page light mode overrides */
+  --landing-bg-dark: #fafafa;
+  --landing-bg-elevated: #ffffff;
+  --landing-bg-surface: #f8fafc;
+  --landing-border: rgba(0, 0, 0, 0.06);
+  --landing-border-hover: rgba(0, 0, 0, 0.12);
+  --landing-text-primary: #0f172a;
+  --landing-text-secondary: #475569;
+  --landing-text-muted: #64748b;
+
+  --landing-gradient-aurora: radial-gradient(
+    ellipse 80% 50% at 50% -20%,
+    rgba(99, 102, 241, 0.1) 0%,
+    transparent 70%
+  );
+
   color-scheme: light;
+}
+
+/* =============================================================================
+   LANDING PAGE RESPONSIVE VARIABLES
+   Breakpoint reference:
+   - Mobile: <= 480px
+   - Tablet: <= 768px
+   - Desktop: <= 1024px
+   - Wide: >= 1440px
+   ============================================================================= */
+
+@media (max-width: 768px) {
+  :root {
+    --landing-padding-x: var(--landing-padding-x-tablet);
+    --landing-section-padding-y: var(--landing-section-padding-y-tablet);
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --landing-padding-x: var(--landing-padding-x-mobile);
+    --landing-section-padding-y: var(--landing-section-padding-y-mobile);
+  }
+}
+
+@media (min-width: 1440px) {
+  :root {
+    --landing-max-width: var(--landing-max-width-wide);
+  }
+}
+
+/* =============================================================================
+   LANDING PAGE TYPOGRAPHY SCALE
+   ============================================================================= */
+
+.landing-h1 {
+  font-family: var(--landing-font-display);
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--landing-text-primary);
+}
+
+.landing-h2 {
+  font-family: var(--landing-font-display);
+  font-size: clamp(1.875rem, 4vw, 3rem);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--landing-text-primary);
+}
+
+.landing-h3 {
+  font-family: var(--landing-font-display);
+  font-size: clamp(1.25rem, 2vw, 1.5rem);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--landing-text-primary);
+}
+
+.landing-body {
+  font-family: var(--landing-font-body);
+  font-size: 1.125rem;
+  line-height: 1.7;
+  color: var(--landing-text-secondary);
+}
+
+.landing-body-sm {
+  font-family: var(--landing-font-body);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--landing-text-muted);
+}
+
+.landing-label {
+  font-family: var(--landing-font-body);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--landing-text-muted);
 }
 
 /* =============================================================================

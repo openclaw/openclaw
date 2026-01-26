@@ -13,42 +13,42 @@ interface ActivityEvent {
 const ACTIVITY_EVENTS: ActivityEvent[] = [
   {
     id: '1',
-    time: '3:42 AM',
-    icon: '🔍',
-    title: 'Research completed',
-    description: 'Analyzed 47 competitor products',
+    time: '09:12',
+    icon: '🧭',
+    title: 'Plan generated',
+    description: 'Goal broken into tasks with owners',
     status: 'complete',
   },
   {
     id: '2',
-    time: '6:15 AM',
-    icon: '📝',
-    title: 'Drafted proposal',
-    description: 'Business plan ready for review',
+    time: '09:18',
+    icon: '🔍',
+    title: 'Research executed',
+    description: 'Sources collected and summarized',
     status: 'complete',
   },
   {
     id: '3',
-    time: '9:30 AM',
-    icon: '🎯',
-    title: 'Found 3 leads',
-    description: 'Matching your criteria',
+    time: '09:41',
+    icon: '🛠️',
+    title: 'Changes prepared',
+    description: 'Draft PR and rollout notes created',
     status: 'complete',
   },
   {
     id: '4',
     time: 'Now',
-    icon: '✨',
-    title: 'Ready for review',
-    description: 'Awaiting your approval',
+    icon: '✅',
+    title: 'Approval requested',
+    description: 'Review before merge & message send',
     status: 'active',
   },
 ];
 
 const FEATURE_CALLOUTS = [
-  { icon: '🌙', title: 'Researches while you rest' },
-  { icon: '💭', title: 'Drafts while you dream' },
-  { icon: '☀️', title: 'Delivers when you wake' },
+  { icon: '⏱️', title: 'Runs continuously with checkpoints' },
+  { icon: '🧾', title: 'Every action logged & replayable' },
+  { icon: '✋', title: 'Asks before sensitive steps' },
 ];
 
 @customElement('landing-activity')
@@ -57,12 +57,13 @@ export class LandingActivity extends LitElement {
     :host {
       display: block;
       background: var(--landing-bg-elevated);
-      padding: 8rem 2rem;
+      padding: var(--landing-section-padding-y, 8rem) var(--landing-padding-x, 2rem);
       font-family: var(--landing-font-body, inherit);
+      scroll-margin-top: var(--landing-scroll-offset, 92px);
     }
 
     .section-container {
-      max-width: 1000px;
+      max-width: var(--landing-max-width-narrow, 1000px);
       margin: 0 auto;
     }
 
@@ -84,7 +85,7 @@ export class LandingActivity extends LitElement {
     .section-headline {
       font-family: var(--landing-font-display, inherit);
       font-size: clamp(2rem, 4vw, 3rem);
-      font-weight: 600;
+      font-weight: 700;
       line-height: 1.2;
       color: var(--landing-text-primary);
       margin: 0;
@@ -268,6 +269,43 @@ export class LandingActivity extends LitElement {
       color: var(--landing-text-secondary);
     }
 
+    /* Section next CTA */
+    .section-next {
+      display: flex;
+      justify-content: center;
+      margin-top: 3rem;
+    }
+
+    .next-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.125rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--landing-text-primary);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--landing-border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .next-button:hover {
+      transform: translateY(-1px);
+      border-color: var(--landing-border-hover);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .next-button:focus-visible {
+      outline: 2px solid var(--landing-primary);
+      outline-offset: 2px;
+    }
+
+    .next-arrow {
+      color: var(--landing-primary);
+    }
+
     /* Responsive */
     @media (max-width: 768px) {
       .timeline {
@@ -313,6 +351,22 @@ export class LandingActivity extends LitElement {
       .callouts {
         grid-template-columns: 1fr;
         gap: 1.5rem;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .timeline-event {
+        transform: translateY(12px);
+      }
+
+      .event-card {
+        padding: 1.25rem;
+      }
+
+      .next-button {
+        width: 100%;
+        max-width: 320px;
+        justify-content: center;
       }
     }
   `;
@@ -363,9 +417,9 @@ export class LandingActivity extends LitElement {
       <section id="activity-section">
         <div class="section-container">
           <div class="section-header">
-            <span class="section-label">Autonomous</span>
-            <h2 class="section-headline">Works around the clock.</h2>
-            <p class="section-subheadline">So you don't have to.</p>
+            <span class="section-label">How It Works</span>
+            <h2 class="section-headline">From goal to outcome—without babysitting.</h2>
+            <p class="section-subheadline">A coordinated run you can monitor, steer, and approve.</p>
           </div>
 
           <div class="timeline">
@@ -384,9 +438,23 @@ export class LandingActivity extends LitElement {
               </div>
             `)}
           </div>
+
+          <div class="section-next">
+            <button class="next-button" @click=${this.handleNext}>
+              Next: Stories & getting started <span class="next-arrow">→</span>
+            </button>
+          </div>
         </div>
       </section>
     `;
+  }
+
+  private handleNext(): void {
+    this.dispatchEvent(new CustomEvent('landing-navigate', {
+      detail: { section: 'social-proof' },
+      bubbles: true,
+      composed: true,
+    }));
   }
 }
 

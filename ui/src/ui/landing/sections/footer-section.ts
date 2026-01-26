@@ -31,9 +31,9 @@ export class LandingFooter extends LitElement {
     }
 
     .footer-container {
-      max-width: 1100px;
+      max-width: var(--landing-max-width, 1100px);
       margin: 0 auto;
-      padding: 3rem 2rem;
+      padding: 3rem var(--landing-padding-x, 2rem);
     }
 
     .footer-main {
@@ -43,6 +43,12 @@ export class LandingFooter extends LitElement {
       margin-bottom: 2rem;
       padding-bottom: 2rem;
       border-bottom: 1px solid var(--landing-border);
+    }
+
+    .footer-brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.375rem;
     }
 
     .footer-logo {
@@ -59,6 +65,13 @@ export class LandingFooter extends LitElement {
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
+    }
+
+    .footer-tagline {
+      font-size: 0.875rem;
+      line-height: 1.4;
+      color: var(--landing-text-muted);
+      max-width: 360px;
     }
 
     .footer-nav {
@@ -164,6 +177,10 @@ export class LandingFooter extends LitElement {
         text-align: center;
       }
 
+      .footer-brand {
+        align-items: center;
+      }
+
       .footer-nav {
         flex-wrap: wrap;
         justify-content: center;
@@ -174,6 +191,13 @@ export class LandingFooter extends LitElement {
         flex-direction: column;
         gap: 1rem;
         text-align: center;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .footer-container {
+        padding-top: 2.5rem;
+        padding-bottom: 2.5rem;
       }
     }
   `;
@@ -210,9 +234,14 @@ export class LandingFooter extends LitElement {
       <footer>
         <div class="footer-container">
           <div class="footer-main">
-            <a href="/" class="footer-logo">
-              Clawd<span>brain</span>
-            </a>
+            <div class="footer-brand">
+              <a href="/" class="footer-logo">
+                Clawd<span>brain</span>
+              </a>
+              <div class="footer-tagline">
+                Autonomous AI agent orchestration with memory, approvals, and observability.
+              </div>
+            </div>
 
             <nav class="footer-nav">
               ${NAV_LINKS.map(link => html`

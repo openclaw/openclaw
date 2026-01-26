@@ -26,78 +26,7 @@ export class LandingPage extends LitElement {
       min-height: 100vh;
       background: var(--landing-bg-dark);
       color: var(--landing-text-primary);
-
-      /* Landing page design tokens */
-      --landing-primary: #6366f1;
-      --landing-primary-light: #818cf8;
-      --landing-primary-dark: #4f46e5;
-
-      --landing-accent-warm: #f59e0b;
-      --landing-accent-coral: #fb7185;
-      --landing-accent-teal: #2dd4bf;
-      --landing-accent-lavender: #a78bfa;
-
-      --landing-bg-dark: #0a0a0f;
-      --landing-bg-elevated: #12121a;
-      --landing-bg-surface: #1a1a24;
-      --landing-border: rgba(255, 255, 255, 0.08);
-      --landing-border-hover: rgba(255, 255, 255, 0.15);
-
-      --landing-text-primary: #f8fafc;
-      --landing-text-secondary: #94a3b8;
-      --landing-text-muted: #64748b;
-
-      --landing-gradient-hero: linear-gradient(
-        135deg,
-        rgba(99, 102, 241, 0.15) 0%,
-        rgba(168, 85, 247, 0.08) 50%,
-        rgba(45, 212, 191, 0.05) 100%
-      );
-
-      --landing-gradient-aurora: radial-gradient(
-        ellipse 80% 50% at 50% -20%,
-        rgba(99, 102, 241, 0.3) 0%,
-        transparent 70%
-      );
-
-      --landing-gradient-card: linear-gradient(
-        180deg,
-        rgba(255, 255, 255, 0.05) 0%,
-        rgba(255, 255, 255, 0.02) 100%
-      );
-
-      --landing-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-      --landing-shadow-md: 0 4px 20px rgba(0, 0, 0, 0.4);
-      --landing-shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.5);
-      --landing-shadow-glow: 0 0 40px rgba(99, 102, 241, 0.3);
-
-      --landing-glass-bg: rgba(255, 255, 255, 0.03);
-      --landing-glass-border: rgba(255, 255, 255, 0.08);
-      --landing-glass-blur: blur(20px);
-
-      --landing-font-display: 'Unbounded', 'Times New Roman', serif;
-      --landing-font-body: 'Work Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-
-    /* Light mode support */
-    :host([data-theme="light"]) {
-      --landing-bg-dark: #fafafa;
-      --landing-bg-elevated: #ffffff;
-      --landing-bg-surface: #f8fafc;
-      --landing-border: rgba(0, 0, 0, 0.06);
-      --landing-border-hover: rgba(0, 0, 0, 0.12);
-      --landing-text-primary: #0f172a;
-      --landing-text-secondary: #475569;
-      --landing-text-muted: #64748b;
-      --landing-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
-      --landing-shadow-md: 0 4px 20px rgba(0, 0, 0, 0.1);
-      --landing-shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.15);
-
-      --landing-gradient-aurora: radial-gradient(
-        ellipse 80% 50% at 50% -20%,
-        rgba(99, 102, 241, 0.1) 0%,
-        transparent 70%
-      );
+      font-family: var(--landing-font-body, var(--font-body, system-ui, sans-serif));
     }
 
     .landing-wrapper {
@@ -115,7 +44,7 @@ export class LandingPage extends LitElement {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 1rem 2rem;
+      padding: 1rem var(--landing-padding-x, 2rem);
       transition: all 0.3s ease;
     }
 
@@ -124,7 +53,11 @@ export class LandingPage extends LitElement {
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border-bottom: 1px solid var(--landing-border);
-      padding: 0.75rem 2rem;
+      padding: 0.75rem var(--landing-padding-x, 2rem);
+    }
+
+    :host-context([data-theme="light"]) .landing-nav.scrolled {
+      background: rgba(255, 255, 255, 0.85);
     }
 
     .nav-logo {
@@ -201,7 +134,7 @@ export class LandingPage extends LitElement {
     /* Responsive */
     @media (max-width: 768px) {
       .landing-nav {
-        padding: 0.75rem 1rem;
+        padding: 0.75rem var(--landing-padding-x, 1.5rem);
       }
 
       .nav-links {
@@ -210,6 +143,12 @@ export class LandingPage extends LitElement {
 
       .nav-link {
         display: none;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .nav-cta {
+        padding: 0.5rem 1rem;
       }
     }
   `;
@@ -241,8 +180,9 @@ export class LandingPage extends LitElement {
           Clawd<span>brain</span>
         </a>
         <div class="nav-links">
-          <button class="nav-link" @click=${this.scrollToSection.bind(this, 'features')}>Features</button>
-          <button class="nav-link" @click=${this.scrollToSection.bind(this, 'control')}>Trust</button>
+          <button class="nav-link" @click=${this.scrollToSection.bind(this, 'features')}>Platform</button>
+          <button class="nav-link" @click=${this.scrollToSection.bind(this, 'activity')}>How it works</button>
+          <button class="nav-link" @click=${this.scrollToSection.bind(this, 'control')}>Safety</button>
           <button class="nav-link" @click=${this.scrollToSection.bind(this, 'social-proof')}>Stories</button>
           <button class="nav-cta" @click=${this.handleGetStarted}>
             Get Started
@@ -250,19 +190,19 @@ export class LandingPage extends LitElement {
         </div>
       </nav>
 
-      <div class="landing-wrapper">
+      <div class="landing-wrapper" @landing-navigate=${this.handleLandingNavigate}>
         <landing-hero
           @get-started=${this.handleGetStarted}
-          @learn-more=${() => this.scrollToSection('understanding')}
+          @learn-more=${() => this.scrollToSection('features')}
         ></landing-hero>
+
+        <landing-features></landing-features>
 
         <landing-understanding></landing-understanding>
 
-        <landing-activity></landing-activity>
-
         <landing-control></landing-control>
 
-        <landing-features></landing-features>
+        <landing-activity></landing-activity>
 
         <landing-social-proof
           @get-started=${this.handleGetStarted}
@@ -296,6 +236,11 @@ export class LandingPage extends LitElement {
 
   private handleBookDemo(): void {
     this.dispatchEvent(new CustomEvent('book-demo', { bubbles: true, composed: true }));
+  }
+
+  private handleLandingNavigate(event: CustomEvent<{ section: string }>): void {
+    event.stopPropagation();
+    this.scrollToSection(event.detail.section);
   }
 }
 

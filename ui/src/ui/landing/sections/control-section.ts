@@ -9,15 +9,15 @@ interface Agent {
 }
 
 const MOCK_AGENTS: Agent[] = [
-  { id: '1', name: 'Research Agent', status: 'running', icon: '🔍' },
-  { id: '2', name: 'Content Agent', status: 'paused', icon: '📝' },
-  { id: '3', name: 'Outreach Agent', status: 'running', icon: '📤' },
+  { id: '1', name: 'Planner Agent', status: 'running', icon: '🧭' },
+  { id: '2', name: 'Research Agent', status: 'running', icon: '🔍' },
+  { id: '3', name: 'Delivery Agent', status: 'paused', icon: '📦' },
 ];
 
 const TRUST_SIGNALS = [
-  { icon: '🔒', label: 'End-to-end encrypted' },
-  { icon: '👁', label: 'Full activity logs' },
-  { icon: '✋', label: 'Approval for sensitive actions' },
+  { icon: '🧾', label: 'Audit log & artifacts' },
+  { icon: '✋', label: 'Approval checkpoints' },
+  { icon: '🔐', label: 'Scoped permissions' },
 ];
 
 @customElement('landing-control')
@@ -26,12 +26,13 @@ export class LandingControl extends LitElement {
     :host {
       display: block;
       background: var(--landing-bg-dark);
-      padding: 8rem 2rem;
+      padding: var(--landing-section-padding-y, 8rem) var(--landing-padding-x, 2rem);
       font-family: var(--landing-font-body, inherit);
+      scroll-margin-top: var(--landing-scroll-offset, 92px);
     }
 
     .section-container {
-      max-width: 1000px;
+      max-width: var(--landing-max-width-narrow, 1000px);
       margin: 0 auto;
     }
 
@@ -53,7 +54,7 @@ export class LandingControl extends LitElement {
     .section-headline {
       font-family: var(--landing-font-display, inherit);
       font-size: clamp(2rem, 4vw, 3rem);
-      font-weight: 600;
+      font-weight: 700;
       line-height: 1.2;
       color: var(--landing-text-primary);
       margin: 0 0 1rem;
@@ -64,6 +65,43 @@ export class LandingControl extends LitElement {
       color: var(--landing-text-secondary);
       max-width: 600px;
       margin: 0 auto;
+    }
+
+    /* Section next CTA */
+    .section-next {
+      display: flex;
+      justify-content: center;
+      margin-top: 2.5rem;
+    }
+
+    .next-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.125rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--landing-text-primary);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--landing-border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .next-button:hover {
+      transform: translateY(-1px);
+      border-color: var(--landing-border-hover);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .next-button:focus-visible {
+      outline: 2px solid var(--landing-primary);
+      outline-offset: 2px;
+    }
+
+    .next-arrow {
+      color: var(--landing-primary);
     }
 
     /* Dashboard mockup */
@@ -330,6 +368,22 @@ export class LandingControl extends LitElement {
         flex-direction: column;
       }
     }
+
+    @media (max-width: 480px) {
+      .dashboard-header {
+        padding: 0.875rem 1.125rem;
+      }
+
+      .dashboard-body {
+        padding: 1.125rem;
+      }
+
+      .next-button {
+        width: 100%;
+        max-width: 320px;
+        justify-content: center;
+      }
+    }
   `;
 
   @state()
@@ -382,10 +436,10 @@ export class LandingControl extends LitElement {
       <section id="control-section">
         <div class="section-container">
           <div class="section-header">
-            <span class="section-label">Trust & Control</span>
-            <h2 class="section-headline">Autonomous, not unsupervised.</h2>
+            <span class="section-label">Safety & Control</span>
+            <h2 class="section-headline">Autonomous, with guardrails.</h2>
             <p class="section-subheadline">
-              Set the rules. Define the boundaries. Review before it acts on anything important.
+              Define scopes, approvals, and policies. Review before sensitive actions, and keep a full audit trail.
             </p>
           </div>
 
@@ -393,7 +447,7 @@ export class LandingControl extends LitElement {
             <div class="dashboard-header">
               <div class="dashboard-title">
                 <span class="dashboard-title-dot"></span>
-                Active Overseers (3)
+                Active Agents (3)
               </div>
               <button class="dashboard-action">Pause All</button>
             </div>
@@ -428,9 +482,23 @@ export class LandingControl extends LitElement {
               </div>
             `)}
           </div>
+
+          <div class="section-next">
+            <button class="next-button" @click=${this.handleNext}>
+              Next: Watch a run in action <span class="next-arrow">→</span>
+            </button>
+          </div>
         </div>
       </section>
     `;
+  }
+
+  private handleNext(): void {
+    this.dispatchEvent(new CustomEvent('landing-navigate', {
+      detail: { section: 'activity' },
+      bubbles: true,
+      composed: true,
+    }));
   }
 }
 

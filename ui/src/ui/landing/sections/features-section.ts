@@ -12,46 +12,46 @@ interface Feature {
 
 const FEATURES: Feature[] = [
   {
-    id: 'idea-development',
-    icon: '💡',
-    title: 'Idea Development',
-    description: 'From napkin sketch to actionable plan. Your concepts get researched, structured, and refined into something real.',
+    id: 'orchestration',
+    icon: '🤖',
+    title: 'Multi-Agent Orchestration',
+    description: 'Coordinate specialized agents under a single objective. Clawdbrain plans the work, delegates tasks, and keeps the run aligned.',
     size: 'large',
     accent: 'primary',
   },
   {
-    id: 'research',
-    icon: '🔍',
-    title: 'Research & Discovery',
-    description: 'Explores topics deeply so you don\'t have to.',
+    id: 'execution',
+    icon: '🎯',
+    title: 'Goal-Driven Execution',
+    description: 'Define the outcome, constraints, and tools. Agents execute step-by-step with checkpoints and clear artifacts.',
     size: 'medium',
   },
   {
-    id: 'automation',
-    icon: '⚙️',
-    title: 'Task Automation',
-    description: 'Handles operational busywork automatically.',
+    id: 'memory',
+    icon: '🧠',
+    title: 'Persistent Memory',
+    description: 'Shared memory captures decisions, preferences, and context so every run starts smarter than the last.',
     size: 'medium',
   },
   {
-    id: 'learning',
-    icon: '📈',
-    title: 'Learning & Growth',
-    description: 'Surfaces insights tailored to your goals.',
+    id: 'approvals',
+    icon: '✅',
+    title: 'Human-in-the-Loop',
+    description: 'Approval gates for sensitive actions—send, merge, deploy—so autonomy never becomes risk.',
     size: 'small',
   },
   {
-    id: 'content',
-    icon: '✍️',
-    title: 'Content Creation',
-    description: 'Drafts, iterates, and refines on your behalf.',
+    id: 'observability',
+    icon: '📊',
+    title: 'Observability',
+    description: 'Live activity timelines, logs, and outputs you can audit and replay.',
     size: 'small',
   },
   {
     id: 'integrations',
     icon: '🔗',
-    title: 'External Integrations',
-    description: 'Connects to your existing tools and workflows.',
+    title: 'Tool Integrations',
+    description: 'Connect the tools you already use and let agents operate where work happens.',
     size: 'small',
   },
 ];
@@ -62,12 +62,13 @@ export class LandingFeatures extends LitElement {
     :host {
       display: block;
       background: var(--landing-bg-elevated);
-      padding: 8rem 2rem;
+      padding: var(--landing-section-padding-y, 8rem) var(--landing-padding-x, 2rem);
       font-family: var(--landing-font-body, inherit);
+      scroll-margin-top: var(--landing-scroll-offset, 92px);
     }
 
     .section-container {
-      max-width: 1100px;
+      max-width: var(--landing-max-width, 1100px);
       margin: 0 auto;
     }
 
@@ -89,10 +90,18 @@ export class LandingFeatures extends LitElement {
     .section-headline {
       font-family: var(--landing-font-display, inherit);
       font-size: clamp(2rem, 4vw, 3rem);
-      font-weight: 600;
+      font-weight: 700;
       line-height: 1.2;
       color: var(--landing-text-primary);
       margin: 0;
+    }
+
+    .section-subheadline {
+      margin: 1rem auto 0;
+      max-width: 720px;
+      font-size: 1.125rem;
+      line-height: 1.7;
+      color: var(--landing-text-secondary);
     }
 
     /* Bento grid */
@@ -202,8 +211,46 @@ export class LandingFeatures extends LitElement {
       box-shadow: var(--landing-shadow-glow);
     }
 
+    /* Section next CTA */
+    .section-next {
+      display: flex;
+      justify-content: center;
+      margin-top: 3.5rem;
+    }
+
+    .next-button {
+      font-family: var(--landing-font-body, inherit);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.125rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--landing-text-primary);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--landing-border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .next-button:hover {
+      transform: translateY(-1px);
+      border-color: var(--landing-border-hover);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .next-button:focus-visible {
+      outline: 2px solid var(--landing-primary);
+      outline-offset: 2px;
+    }
+
+    .next-arrow {
+      color: var(--landing-primary);
+    }
+
     /* Responsive */
-    @media (max-width: 900px) {
+    @media (max-width: 1024px) {
       .bento-grid {
         grid-template-columns: repeat(2, 1fr);
       }
@@ -214,7 +261,7 @@ export class LandingFeatures extends LitElement {
       }
     }
 
-    @media (max-width: 600px) {
+    @media (max-width: 768px) {
       .bento-grid {
         grid-template-columns: 1fr;
       }
@@ -224,6 +271,18 @@ export class LandingFeatures extends LitElement {
       .feature-card.small {
         grid-column: span 1;
         grid-row: span 1;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .feature-card {
+        padding: 1.5rem;
+      }
+
+      .next-button {
+        width: 100%;
+        max-width: 320px;
+        justify-content: center;
       }
     }
   `;
@@ -269,16 +328,34 @@ export class LandingFeatures extends LitElement {
       <section id="features-section">
         <div class="section-container">
           <div class="section-header">
-            <span class="section-label">Capabilities</span>
-            <h2 class="section-headline">What Clawdbrain can do</h2>
+            <span class="section-label">Platform</span>
+            <h2 class="section-headline">Autonomous AI agent orchestration—end to end.</h2>
+            <p class="section-subheadline">
+              Give Clawdbrain a goal and it coordinates agents to plan, execute, and report—across your tools,
+              with memory and guardrails built in.
+            </p>
           </div>
 
           <div class="bento-grid">
             ${FEATURES.map((feature, i) => this.renderFeatureCard(feature, i))}
           </div>
+
+          <div class="section-next">
+            <button class="next-button" @click=${this.handleNext}>
+              Next: Shared memory & alignment <span class="next-arrow">→</span>
+            </button>
+          </div>
         </div>
       </section>
     `;
+  }
+
+  private handleNext(): void {
+    this.dispatchEvent(new CustomEvent('landing-navigate', {
+      detail: { section: 'understanding' },
+      bubbles: true,
+      composed: true,
+    }));
   }
 }
 

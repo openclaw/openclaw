@@ -19,48 +19,48 @@ interface FloatingCard {
 
 const FLOATING_CARDS: FloatingCard[] = [
   {
-    id: 'research',
-    icon: '🔍',
-    label: 'Researching market trends...',
+    id: 'planning',
+    icon: '🧭',
+    label: 'Planning the run',
     status: 'active',
-    position: { top: '18%', left: '5%' },
+    position: { top: '15%', left: '8%' },
     rotation: -3,
     parallaxSpeed: 0.3,
   },
   {
-    id: 'building',
-    icon: '🔨',
-    label: 'Building your plan...',
+    id: 'coordinating',
+    icon: '🤖',
+    label: 'Coordinating agents',
     status: 'active',
-    position: { top: '22%', right: '6%' },
+    position: { top: '20%', right: '10%' },
     rotation: 4,
     parallaxSpeed: 0.5,
   },
   {
-    id: 'learning',
-    icon: '🧠',
-    label: 'Learning your preferences...',
+    id: 'executing',
+    icon: '⚡',
+    label: 'Executing tasks',
     status: 'active',
-    position: { bottom: '28%', left: '8%' },
+    position: { bottom: '25%', left: '12%' },
     rotation: 2,
     parallaxSpeed: 0.4,
   },
   {
-    id: 'delivering',
-    icon: '✨',
-    label: '3 items ready for review',
+    id: 'reporting',
+    icon: '✅',
+    label: 'Results ready',
     status: 'complete',
-    position: { bottom: '24%', right: '5%' },
+    position: { bottom: '20%', right: '8%' },
     rotation: -2,
     parallaxSpeed: 0.6,
   },
 ];
 
 const ROTATING_TEXTS = [
-  'Automatically.',
-  'While you sleep.',
-  'Before you ask.',
-  'On your behalf.',
+  'Across your tools.',
+  'With shared memory.',
+  'With guardrails.',
+  'From goal to done.',
 ];
 
 @customElement('landing-hero')
@@ -119,7 +119,7 @@ export class LandingHero extends LitElement {
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      padding: 2rem;
+      padding: 2rem var(--landing-padding-x, 2rem);
       text-align: center;
     }
 
@@ -127,11 +127,11 @@ export class LandingHero extends LitElement {
     .hero-headline {
       font-family: var(--landing-font-display, inherit);
       font-size: clamp(2.5rem, 6vw, 4.5rem);
-      font-weight: 600;
-      line-height: 1.15;
+      font-weight: 700;
+      line-height: 1.1;
       letter-spacing: -0.02em;
       color: var(--landing-text-primary);
-      margin: 0;
+      margin: 0 0 0.5rem;
       opacity: 0;
       animation: fadeInUp 0.8s ease-out 0.2s forwards;
       max-width: 800px;
@@ -167,12 +167,17 @@ export class LandingHero extends LitElement {
     .hero-rotating-line {
       font-family: var(--landing-font-display, inherit);
       font-size: clamp(2.5rem, 6vw, 4.5rem);
-      font-weight: 600;
-      line-height: 1.15;
+      font-weight: 700;
+      line-height: 1.1;
       letter-spacing: -0.02em;
       margin: 0.25rem 0 0;
       opacity: 0;
       animation: fadeInUp 0.8s ease-out 0.35s forwards;
+      display: inline-block;
+      min-width: 300px;
+      height: 1.2em;
+      overflow: hidden;
+      position: relative;
     }
 
     .hero-rotating-text {
@@ -199,7 +204,7 @@ export class LandingHero extends LitElement {
     .hero-subheadline {
       font-family: var(--landing-font-body, inherit);
       max-width: 560px;
-      margin: 2rem auto 0;
+      margin: 2rem auto;
       font-size: clamp(1rem, 2vw, 1.25rem);
       line-height: 1.7;
       color: var(--landing-text-secondary);
@@ -211,14 +216,14 @@ export class LandingHero extends LitElement {
     .hero-ctas {
       display: flex;
       gap: 1rem;
-      margin-top: 2.5rem;
+      margin-top: 2rem;
       opacity: 0;
       animation: fadeInUp 0.8s ease-out 0.65s forwards;
     }
 
     .cta-primary {
       font-family: var(--landing-font-body, inherit);
-      padding: 1rem 2.25rem;
+      padding: 1rem 2rem;
       font-size: 1rem;
       font-weight: 600;
       color: white;
@@ -246,7 +251,7 @@ export class LandingHero extends LitElement {
 
     .cta-secondary {
       font-family: var(--landing-font-body, inherit);
-      padding: 1rem 2.25rem;
+      padding: 1rem 2rem;
       font-size: 1rem;
       font-weight: 600;
       color: var(--landing-text-primary);
@@ -318,10 +323,10 @@ export class LandingHero extends LitElement {
     .floating-card {
       position: absolute;
       z-index: 5;
-      padding: 0.75rem 1.25rem;
-      background: rgba(18, 18, 26, 0.8);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+      padding: 0.75rem 1rem;
+      background: var(--landing-glass-bg);
+      backdrop-filter: var(--landing-glass-blur);
+      -webkit-backdrop-filter: var(--landing-glass-blur);
       border: 1px solid var(--landing-glass-border);
       border-radius: 12px;
       box-shadow: var(--landing-shadow-md);
@@ -350,7 +355,7 @@ export class LandingHero extends LitElement {
 
     .floating-card-label {
       font-family: var(--landing-font-body, inherit);
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       font-weight: 500;
       color: var(--landing-text-secondary);
     }
@@ -419,6 +424,33 @@ export class LandingHero extends LitElement {
         text-align: center;
       }
     }
+
+    @media (max-width: 480px) {
+      .hero-social-hint {
+        margin-top: 2rem;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .hero-mesh {
+        animation: none;
+      }
+
+      .hero-headline,
+      .hero-rotating-line,
+      .hero-subheadline,
+      .hero-ctas,
+      .hero-social-hint,
+      .scroll-indicator,
+      .floating-card {
+        animation: none !important;
+        opacity: 1;
+      }
+
+      .scroll-arrow {
+        animation: none;
+      }
+    }
   `;
 
   @state()
@@ -481,23 +513,23 @@ export class LandingHero extends LitElement {
 
         <div class="hero-content">
           <h1 class="hero-headline">
-            Turn your ideas into reality.
+            Orchestrate Autonomous AI Agents.
           </h1>
           <div class="hero-rotating-line">
             <span class="hero-rotating-text">${ROTATING_TEXTS[0]}</span>
           </div>
 
           <p class="hero-subheadline">
-            An AI that truly knows you — researching, building, and delivering
-            while you focus on what matters most.
+            Clawdbrain coordinates a fleet of specialized agents to plan, execute, and verify work across your stack.
+            Persistent memory keeps every agent aligned—approvals and audit trails keep you in control.
           </p>
 
           <div class="hero-ctas">
             <button class="cta-primary" @click=${this.handleGetStarted}>
-              Get Started Free
+              Get Started
             </button>
             <button class="cta-secondary" @click=${this.handleLearnMore}>
-              See How It Works
+              See It In Action
             </button>
           </div>
 
@@ -508,7 +540,7 @@ export class LandingHero extends LitElement {
               <div class="hero-avatar">E</div>
             </div>
             <span class="hero-social-text">
-              Trusted by <strong>early adopters</strong> building their second brain
+              Trusted by <strong>early teams</strong> building agentic workflows
             </span>
           </div>
         </div>

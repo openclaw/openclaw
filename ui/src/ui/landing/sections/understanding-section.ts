@@ -2,24 +2,24 @@ import { html, css, LitElement, TemplateResult } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { createScrollObserver } from '../animation-utils';
 
-interface ProfileTile {
+interface MemoryTile {
   id: string;
-  type: 'interest' | 'strength' | 'weakness' | 'goal' | 'mood';
+  type: 'goal' | 'constraint' | 'tool' | 'preference';
   icon: string;
   label: string;
   color: string;
   delay: number;
 }
 
-const PROFILE_TILES: ProfileTile[] = [
-  { id: 'interest-1', type: 'interest', icon: '💡', label: 'Innovation', color: 'amber', delay: 0 },
-  { id: 'interest-2', type: 'interest', icon: '🎨', label: 'Design', color: 'coral', delay: 100 },
-  { id: 'interest-3', type: 'interest', icon: '📚', label: 'Learning', color: 'teal', delay: 200 },
-  { id: 'strength-1', type: 'strength', icon: '⚡', label: 'Quick learner', color: 'amber', delay: 300 },
-  { id: 'strength-2', type: 'strength', icon: '🎯', label: 'Detail-oriented', color: 'lavender', delay: 400 },
-  { id: 'goal-1', type: 'goal', icon: '🚀', label: 'Launch a product', color: 'primary', delay: 500 },
-  { id: 'goal-2', type: 'goal', icon: '📈', label: 'Grow audience', color: 'teal', delay: 600 },
-  { id: 'mood', type: 'mood', icon: '🧘', label: 'Focused & calm', color: 'lavender', delay: 700 },
+const MEMORY_TILES: MemoryTile[] = [
+  { id: 'goal-1', type: 'goal', icon: '🎯', label: 'Ship v1 in 2 weeks', color: 'primary', delay: 0 },
+  { id: 'goal-2', type: 'goal', icon: '🚀', label: 'Launch onboarding flow', color: 'lavender', delay: 100 },
+  { id: 'constraint-1', type: 'constraint', icon: '🛡️', label: 'No prod changes without approval', color: 'amber', delay: 250 },
+  { id: 'constraint-2', type: 'constraint', icon: '⏱️', label: 'Daily status at 9:00 AM', color: 'teal', delay: 350 },
+  { id: 'tool-1', type: 'tool', icon: '🔗', label: 'GitHub + CI', color: 'primary', delay: 500 },
+  { id: 'tool-2', type: 'tool', icon: '💬', label: 'Slack', color: 'teal', delay: 600 },
+  { id: 'preference-1', type: 'preference', icon: '✍️', label: 'Concise summaries', color: 'lavender', delay: 720 },
+  { id: 'preference-2', type: 'preference', icon: '🧩', label: 'TypeScript-first', color: 'coral', delay: 820 },
 ];
 
 @customElement('landing-understanding')
@@ -28,8 +28,9 @@ export class LandingUnderstanding extends LitElement {
     :host {
       display: block;
       background: var(--landing-bg-dark);
-      padding: 8rem 2rem;
+      padding: var(--landing-section-padding-y, 8rem) var(--landing-padding-x, 2rem);
       font-family: var(--landing-font-body, inherit);
+      scroll-margin-top: var(--landing-scroll-offset, 92px);
     }
 
     .section-container {
@@ -65,7 +66,7 @@ export class LandingUnderstanding extends LitElement {
     .section-headline {
       font-family: var(--landing-font-display, inherit);
       font-size: clamp(2rem, 4vw, 3rem);
-      font-weight: 600;
+      font-weight: 700;
       line-height: 1.2;
       color: var(--landing-text-primary);
       margin: 0 0 1.5rem;
@@ -235,8 +236,51 @@ export class LandingUnderstanding extends LitElement {
       color: var(--landing-text-muted);
     }
 
+    /* Section next CTA */
+    .section-next {
+      margin-top: 2.25rem;
+      display: flex;
+      justify-content: flex-start;
+    }
+
+    .next-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.125rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--landing-text-primary);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--landing-border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .next-button:hover {
+      transform: translateY(-1px);
+      border-color: var(--landing-border-hover);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .next-button:focus-visible {
+      outline: 2px solid var(--landing-primary);
+      outline-offset: 2px;
+    }
+
+    .next-arrow {
+      color: var(--landing-primary);
+    }
+
     /* Responsive */
-    @media (max-width: 900px) {
+    @media (max-width: 1024px) {
+      .section-container {
+        gap: 3rem;
+      }
+    }
+
+    @media (max-width: 768px) {
       .section-container {
         grid-template-columns: 1fr;
         gap: 3rem;
@@ -248,6 +292,10 @@ export class LandingUnderstanding extends LitElement {
 
       .profile-column {
         order: -1;
+      }
+
+      .section-next {
+        justify-content: center;
       }
     }
   `;
@@ -292,7 +340,7 @@ export class LandingUnderstanding extends LitElement {
     this.observer?.disconnect();
   }
 
-  private renderTile(tile: ProfileTile): TemplateResult {
+  private renderTile(tile: MemoryTile): TemplateResult {
     const visibleClass = this.tilesVisible ? 'is-visible' : '';
 
     return html`
@@ -307,53 +355,44 @@ export class LandingUnderstanding extends LitElement {
   }
 
   render(): TemplateResult {
-    const interests = PROFILE_TILES.filter(t => t.type === 'interest');
-    const strengths = PROFILE_TILES.filter(t => t.type === 'strength');
-    const goals = PROFILE_TILES.filter(t => t.type === 'goal');
-    const mood = PROFILE_TILES.filter(t => t.type === 'mood');
+    const goals = MEMORY_TILES.filter(t => t.type === 'goal');
+    const constraints = MEMORY_TILES.filter(t => t.type === 'constraint');
+    const tools = MEMORY_TILES.filter(t => t.type === 'tool');
+    const preferences = MEMORY_TILES.filter(t => t.type === 'preference');
 
     return html`
       <section id="understanding-section">
         <div class="section-container">
           <div class="text-column animate-on-scroll">
-            <span class="section-label">Personalization</span>
+            <span class="section-label">Persistent Memory</span>
             <h2 class="section-headline">
-              An AI that truly understands you.
+              Shared context that keeps every agent aligned.
             </h2>
             <p class="section-body">
-              Not just what you ask — but what you <strong>need</strong>.
+              Clawdbrain builds a durable memory layer for your workspace—goals, constraints, tools, and decisions.
             </p>
             <p class="section-body">
-              Your interests. Your strengths. Your stressors.
-              What lights you up and what holds you back.
+              Every agent runs with the same north star, so handoffs are clean and execution stays on track.
             </p>
             <p class="section-footnote">
-              The more you share, the more it anticipates.
+              You can inspect and edit memory at any time.
             </p>
+
+            <div class="section-next">
+              <button class="next-button" @click=${this.handleNext}>
+                Next: Safety & control <span class="next-arrow">→</span>
+              </button>
+            </div>
           </div>
 
           <div class="profile-column">
             <div class="profile-card">
               <div class="profile-header">
-                <div class="profile-avatar">👤</div>
+                <div class="profile-avatar">🧠</div>
                 <div>
-                  <div class="profile-name">Your Profile</div>
-                  <div class="profile-subtitle">Always learning</div>
+                  <div class="profile-name">Workspace Memory</div>
+                  <div class="profile-subtitle">Shared across agents</div>
                 </div>
-              </div>
-
-              <div class="tile-section">
-                <span class="tile-section-label">Interests</span>
-              </div>
-              <div class="tiles-container">
-                ${interests.map(t => this.renderTile(t))}
-              </div>
-
-              <div class="tile-section">
-                <span class="tile-section-label">Strengths</span>
-              </div>
-              <div class="tiles-container">
-                ${strengths.map(t => this.renderTile(t))}
               </div>
 
               <div class="tile-section">
@@ -364,16 +403,38 @@ export class LandingUnderstanding extends LitElement {
               </div>
 
               <div class="tile-section">
-                <span class="tile-section-label">Current State</span>
+                <span class="tile-section-label">Constraints</span>
               </div>
               <div class="tiles-container">
-                ${mood.map(t => this.renderTile(t))}
+                ${constraints.map(t => this.renderTile(t))}
+              </div>
+
+              <div class="tile-section">
+                <span class="tile-section-label">Tools</span>
+              </div>
+              <div class="tiles-container">
+                ${tools.map(t => this.renderTile(t))}
+              </div>
+
+              <div class="tile-section">
+                <span class="tile-section-label">Preferences</span>
+              </div>
+              <div class="tiles-container">
+                ${preferences.map(t => this.renderTile(t))}
               </div>
             </div>
           </div>
         </div>
       </section>
     `;
+  }
+
+  private handleNext(): void {
+    this.dispatchEvent(new CustomEvent('landing-navigate', {
+      detail: { section: 'control' },
+      bubbles: true,
+      composed: true,
+    }));
   }
 }
 
