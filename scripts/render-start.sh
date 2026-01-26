@@ -6,17 +6,16 @@ echo "=== Render startup script ==="
 echo "CLAWDBOT_STATE_DIR=${CLAWDBOT_STATE_DIR}"
 echo "HOME=${HOME}"
 
-# Ensure HOME is set (fallback to /tmp if not set)
+# Ensure HOME is set (node user's home is typically /home/node)
 if [ -z "${HOME}" ]; then
-  HOME="/tmp"
+  HOME="/home/node"
+  if [ ! -d "${HOME}" ]; then
+    HOME="/tmp"
+  fi
   echo "Warning: HOME not set, using ${HOME}"
 fi
 
-# Determine config directory - try in order until one works
-# 1. CLAWDBOT_STATE_DIR if set
-# 2. /data/.clawdbot (Render persistent disk)
-# 3. $HOME/.clawdbot (always writable by node user)
-
+# Config content
 CONFIG_CONTENT='{
   "gateway": {
     "mode": "local",
@@ -27,29 +26,33 @@ CONFIG_CONTENT='{
   }
 }'
 
+# Determine config directory - try in order until one works
+# Temporarily disable set -e for permission testing
+set +e
 CONFIG_DIR=""
 CONFIG_FILE=""
 
-# Try each directory in order
-for dir in "${CLAWDBOT_STATE_DIR:-}" "/data/.clawdbot" "${HOME}/.clawdbot"; do
-  if [ -z "${dir}" ]; then
-    continue
+# Try CLAWDBOT_STATE_DIR first if set
+if [ -n "${CLAWDBOT_STATE_DIR}" ]; then
+  mkdir -p "${CLAWDBOT_STATE_DIR}" 2>/dev/null
+  if echo "${CONFIG_CONTENT}" > "${CLAWDBOT_STATE_DIR}/clawdbot.json" 2>/dev/null; then
+    CONFIG_DIR="${CLAWDBOT_STATE_DIR}"
+    CONFIG_FILE="${CLAWDBOT_STATE_DIR}/clawdbot.json"
+    echo "Using CLAWDBOT_STATE_DIR: ${CONFIG_DIR}"
   fi
-  
-  # Temporarily disable set -e for this test
-  set +e
-  mkdir -p "${dir}" 2>/dev/null
-  if echo "${CONFIG_CONTENT}" > "${dir}/clawdbot.json" 2>/dev/null; then
-    set -e
-    CONFIG_DIR="${dir}"
-    CONFIG_FILE="${dir}/clawdbot.json"
-    echo "Successfully wrote config to: ${CONFIG_FILE}"
-    break
-  fi
-  set -e
-done
+fi
 
-# Ensure we have a config directory (should always succeed with HOME fallback)
+# Try /data/.clawdbot if not set yet
+if [ -z "${CONFIG_DIR}" ]; then
+  mkdir -p "/data/.clawdbot" 2>/dev/null
+  if echo "${CONFIG_CONTENT}" > "/data/.clawdbot/clawdbot.json" 2>/dev/null; then
+    CONFIG_DIR="/data/.clawdbot"
+    CONFIG_FILE="/data/.clawdbot/clawdbot.json"
+    echo "Using /data/.clawdbot: ${CONFIG_DIR}"
+  fi
+fi
+
+# Final fallback: use HOME (always writable by node user)
 if [ -z "${CONFIG_DIR}" ]; then
   CONFIG_DIR="${HOME}/.clawdbot"
   CONFIG_FILE="${CONFIG_DIR}/clawdbot.json"
@@ -57,6 +60,9 @@ if [ -z "${CONFIG_DIR}" ]; then
   echo "${CONFIG_CONTENT}" > "${CONFIG_FILE}"
   echo "Using fallback: ${CONFIG_FILE}"
 fi
+
+# Re-enable set -e for the rest of the script
+set -e
 
 echo "Config dir: ${CONFIG_DIR}"
 echo "Config file: ${CONFIG_FILE}"
