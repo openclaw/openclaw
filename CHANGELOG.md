@@ -51,6 +51,7 @@ Status: unreleased.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Security: pin npm overrides to keep tar@7.5.4 for install toolchains.
 - BlueBubbles: coalesce inbound URL link preview messages. (#1981) Thanks @tyler6204.
 - Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
