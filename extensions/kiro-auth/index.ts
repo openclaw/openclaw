@@ -3,9 +3,9 @@ import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
 import { extractKiroCliToken, isTokenExpired } from "./cli-credentials.js";
 import { findKiroCli } from "./cli-detector.js";
 
-const PROVIDER_ID = "kiro";
-const PROVIDER_LABEL = "Kiro";
-const DEFAULT_MODEL = "kiro/auto";
+const PROVIDER_ID = "kiro-cli";
+const PROVIDER_LABEL = "Kiro CLI";
+const DEFAULT_MODEL = "kiro-cli/auto";
 
 const kiroPlugin = {
   id: "kiro-auth",
@@ -17,7 +17,7 @@ const kiroPlugin = {
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
       docsPath: "/providers/models",
-      aliases: ["kiro-cli", "amazon-q", "q-developer"],
+      aliases: ["kiro", "amazon-q", "q-developer"],
       envVars: [],
       auth: [
         {

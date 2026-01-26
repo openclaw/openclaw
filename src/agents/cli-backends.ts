@@ -25,6 +25,18 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   "claude-haiku-3-5": "haiku",
 };
 
+const KIRO_MODEL_ALIASES: Record<string, string> = {
+  auto: "auto",
+  "claude-sonnet-4": "claude-sonnet-4",
+  "sonnet-4": "claude-sonnet-4",
+  "claude-sonnet-4.5": "claude-sonnet-4.5",
+  "sonnet-4.5": "claude-sonnet-4.5",
+  "claude-haiku-4.5": "claude-haiku-4.5",
+  "haiku-4.5": "claude-haiku-4.5",
+  "claude-opus-4.5": "claude-opus-4.5",
+  "opus-4.5": "claude-opus-4.5",
+};
+
 const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   command: "claude",
   args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
@@ -42,7 +54,12 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   modelAliases: CLAUDE_MODEL_ALIASES,
   sessionArg: "--session-id",
   sessionMode: "always",
-  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  sessionIdFields: [
+    "session_id",
+    "sessionId",
+    "conversation_id",
+    "conversationId",
+  ],
   systemPromptArg: "--append-system-prompt",
   systemPromptMode: "append",
   systemPromptWhen: "first",
@@ -52,7 +69,15 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
 
 const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   command: "codex",
-  args: ["exec", "--json", "--color", "never", "--sandbox", "read-only", "--skip-git-repo-check"],
+  args: [
+    "exec",
+    "--json",
+    "--color",
+    "never",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+  ],
   resumeArgs: [
     "exec",
     "resume",
@@ -74,6 +99,17 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+const DEFAULT_KIRO_BACKEND: CliBackendConfig = {
+  command: "kiro-cli",
+  args: ["chat", "--no-interactive"],
+  output: "text",
+  input: "stdin",
+  modelArg: "--model",
+  modelAliases: KIRO_MODEL_ALIASES,
+  sessionMode: "none",
+  serialize: true,
+};
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -88,7 +124,10 @@ function pickBackendConfig(
   return undefined;
 }
 
-function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
+function mergeBackendConfig(
+  base: CliBackendConfig,
+  override?: CliBackendConfig,
+): CliBackendConfig {
   if (!override) return { ...base };
   return {
     ...base,
@@ -96,7 +135,9 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     args: override.args ?? base.args,
     env: { ...base.env, ...override.env },
     modelAliases: { ...base.modelAliases, ...override.modelAliases },
-    clearEnv: Array.from(new Set([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])])),
+    clearEnv: Array.from(
+      new Set([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])]),
+    ),
     sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
     sessionArgs: override.sessionArgs ?? base.sessionArgs,
     resumeArgs: override.resumeArgs ?? base.resumeArgs,
@@ -107,6 +148,7 @@ export function resolveCliBackendIds(cfg?: ClawdbotConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
+    normalizeBackendKey("kiro-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
@@ -131,6 +173,12 @@ export function resolveCliBackendConfig(
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) return null;
+    return { id: normalized, config: { ...merged, command } };
+  }
+  if (normalized === "kiro-cli") {
+    const merged = mergeBackendConfig(DEFAULT_KIRO_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) return null;
     return { id: normalized, config: { ...merged, command } };

@@ -9,7 +9,13 @@ export type ModelRef = {
   model: string;
 };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
@@ -36,8 +42,11 @@ export function isCliProvider(provider: string, cfg?: ClawdbotConfig): boolean {
   const normalized = normalizeProviderId(provider);
   if (normalized === "claude-cli") return true;
   if (normalized === "codex-cli") return true;
+  if (normalized === "kiro-cli") return true;
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
+  return Object.keys(backends).some(
+    (key) => normalizeProviderId(key) === normalized,
+  );
 }
 
 function normalizeAnthropicModelId(model: string): string {
@@ -55,7 +64,10 @@ function normalizeProviderModelId(provider: string, model: string): string {
   return model;
 }
 
-export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
+export function parseModelRef(
+  raw: string,
+  defaultProvider: string,
+): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const slash = trimmed.indexOf("/");
@@ -83,7 +95,9 @@ export function buildModelAliasIndex(params: {
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
     const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
     if (!parsed) continue;
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias = String(
+      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
+    ).trim();
     if (!alias) continue;
     const aliasKey = normalizeAliasKey(alias);
     byAlias.set(aliasKey, { alias, ref: parsed });
@@ -121,7 +135,10 @@ export function resolveConfiguredModelRef(params: {
   defaultModel: string;
 }): ModelRef {
   const rawModel = (() => {
-    const raw = params.cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
+    const raw = params.cfg.agents?.defaults?.model as
+      | { primary?: string }
+      | string
+      | undefined;
     if (typeof raw === "string") return raw.trim();
     return raw?.primary?.trim() ?? "";
   })();
@@ -205,7 +222,9 @@ export function buildAllowedModelSet(params: {
     defaultModel && params.defaultProvider
       ? modelKey(params.defaultProvider, defaultModel)
       : undefined;
-  const catalogKeys = new Set(params.catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const catalogKeys = new Set(
+    params.catalog.map((entry) => modelKey(entry.provider, entry.id)),
+  );
 
   if (allowAny) {
     if (defaultKey) catalogKeys.add(defaultKey);
@@ -217,7 +236,10 @@ export function buildAllowedModelSet(params: {
   }
 
   const allowedKeys = new Set<string>();
-  const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
+  const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<
+    string,
+    unknown
+  >;
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) continue;
@@ -277,7 +299,9 @@ export function getModelRefStatus(params: {
   const key = modelKey(params.ref.provider, params.ref.model);
   return {
     key,
-    inCatalog: params.catalog.some((entry) => modelKey(entry.provider, entry.id) === key),
+    inCatalog: params.catalog.some(
+      (entry) => modelKey(entry.provider, entry.id) === key,
+    ),
     allowAny: allowed.allowAny,
     allowed: allowed.allowAny || allowed.allowedKeys.has(key),
   };

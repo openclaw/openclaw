@@ -1,6 +1,6 @@
 {
   "id": "kiro-auth",
-  "providers": ["kiro"],
+  "providers": ["kiro-cli"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
