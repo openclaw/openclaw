@@ -264,7 +264,7 @@ type BlueBubblesDebounceEntry = {
  * This helps combine URL text + link preview balloon messages that BlueBubbles
  * sends as separate webhook events.
  */
-const DEFAULT_INBOUND_DEBOUNCE_MS = 100;
+const DEFAULT_INBOUND_DEBOUNCE_MS = 350;
 
 /**
  * Known URLBalloonProvider bundle IDs that indicate a rich link preview message.
