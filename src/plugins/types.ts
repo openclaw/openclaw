@@ -339,6 +339,16 @@ export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  /** The generated summary text (read-only). */
+  summary?: string;
+  /** Agent workspace root (for reading context files). */
+  workspaceRoot?: string;
+};
+
+/** Result from after_compaction hook - allows injecting additional context into the summary. */
+export type PluginHookAfterCompactionResult = {
+  /** Additional text to append to the compaction summary. */
+  appendToSummary?: string;
 };
 
 // Message context
@@ -476,7 +486,7 @@ export type PluginHookHandlerMap = {
   after_compaction: (
     event: PluginHookAfterCompactionEvent,
     ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookAfterCompactionResult | void> | PluginHookAfterCompactionResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

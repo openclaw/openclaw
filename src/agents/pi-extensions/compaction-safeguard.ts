@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import {
@@ -11,8 +14,52 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  DEFAULT_USER_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+} from "../workspace.js";
+
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
+
+// Context refresh settings
+const MAX_CONTEXT_FILE_SIZE = 4000; // Max chars per file to avoid bloating the summary
+const CONTEXT_FILES = [DEFAULT_USER_FILENAME, DEFAULT_SOUL_FILENAME, DEFAULT_IDENTITY_FILENAME];
+
+async function readContextFile(
+  workspaceRoot: string,
+  filename: string,
+  maxSize: number = MAX_CONTEXT_FILE_SIZE,
+): Promise<string | undefined> {
+  try {
+    const filePath = path.join(workspaceRoot, filename);
+    const content = await fs.readFile(filePath, "utf-8");
+    if (content.trim().length === 0) return undefined;
+    if (content.length > maxSize) {
+      return content.slice(0, maxSize) + "\n\n[... truncated for context limits ...]";
+    }
+    return content;
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildContextRefreshSection(workspaceRoot: string | undefined): Promise<string> {
+  if (!workspaceRoot) return "";
+
+  const sections: string[] = [];
+  for (const filename of CONTEXT_FILES) {
+    const content = await readContextFile(workspaceRoot, filename);
+    if (content) {
+      sections.push(`## ${filename}\n${content}`);
+    }
+  }
+
+  if (sections.length === 0) return "";
+  return `\n\n# Workspace Context (re-injected after compaction)\n\n${sections.join("\n\n")}`;
+}
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -240,6 +287,47 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       summary += toolFailureSection;
       summary += fileOpsSummary;
+
+      // Re-inject workspace context files (USER.md, SOUL.md, etc.) after compaction
+      // This ensures the agent retains persona and user preferences
+      try {
+        const contextRefresh = await buildContextRefreshSection(ctx.cwd);
+        if (contextRefresh) {
+          summary += contextRefresh;
+        }
+      } catch (contextError) {
+        console.warn(
+          `Context refresh after compaction failed: ${
+            contextError instanceof Error ? contextError.message : String(contextError)
+          }`,
+        );
+      }
+
+      // Run after_compaction hook to allow plugins to inject additional context
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("after_compaction")) {
+        try {
+          const hookResult = await hookRunner.runAfterCompaction(
+            {
+              messageCount: preparation.messagesToSummarize.length,
+              tokenCount: preparation.tokensBefore,
+              compactedCount: preparation.messagesToSummarize.length,
+              summary,
+              workspaceRoot: ctx.cwd,
+            },
+            { agentId: undefined },
+          );
+          if (hookResult?.appendToSummary) {
+            summary += `\n\n${hookResult.appendToSummary}`;
+          }
+        } catch (hookError) {
+          console.warn(
+            `after_compaction hook failed: ${
+              hookError instanceof Error ? hookError.message : String(hookError)
+            }`,
+          );
+        }
+      }
 
       return {
         compaction: {

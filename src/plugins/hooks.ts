@@ -8,6 +8,7 @@
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
+  PluginHookAfterCompactionResult,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
@@ -43,6 +44,7 @@ export type {
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookAfterCompactionEvent,
+  PluginHookAfterCompactionResult,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -218,12 +220,21 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run after_compaction hook.
+   * Allows plugins to return text to append to the compaction summary.
    */
   async function runAfterCompaction(
     event: PluginHookAfterCompactionEvent,
     ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("after_compaction", event, ctx);
+  ): Promise<PluginHookAfterCompactionResult | undefined> {
+    return runModifyingHook<"after_compaction", PluginHookAfterCompactionResult>(
+      "after_compaction",
+      event,
+      ctx,
+      (acc, next) => ({
+        appendToSummary:
+          [acc?.appendToSummary, next.appendToSummary].filter(Boolean).join("\n\n") || undefined,
+      }),
+    );
   }
 
   // =========================================================================
