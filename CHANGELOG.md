@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
+- Gateway: warn on hook tokens via query params; document header auth preference. (#2200) Thanks @YuriNachos.
 - Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
 - Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.
 - Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
