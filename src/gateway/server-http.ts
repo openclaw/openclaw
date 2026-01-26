@@ -46,6 +46,7 @@ type HookDispatchers = {
     model?: string;
     thinking?: string;
     timeoutSeconds?: number;
+    allowUnsafeExternalContent?: boolean;
   }) => string;
 };
 
@@ -173,6 +174,7 @@ export function createHooksRequestHandler(
             model: mapped.action.model,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
+            allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
           });
           sendJson(res, 202, { ok: true, runId });
           return true;

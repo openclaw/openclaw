@@ -242,10 +242,15 @@ export async function runCronIsolatedAgentTurn(params: {
   const formattedTime =
     formatUserTime(new Date(now), userTimezone, userTimeFormat) ?? new Date(now).toISOString();
   const timeLine = `Current time: ${formattedTime} (${userTimezone})`;
+  const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
 
-  // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection.
-  // External content (emails, webhooks) should never be treated as trusted instructions.
+  // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
+  // unless explicitly allowed via a dangerous config override.
   const isExternalHook = isExternalHookSession(baseSessionKey);
+  const allowUnsafeExternalContent =
+    agentPayload?.allowUnsafeExternalContent === true ||
+    (isGmailHook && params.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
+  const shouldWrapExternal = isExternalHook && !allowUnsafeExternalContent;
   let commandBody: string;
 
   if (isExternalHook) {
@@ -258,7 +263,9 @@ export async function runCronIsolatedAgentTurn(params: {
           `${suspiciousPatterns.slice(0, 3).join(", ")}`,
       );
     }
+  }
 
+  if (shouldWrapExternal) {
     // Wrap external content with security boundaries
     const hookType = getHookType(baseSessionKey);
     const safeContent = buildSafeExternalPrompt({
@@ -272,7 +279,6 @@ export async function runCronIsolatedAgentTurn(params: {
     commandBody = `${safeContent}\n\n${timeLine}`.trim();
   } else {
     // Internal/trusted source - use original format
-    const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
     commandBody = `${base}\n${timeLine}`.trim();
   }
 
