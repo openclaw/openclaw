@@ -99,6 +99,7 @@ export function buildParseArgv(params: {
     normalizedArgv.length >= 2 &&
     (executable === "node" ||
       executable === "node.exe" ||
+      executable.startsWith("node-") ||
       executable === "bun" ||
       executable === "bun.exe");
   if (looksLikeNode) return normalizedArgv;
