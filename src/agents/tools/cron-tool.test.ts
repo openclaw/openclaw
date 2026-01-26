@@ -47,6 +47,39 @@ describe("cron tool", () => {
     expect(call.params).toEqual(expectedParams);
   });
 
+  it("run passes runMode force to gateway as mode", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-force", {
+      action: "run",
+      jobId: "job-1",
+      runMode: "force",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: unknown;
+    };
+    expect(call.method).toBe("cron.run");
+    expect(call.params).toEqual({ id: "job-1", mode: "force" });
+  });
+
+  it("run omits mode when runMode is not provided", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-no-mode", {
+      action: "run",
+      jobId: "job-1",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: unknown;
+    };
+    expect(call.method).toBe("cron.run");
+    expect(call.params).toEqual({ id: "job-1" });
+  });
+
   it("prefers jobId over id when both are provided", async () => {
     const tool = createCronTool();
     await tool.execute("call1", {

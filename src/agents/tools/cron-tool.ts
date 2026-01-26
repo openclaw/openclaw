@@ -16,6 +16,7 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-h
 const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
+const CRON_RUN_MODES = ["due", "force"] as const;
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
@@ -35,6 +36,7 @@ const CronToolSchema = Type.Object({
   patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
   text: Type.Optional(Type.String()),
   mode: optionalStringEnum(CRON_WAKE_MODES),
+  runMode: optionalStringEnum(CRON_RUN_MODES),
   contextMessages: Type.Optional(
     Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
   ),
@@ -134,7 +136,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     label: "Cron",
     name: "cron",
     description:
-      "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use `jobId` as the canonical identifier; `id` is accepted for compatibility. Use `contextMessages` (0-10) to add previous messages as context to the job text.",
+      "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use `jobId` as the canonical identifier; `id` is accepted for compatibility. Use `contextMessages` (0-10) to add previous messages as context to the job text. For `run`, pass `runMode` \"force\" to execute regardless of schedule.",
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -221,7 +223,12 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, { id }));
+          const runMode = readStringParam(params, "runMode");
+          const runPayload: Record<string, unknown> = { id };
+          if (runMode === "due" || runMode === "force") {
+            runPayload.mode = runMode;
+          }
+          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, runPayload));
         }
         case "runs": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
