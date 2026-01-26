@@ -18,7 +18,7 @@ Status: unreleased.
 - Docs: add DigitalOcean deployment guide. (#1870) Thanks @0xJonHoldsCrypto.
 - Docs: add Raspberry Pi install guide. (#1871) Thanks @0xJonHoldsCrypto.
 - Docs: add GCP Compute Engine deployment guide. (#1848) Thanks @hougangdev.
-- Docs: add LINE channel guide.
+- Docs: add LINE channel guide. Thanks @thewilloftheshadow.
 - Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
 - Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
 - Onboarding: strengthen security warning copy for beta + access control expectations.
