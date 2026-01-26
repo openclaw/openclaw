@@ -46,6 +46,7 @@ type HookDispatchers = {
     model?: string;
     thinking?: string;
     timeoutSeconds?: number;
+    allowUnsafeExternalContent?: boolean;
   }) => string;
 };
 
@@ -75,12 +76,19 @@ export function createHooksRequestHandler(
       return false;
     }
 
-    const token = extractHookToken(req, url);
+    const { token, fromQuery } = extractHookToken(req, url);
     if (!token || token !== hooksConfig.token) {
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Unauthorized");
       return true;
+    }
+    if (fromQuery) {
+      logHooks.warn(
+        "Hook token provided via query parameter is deprecated for security reasons. " +
+          "Tokens in URLs appear in logs, browser history, and referrer headers. " +
+          "Use Authorization: Bearer <token> or X-Clawdbot-Token header instead.",
+      );
     }
 
     if (req.method !== "POST") {
@@ -173,6 +181,7 @@ export function createHooksRequestHandler(
             model: mapped.action.model,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
+            allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
           });
           sendJson(res, 202, { ok: true, runId });
           return true;
@@ -227,21 +236,36 @@ export function createGatewayHttpServer(opts: {
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;
 
     try {
+      const configSnapshot = loadConfig();
+      const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       if (await handleHooksRequest(req, res)) return;
+      if (
+        await handleToolsInvokeHttpRequest(req, res, {
+          auth: resolvedAuth,
+          trustedProxies,
+        })
+      )
+        return;
       if (await handleSlackHttpRequest(req, res)) return;
       if (handlePluginRequest && (await handlePluginRequest(req, res))) return;
-      if (await handleToolsInvokeHttpRequest(req, res, { auth: resolvedAuth })) return;
       if (openResponsesEnabled) {
         if (
           await handleOpenResponsesHttpRequest(req, res, {
             auth: resolvedAuth,
             config: openResponsesConfig,
+            trustedProxies,
           })
         )
           return;
       }
       if (openAiChatCompletionsEnabled) {
-        if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth })) return;
+        if (
+          await handleOpenAiHttpRequest(req, res, {
+            auth: resolvedAuth,
+            trustedProxies,
+          })
+        )
+          return;
       }
       if (canvasHost) {
         if (await handleA2uiHttpRequest(req, res)) return;
@@ -251,14 +275,14 @@ export function createGatewayHttpServer(opts: {
         if (
           handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,
-            resolveAvatar: (agentId) => resolveAgentAvatar(loadConfig(), agentId),
+            resolveAvatar: (agentId) => resolveAgentAvatar(configSnapshot, agentId),
           })
         )
           return;
         if (
           handleControlUiHttpRequest(req, res, {
             basePath: controlUiBasePath,
-            config: loadConfig(),
+            config: configSnapshot,
           })
         )
           return;

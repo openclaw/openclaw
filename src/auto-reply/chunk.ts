@@ -13,7 +13,9 @@ export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
 /**
  * Chunking mode for outbound messages:
  * - "length": Split only when exceeding textChunkLimit (default)
- * - "newline": Split on every newline, with fallback to length-based for long lines
+ * - "newline": Prefer breaking on "soft" boundaries. Historically this split on every
+ *   newline; now it only breaks on paragraph boundaries (blank lines) unless the text
+ *   exceeds the length limit.
  */
 export type ChunkMode = "length" | "newline";
 
@@ -101,8 +103,6 @@ export function resolveChunkMode(
   accountId?: string | null,
 ): ChunkMode {
   if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) return DEFAULT_CHUNK_MODE;
-  // Chunk mode is only supported for BlueBubbles.
-  if (provider !== "bluebubbles") return DEFAULT_CHUNK_MODE;
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
   const providerConfig = (channelsConfig?.[provider] ??
     (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
@@ -111,24 +111,120 @@ export function resolveChunkMode(
 }
 
 /**
- * Split text on newlines, filtering empty lines.
- * Lines exceeding maxLineLength are further split using length-based chunking.
+ * Split text on newlines, trimming line whitespace.
+ * Blank lines are folded into the next non-empty line as leading "\n" prefixes.
+ * Long lines can be split by length (default) or kept intact via splitLongLines:false.
  */
-export function chunkByNewline(text: string, maxLineLength: number): string[] {
+export function chunkByNewline(
+  text: string,
+  maxLineLength: number,
+  opts?: {
+    splitLongLines?: boolean;
+    trimLines?: boolean;
+    isSafeBreak?: (index: number) => boolean;
+  },
+): string[] {
   if (!text) return [];
-  const lines = text.split("\n");
+  if (maxLineLength <= 0) return text.trim() ? [text] : [];
+  const splitLongLines = opts?.splitLongLines !== false;
+  const trimLines = opts?.trimLines !== false;
+  const lines = splitByNewline(text, opts?.isSafeBreak);
   const chunks: string[] = [];
+  let pendingBlankLines = 0;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed) continue; // skip empty lines
+    if (!trimmed) {
+      pendingBlankLines += 1;
+      continue;
+    }
 
-    if (trimmed.length <= maxLineLength) {
-      chunks.push(trimmed);
+    const maxPrefix = Math.max(0, maxLineLength - 1);
+    const cappedBlankLines = pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
+    const prefix = cappedBlankLines > 0 ? "\n".repeat(cappedBlankLines) : "";
+    pendingBlankLines = 0;
+
+    const lineValue = trimLines ? trimmed : line;
+    if (!splitLongLines || lineValue.length + prefix.length <= maxLineLength) {
+      chunks.push(prefix + lineValue);
+      continue;
+    }
+
+    const firstLimit = Math.max(1, maxLineLength - prefix.length);
+    const first = lineValue.slice(0, firstLimit);
+    chunks.push(prefix + first);
+    const remaining = lineValue.slice(firstLimit);
+    if (remaining) {
+      chunks.push(...chunkText(remaining, maxLineLength));
+    }
+  }
+
+  if (pendingBlankLines > 0 && chunks.length > 0) {
+    chunks[chunks.length - 1] += "\n".repeat(pendingBlankLines);
+  }
+
+  return chunks;
+}
+
+/**
+ * Split text into chunks on paragraph boundaries (blank lines), preserving lists and
+ * single-newline line wraps inside paragraphs.
+ *
+ * - Only breaks at paragraph separators ("\n\n" or more, allowing whitespace on blank lines)
+ * - Packs multiple paragraphs into a single chunk up to `limit`
+ * - Falls back to length-based splitting when a single paragraph exceeds `limit`
+ *   (unless `splitLongParagraphs` is disabled)
+ */
+export function chunkByParagraph(
+  text: string,
+  limit: number,
+  opts?: { splitLongParagraphs?: boolean },
+): string[] {
+  if (!text) return [];
+  if (limit <= 0) return [text];
+  const splitLongParagraphs = opts?.splitLongParagraphs !== false;
+
+  // Normalize to \n so blank line detection is consistent.
+  const normalized = text.replace(/\r\n?/g, "\n");
+
+  // Fast-path: if there are no blank-line paragraph separators, do not split.
+  // (We *do not* early-return based on `limit` — newline mode is about paragraph
+  // boundaries, not only exceeding a length limit.)
+  const paragraphRe = /\n[\t ]*\n+/;
+  if (!paragraphRe.test(normalized)) {
+    if (normalized.length <= limit) return [normalized];
+    if (!splitLongParagraphs) return [normalized];
+    return chunkText(normalized, limit);
+  }
+
+  const spans = parseFenceSpans(normalized);
+
+  const parts: string[] = [];
+  const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
+  let lastIndex = 0;
+  for (const match of normalized.matchAll(re)) {
+    const idx = match.index ?? 0;
+
+    // Do not split on blank lines that occur inside fenced code blocks.
+    if (!isSafeFenceBreak(spans, idx)) {
+      continue;
+    }
+
+    parts.push(normalized.slice(lastIndex, idx));
+    lastIndex = idx + match[0].length;
+  }
+  parts.push(normalized.slice(lastIndex));
+
+  const chunks: string[] = [];
+  for (const part of parts) {
+    const paragraph = part.replace(/\s+$/g, "");
+    if (!paragraph.trim()) continue;
+    if (paragraph.length <= limit) {
+      chunks.push(paragraph);
+    } else if (!splitLongParagraphs) {
+      chunks.push(paragraph);
     } else {
-      // Long line: fall back to length-based chunking
-      const subChunks = chunkText(trimmed, maxLineLength);
-      chunks.push(...subChunks);
+      chunks.push(...chunkText(paragraph, limit));
     }
   }
 
@@ -140,9 +236,41 @@ export function chunkByNewline(text: string, maxLineLength: number): string[] {
  */
 export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
   if (mode === "newline") {
-    return chunkByNewline(text, limit);
+    return chunkByParagraph(text, limit);
   }
   return chunkText(text, limit);
+}
+
+export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+  if (mode === "newline") {
+    // Paragraph chunking is fence-safe because we never split at arbitrary indices.
+    // If a paragraph must be split by length, defer to the markdown-aware chunker.
+    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    const out: string[] = [];
+    for (const chunk of paragraphChunks) {
+      const nested = chunkMarkdownText(chunk, limit);
+      if (!nested.length && chunk) out.push(chunk);
+      else out.push(...nested);
+    }
+    return out;
+  }
+  return chunkMarkdownText(text, limit);
+}
+
+function splitByNewline(
+  text: string,
+  isSafeBreak: (index: number) => boolean = () => true,
+): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n" && isSafeBreak(i)) {
+      lines.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  lines.push(text.slice(start));
+  return lines;
 }
 
 export function chunkText(text: string, limit: number): string[] {

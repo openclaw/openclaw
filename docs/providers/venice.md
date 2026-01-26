@@ -1,6 +1,21 @@
-# Venice AI Provider
+---
+summary: "Use Venice AI privacy-focused models in Clawdbot"
+read_when:
+  - You want privacy-focused inference in Clawdbot
+  - You want Venice AI setup guidance
+---
+# Venice AI (Venius highlight)
+
+**Venius** is our highlight Venice setup for privacy-first inference with optional anonymized access to proprietary models.
 
 Venice AI provides privacy-focused AI inference with support for uncensored models and access to major proprietary models through their anonymized proxy. All inference is private by default—no training on your data, no logging.
+
+## Why Venice in Clawdbot
+
+- **Private inference** for open-source models (no logging).
+- **Uncensored models** when you need them.
+- **Anonymized access** to proprietary models (Opus/GPT/Gemini) when quality matters.
+- OpenAI-compatible `/v1` endpoints.
 
 ## Privacy Modes
 
@@ -20,6 +35,7 @@ Venice offers two privacy levels — understanding this is key to choosing your 
 - **Streaming**: ✅ Supported on all models
 - **Function calling**: ✅ Supported on select models (check model capabilities)
 - **Vision**: ✅ Supported on models with vision capability
+- **No hard rate limits**: Fair-use throttling may apply for extreme usage
 
 ## Setup
 
@@ -54,8 +70,7 @@ This will:
 ```bash
 clawdbot onboard --non-interactive \
   --auth-choice venice-api-key \
-  --token "vapi_xxxxxxxxxxxx" \
-  --token-provider venice
+  --venice-api-key "vapi_xxxxxxxxxxxx"
 ```
 
 ### 3. Verify Setup
@@ -68,8 +83,10 @@ clawdbot chat --model venice/llama-3.3-70b "Hello, are you working?"
 
 After setup, Clawdbot shows all available Venice models. Pick based on your needs:
 
-- **Privacy**: Choose "private" models for fully private inference
-- **Capability**: Choose "anonymized" models to access Claude, GPT, Gemini via Venice's proxy
+- **Default (our pick)**: `venice/llama-3.3-70b` for private, balanced performance.
+- **Best overall quality**: `venice/claude-opus-45` for hard jobs (Opus remains the strongest).
+- **Privacy**: Choose "private" models for fully private inference.
+- **Capability**: Choose "anonymized" models to access Claude, GPT, Gemini via Venice's proxy.
 
 Change your default model anytime:
 
@@ -84,11 +101,18 @@ List all available models:
 clawdbot models list | grep venice
 ```
 
+## Configure via `clawdbot configure`
+
+1. Run `clawdbot configure`
+2. Select **Model/auth**
+3. Choose **Venice AI**
+
 ## Which Model Should I Use?
 
 | Use Case | Recommended Model | Why |
 |----------|-------------------|-----|
 | **General chat** | `llama-3.3-70b` | Good all-around, fully private |
+| **Best overall quality** | `claude-opus-45` | Opus remains the strongest for hard tasks |
 | **Privacy + Claude quality** | `claude-opus-45` | Best reasoning via anonymized proxy |
 | **Coding** | `qwen3-coder-480b-a35b-instruct` | Code-optimized, 262k context |
 | **Vision tasks** | `qwen3-vl-235b-a22b` | Best private vision model |
@@ -201,6 +225,36 @@ The Venice model catalog updates dynamically. Run `clawdbot models list` to see 
 ### Connection issues
 
 Venice API is at `https://api.venice.ai/api/v1`. Ensure your network allows HTTPS connections.
+
+## Config file example
+
+```json5
+{
+  env: { VENICE_API_KEY: "vapi_..." },
+  agents: { defaults: { model: { primary: "venice/llama-3.3-70b" } } },
+  models: {
+    mode: "merge",
+    providers: {
+      venice: {
+        baseUrl: "https://api.venice.ai/api/v1",
+        apiKey: "${VENICE_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "llama-3.3-70b",
+            name: "Llama 3.3 70B",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 131072,
+            maxTokens: 8192
+          }
+        ]
+      }
+    }
+  }
+}
+```
 
 ## Links
 

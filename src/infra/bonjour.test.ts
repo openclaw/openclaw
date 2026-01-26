@@ -138,6 +138,42 @@ describe("gateway bonjour advertiser", () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it("omits cliPath and sshPort in minimal mode", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+
+    vi.spyOn(os, "hostname").mockReturnValue("test-host");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+
+    createService.mockImplementation((options: Record<string, unknown>) => {
+      return {
+        advertise,
+        destroy,
+        serviceState: "announced",
+        on: vi.fn(),
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getHostname: () => asString(options.hostname, "unknown"),
+        getPort: () => Number(options.port ?? -1),
+      };
+    });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+      cliPath: "/opt/homebrew/bin/clawdbot",
+      minimal: true,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBeUndefined();
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBeUndefined();
+
+    await started.stop();
+  });
+
   it("attaches conflict listeners for services", async () => {
     // Allow advertiser to run in unit tests.
     delete process.env.VITEST;

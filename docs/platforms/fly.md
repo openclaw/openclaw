@@ -39,7 +39,9 @@ fly volumes create clawdbot_data --size 1 --region iad
 
 ## 2) Configure fly.toml
 
-Edit `fly.toml` to match your app name and requirements:
+Edit `fly.toml` to match your app name and requirements.
+
+**Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `fly.private.toml`.
 
 ```toml
 app = "my-clawdbot"  # Your app name
@@ -80,6 +82,7 @@ primary_region = "iad"
 |---------|-----|
 | `--bind lan` | Binds to `0.0.0.0` so Fly's proxy can reach the gateway |
 | `--allow-unconfigured` | Starts without a config file (you'll create one after) |
+| `internal_port = 3000` | Must match `--port 3000` (or `CLAWDBOT_GATEWAY_PORT`) for Fly health checks |
 | `memory = "2048mb"` | 512MB is too small; 2GB recommended |
 | `CLAWDBOT_STATE_DIR = "/data"` | Persists state on the volume |
 
@@ -103,6 +106,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 **Notes:**
 - Non-loopback binds (`--bind lan`) require `CLAWDBOT_GATEWAY_TOKEN` for security.
 - Treat these tokens like passwords.
+- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `clawdbot.json` where they could be accidentally exposed or logged.
 
 ## 4) Deploy
 
@@ -181,7 +185,7 @@ cat > /data/clawdbot.json << 'EOF'
     "bind": "auto"
   },
   "meta": {
-    "lastTouchedVersion": "2026.1.24"
+    "lastTouchedVersion": "2026.1.25"
   }
 }
 EOF
@@ -235,6 +239,12 @@ The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
 
 **Fix:** Add `--bind lan` to your process command in `fly.toml`.
 
+### Health checks failing / connection refused
+
+Fly can't reach the gateway on the configured port.
+
+**Fix:** Ensure `internal_port` matches the gateway port (set `--port 3000` or `CLAWDBOT_GATEWAY_PORT=3000`).
+
 ### OOM / Memory Issues
 
 Container keeps restarting or getting killed. Signs: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, or silent restarts.
@@ -268,11 +278,11 @@ The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
 ### Config Not Being Read
 
-If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/.clawdbot/clawdbot.json` should be read on restart.
+If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/clawdbot.json` should be read on restart.
 
 Verify the config exists:
 ```bash
-fly ssh console --command "cat /data/.clawdbot/clawdbot.json"
+fly ssh console --command "cat /data/clawdbot.json"
 ```
 
 ### Writing Config via SSH
@@ -281,17 +291,23 @@ The `fly ssh console -C` command doesn't support shell redirection. To write a c
 
 ```bash
 # Use echo + tee (pipe from local to remote)
-echo '{"your":"config"}' | fly ssh console -C "tee /data/.clawdbot/clawdbot.json"
+echo '{"your":"config"}' | fly ssh console -C "tee /data/clawdbot.json"
 
 # Or use sftp
 fly sftp shell
-> put /local/path/config.json /data/.clawdbot/clawdbot.json
+> put /local/path/config.json /data/clawdbot.json
 ```
 
 **Note:** `fly sftp` may fail if the file already exists. Delete first:
 ```bash
-fly ssh console --command "rm /data/.clawdbot/clawdbot.json"
+fly ssh console --command "rm /data/clawdbot.json"
 ```
+
+### State Not Persisting
+
+If you lose credentials or sessions after a restart, the state dir is writing to the container filesystem.
+
+**Fix:** Ensure `CLAWDBOT_STATE_DIR=/data` is set in `fly.toml` and redeploy.
 
 ## Updates
 
@@ -324,12 +340,121 @@ fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js g
 
 **Note:** After `fly deploy`, the machine command may reset to what's in `fly.toml`. If you made manual changes, re-apply them after deploy.
 
+## Private Deployment (Hardened)
+
+By default, Fly allocates public IPs, making your gateway accessible at `https://your-app.fly.dev`. This is convenient but means your deployment is discoverable by internet scanners (Shodan, Censys, etc.).
+
+For a hardened deployment with **no public exposure**, use the private template.
+
+### When to use private deployment
+
+- You only make **outbound** calls/messages (no inbound webhooks)
+- You use **ngrok or Tailscale** tunnels for any webhook callbacks
+- You access the gateway via **SSH, proxy, or WireGuard** instead of browser
+- You want the deployment **hidden from internet scanners**
+
+### Setup
+
+Use `fly.private.toml` instead of the standard config:
+
+```bash
+# Deploy with private config
+fly deploy -c fly.private.toml
+```
+
+Or convert an existing deployment:
+
+```bash
+# List current IPs
+fly ips list -a my-clawdbot
+
+# Release public IPs
+fly ips release <public-ipv4> -a my-clawdbot
+fly ips release <public-ipv6> -a my-clawdbot
+
+# Switch to private config so future deploys don't re-allocate public IPs
+# (remove [http_service] or deploy with the private template)
+fly deploy -c fly.private.toml
+
+# Allocate private-only IPv6
+fly ips allocate-v6 --private -a my-clawdbot
+```
+
+After this, `fly ips list` should show only a `private` type IP:
+```
+VERSION  IP                   TYPE             REGION
+v6       fdaa:x:x:x:x::x      private          global
+```
+
+### Accessing a private deployment
+
+Since there's no public URL, use one of these methods:
+
+**Option 1: Local proxy (simplest)**
+```bash
+# Forward local port 3000 to the app
+fly proxy 3000:3000 -a my-clawdbot
+
+# Then open http://localhost:3000 in browser
+```
+
+**Option 2: WireGuard VPN**
+```bash
+# Create WireGuard config (one-time)
+fly wireguard create
+
+# Import to WireGuard client, then access via internal IPv6
+# Example: http://[fdaa:x:x:x:x::x]:3000
+```
+
+**Option 3: SSH only**
+```bash
+fly ssh console -a my-clawdbot
+```
+
+### Webhooks with private deployment
+
+If you need webhook callbacks (Twilio, Telnyx, etc.) without public exposure:
+
+1. **ngrok tunnel** - Run ngrok inside the container or as a sidecar
+2. **Tailscale Funnel** - Expose specific paths via Tailscale
+3. **Outbound-only** - Some providers (Twilio) work fine for outbound calls without webhooks
+
+Example voice-call config with ngrok:
+```json
+{
+  "plugins": {
+    "entries": {
+      "voice-call": {
+        "enabled": true,
+        "config": {
+          "provider": "twilio",
+          "tunnel": { "provider": "ngrok" }
+        }
+      }
+    }
+  }
+}
+```
+
+The ngrok tunnel runs inside the container and provides a public webhook URL without exposing the Fly app itself.
+
+### Security benefits
+
+| Aspect | Public | Private |
+|--------|--------|---------|
+| Internet scanners | Discoverable | Hidden |
+| Direct attacks | Possible | Blocked |
+| Control UI access | Browser | Proxy/VPN |
+| Webhook delivery | Direct | Via tunnel |
+
 ## Notes
 
 - Fly.io uses **x86 architecture** (not ARM)
 - The Dockerfile is compatible with both architectures
 - For WhatsApp/Telegram onboarding, use `fly ssh console`
 - Persistent data lives on the volume at `/data`
+- Signal requires Java + signal-cli; use a custom image and keep memory at 2GB+.
 
 ## Cost
 

@@ -1,14 +1,76 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { ClawdbotConfig, GatewayBindMode } from "../config/config.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { note } from "../terminal/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
+import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 
 export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("clawdbot security audit --deep")}`;
+
+  // ===========================================
+  // GATEWAY NETWORK EXPOSURE CHECK
+  // ===========================================
+  // Check for dangerous gateway binding configurations
+  // that expose the gateway to network without proper auth
+
+  const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
+  const customBindHost = cfg.gateway?.customBindHost?.trim();
+  const bindModes: GatewayBindMode[] = ["auto", "lan", "loopback", "custom", "tailnet"];
+  const bindMode = bindModes.includes(gatewayBind as GatewayBindMode)
+    ? (gatewayBind as GatewayBindMode)
+    : undefined;
+  const resolvedBindHost = bindMode
+    ? await resolveGatewayBindHost(bindMode, customBindHost)
+    : "0.0.0.0";
+  const isExposed = !isLoopbackHost(resolvedBindHost);
+
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    env: process.env,
+    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+  });
+  const authToken = resolvedAuth.token?.trim() ?? "";
+  const authPassword = resolvedAuth.password?.trim() ?? "";
+  const hasToken = authToken.length > 0;
+  const hasPassword = authPassword.length > 0;
+  const hasSharedSecret =
+    (resolvedAuth.mode === "token" && hasToken) ||
+    (resolvedAuth.mode === "password" && hasPassword);
+  const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
+
+  if (isExposed) {
+    if (!hasSharedSecret) {
+      const authFixLines =
+        resolvedAuth.mode === "password"
+          ? [
+              `  Fix: ${formatCliCommand("clawdbot configure")} to set a password`,
+              `  Or switch to token: ${formatCliCommand("clawdbot config set gateway.auth.mode token")}`,
+            ]
+          : [
+              `  Fix: ${formatCliCommand("clawdbot doctor --fix")} to generate a token`,
+              `  Or set token directly: ${formatCliCommand(
+                "clawdbot config set gateway.auth.mode token",
+              )}`,
+            ];
+      warnings.push(
+        `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
+        `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
+        `  Fix: ${formatCliCommand("clawdbot config set gateway.bind loopback")}`,
+        ...authFixLines,
+      );
+    } else {
+      // Auth is configured, but still warn about network exposure
+      warnings.push(
+        `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
+        `  Ensure your auth credentials are strong and not exposed.`,
+      );
+    }
+  }
 
   const warnDmPolicy = async (params: {
     label: string;

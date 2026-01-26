@@ -14,6 +14,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
+import { logAcceptedEnvOption } from "../infra/env.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -149,6 +150,14 @@ export async function startGatewayServer(
 ): Promise<GatewayServer> {
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.CLAWDBOT_GATEWAY_PORT = String(port);
+  logAcceptedEnvOption({
+    key: "CLAWDBOT_RAW_STREAM",
+    description: "raw stream logging enabled",
+  });
+  logAcceptedEnvOption({
+    key: "CLAWDBOT_RAW_STREAM_PATH",
+    description: "raw stream log path override",
+  });
 
   let configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.legacyIssues.length > 0) {
@@ -263,6 +272,8 @@ export async function startGatewayServer(
   const {
     canvasHost,
     httpServer,
+    httpServers,
+    httpBindHosts,
     wss,
     clients,
     broadcast,
@@ -292,6 +303,7 @@ export async function startGatewayServer(
     canvasHostEnabled,
     allowCanvasHostInTests: opts.allowCanvasHostInTests,
     logCanvas,
+    log,
     logHooks,
     logPlugins,
   });
@@ -339,6 +351,8 @@ export async function startGatewayServer(
       ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
       : undefined,
     wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
+    tailscaleMode,
+    mdnsMode: cfgAtStart.discovery?.mdns?.mode,
     logDiscovery,
   });
   bonjourStop = discovery.bonjourStop;
@@ -463,6 +477,7 @@ export async function startGatewayServer(
   logGatewayStartup({
     cfg: cfgAtStart,
     bindHost,
+    bindHosts: httpBindHosts,
     port,
     tlsEnabled: gatewayTls.enabled,
     log,
@@ -551,6 +566,7 @@ export async function startGatewayServer(
     browserControl,
     wss,
     httpServer,
+    httpServers,
   });
 
   return {

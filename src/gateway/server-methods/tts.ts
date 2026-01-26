@@ -5,6 +5,7 @@ import {
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
+  resolveTtsAutoMode,
   resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
@@ -24,11 +25,13 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       const provider = getTtsProvider(config, prefsPath);
+      const autoMode = resolveTtsAutoMode({ config, prefsPath });
       const fallbackProviders = resolveTtsProviderOrder(provider)
         .slice(1)
         .filter((candidate) => isTtsProviderConfigured(config, candidate));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
+        auto: autoMode,
         provider,
         fallbackProvider: fallbackProviders[0] ?? null,
         fallbackProviders,
