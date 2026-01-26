@@ -1,4 +1,8 @@
+import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
+
 export type HybridSource = string;
+
+export { type MMRConfig, DEFAULT_MMR_CONFIG };
 
 export type HybridVectorResult = {
   id: string;
@@ -43,6 +47,8 @@ export function mergeHybridResults(params: {
   keyword: HybridKeywordResult[];
   vectorWeight: number;
   textWeight: number;
+  /** MMR configuration for diversity-aware re-ranking */
+  mmr?: Partial<MMRConfig>;
 }): Array<{
   path: string;
   startLine: number;
@@ -111,5 +117,13 @@ export function mergeHybridResults(params: {
     };
   });
 
-  return merged.toSorted((a, b) => b.score - a.score);
+  const sorted = merged.toSorted((a, b) => b.score - a.score);
+
+  // Apply MMR re-ranking if enabled
+  const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
+  if (mmrConfig.enabled) {
+    return applyMMRToHybridResults(sorted, mmrConfig);
+  }
+
+  return sorted;
 }
