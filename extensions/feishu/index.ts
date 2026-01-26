@@ -2,7 +2,6 @@ import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
 import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
 
 import { feishuDock, feishuPlugin } from "./src/channel.js";
-import { handleFeishuWebhookRequest } from "./src/monitor.js";
 import { setFeishuRuntime } from "./src/runtime.js";
 
 const plugin = {
@@ -13,7 +12,7 @@ const plugin = {
   register(api: ClawdbotPluginApi) {
     setFeishuRuntime(api.runtime);
     api.registerChannel({ plugin: feishuPlugin, dock: feishuDock });
-    api.registerHttpHandler(handleFeishuWebhookRequest);
+    // WebSocket mode - no HTTP handler needed
   },
 };
 

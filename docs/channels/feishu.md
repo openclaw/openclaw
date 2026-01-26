@@ -1,12 +1,12 @@
 ---
 summary: "Feishu (Lark) bot support, capabilities, and configuration"
 read_when:
-  - Working on Feishu features or webhooks
+  - Working on Feishu features
   - Integrating with Chinese enterprise messaging
 ---
 # Feishu (飞书/Lark)
 
-Status: experimental. Supports direct messages and groups via Bot API.
+Status: experimental. Supports direct messages and groups via Bot API using WebSocket long connection.
 
 ## Plugin required
 Feishu ships as a plugin and is not bundled with the core install.
@@ -23,7 +23,9 @@ Feishu ships as a plugin and is not bundled with the core install.
 3) Set the credentials:
    - Env: `FEISHU_APP_ID=...` and `FEISHU_APP_SECRET=...`
    - Or config: `channels.feishu.appId` and `channels.feishu.appSecret`
-4) Configure event subscription in Feishu console with your webhook URL
+4) Configure event subscription in Feishu console:
+   - Set subscription method to **"Long Connection"**
+   - Add `im.message.receive_v1` event
 5) Restart the gateway (or finish onboarding)
 6) DM access is pairing by default; approve the pairing code on first contact
 
@@ -35,8 +37,6 @@ Minimal config:
       enabled: true,
       appId: "cli_xxxxxxxxxx",
       appSecret: "xxxxxxxxxxxxxxxxxxxxxxxx",
-      verificationToken: "xxxxxxxxxxxxxxxxxxxxxxxx",
-      webhookPath: "/feishu/callback",
       dmPolicy: "pairing"
     }
   }
@@ -46,6 +46,7 @@ Minimal config:
 ## What it is
 Feishu (飞书) is an enterprise collaboration platform by ByteDance, also known as Lark internationally. Its Bot API allows the Gateway to run a bot for 1:1 conversations and group chats.
 - A Feishu Bot API channel owned by the Gateway
+- Uses WebSocket long connection for receiving events (no public IP needed)
 - Deterministic routing: replies go back to Feishu; the model never chooses channels
 - DMs share the agent's main session
 - Groups require @mention by default
@@ -70,11 +71,9 @@ Feishu (飞书) is an enterprise collaboration platform by ByteDance, also known
 
 ### 3) Configure event subscription
 1) Go to "Events and Callbacks" page
-2) Choose "Request URL Mode" (webhook)
-3) Enter your webhook URL: `https://your-gateway-host/feishu/callback`
-4) Copy the **Verification Token** and optionally the **Encrypt Key**
-5) Add event subscription: `im.message.receive_v1` (Receive messages)
-6) Click Save
+2) Set subscription method to **"Long Connection"** (WebSocket)
+3) Add event subscription: `im.message.receive_v1` (Receive messages)
+4) Click Save
 
 ### 4) Configure the token (env or config)
 Example:
@@ -86,9 +85,6 @@ Example:
       enabled: true,
       appId: "cli_xxxxxxxxxx",
       appSecret: "xxxxxxxxxxxxxxxxxxxxxxxx",
-      verificationToken: "xxxxxxxxxxxxxxxxxxxxxxxx",
-      encryptKey: "xxxxxxxxxxxxxxxxxxxxxxxx",  // optional, for encrypted events
-      webhookPath: "/feishu/callback",
       dmPolicy: "pairing"
     }
   }
@@ -98,8 +94,6 @@ Example:
 Env option (works for the default account only):
 - `FEISHU_APP_ID=cli_xxxxxxxxxx`
 - `FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxx`
-- `FEISHU_VERIFICATION_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxx`
-- `FEISHU_ENCRYPT_KEY=xxxxxxxxxxxxxxxxxxxxxxxx`
 
 Multi-account support: use `channels.feishu.accounts` with per-account credentials and optional `name`.
 
@@ -114,8 +108,8 @@ Restart the gateway. Feishu starts when credentials are resolved.
 DM access defaults to pairing. Approve the code when the bot is first contacted.
 
 ## How it works (behavior)
-- Inbound messages arrive via webhook (Feishu sends HTTP POST to your configured path)
-- The gateway verifies the request using the verification token
+- The gateway establishes a WebSocket long connection to Feishu servers
+- Events are pushed directly through the WebSocket (no public IP needed)
 - Messages are normalized into the shared channel envelope
 - Replies always route back to the same Feishu chat
 - Long responses are chunked to 4000 characters (Feishu API limit)
@@ -123,7 +117,6 @@ DM access defaults to pairing. Approve the code when the bot is first contacted.
 ## Limits
 - Outbound text is chunked to 4000 characters (Feishu API limit)
 - Media downloads/uploads are capped by `channels.feishu.mediaMaxMb` (default 20)
-- Streaming is blocked by default due to webhook-based architecture
 - Rate limits apply per the Feishu API documentation
 
 ## Access control (DMs)
@@ -141,33 +134,33 @@ DM access defaults to pairing. Approve the code when the bot is first contacted.
 - Configure allowed groups via `channels.feishu.groupAllowFrom` or `channels.feishu.groups`
 - Groups require @mention by default; configure per-group via `channels.feishu.groups.<chat_id>.requireMention`
 
-## Webhook verification
-Feishu uses two verification mechanisms:
-1) **URL Verification**: When you first configure the webhook, Feishu sends a challenge request. The gateway responds automatically.
-2) **Event Verification**: Each event includes a `token` field that must match your verification token.
-
-Optional encryption:
-- If you enable encryption in Feishu console, set `channels.feishu.encryptKey`
-- Events are encrypted with AES-256-CBC; the gateway decrypts them automatically
-
 ## Supported message types
-- **Text messages**: Full support with 4000 character chunking
-- **Image messages**: Logged but media upload requires image_key (planned)
+- **Interactive cards**: Full markdown support via card messages (default for replies)
+- **Text messages**: Plain text fallback
+- **Image messages**: Requires image_key (pre-uploaded images)
 - **Rich text (post)**: Planned support
-- **Interactive cards**: Planned support
+
+### Markdown support
+All outbound messages use Feishu interactive card format, which supports markdown syntax:
+- **Bold**: `**text**`
+- *Italic*: `*text*`
+- ~~Strikethrough~~: `~~text~~`
+- `Code`: `` `code` ``
+- Links: `[text](url)`
+- Lists and more
 
 ## Capabilities
 | Feature | Status |
 |---------|--------|
 | Direct messages | Supported |
 | Groups | Supported |
-| Media (images) | Partial (text only for now) |
+| Markdown formatting | Supported (via card messages) |
+| Media (images) | Partial (requires image_key) |
 | Reactions | Not supported |
 | Threads | Not supported |
 | Polls | Not supported |
 | Native commands | Not supported |
-| Streaming | Blocked (webhook-based) |
-| Rich cards | Planned |
+| Streaming | Blocked |
 
 ## Delivery targets (CLI/cron)
 - Use an open_id, user_id, or chat_id as the target
@@ -178,15 +171,14 @@ Optional encryption:
 
 **Bot does not respond:**
 - Check that the app credentials are valid: `clawdbot channels status --probe`
-- Verify the webhook URL is correctly configured in Feishu console
-- Check that the verification token matches
+- Verify the event subscription is set to "Long Connection" mode in Feishu console
 - Verify the sender is approved (pairing or allowFrom)
 - Check gateway logs: `clawdbot logs --follow`
 
-**Webhook verification fails:**
-- Ensure your gateway is publicly accessible at the configured webhook path
-- Check that `channels.feishu.verificationToken` matches the token in Feishu console
-- If using encryption, verify `channels.feishu.encryptKey` is correct
+**WebSocket connection fails:**
+- Ensure the gateway has network access to Feishu servers
+- Check that the App ID and App Secret are correct
+- Verify the app is published and active
 
 **Permission errors:**
 - Ensure the app has required permissions (`im:message`, `im:message.receive_v1`)
@@ -206,9 +198,6 @@ Provider options:
 - `channels.feishu.appId`: App ID from Feishu Open Platform
 - `channels.feishu.appSecret`: App Secret from Feishu Open Platform
 - `channels.feishu.appSecretFile`: read app secret from file path
-- `channels.feishu.verificationToken`: verification token for webhook validation
-- `channels.feishu.encryptKey`: encrypt key for event decryption (optional)
-- `channels.feishu.webhookPath`: webhook path on the gateway HTTP server (default: /feishu/callback)
 - `channels.feishu.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
 - `channels.feishu.allowFrom`: DM allowlist (open_id or user_id). `open` requires `"*"`
 - `channels.feishu.groupPolicy`: `open | allowlist` (default: allowlist)
@@ -224,9 +213,6 @@ Multi-account options:
 - `channels.feishu.accounts.<id>.enabled`: enable/disable account
 - `channels.feishu.accounts.<id>.dmPolicy`: per-account DM policy
 - `channels.feishu.accounts.<id>.allowFrom`: per-account allowlist
-- `channels.feishu.accounts.<id>.verificationToken`: per-account verification token
-- `channels.feishu.accounts.<id>.encryptKey`: per-account encrypt key
-- `channels.feishu.accounts.<id>.webhookPath`: per-account webhook path
 
 ## International users (Lark)
 For Lark (international version), use the same configuration. The API endpoints are compatible.

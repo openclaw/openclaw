@@ -3,8 +3,6 @@
  * @see https://open.feishu.cn/document
  */
 
-import { createHash, createDecipheriv } from "node:crypto";
-
 import type {
   FeishuApiResponse,
   FeishuBotInfo,
@@ -12,7 +10,6 @@ import type {
   FeishuSendMessageParams,
   FeishuSendMessageResponse,
   FeishuTokenResponse,
-  FeishuWebhookPayload,
 } from "./types.js";
 
 const FEISHU_API_BASE = "https://open.feishu.cn/open-apis";
@@ -213,75 +210,4 @@ export async function replyMessage(
     timeoutMs: options?.timeoutMs,
     fetch: options?.fetch,
   });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Webhook Verification
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Decrypt an encrypted webhook payload using the encrypt key.
- * Feishu uses AES-256-CBC with the key derived from SHA256 of the encrypt key.
- */
-export function decryptWebhookPayload(encrypted: string, encryptKey: string): string {
-  // Derive key from encrypt key using SHA256
-  const key = createHash("sha256").update(encryptKey).digest();
-
-  // Decode base64
-  const ciphertext = Buffer.from(encrypted, "base64");
-
-  // First 16 bytes are the IV
-  const iv = ciphertext.subarray(0, 16);
-  const encryptedData = ciphertext.subarray(16);
-
-  // Decrypt using AES-256-CBC
-  const decipher = createDecipheriv("aes-256-cbc", key, iv);
-  let decrypted = decipher.update(encryptedData);
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-
-  return decrypted.toString("utf8");
-}
-
-/**
- * Verify webhook signature using verification token.
- */
-export function verifyWebhookToken(payload: FeishuWebhookPayload, verificationToken: string): boolean {
-  // For challenge verification, token is at top level
-  if (payload.token) {
-    return payload.token === verificationToken;
-  }
-  // For events, token is in header
-  if (payload.header?.token) {
-    return payload.header.token === verificationToken;
-  }
-  return false;
-}
-
-/**
- * Parse webhook payload, decrypting if necessary.
- */
-export function parseWebhookPayload(
-  rawBody: string,
-  encryptKey?: string,
-): FeishuWebhookPayload | null {
-  try {
-    const parsed = JSON.parse(rawBody) as FeishuWebhookPayload;
-
-    // If encrypted, decrypt first
-    if (parsed.encrypt && encryptKey) {
-      const decrypted = decryptWebhookPayload(parsed.encrypt, encryptKey);
-      return JSON.parse(decrypted) as FeishuWebhookPayload;
-    }
-
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Build challenge response for URL verification.
- */
-export function buildChallengeResponse(challenge: string): string {
-  return JSON.stringify({ challenge });
 }

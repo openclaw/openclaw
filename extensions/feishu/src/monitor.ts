@@ -1,19 +1,21 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+/**
+ * WebSocket-based monitor for Feishu events using long connection mode.
+ * Uses the official @larksuiteoapi/node-sdk WSClient for receiving events
+ * via WebSocket - no public IP or webhook setup needed.
+ *
+ * @see https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/long-connection-mode
+ */
+
+import * as Lark from "@larksuiteoapi/node-sdk";
 
 import type { ClawdbotConfig, MarkdownTableMode } from "clawdbot/plugin-sdk";
 
 import type {
   FeishuMessageEvent,
   FeishuReceiveIdType,
-  FeishuWebhookPayload,
   ResolvedFeishuAccount,
 } from "./types.js";
-import {
-  buildChallengeResponse,
-  parseWebhookPayload,
-  sendMessage,
-  verifyWebhookToken,
-} from "./api.js";
+import { sendMessage } from "./api.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 export type FeishuRuntimeEnv = {
@@ -26,7 +28,6 @@ export type FeishuMonitorOptions = {
   config: ClawdbotConfig;
   runtime: FeishuRuntimeEnv;
   abortSignal: AbortSignal;
-  webhookPath?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
@@ -34,9 +35,29 @@ export type FeishuMonitorResult = {
   stop: () => void;
 };
 
-const FEISHU_TEXT_LIMIT = 4000;
+// Feishu card markdown content limit (slightly lower than text to account for JSON overhead)
+const FEISHU_CARD_CONTENT_LIMIT = 3800;
 const DEFAULT_MEDIA_MAX_MB = 20;
-const DEFAULT_WEBHOOK_PATH = "/feishu/callback";
+
+/**
+ * Build a Feishu interactive card with markdown content.
+ * Card messages support rich markdown formatting in Feishu.
+ */
+function buildMarkdownCard(content: string): string {
+  const card = {
+    config: {
+      wide_screen_mode: true,
+      enable_forward: true,
+    },
+    elements: [
+      {
+        tag: "markdown",
+        content,
+      },
+    ],
+  };
+  return JSON.stringify(card);
+}
 
 type FeishuCoreRuntime = ReturnType<typeof getFeishuRuntime>;
 
@@ -44,11 +65,6 @@ function logVerbose(core: FeishuCoreRuntime, runtime: FeishuRuntimeEnv, message:
   if (core.logging.shouldLogVerbose()) {
     runtime.log?.(`[feishu] ${message}`);
   }
-}
-
-function logWebhookEvent(message: string): void {
-  // Use console to ensure visibility even when runtime isn't available.
-  console.warn(`[feishu] ${message}`);
 }
 
 type FeishuReplyTarget = {
@@ -73,218 +89,8 @@ function isSenderAllowed(senderId: string, allowFrom: string[]): boolean {
   });
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes: number) {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  return await new Promise<{ ok: boolean; value?: string; error?: string }>((resolve) => {
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        resolve({ ok: false, error: "payload too large" });
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      try {
-        const raw = Buffer.concat(chunks).toString("utf8");
-        if (!raw.trim()) {
-          resolve({ ok: false, error: "empty payload" });
-          return;
-        }
-        resolve({ ok: true, value: raw });
-      } catch (err) {
-        resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
-    });
-    req.on("error", (err) => {
-      resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    });
-  });
-}
-
-type WebhookTarget = {
-  account: ResolvedFeishuAccount;
-  config: ClawdbotConfig;
-  runtime: FeishuRuntimeEnv;
-  core: FeishuCoreRuntime;
-  path: string;
-  encryptKey: string;
-  verificationToken: string;
-  mediaMaxMb: number;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-};
-
-const webhookTargets = new Map<string, WebhookTarget[]>();
-
-function normalizeWebhookPath(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "/feishu/callback";
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (withSlash.length > 1 && withSlash.endsWith("/")) {
-    return withSlash.slice(0, -1);
-  }
-  return withSlash;
-}
-
-export function registerFeishuWebhookTarget(target: WebhookTarget): () => void {
-  const key = normalizeWebhookPath(target.path);
-  const normalizedTarget = { ...target, path: key };
-  const existing = webhookTargets.get(key) ?? [];
-  const next = [...existing, normalizedTarget];
-  webhookTargets.set(key, next);
-  return () => {
-    const updated = (webhookTargets.get(key) ?? []).filter(
-      (entry) => entry !== normalizedTarget,
-    );
-    if (updated.length > 0) {
-      webhookTargets.set(key, updated);
-    } else {
-      webhookTargets.delete(key);
-    }
-  };
-}
-
 /**
- * Handle incoming Feishu webhook requests.
- */
-export async function handleFeishuWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const path = normalizeWebhookPath(url.pathname);
-  const targets = webhookTargets.get(path);
-  if (!targets || targets.length === 0) {
-    if (path === DEFAULT_WEBHOOK_PATH || path.startsWith("/feishu/")) {
-      logWebhookEvent(
-        `webhook request received for ${path}, but no active Feishu accounts are registered`,
-      );
-    }
-    return false;
-  }
-
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "POST");
-    res.end("Method Not Allowed");
-    return true;
-  }
-
-  const body = await readJsonBody(req, 1024 * 1024);
-  if (!body.ok || !body.value) {
-    res.statusCode = body.error === "payload too large" ? 413 : 400;
-    res.end(body.error ?? "invalid payload");
-    return true;
-  }
-
-  let rawPayload: FeishuWebhookPayload | null = null;
-  try {
-    rawPayload = JSON.parse(body.value) as FeishuWebhookPayload;
-  } catch {
-    rawPayload = null;
-  }
-  const isEncryptedRequest = Boolean(rawPayload?.encrypt);
-  const rawEventType = rawPayload?.header?.event_type ?? rawPayload?.type ?? "unknown";
-  logWebhookEvent(
-    `webhook hit: path=${path} method=${req.method} targets=${targets.length} encrypted=${isEncryptedRequest} event=${rawEventType}`,
-  );
-
-  let sawTokenMismatch = false;
-  let sawEncryptedWithoutKey = false;
-  let sawDecryptFailure = false;
-
-  // Try each target to find one that can handle this request
-  for (const target of targets) {
-    const payload = parseWebhookPayload(body.value, target.encryptKey);
-    if (!payload) {
-      if (isEncryptedRequest && target.encryptKey) {
-        sawDecryptFailure = true;
-        target.runtime.error?.(
-          `[${target.account.accountId}] Feishu webhook decrypt failed. Check encryptKey.`,
-        );
-      }
-      continue;
-    }
-
-    if (payload.encrypt && !target.encryptKey) {
-      sawEncryptedWithoutKey = true;
-      target.runtime.error?.(
-        `[${target.account.accountId}] Feishu webhook is encrypted but encryptKey is not configured.`,
-      );
-      continue;
-    }
-
-    // Verify token if configured
-    if (target.verificationToken && !verifyWebhookToken(payload, target.verificationToken)) {
-      sawTokenMismatch = true;
-      target.runtime.error?.(
-        `[${target.account.accountId}] Feishu webhook token mismatch. Check verificationToken.`,
-      );
-      continue;
-    }
-
-    // Handle URL verification challenge
-    if (payload.type === "url_verification" && payload.challenge) {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(buildChallengeResponse(payload.challenge));
-      return true;
-    }
-
-    // Handle message events
-    if (payload.header?.event_type === "im.message.receive_v1" && payload.event) {
-      target.statusSink?.({ lastInboundAt: Date.now() });
-      processMessageEvent(
-        payload.event as FeishuMessageEvent,
-        target.account,
-        target.config,
-        target.runtime,
-        target.core,
-        target.mediaMaxMb,
-        target.statusSink,
-      ).catch((err) => {
-        target.runtime.error?.(`[${target.account.accountId}] Feishu webhook failed: ${String(err)}`);
-      });
-
-      res.statusCode = 200;
-      res.end("ok");
-      return true;
-    }
-
-    // Other event types - acknowledge but don't process
-    if (payload.header?.event_type) {
-      target.runtime.log?.(`[feishu] ignoring event type: ${payload.header.event_type}`);
-      res.statusCode = 200;
-      res.end("ok");
-      return true;
-    }
-  }
-
-  // No target could handle the request
-  if (sawEncryptedWithoutKey) {
-    res.statusCode = 400;
-    res.end("encrypt_key required");
-    return true;
-  }
-  if (sawDecryptFailure) {
-    res.statusCode = 400;
-    res.end("decrypt failed");
-    return true;
-  }
-  if (sawTokenMismatch) {
-    res.statusCode = 401;
-    res.end("unauthorized");
-    return true;
-  }
-  res.statusCode = 401;
-  res.end("unauthorized");
-  return true;
-}
-
-/**
- * Process a message event from Feishu webhook.
+ * Process a message event from Feishu WebSocket.
  */
 async function processMessageEvent(
   event: FeishuMessageEvent,
@@ -543,18 +349,19 @@ async function deliverFeishuReply(params: {
     const chunkMode = core.channel.text.resolveChunkMode(config, "feishu", account.accountId);
     const chunks = core.channel.text.chunkMarkdownTextWithMode(
       text,
-      FEISHU_TEXT_LIMIT,
+      FEISHU_CARD_CONTENT_LIMIT,
       chunkMode,
     );
     for (const chunk of chunks) {
       try {
+        // Send as interactive card message with markdown support
         await sendMessage(
           account.appId,
           account.appSecret,
           {
             receive_id: receiveId,
-            msg_type: "text",
-            content: JSON.stringify({ text: chunk }),
+            msg_type: "interactive",
+            content: buildMarkdownCard(chunk),
           },
           receiveIdType,
         );
@@ -567,48 +374,70 @@ async function deliverFeishuReply(params: {
 }
 
 /**
- * Start monitoring Feishu webhook events.
+ * Start monitoring Feishu events using WebSocket long connection.
  */
 export async function monitorFeishuProvider(
   options: FeishuMonitorOptions,
 ): Promise<FeishuMonitorResult> {
-  const { account, config, runtime, abortSignal, webhookPath, statusSink } = options;
+  const { account, config, runtime, abortSignal, statusSink } = options;
 
   const core = getFeishuRuntime();
   const effectiveMediaMaxMb = account.config.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
-  const path = normalizeWebhookPath(webhookPath ?? account.config.webhookPath ?? "/feishu/callback");
-
-  const encryptKey = account.config.encryptKey ?? process.env.FEISHU_ENCRYPT_KEY ?? "";
-  const verificationToken = account.config.verificationToken ?? process.env.FEISHU_VERIFICATION_TOKEN ?? "";
 
   let stopped = false;
-  const stopHandlers: Array<() => void> = [];
+  let wsClient: Lark.WSClient | null = null;
 
   const stop = () => {
     stopped = true;
-    for (const handler of stopHandlers) {
-      handler();
+    if (wsClient) {
+      wsClient = null;
     }
   };
 
-  // Register webhook target
-  const unregister = registerFeishuWebhookTarget({
-    account,
-    config,
-    runtime,
-    core,
-    path,
-    encryptKey,
-    verificationToken,
-    mediaMaxMb: effectiveMediaMaxMb,
-    statusSink,
+  // Create WebSocket client for receiving events
+  wsClient = new Lark.WSClient({
+    appId: account.appId,
+    appSecret: account.appSecret,
+    domain: Lark.Domain.Feishu,
+    loggerLevel: Lark.LoggerLevel.warn,
   });
-  stopHandlers.push(unregister);
+
+  // Create event dispatcher with message handler
+  const eventDispatcher = new Lark.EventDispatcher({}).register({
+    "im.message.receive_v1": async (data) => {
+      if (stopped) return;
+
+      statusSink?.({ lastInboundAt: Date.now() });
+
+      // Convert SDK event data to our internal type
+      const event: FeishuMessageEvent = {
+        sender: data.sender as FeishuMessageEvent["sender"],
+        message: data.message as FeishuMessageEvent["message"],
+      };
+
+      try {
+        await processMessageEvent(
+          event,
+          account,
+          config,
+          runtime,
+          core,
+          effectiveMediaMaxMb,
+          statusSink,
+        );
+      } catch (err) {
+        runtime.error?.(`[${account.accountId}] Feishu event handler failed: ${String(err)}`);
+      }
+    },
+  });
+
+  // Start WebSocket connection
+  wsClient.start({
+    eventDispatcher,
+  });
 
   runtime.log?.(
-    `[feishu] webhook ready: path=${path} encrypted=${Boolean(encryptKey)} token=${Boolean(
-      verificationToken,
-    )}`,
+    `[feishu] WebSocket connection started for account=${account.accountId}`,
   );
 
   abortSignal.addEventListener("abort", stop, { once: true });

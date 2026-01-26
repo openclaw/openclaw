@@ -10,12 +10,6 @@ export type FeishuAccountConfig = {
   appSecret?: string;
   /** Path to file containing the app secret. */
   appSecretFile?: string;
-  /** Encrypt key for event decryption (from Events and Callbacks page). */
-  encryptKey?: string;
-  /** Verification token for webhook validation. */
-  verificationToken?: string;
-  /** Webhook path for the gateway HTTP server (defaults to /feishu/callback). */
-  webhookPath?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   /** Allowlist for DM senders (Feishu open_id or user_id). */
@@ -124,39 +118,27 @@ export type FeishuMention = {
   tenant_key?: string;
 };
 
-/** Event header from webhook payload. */
-export type FeishuEventHeader = {
-  event_id: string;
-  event_type: string;
-  create_time: string;
-  token: string;
-  app_id: string;
-  tenant_key: string;
-};
-
 /** Message receive event (im.message.receive_v1). */
 export type FeishuMessageEvent = {
   sender: FeishuSender;
   message: FeishuMessageContent;
 };
 
-/** Webhook event payload. */
-export type FeishuWebhookPayload = {
-  schema?: string;
-  header?: FeishuEventHeader;
-  event?: FeishuMessageEvent | Record<string, unknown>;
-  // URL verification challenge
-  challenge?: string;
-  token?: string;
-  type?: string;
-  // Encrypted payload
-  encrypt?: string;
-};
+/** Feishu message type. */
+export type FeishuMessageType =
+  | "text"
+  | "post"
+  | "image"
+  | "file"
+  | "audio"
+  | "media"
+  | "sticker"
+  | "interactive";  // Card message with markdown support
 
 /** Send message request body. */
 export type FeishuSendMessageParams = {
   receive_id: string;
-  msg_type: "text" | "post" | "image" | "file" | "audio" | "media" | "sticker" | "interactive";
+  msg_type: FeishuMessageType;
   content: string; // JSON string
   uuid?: string;
 };

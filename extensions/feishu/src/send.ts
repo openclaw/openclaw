@@ -62,7 +62,28 @@ function inferReceiveIdType(target: string): FeishuReceiveIdType {
 }
 
 /**
- * Send a text message to a Feishu user or chat.
+ * Build a Feishu interactive card with markdown content.
+ * Card messages support rich markdown formatting in Feishu.
+ */
+function buildMarkdownCard(content: string): string {
+  const card = {
+    config: {
+      wide_screen_mode: true,
+      enable_forward: true,
+    },
+    elements: [
+      {
+        tag: "markdown",
+        content,
+      },
+    ],
+  };
+  return JSON.stringify(card);
+}
+
+/**
+ * Send a message to a Feishu user or chat.
+ * Uses interactive card format for markdown support.
  */
 export async function sendMessageFeishu(
   to: string,
@@ -81,8 +102,8 @@ export async function sendMessageFeishu(
 
   const receiveIdType = options.receiveIdType ?? inferReceiveIdType(to);
 
-  // Build message content
-  const content = JSON.stringify({ text });
+  // Build interactive card message content for markdown support
+  const content = buildMarkdownCard(text);
 
   try {
     // If replying to a specific message
@@ -91,7 +112,7 @@ export async function sendMessageFeishu(
         appId,
         appSecret,
         options.replyToMessageId,
-        { msg_type: "text", content },
+        { msg_type: "interactive", content },
         { fetch: fetcher },
       );
 
@@ -101,11 +122,11 @@ export async function sendMessageFeishu(
       return { ok: false, error: response.msg ?? "Failed to reply" };
     }
 
-    // Send new message
+    // Send new message as interactive card
     const response = await sendMessage(
       appId,
       appSecret,
-      { receive_id: to.trim(), msg_type: "text", content },
+      { receive_id: to.trim(), msg_type: "interactive", content },
       receiveIdType,
       { fetch: fetcher },
     );
