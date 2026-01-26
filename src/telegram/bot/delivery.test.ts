@@ -17,6 +17,9 @@ vi.mock("grammy", () => ({
       public fileName?: string,
     ) {}
   },
+  GrammyError: class GrammyError extends Error {
+    description = "";
+  },
 }));
 
 describe("deliverReplies", () => {
@@ -163,5 +166,112 @@ describe("deliverReplies", () => {
         link_preview_options: expect.anything(),
       }),
     );
+  });
+
+  it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendVoice = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
+        ),
+      );
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendVoice, sendMessage } } as unknown as Bot;
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
+
+    await deliverReplies({
+      replies: [
+        { mediaUrl: "https://example.com/note.ogg", text: "Hello there", audioAsVoice: true },
+      ],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    // Voice was attempted but failed
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    // Fallback to text succeeded
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Hello there"),
+      expect.any(Object),
+    );
+  });
+
+  it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
+    const sendMessage = vi.fn();
+    const bot = { api: { sendVoice, sendMessage } } as unknown as Bot;
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
+
+    await expect(
+      deliverReplies({
+        replies: [{ mediaUrl: "https://example.com/note.ogg", text: "Hello", audioAsVoice: true }],
+        chatId: "123",
+        token: "tok",
+        runtime,
+        bot,
+        replyToMode: "off",
+        textLimit: 4000,
+      }),
+    ).rejects.toThrow("Network error");
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    // Text fallback should NOT be attempted for other errors
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendVoice = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
+        ),
+      );
+    const sendMessage = vi.fn();
+    const bot = { api: { sendVoice, sendMessage } } as unknown as Bot;
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
+
+    await expect(
+      deliverReplies({
+        replies: [{ mediaUrl: "https://example.com/note.ogg", audioAsVoice: true }],
+        chatId: "123",
+        token: "tok",
+        runtime,
+        bot,
+        replyToMode: "off",
+        textLimit: 4000,
+      }),
+    ).rejects.toThrow("VOICE_MESSAGES_FORBIDDEN");
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });

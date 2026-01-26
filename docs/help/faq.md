@@ -105,6 +105,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How can my agent access my computer if the Gateway is hosted remotely?](#how-can-my-agent-access-my-computer-if-the-gateway-is-hosted-remotely)
   - [Tailscale is connected but I get no replies. What now?](#tailscale-is-connected-but-i-get-no-replies-what-now)
   - [Can two Clawdbots talk to each other (local + VPS)?](#can-two-clawdbots-talk-to-each-other-local-vps)
+  - [Do I need separate VPSes for multiple agents](#do-i-need-separate-vpses-for-multiple-agents)
   - [Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?](#is-there-a-benefit-to-using-a-node-on-my-personal-laptop-instead-of-ssh-from-a-vps)
   - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
@@ -138,6 +139,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I use self-hosted models (llama.cpp, vLLM, Ollama)?](#can-i-use-selfhosted-models-llamacpp-vllm-ollama)
   - [What do Clawd, Flawd, and Krill use for models?](#what-do-clawd-flawd-and-krill-use-for-models)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
+  - [Can I use GPT 5.2 for daily tasks and Codex 5.2 for coding](#can-i-use-gpt-52-for-daily-tasks-and-codex-52-for-coding)
   - [Why do I see “Model … is not allowed” and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
   - [Why do I see “Unknown model: minimax/MiniMax-M2.1”?](#why-do-i-see-unknown-model-minimaxminimaxm21)
   - [Can I use MiniMax as my default and OpenAI for complex tasks?](#can-i-use-minimax-as-my-default-and-openai-for-complex-tasks)
@@ -564,7 +566,6 @@ Remote access: [Gateway remote](/gateway/remote).
 We keep a **hosting hub** with the common providers. Pick one and follow the guide:
 
 - [VPS hosting](/vps) (all providers in one place)
-- [Railway](/railway) (one‑click, browser‑based setup)
 - [Fly.io](/platforms/fly)
 - [Hetzner](/platforms/hetzner)
 - [exe.dev](/platforms/exe-dev)
@@ -1449,7 +1450,7 @@ Have Bot A send a message to Bot B, then let Bot B reply as usual.
 
 **CLI bridge (generic):** run a script that calls the other Gateway with
 `clawdbot agent --message ... --deliver`, targeting a chat where the other bot
-listens. If one bot is on Railway/VPS, point your CLI at that remote Gateway
+listens. If one bot is on a remote VPS, point your CLI at that remote Gateway
 via SSH/Tailscale (see [Remote access](/gateway/remote)).
 
 Example pattern (run from a machine that can reach the target Gateway):
@@ -1461,6 +1462,16 @@ Tip: add a guardrail so the two bots do not loop endlessly (mention-only, channe
 allowlists, or a "do not reply to bot messages" rule).
 
 Docs: [Remote access](/gateway/remote), [Agent CLI](/cli/agent), [Agent send](/tools/agent-send).
+
+### Do I need separate VPSes for multiple agents
+
+No. One Gateway can host multiple agents, each with its own workspace, model defaults,
+and routing. That is the normal setup and it is much cheaper and simpler than running
+one VPS per agent.
+
+Use separate VPSes only when you need hard isolation (security boundaries) or very
+different configs that you do not want to share. Otherwise, keep one Gateway and
+use multiple agents or sub-agents.
 
 ### Is there a benefit to using a node on my personal laptop instead of SSH from a VPS
 
@@ -1946,6 +1957,16 @@ Re-run `/model` **without** the `@profile` suffix:
 
 If you want to return to the default, pick it from `/model` (or send `/model <default provider/model>`).
 Use `/model status` to confirm which auth profile is active.
+
+### Can I use GPT 5.2 for daily tasks and Codex 5.2 for coding
+
+Yes. Set one as default and switch as needed:
+
+- **Quick switch (per session):** `/model gpt-5.2` for daily tasks, `/model gpt-5.2-codex` for coding.
+- **Default + switch:** set `agents.defaults.model.primary` to `openai-codex/gpt-5.2`, then switch to `openai-codex/gpt-5.2-codex` when coding (or the other way around).
+- **Sub-agents:** route coding tasks to sub-agents with a different default model.
+
+See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
 
 ### Why do I see Model is not allowed and then no reply
 

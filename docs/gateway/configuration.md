@@ -1021,6 +1021,7 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
       ],
       historyLimit: 50,                     // include last N group messages as context (0 disables)
       replyToMode: "first",                 // off | first | all
+      linkPreview: true,                   // toggle outbound link previews
       streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
       draftChunk: {                        // optional; only for streamMode=block
         minChars: 200,
@@ -1130,7 +1131,7 @@ Reaction notification modes:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
-Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Set `channels.discord.chunkMode="newline"` to split on line boundaries before length chunking. Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
+Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Set `channels.discord.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking. Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
 ### `channels.googlechat` (Chat API webhook)
@@ -2846,8 +2847,9 @@ Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
 - Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
 - Default: root (`/`) (unchanged).
-- `gateway.controlUi.allowInsecureAuth` allows token-only auth over **HTTP** (no device identity).
-  Default: `false`. Prefer HTTPS (Tailscale Serve) or `127.0.0.1`.
+- `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI and skips
+  device identity + pairing (even on HTTPS). Default: `false`. Prefer HTTPS
+  (Tailscale Serve) or `127.0.0.1`.
 
 Related docs:
 - [Control UI](/web/control-ui)
@@ -2865,21 +2867,22 @@ Notes:
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
-- Non-loopback binds (`lan`/`tailnet`/`auto`) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
+- Gateway auth is required by default (token/password or Tailscale Serve identity). Non-loopback binds require a shared token/password.
 - The onboarding wizard generates a gateway token by default (even on loopback).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
 
 Auth and Tailscale:
-- `gateway.auth.mode` sets the handshake requirements (`token` or `password`).
+- `gateway.auth.mode` sets the handshake requirements (`token` or `password`). When unset, token auth is assumed.
 - `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine).
 - When `gateway.auth.mode` is set, only that method is accepted (plus optional Tailscale headers).
 - `gateway.auth.password` can be set here, or via `CLAWDBOT_GATEWAY_PASSWORD` (recommended).
 - `gateway.auth.allowTailscale` allows Tailscale Serve identity headers
   (`tailscale-user-login`) to satisfy auth when the request arrives on loopback
-  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. When
-  `true`, Serve requests do not need a token/password; set `false` to require
-  explicit credentials. Defaults to `true` when `tailscale.mode = "serve"` and
-  auth mode is not `password`.
+  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. Clawdbot
+  verifies the identity by resolving the `x-forwarded-for` address via
+  `tailscale whois` before accepting it. When `true`, Serve requests do not need
+  a token/password; set `false` to require explicit credentials. Defaults to
+  `true` when `tailscale.mode = "serve"` and auth mode is not `password`.
 - `gateway.tailscale.mode: "serve"` uses Tailscale Serve (tailnet only, loopback bind).
 - `gateway.tailscale.mode: "funnel"` exposes the dashboard publicly; requires auth.
 - `gateway.tailscale.resetOnExit` resets Serve/Funnel config on shutdown.

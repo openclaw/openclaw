@@ -107,6 +107,7 @@ const FIELD_LABELS: Record<string, string> = {
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
   "diagnostics.enabled": "Diagnostics Enabled",
+  "diagnostics.flags": "Diagnostics Flags",
   "diagnostics.otel.enabled": "OpenTelemetry Enabled",
   "diagnostics.otel.endpoint": "OpenTelemetry Endpoint",
   "diagnostics.otel.protocol": "OpenTelemetry Protocol",
@@ -368,7 +369,8 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
-  "gateway.auth.token": "Recommended for all gateways; required for non-loopback binds.",
+  "gateway.auth.token":
+    "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /clawdbot).",
@@ -388,6 +390,8 @@ const FIELD_HELP: Record<string, string> = {
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
   "nodeHost.browserProxy.allowProfiles":
     "Optional allowlist of browser profile names exposed via the node proxy.",
+  "diagnostics.flags":
+    'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":

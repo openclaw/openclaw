@@ -109,13 +109,13 @@ describe("tts", () => {
   });
 
   describe("isValidOpenAIModel", () => {
-    it("accepts gpt-4o-mini-tts model", () => {
+    it("accepts supported models", () => {
       expect(isValidOpenAIModel("gpt-4o-mini-tts")).toBe(true);
+      expect(isValidOpenAIModel("tts-1")).toBe(true);
+      expect(isValidOpenAIModel("tts-1-hd")).toBe(true);
     });
 
-    it("rejects other models", () => {
-      expect(isValidOpenAIModel("tts-1")).toBe(false);
-      expect(isValidOpenAIModel("tts-1-hd")).toBe(false);
+    it("rejects unsupported models", () => {
       expect(isValidOpenAIModel("invalid")).toBe(false);
       expect(isValidOpenAIModel("")).toBe(false);
       expect(isValidOpenAIModel("gpt-4")).toBe(false);
@@ -123,9 +123,11 @@ describe("tts", () => {
   });
 
   describe("OPENAI_TTS_MODELS", () => {
-    it("contains only gpt-4o-mini-tts", () => {
+    it("contains supported models", () => {
       expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts");
-      expect(OPENAI_TTS_MODELS).toHaveLength(1);
+      expect(OPENAI_TTS_MODELS).toContain("tts-1");
+      expect(OPENAI_TTS_MODELS).toContain("tts-1-hd");
+      expect(OPENAI_TTS_MODELS).toHaveLength(3);
     });
 
     it("is a non-empty array", () => {

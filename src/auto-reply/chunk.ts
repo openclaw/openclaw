@@ -13,7 +13,9 @@ export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
 /**
  * Chunking mode for outbound messages:
  * - "length": Split only when exceeding textChunkLimit (default)
- * - "newline": Split on every newline, with fallback to length-based for long lines
+ * - "newline": Prefer breaking on "soft" boundaries. Historically this split on every
+ *   newline; now it only breaks on paragraph boundaries (blank lines) unless the text
+ *   exceeds the length limit.
  */
 export type ChunkMode = "length" | "newline";
 
@@ -165,43 +167,92 @@ export function chunkByNewline(
 }
 
 /**
+ * Split text into chunks on paragraph boundaries (blank lines), preserving lists and
+ * single-newline line wraps inside paragraphs.
+ *
+ * - Only breaks at paragraph separators ("\n\n" or more, allowing whitespace on blank lines)
+ * - Packs multiple paragraphs into a single chunk up to `limit`
+ * - Falls back to length-based splitting when a single paragraph exceeds `limit`
+ *   (unless `splitLongParagraphs` is disabled)
+ */
+export function chunkByParagraph(
+  text: string,
+  limit: number,
+  opts?: { splitLongParagraphs?: boolean },
+): string[] {
+  if (!text) return [];
+  if (limit <= 0) return [text];
+  const splitLongParagraphs = opts?.splitLongParagraphs !== false;
+
+  // Normalize to \n so blank line detection is consistent.
+  const normalized = text.replace(/\r\n?/g, "\n");
+
+  // Fast-path: if there are no blank-line paragraph separators, do not split.
+  // (We *do not* early-return based on `limit` — newline mode is about paragraph
+  // boundaries, not only exceeding a length limit.)
+  const paragraphRe = /\n[\t ]*\n+/;
+  if (!paragraphRe.test(normalized)) {
+    if (normalized.length <= limit) return [normalized];
+    if (!splitLongParagraphs) return [normalized];
+    return chunkText(normalized, limit);
+  }
+
+  const spans = parseFenceSpans(normalized);
+
+  const parts: string[] = [];
+  const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
+  let lastIndex = 0;
+  for (const match of normalized.matchAll(re)) {
+    const idx = match.index ?? 0;
+
+    // Do not split on blank lines that occur inside fenced code blocks.
+    if (!isSafeFenceBreak(spans, idx)) {
+      continue;
+    }
+
+    parts.push(normalized.slice(lastIndex, idx));
+    lastIndex = idx + match[0].length;
+  }
+  parts.push(normalized.slice(lastIndex));
+
+  const chunks: string[] = [];
+  for (const part of parts) {
+    const paragraph = part.replace(/\s+$/g, "");
+    if (!paragraph.trim()) continue;
+    if (paragraph.length <= limit) {
+      chunks.push(paragraph);
+    } else if (!splitLongParagraphs) {
+      chunks.push(paragraph);
+    } else {
+      chunks.push(...chunkText(paragraph, limit));
+    }
+  }
+
+  return chunks;
+}
+
+/**
  * Unified chunking function that dispatches based on mode.
  */
 export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
   if (mode === "newline") {
-    const chunks: string[] = [];
-    const lineChunks = chunkByNewline(text, limit, { splitLongLines: false });
-    for (const line of lineChunks) {
-      const nested = chunkText(line, limit);
-      if (!nested.length && line) {
-        chunks.push(line);
-        continue;
-      }
-      chunks.push(...nested);
-    }
-    return chunks;
+    return chunkByParagraph(text, limit);
   }
   return chunkText(text, limit);
 }
 
 export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
   if (mode === "newline") {
-    const spans = parseFenceSpans(text);
-    const chunks: string[] = [];
-    const lineChunks = chunkByNewline(text, limit, {
-      splitLongLines: false,
-      trimLines: false,
-      isSafeBreak: (index) => isSafeFenceBreak(spans, index),
-    });
-    for (const line of lineChunks) {
-      const nested = chunkMarkdownText(line, limit);
-      if (!nested.length && line) {
-        chunks.push(line);
-        continue;
-      }
-      chunks.push(...nested);
+    // Paragraph chunking is fence-safe because we never split at arbitrary indices.
+    // If a paragraph must be split by length, defer to the markdown-aware chunker.
+    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    const out: string[] = [];
+    for (const chunk of paragraphChunks) {
+      const nested = chunkMarkdownText(chunk, limit);
+      if (!nested.length && chunk) out.push(chunk);
+      else out.push(...nested);
     }
-    return chunks;
+    return out;
   }
   return chunkMarkdownText(text, limit);
 }

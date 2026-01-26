@@ -58,10 +58,27 @@ When the audit prints findings, treat this as a priority order:
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
 identity. If you enable `gateway.controlUi.allowInsecureAuth`, the UI falls back
-to **token-only auth** on plain HTTP and skips device pairing. This is a security
+to **token-only auth** and skips device pairing (even on HTTPS). This is a security
 downgrade—prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 
 `clawdbot security audit` warns when this setting is enabled.
+
+## Reverse Proxy Configuration
+
+If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you should configure `gateway.trustedProxies` for proper client IP detection.
+
+When the Gateway detects proxy headers (`X-Forwarded-For` or `X-Real-IP`) from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
+
+```yaml
+gateway:
+  trustedProxies:
+    - "127.0.0.1"  # if your proxy runs on localhost
+  auth:
+    mode: password
+    password: ${CLAWDBOT_GATEWAY_PASSWORD}
+```
+
+When `trustedProxies` is configured, the Gateway will use `X-Forwarded-For` headers to determine the real client IP for local client detection. Make sure your proxy overwrites (not appends to) incoming `X-Forwarded-For` headers to prevent spoofing.
 
 ## Local session logs live on disk
 
@@ -263,7 +280,7 @@ The Gateway multiplexes **WebSocket + HTTP** on a single port:
 
 Bind mode controls where the Gateway listens:
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with `gateway.auth` enabled and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with a shared token/password and a real firewall.
 
 Rules of thumb:
 - Prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback, and Tailscale handles access).
@@ -272,13 +289,11 @@ Rules of thumb:
 
 ### 0.5) Lock down the Gateway WebSocket (local auth)
 
-Gateway auth is **only** enforced when you set `gateway.auth`. If it’s unset,
-loopback WS clients are unauthenticated — any local process can connect and call
-`config.apply`.
+Gateway auth is **required by default**. If no token/password is configured,
+the Gateway refuses WebSocket connections (fail‑closed).
 
-The onboarding wizard now generates a token by default (even for loopback) so
-local clients must authenticate. If you skip the wizard or remove auth, you’re
-back to open loopback.
+The onboarding wizard generates a token by default (even for loopback) so
+local clients must authenticate.
 
 Set a token so **all** WS clients must authenticate:
 
@@ -316,9 +331,11 @@ Rotation checklist (token/password):
 
 When `gateway.auth.allowTailscale` is `true` (default for Serve), Clawdbot
 accepts Tailscale Serve identity headers (`tailscale-user-login`) as
-authentication. This only triggers for requests that hit loopback and include
-`x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as injected by
-Tailscale.
+authentication. Clawdbot verifies the identity by resolving the
+`x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`)
+and matching it to the header. This only triggers for requests that hit loopback
+and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
+injected by Tailscale.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable

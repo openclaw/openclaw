@@ -39,4 +39,3 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
   });
 });
-

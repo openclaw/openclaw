@@ -1,4 +1,4 @@
-import { type Bot, InputFile } from "grammy";
+import { type Bot, GrammyError, InputFile } from "grammy";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -22,6 +22,7 @@ import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js"
 import type { TelegramContext } from "./types.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -155,9 +156,39 @@ export async function deliverReplies(params: {
           // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
-          await bot.api.sendVoice(chatId, file, {
-            ...mediaParams,
-          });
+          try {
+            await bot.api.sendVoice(chatId, file, {
+              ...mediaParams,
+            });
+          } catch (voiceErr) {
+            // Fall back to text if voice messages are forbidden in this chat.
+            // This happens when the recipient has Telegram Premium privacy settings
+            // that block voice messages (Settings > Privacy > Voice Messages).
+            if (isVoiceMessagesForbidden(voiceErr)) {
+              const fallbackText = reply.text;
+              if (!fallbackText || !fallbackText.trim()) {
+                throw voiceErr;
+              }
+              logVerbose(
+                "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
+              );
+              hasReplied = await sendTelegramVoiceFallbackText({
+                bot,
+                chatId,
+                runtime,
+                text: fallbackText,
+                chunkText,
+                replyToId,
+                replyToMode,
+                hasReplied,
+                messageThreadId,
+                linkPreview,
+              });
+              // Skip this media item; continue with next.
+              continue;
+            }
+            throw voiceErr;
+          }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
           await bot.api.sendAudio(chatId, file, {
@@ -226,6 +257,43 @@ export async function resolveMedia(
   else if (msg.video) placeholder = "<media:video>";
   else if (msg.audio || msg.voice) placeholder = "<media:audio>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
+}
+
+function isVoiceMessagesForbidden(err: unknown): boolean {
+  if (err instanceof GrammyError) {
+    return VOICE_FORBIDDEN_RE.test(err.description);
+  }
+  return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+}
+
+async function sendTelegramVoiceFallbackText(opts: {
+  bot: Bot;
+  chatId: string;
+  runtime: RuntimeEnv;
+  text: string;
+  chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+  replyToId?: number;
+  replyToMode: ReplyToMode;
+  hasReplied: boolean;
+  messageThreadId?: number;
+  linkPreview?: boolean;
+}): Promise<boolean> {
+  const chunks = opts.chunkText(opts.text);
+  let hasReplied = opts.hasReplied;
+  for (const chunk of chunks) {
+    await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
+      replyToMessageId:
+        opts.replyToId && (opts.replyToMode === "all" || !hasReplied) ? opts.replyToId : undefined,
+      messageThreadId: opts.messageThreadId,
+      textMode: "html",
+      plainText: chunk.text,
+      linkPreview: opts.linkPreview,
+    });
+    if (opts.replyToId && !hasReplied) {
+      hasReplied = true;
+    }
+  }
+  return hasReplied;
 }
 
 function buildTelegramSendParams(opts?: {

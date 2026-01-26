@@ -62,6 +62,7 @@ export const ClawdbotSchema = z
     diagnostics: z
       .object({
         enabled: z.boolean().optional(),
+        flags: z.array(z.string()).optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),

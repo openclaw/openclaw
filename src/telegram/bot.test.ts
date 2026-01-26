@@ -865,15 +865,12 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("prefixes tool and final replies with responsePrefix", async () => {
+  it("prefixes final replies with responsePrefix", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
-    replySpy.mockImplementation(async (_ctx, opts) => {
-      await opts?.onToolResult?.({ text: "tool result" });
-      return { text: "final reply" };
-    });
+    replySpy.mockResolvedValue({ text: "final reply" });
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
@@ -893,9 +890,8 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
-    expect(sendMessageSpy.mock.calls[0][1]).toBe("PFX tool result");
-    expect(sendMessageSpy.mock.calls[1][1]).toBe("PFX final reply");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0][1]).toBe("PFX final reply");
   });
 
   it("honors replyToMode=all for threaded replies", async () => {
@@ -2288,7 +2284,7 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("streams tool summaries for native slash commands", async () => {
+  it("skips tool summaries for native slash commands", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
     commandSpy.mockReset();
@@ -2326,9 +2322,8 @@ describe("createTelegramBot", () => {
       match: "on",
     });
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
-    expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("tool update");
-    expect(sendMessageSpy.mock.calls[1]?.[1]).toContain("final reply");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("final reply");
   });
 
   it("dedupes duplicate message updates by update_id", async () => {

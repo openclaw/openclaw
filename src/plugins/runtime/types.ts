@@ -16,6 +16,7 @@ type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
 type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
 type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
+type TextToSpeechTelephony = typeof import("../../tts/tts.js").textToSpeechTelephony;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
@@ -147,6 +148,26 @@ type HandleWhatsAppAction =
 type CreateWhatsAppLoginTool =
   typeof import("../../channels/plugins/agent-tools/whatsapp-login.js").createWhatsAppLoginTool;
 
+// LINE channel types
+type ListLineAccountIds = typeof import("../../line/accounts.js").listLineAccountIds;
+type ResolveDefaultLineAccountId =
+  typeof import("../../line/accounts.js").resolveDefaultLineAccountId;
+type ResolveLineAccount = typeof import("../../line/accounts.js").resolveLineAccount;
+type NormalizeLineAccountId = typeof import("../../line/accounts.js").normalizeAccountId;
+type ProbeLineBot = typeof import("../../line/probe.js").probeLineBot;
+type SendMessageLine = typeof import("../../line/send.js").sendMessageLine;
+type PushMessageLine = typeof import("../../line/send.js").pushMessageLine;
+type PushMessagesLine = typeof import("../../line/send.js").pushMessagesLine;
+type PushFlexMessage = typeof import("../../line/send.js").pushFlexMessage;
+type PushTemplateMessage = typeof import("../../line/send.js").pushTemplateMessage;
+type PushLocationMessage = typeof import("../../line/send.js").pushLocationMessage;
+type PushTextMessageWithQuickReplies =
+  typeof import("../../line/send.js").pushTextMessageWithQuickReplies;
+type CreateQuickReplyItems = typeof import("../../line/send.js").createQuickReplyItems;
+type BuildTemplateMessageFromPayload =
+  typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
+type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
+
 export type RuntimeLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
@@ -172,6 +193,9 @@ export type PluginRuntime = {
     isVoiceCompatibleAudio: IsVoiceCompatibleAudio;
     getImageMetadata: GetImageMetadata;
     resizeToJpeg: ResizeToJpeg;
+  };
+  tts: {
+    textToSpeechTelephony: TextToSpeechTelephony;
   };
   tools: {
     createMemoryGetTool: CreateMemoryGetTool;
@@ -305,6 +329,23 @@ export type PluginRuntime = {
       monitorWebChannel: MonitorWebChannel;
       handleWhatsAppAction: HandleWhatsAppAction;
       createLoginTool: CreateWhatsAppLoginTool;
+    };
+    line: {
+      listLineAccountIds: ListLineAccountIds;
+      resolveDefaultLineAccountId: ResolveDefaultLineAccountId;
+      resolveLineAccount: ResolveLineAccount;
+      normalizeAccountId: NormalizeLineAccountId;
+      probeLineBot: ProbeLineBot;
+      sendMessageLine: SendMessageLine;
+      pushMessageLine: PushMessageLine;
+      pushMessagesLine: PushMessagesLine;
+      pushFlexMessage: PushFlexMessage;
+      pushTemplateMessage: PushTemplateMessage;
+      pushLocationMessage: PushLocationMessage;
+      pushTextMessageWithQuickReplies: PushTextMessageWithQuickReplies;
+      createQuickReplyItems: CreateQuickReplyItems;
+      buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
+      monitorLineProvider: MonitorLineProvider;
     };
   };
   logging: {
