@@ -374,12 +374,6 @@ Overrides:
 
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
 
-Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.json` (when present on the gateway host):
-- Claude Code → `anthropic:claude-cli`
-  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
-  - Linux/Windows: `~/.claude/.credentials.json`
-- `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
-
 ### `auth`
 
 Optional metadata for auth profiles. This does **not** store secrets; it maps
@@ -399,10 +393,6 @@ rotation order used for failover.
   }
 }
 ```
-
-Note: `anthropic:claude-cli` should use `mode: "oauth"` even when the stored
-credential is a setup-token. Clawdbot auto-migrates older configs that used
-`mode: "token"`.
 
 ### `agents.list[].identity`
 
