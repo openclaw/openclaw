@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ChannelHeartbeatVisibilityConfig } from "../config/types.channels.js";
-import type { DeliverableMessageChannel, GatewayMessageChannel } from "../utils/message-channel.js";
+import type { GatewayMessageChannel } from "../utils/message-channel.js";
 
 export type ResolvedHeartbeatVisibility = {
   showOk: boolean;
