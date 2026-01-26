@@ -382,6 +382,52 @@ export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
 // -----------------------------------------------------------------------------
 
 /**
+ * Resolves the configuration by merging environment variables into missing fields.
+ * Returns a new configuration object with environment variables applied.
+ */
+export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
+  const resolved = JSON.parse(JSON.stringify(config)) as VoiceCallConfig;
+
+  // Telnyx
+  if (resolved.provider === "telnyx") {
+    resolved.telnyx = resolved.telnyx ?? {};
+    resolved.telnyx.apiKey =
+      resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
+    resolved.telnyx.connectionId =
+      resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
+    resolved.telnyx.publicKey =
+      resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+  }
+
+  // Twilio
+  if (resolved.provider === "twilio") {
+    resolved.twilio = resolved.twilio ?? {};
+    resolved.twilio.accountSid =
+      resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
+    resolved.twilio.authToken =
+      resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+  }
+
+  // Plivo
+  if (resolved.provider === "plivo") {
+    resolved.plivo = resolved.plivo ?? {};
+    resolved.plivo.authId =
+      resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
+    resolved.plivo.authToken =
+      resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
+  }
+
+  // Tunnel Config
+  resolved.tunnel = resolved.tunnel ?? { provider: "none", allowNgrokFreeTier: true };
+  resolved.tunnel.ngrokAuthToken =
+      resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
+  resolved.tunnel.ngrokDomain = 
+      resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+
+  return resolved;
+}
+
+/**
  * Validate that the configuration has all required fields for the selected provider.
  */
 export function validateProviderConfig(config: VoiceCallConfig): {
@@ -403,12 +449,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   }
 
   if (config.provider === "telnyx") {
-    if (!config.telnyx?.apiKey && !process.env.TELNYX_API_KEY) {
+    if (!config.telnyx?.apiKey) {
       errors.push(
         "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
       );
     }
-    if (!config.telnyx?.connectionId && !process.env.TELNYX_CONNECTION_ID) {
+    if (!config.telnyx?.connectionId) {
       errors.push(
         "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
       );
@@ -416,12 +462,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   }
 
   if (config.provider === "twilio") {
-    if (!config.twilio?.accountSid && !process.env.TWILIO_ACCOUNT_SID) {
+    if (!config.twilio?.accountSid) {
       errors.push(
         "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
       );
     }
-    if (!config.twilio?.authToken && !process.env.TWILIO_AUTH_TOKEN) {
+    if (!config.twilio?.authToken) {
       errors.push(
         "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
       );
@@ -429,12 +475,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   }
 
   if (config.provider === "plivo") {
-    if (!config.plivo?.authId && !process.env.PLIVO_AUTH_ID) {
+    if (!config.plivo?.authId) {
       errors.push(
         "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
       );
     }
-    if (!config.plivo?.authToken && !process.env.PLIVO_AUTH_TOKEN) {
+    if (!config.plivo?.authToken) {
       errors.push(
         "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
       );
