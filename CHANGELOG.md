@@ -37,6 +37,7 @@ Status: unreleased.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
 
 ### Fixes
+- Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
 - Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
 - Build: align memory-core peer dependency with lockfile.
 - Security: add mDNS discovery mode with minimal default to reduce information disclosure. (#1882) Thanks @orlyjamie.
