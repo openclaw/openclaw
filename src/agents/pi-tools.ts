@@ -157,6 +157,8 @@ export function createClawdbotCodingTools(options?: {
     agentProviderPolicy,
     profile,
     providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
   } = resolveEffectiveToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
@@ -175,14 +177,25 @@ export function createClawdbotCodingTools(options?: {
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+
+  const mergeAlsoAllow = (policy: typeof profilePolicy, alsoAllow?: string[]) => {
+    if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) return policy;
+    return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
+  };
+
+  const profilePolicyWithAlsoAllow = mergeAlsoAllow(profilePolicy, profileAlsoAllow);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllow(
+    providerProfilePolicy,
+    providerProfileAlsoAllow,
+  );
   const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicy(options.config)
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
-    profilePolicy,
-    providerProfilePolicy,
+    profilePolicyWithAlsoAllow,
+    providerProfilePolicyWithAlsoAllow,
     globalPolicy,
     globalProviderPolicy,
     agentPolicy,
@@ -333,18 +346,18 @@ export function createClawdbotCodingTools(options?: {
     if (resolved.unknownAllowlist.length > 0) {
       const entries = resolved.unknownAllowlist.join(", ");
       const suffix = resolved.strippedAllowlist
-        ? "Ignoring allowlist so core tools remain available."
+        ? "Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
         : "These entries won't match any tool unless the plugin is enabled.";
       logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
     }
     return expandPolicyWithPluginGroups(resolved.policy, pluginGroups);
   };
   const profilePolicyExpanded = resolvePolicy(
-    profilePolicy,
+    profilePolicyWithAlsoAllow,
     profile ? `tools.profile (${profile})` : "tools.profile",
   );
   const providerProfileExpanded = resolvePolicy(
-    providerProfilePolicy,
+    providerProfilePolicyWithAlsoAllow,
     providerProfile ? `tools.byProvider.profile (${providerProfile})` : "tools.byProvider.profile",
   );
   const globalPolicyExpanded = resolvePolicy(globalPolicy, "tools.allow");
