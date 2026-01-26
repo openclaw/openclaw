@@ -115,6 +115,8 @@
           - "ui/**"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
+          - "src/gateway/protocol/**"
+          - "src/gateway/server-methods/chat.ts"
           - "src/infra/control-ui-assets.ts"
 
 "gateway":
