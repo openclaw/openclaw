@@ -348,10 +348,21 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }
           }
 
-          if (!params.job || typeof params.job !== "object") {
+          if (params.job === null || params.job === undefined) {
             throw new Error("job required");
           }
-          const job = normalizeCronJobCreate(params.job) ?? params.job;
+          let rawJob: unknown = params.job;
+          if (typeof rawJob === "string") {
+            try {
+              rawJob = JSON.parse(rawJob);
+            } catch {
+              throw new Error("job must be object");
+            }
+          }
+          if (!rawJob || typeof rawJob !== "object" || Array.isArray(rawJob)) {
+            throw new Error("job must be object");
+          }
+          const job = normalizeCronJobCreate(rawJob) ?? rawJob;
           if (job && typeof job === "object" && !("agentId" in job)) {
             const cfg = loadConfig();
             const agentId = opts?.agentSessionKey
