@@ -1038,6 +1038,7 @@
           "tools/reactions",
           "tools/skills",
           "tools/skills-config",
+          "tools/build-your-first-skill",
           "tools/clawdhub"
         ]
       },
