@@ -133,8 +133,8 @@ describe("tabFromPath", () => {
     expect(tabFromPath("/sessions")).toBe("sessions");
   });
 
-  it("returns chat for root path", () => {
-    expect(tabFromPath("/")).toBe("chat");
+  it("returns landing for root path", () => {
+    expect(tabFromPath("/")).toBe("landing");
   });
 
   it("handles base paths", () => {

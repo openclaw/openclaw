@@ -9,6 +9,7 @@ export const TAB_GROUPS = [
 ] as const;
 
 export type Tab =
+  | "landing"
   | "overview"
   | "channels"
   | "instances"
@@ -23,6 +24,7 @@ export type Tab =
   | "logs";
 
 const TAB_PATHS: Record<Tab, string> = {
+  landing: "/",
   overview: "/overview",
   channels: "/channels",
   instances: "/instances",
@@ -78,7 +80,7 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   }
   let normalized = normalizePath(path).toLowerCase();
   if (normalized.endsWith("/index.html")) normalized = "/";
-  if (normalized === "/") return "chat";
+  if (normalized === "/") return "landing";
   return PATH_TO_TAB.get(normalized) ?? null;
 }
 
@@ -102,6 +104,8 @@ export function inferBasePathFromPathname(pathname: string): string {
 
 export function iconForTab(tab: Tab): string {
   switch (tab) {
+    case "landing":
+      return "🏠";
     case "chat":
       return "💬";
     case "overview":
@@ -133,6 +137,8 @@ export function iconForTab(tab: Tab): string {
 
 export function titleForTab(tab: Tab) {
   switch (tab) {
+    case "landing":
+      return "Welcome";
     case "overview":
       return "Overview";
     case "channels":
@@ -164,6 +170,8 @@ export function titleForTab(tab: Tab) {
 
 export function subtitleForTab(tab: Tab) {
   switch (tab) {
+    case "landing":
+      return "Discover what Clawdbrain can do for you.";
     case "overview":
       return "Gateway status, entry points, and a fast health read.";
     case "channels":

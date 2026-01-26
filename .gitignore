@@ -1,5 +1,6 @@
 node_modules
 **/node_modules/
+**/__screenshots__/
 .env
 docker-compose.extra.yml
 dist
