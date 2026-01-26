@@ -280,7 +280,7 @@ The Gateway multiplexes **WebSocket + HTTP** on a single port:
 
 Bind mode controls where the Gateway listens:
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with `gateway.auth` enabled and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with a shared token/password and a real firewall.
 
 Rules of thumb:
 - Prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback, and Tailscale handles access).
@@ -289,13 +289,11 @@ Rules of thumb:
 
 ### 0.5) Lock down the Gateway WebSocket (local auth)
 
-Gateway auth is **only** enforced when you set `gateway.auth`. If it’s unset,
-loopback WS clients are unauthenticated — any local process can connect and call
-`config.apply`.
+Gateway auth is **required by default**. If no token/password is configured,
+the Gateway refuses WebSocket connections (fail‑closed).
 
-The onboarding wizard now generates a token by default (even for loopback) so
-local clients must authenticate. If you skip the wizard or remove auth, you’re
-back to open loopback.
+The onboarding wizard generates a token by default (even for loopback) so
+local clients must authenticate.
 
 Set a token so **all** WS clients must authenticate:
 
