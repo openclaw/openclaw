@@ -7,6 +7,7 @@ import { icons } from "../icons";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
+  splitSystemPreface,
 } from "../chat/message-normalizer";
 import {
   renderMessageGroup,
@@ -337,10 +338,23 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
+    const split = splitSystemPreface(normalized);
+    if (split.systemMessage) {
+      items.push({
+        kind: "message",
+        key: `system:${messageKey(msg, i)}`,
+        message: split.systemMessage,
+      });
+    }
+
+    if (split.systemMessage && split.message.content.length === 0) {
+      continue;
+    }
+
     items.push({
       kind: "message",
       key: messageKey(msg, i),
-      message: msg,
+      message: split.systemMessage ? split.message : msg,
     });
   }
   if (props.showThinking) {
