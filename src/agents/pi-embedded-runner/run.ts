@@ -168,6 +168,7 @@ export async function runEmbeddedPiAgent(
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
+      let providerApiKey: string | undefined;
       let lastProfileId: string | undefined;
 
       const resolveAuthProfileFailoverReason = (params: {
@@ -218,6 +219,7 @@ export async function runEmbeddedPiAgent(
 
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
+        providerApiKey = apiKeyInfo.apiKey;
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
           if (apiKeyInfo.mode !== "aws-sdk") {
@@ -330,7 +332,7 @@ export async function runEmbeddedPiAgent(
             model,
             authStorage,
             modelRegistry,
-            providerApiKey: apiKeyInfo?.apiKey,
+            providerApiKey,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,

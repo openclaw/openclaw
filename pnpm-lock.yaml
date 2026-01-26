@@ -412,6 +412,8 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/opencode-x402-auth: {}
+
   extensions/signal: {}
 
   extensions/slack: {}

@@ -97,6 +97,8 @@ interface PaymentRequiredHeader {
   }>;
 }
 
+type PaymentRequirement = NonNullable<PaymentRequiredHeader["accepts"]>[number];
+
 interface CachedPermit {
   paymentSig: string;
   deadline: number;
@@ -166,16 +168,12 @@ function buildPermitCacheKey(params: {
   return `${params.network}|${params.asset}|${params.payTo}|${params.cap}|${params.account}`;
 }
 
-function getRequirementPayTo(
-  requirement?: PaymentRequiredHeader["accepts"][number],
-): string | null {
+function getRequirementPayTo(requirement?: PaymentRequirement): string | null {
   if (!requirement) return null;
   return requirement.payTo || requirement.pay_to || null;
 }
 
-function getRequirementMaxAmountRequired(
-  requirement?: PaymentRequiredHeader["accepts"][number],
-): string | undefined {
+function getRequirementMaxAmountRequired(requirement?: PaymentRequirement): string | undefined {
   if (!requirement?.extra) return undefined;
   return (
     requirement.extra.maxAmountRequired ||
@@ -196,7 +194,7 @@ function decodePaymentRequiredHeader(value: string): PaymentRequiredHeader | nul
 
 function applyPaymentRequirement(
   config: RouterConfig,
-  requirement?: PaymentRequiredHeader["accepts"][number],
+  requirement?: PaymentRequirement,
 ): RouterConfig {
   if (!requirement) return config;
   const payTo = getRequirementPayTo(requirement) || config.payTo;
@@ -415,7 +413,7 @@ function wrapStreamFnWithFetch(streamFn: StreamFn, fetchImpl: typeof fetch): Str
           restore();
         }
       })();
-      return iterator as ReturnType<StreamFn>;
+      return iterator as unknown as ReturnType<StreamFn>;
     }
 
     if (result && typeof (result as Promise<unknown>).then === "function") {
