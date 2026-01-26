@@ -11,6 +11,7 @@ Status: unreleased.
 - Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
 - Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
 - Docs: add Render deployment guide. (#1975) Thanks @anurag.
+- Docs: add Claude Max API Proxy guide. (#1875) Thanks @atalovesyou.
 - Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
 - Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
 - Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
