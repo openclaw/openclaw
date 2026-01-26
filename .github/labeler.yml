@@ -86,65 +86,24 @@
 "docs":
   - "docs/**"
   - "docs.acp.md"
-  - "README.md"
-  - "README-header.png"
-  - "CHANGELOG.md"
-  - "CONTRIBUTING.md"
-  - "SECURITY.md"
 
-"extensions: bluebubbles":
-  - "extensions/bluebubbles/**"
 "extensions: copilot-proxy":
   - "extensions/copilot-proxy/**"
 "extensions: diagnostics-otel":
   - "extensions/diagnostics-otel/**"
-"extensions: discord":
-  - "extensions/discord/**"
 "extensions: google-antigravity-auth":
   - "extensions/google-antigravity-auth/**"
 "extensions: google-gemini-cli-auth":
   - "extensions/google-gemini-cli-auth/**"
-"extensions: googlechat":
-  - "extensions/googlechat/**"
-"extensions: imessage":
-  - "extensions/imessage/**"
-"extensions: line":
-  - "extensions/line/**"
 "extensions: llm-task":
   - "extensions/llm-task/**"
 "extensions: lobster":
   - "extensions/lobster/**"
-"extensions: matrix":
-  - "extensions/matrix/**"
-"extensions: mattermost":
-  - "extensions/mattermost/**"
 "extensions: memory-core":
   - "extensions/memory-core/**"
 "extensions: memory-lancedb":
   - "extensions/memory-lancedb/**"
-"extensions: msteams":
-  - "extensions/msteams/**"
-"extensions: nextcloud-talk":
-  - "extensions/nextcloud-talk/**"
-"extensions: nostr":
-  - "extensions/nostr/**"
 "extensions: open-prose":
   - "extensions/open-prose/**"
 "extensions: qwen-portal-auth":
   - "extensions/qwen-portal-auth/**"
-"extensions: signal":
-  - "extensions/signal/**"
-"extensions: slack":
-  - "extensions/slack/**"
-"extensions: telegram":
-  - "extensions/telegram/**"
-"extensions: tlon":
-  - "extensions/tlon/**"
-"extensions: voice-call":
-  - "extensions/voice-call/**"
-"extensions: whatsapp":
-  - "extensions/whatsapp/**"
-"extensions: zalo":
-  - "extensions/zalo/**"
-"extensions: zalouser":
-  - "extensions/zalouser/**"
