@@ -47,7 +47,6 @@ export async function promptAuthConfig(
       allowKeychainPrompt: false,
     }),
     includeSkip: true,
-    includeClaudeCliIfMissing: true,
   });
 
   let next = cfg;
@@ -74,10 +73,7 @@ export async function promptAuthConfig(
   }
 
   const anthropicOAuth =
-    authChoice === "claude-cli" ||
-    authChoice === "setup-token" ||
-    authChoice === "token" ||
-    authChoice === "oauth";
+    authChoice === "setup-token" || authChoice === "token" || authChoice === "oauth";
 
   const allowlistSelection = await promptModelAllowlist({
     config: next,
