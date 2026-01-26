@@ -142,6 +142,16 @@ Clawdbot’s stance:
 - **Scope next:** decide where the bot is allowed to act (group allowlists + mention gating, tools, sandboxing, device permissions).
 - **Model last:** assume the model can be manipulated; design so manipulation has limited blast radius.
 
+## Command authorization model
+
+Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
+channel allowlists/pairing plus `commands.useAccessGroups` (see [Configuration](/gateway/configuration)
+and [Slash commands](/tools/slash-commands)). If a channel allowlist is empty or includes `"*"`,
+commands are effectively open for that channel.
+
+`/exec` is a session-only convenience for authorized operators. It does **not** write config or
+change other sessions.
+
 ## Plugins/extensions
 
 Plugins run **in-process** with the Gateway. Treat them as trusted code:
@@ -211,7 +221,7 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
-- Note: sandboxing is opt-in; if sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox.
+- Note: sandboxing is opt-in. If sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox, and host exec does not require approvals unless you set host=gateway and configure exec approvals.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 

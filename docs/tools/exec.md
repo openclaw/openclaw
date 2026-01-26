@@ -34,6 +34,9 @@ Notes:
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
+- Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
+  the gateway host (no container) and **does not require approvals**. To require approvals, run with
+  `host=gateway` and configure exec approvals (or enable sandboxing).
 
 ## Config
 
@@ -87,6 +90,13 @@ Example:
 ```
 /exec host=gateway security=allowlist ask=on-miss node=mac-1
 ```
+
+## Authorization model
+
+`/exec` is only honored for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+It updates **session state only** and does not write config. To hard-disable exec, deny it via tool
+policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless you explicitly set
+`security=full` and `ask=off`.
 
 ## Exec approvals (companion app / node host)
 

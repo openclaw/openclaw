@@ -954,6 +954,8 @@ Notes:
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
+- Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
+  channel allowlists/pairing plus `commands.useAccessGroups`.
 
 ### `web` (WhatsApp web channel runtime)
 

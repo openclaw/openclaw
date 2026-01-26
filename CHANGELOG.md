@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
+- Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
 - Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.
 - Docs: add migration guide for moving to a new machine. (#2381)
@@ -50,6 +51,8 @@ Status: unreleased.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Security: pin npm overrides to keep tar@7.5.4 for install toolchains.
+- BlueBubbles: coalesce inbound URL link preview messages. (#1981) Thanks @tyler6204.
 - Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
 - Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
