@@ -31,11 +31,11 @@ export type PresenceContext = {
 // Note: Bots CANNOT use type 4 (Custom) - that's user-only
 // Available for bots: Playing (0), Streaming (1), Listening (2), Watching (3), Competing (5)
 const ACTIVITY_TYPE_MAP: Record<string, number> = {
-  Playing: 0,     // "Playing {name}"
-  Streaming: 1,   // "Streaming {name}"
-  Listening: 2,   // "Listening to {name}"
-  Watching: 3,    // "Watching {name}"
-  Competing: 5,   // "Competing in {name}"
+  Playing: 0, // "Playing {name}"
+  Streaming: 1, // "Streaming {name}"
+  Listening: 2, // "Listening to {name}"
+  Watching: 3, // "Watching {name}"
+  Competing: 5, // "Competing in {name}"
 };
 
 // Track cumulative tokens per session

@@ -148,6 +148,21 @@ export type DiscordAccountConfig = {
   execApprovals?: DiscordExecApprovalConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
+  /** Bot presence/status configuration. */
+  presence?: DiscordPresenceConfig;
+};
+
+export type DiscordPresenceConfig = {
+  /** Enable presence updates after each message. Default: false. */
+  enabled?: boolean;
+  /** Show cumulative token usage in status. Default: false. */
+  showTokenUsage?: boolean;
+  /** Custom format string for status text. Placeholders: {tokens}, {input}, {output}, {model}, {provider}, {session}. */
+  format?: string;
+  /** Activity type. Bots cannot use "Custom" - that's user accounts only. Default: "Watching". */
+  activityType?: "Playing" | "Watching" | "Listening" | "Competing";
+  /** Bot online status. Default: "online". */
+  status?: "online" | "idle" | "dnd" | "invisible";
 };
 
 export type DiscordConfig = {
