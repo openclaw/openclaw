@@ -28,6 +28,7 @@ services:
       ]
 
   clawdbot-cli:
+    profiles: ["cli"]
     image: ${CLAWDBOT_IMAGE:-clawdbot:local}
     environment:
       HOME: /home/node
