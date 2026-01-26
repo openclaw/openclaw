@@ -107,7 +107,6 @@ public actor GatewayNodeSession {
 
         do {
             try await channel.connect()
-            await onConnected()
         } catch {
             await onDisconnected(error.localizedDescription)
             throw error
