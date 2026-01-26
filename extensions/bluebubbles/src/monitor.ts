@@ -262,7 +262,7 @@ type BlueBubblesDebounceEntry = {
 /**
  * Default debounce window for inbound message coalescing (ms).
  * This helps combine URL text + link preview balloon messages that BlueBubbles
- * sends as separate webhook events.
+ * sends as separate webhook events when no explicit inbound debounce config exists.
  */
 const DEFAULT_INBOUND_DEBOUNCE_MS = 350;
 
@@ -339,6 +339,17 @@ const targetDebouncers = new Map<
   ReturnType<BlueBubblesCoreRuntime["channel"]["debounce"]["createInboundDebouncer"]>
 >();
 
+function resolveBlueBubblesDebounceMs(
+  config: ClawdbotConfig,
+  core: BlueBubblesCoreRuntime,
+): number {
+  const inbound = config.messages?.inbound;
+  const hasExplicitDebounce =
+    typeof inbound?.debounceMs === "number" || typeof inbound?.byChannel?.bluebubbles === "number";
+  if (!hasExplicitDebounce) return DEFAULT_INBOUND_DEBOUNCE_MS;
+  return core.channel.debounce.resolveInboundDebounceMs({ cfg: config, channel: "bluebubbles" });
+}
+
 /**
  * Creates or retrieves a debouncer for a webhook target.
  */
@@ -349,7 +360,7 @@ function getOrCreateDebouncer(target: WebhookTarget) {
   const { account, config, runtime, core } = target;
 
   const debouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
-    debounceMs: DEFAULT_INBOUND_DEBOUNCE_MS,
+    debounceMs: resolveBlueBubblesDebounceMs(config, core),
     buildKey: (entry) => {
       const msg = entry.message;
       // Build key from account + chat + sender to coalesce messages from same source
