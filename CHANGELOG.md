@@ -18,6 +18,7 @@ Status: unreleased.
 - Docs: add Render deployment guide. (#1975) Thanks @anurag.
 - Docs: add Claude Max API Proxy guide. (#1875) Thanks @atalovesyou.
 - Docs: add DigitalOcean deployment guide. (#1870) Thanks @0xJonHoldsCrypto.
+- Docs: add Oracle Cloud (OCI) platform guide + cross-links. (#2333) Thanks @hirefrank.
 - Docs: add Raspberry Pi install guide. (#1871) Thanks @0xJonHoldsCrypto.
 - Docs: add GCP Compute Engine deployment guide. (#1848) Thanks @hougangdev.
 - Docs: add LINE channel guide. Thanks @thewilloftheshadow.
