@@ -43,6 +43,18 @@ Start with the smallest access that still works, then widen it as you gain confi
 
 If you run `--deep`, Clawdbot also attempts a best-effort live Gateway probe.
 
+## Credential storage map
+
+Use this when auditing access or deciding what to back up:
+
+- **WhatsApp**: `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Discord bot token**: config/env (token file not yet supported)
+- **Slack tokens**: config/env (`channels.slack.*`)
+- **Pairing allowlists**: `~/.clawdbot/credentials/<channel>-allowFrom.json`
+- **Model auth profiles**: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
+- **Legacy OAuth import**: `~/.clawdbot/credentials/oauth.json`
+
 ## Security Audit Checklist
 
 When the audit prints findings, treat this as a priority order:
@@ -199,6 +211,7 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
+- Note: sandboxing is opt-in; if sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 
