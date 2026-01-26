@@ -287,6 +287,49 @@ Rules of thumb:
 - If you must bind to LAN, firewall the port to a tight allowlist of source IPs; do not port-forward it broadly.
 - Never expose the Gateway unauthenticated on `0.0.0.0`.
 
+### 0.4.1) mDNS/Bonjour discovery (information disclosure)
+
+The Gateway broadcasts its presence via mDNS (`_clawdbot-gw._tcp` on port 5353) for local device discovery. In full mode, this includes TXT records that may expose operational details:
+
+- `cliPath`: full filesystem path to the CLI binary (reveals username and install location)
+- `sshPort`: advertises SSH availability on the host
+- `displayName`, `lanHost`: hostname information
+
+**Operational security consideration:** Broadcasting infrastructure details makes reconnaissance easier for anyone on the local network. Even "harmless" info like filesystem paths and SSH availability helps attackers map your environment.
+
+**Recommendations:**
+
+1. **Minimal mode** (default, recommended for exposed gateways): omit sensitive fields from mDNS broadcasts:
+   ```json5
+   {
+     discovery: {
+       mdns: { mode: "minimal" }
+     }
+   }
+   ```
+
+2. **Disable entirely** if you don't need local device discovery:
+   ```json5
+   {
+     discovery: {
+       mdns: { mode: "off" }
+     }
+   }
+   ```
+
+3. **Full mode** (opt-in): include `cliPath` + `sshPort` in TXT records:
+   ```json5
+   {
+     discovery: {
+       mdns: { mode: "full" }
+     }
+   }
+   ```
+
+4. **Environment variable** (alternative): set `CLAWDBOT_DISABLE_BONJOUR=1` to disable mDNS without config changes.
+
+In minimal mode, the Gateway still broadcasts enough for device discovery (`role`, `gatewayPort`, `transport`) but omits `cliPath` and `sshPort`. Apps that need CLI path information can fetch it via the authenticated WebSocket connection instead.
+
 ### 0.5) Lock down the Gateway WebSocket (local auth)
 
 Gateway auth is **required by default**. If no token/password is configured,
