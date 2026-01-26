@@ -427,7 +427,11 @@ export async function resolveImplicitCopilotProvider(params: {
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
-  const hasProfile = listProfilesForProvider(authStore, "github-copilot").length > 0;
+  const profileIds = listProfilesForProvider(authStore, "github-copilot");
+  const hasProfile = profileIds.some((profileId) => {
+    const profile = authStore.profiles[profileId];
+    return profile?.type === "token" && Boolean(profile.token?.trim());
+  });
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 
@@ -437,7 +441,7 @@ export async function resolveImplicitCopilotProvider(params: {
   if (!selectedGithubToken && hasProfile) {
     // Use the first available profile as a default for discovery (it will be
     // re-resolved per-run by the embedded runner).
-    const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
+    const profileId = profileIds[0];
     const profile = profileId ? authStore.profiles[profileId] : undefined;
     if (profile && profile.type === "token") {
       selectedGithubToken = profile.token;

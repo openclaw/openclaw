@@ -21,7 +21,6 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "synthetic-api-key": "synthetic",
   "venice-api-key": "venice",
   "github-copilot": "github-copilot",
-  "copilot-proxy": "copilot-proxy",
   "minimax-cloud": "minimax",
   "minimax-api": "minimax",
   "minimax-api-lightning": "minimax",

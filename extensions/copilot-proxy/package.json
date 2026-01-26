@@ -2,7 +2,9 @@
   "name": "@clawdbot/copilot-proxy",
   "version": "2026.1.25",
   "type": "module",
-  "description": "Clawdbot Copilot Proxy provider plugin",
+  "description": "Deprecated: copilot-proxy integration removed in favor of the Copilot SDK.",
+  "private": true,
+  "deprecated": "Removed in favor of the official Copilot SDK integration.",
   "clawdbot": {
     "extensions": [
       "./index.ts"

@@ -10,16 +10,18 @@
   "colors": {
     "primary": "#FF5A36"
   },
-  "topbarLinks": [
-    {
-      "name": "GitHub",
-      "url": "https://github.com/clawdbot/clawdbot"
-    },
-    {
-      "name": "Releases",
-      "url": "https://github.com/clawdbot/clawdbot/releases"
-    }
-  ],
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/clawdbot/clawdbot"
+      },
+      {
+        "label": "Releases",
+        "href": "https://github.com/clawdbot/clawdbot/releases"
+      }
+    ]
+  },
   "redirects": [
     {
       "source": "/cron",
@@ -821,6 +823,13 @@
           "help/index",
           "help/troubleshooting",
           "help/faq"
+        ]
+      },
+      {
+        "group": "Developer",
+        "pages": [
+          "developer-guide",
+          "validation/copilot-usage"
         ]
       },
       {

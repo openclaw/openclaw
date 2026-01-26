@@ -2,9 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
+import { runCopilotSdkAgent } from "../../agents/copilot-sdk-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
+import { isCliProvider, isCopilotSdkProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   isCompactionFailureError,
@@ -150,6 +151,60 @@ export async function runAgentTurnWithFallback(params: {
             thinkLevel: params.followupRun.run.thinkLevel,
           });
 
+          if (isCopilotSdkProvider(provider)) {
+            const startedAt = Date.now();
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: {
+                phase: "start",
+                startedAt,
+              },
+            });
+            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
+            return runCopilotSdkAgent({
+              sessionId: params.followupRun.run.sessionId,
+              sessionKey: params.sessionKey,
+              sessionFile: params.followupRun.run.sessionFile,
+              workspaceDir: params.followupRun.run.workspaceDir,
+              config: params.followupRun.run.config,
+              prompt: params.commandBody,
+              provider,
+              model,
+              thinkLevel: params.followupRun.run.thinkLevel,
+              timeoutMs: params.followupRun.run.timeoutMs,
+              runId,
+              extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+              ownerNumbers: params.followupRun.run.ownerNumbers,
+              cliSessionId,
+              images: params.opts?.images,
+            })
+              .then((result) => {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "end",
+                    startedAt,
+                    endedAt: Date.now(),
+                  },
+                });
+                return result;
+              })
+              .catch((err) => {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: err instanceof Error ? err.message : String(err),
+                  },
+                });
+                throw err;
+              });
+          }
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
             emitAgentEvent({

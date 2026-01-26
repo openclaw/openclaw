@@ -29,7 +29,6 @@ export type AuthChoice =
   | "minimax-api-lightning"
   | "opencode-zen"
   | "github-copilot"
-  | "copilot-proxy"
   | "qwen-portal"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";

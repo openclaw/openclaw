@@ -25,6 +25,9 @@ importers:
       '@clack/prompts':
         specifier: ^0.11.0
         version: 0.11.0
+      '@github/copilot-sdk':
+        specifier: ^0.1.18
+        version: 0.1.18
       '@grammyjs/runner':
         specifier: ^2.0.3
         version: 2.0.3(grammy@1.39.3)
@@ -357,8 +360,8 @@ importers:
   extensions/memory-core:
     dependencies:
       clawdbot:
-        specifier: '>=2026.1.25'
-        version: link:../..
+        specifier: '>=2026.1.24'
+        version: 2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
 
   extensions/memory-lancedb:
     dependencies:
@@ -981,6 +984,50 @@ packages:
 
   '@eshaz/web-worker@1.2.2':
     resolution: {integrity: sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==}
+
+  '@github/copilot-darwin-arm64@0.0.394':
+    resolution: {integrity: sha512-qDmDFiFaYFW45UhxylN2JyQRLVGLCpkr5UmgbfH5e0aksf+69qytK/MwpD2Cq12KdTjyGMEorlADkSu5eftELA==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-darwin-x64@0.0.394':
+    resolution: {integrity: sha512-iN4YwSVFxhASiBjLk46f+AzRTNHCvYcmyTKBASxieMIhnDxznYmpo+haFKPCv2lCsEWU8s5LARCnXxxx8J1wKA==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-linux-arm64@0.0.394':
+    resolution: {integrity: sha512-9NeGvmO2tGztuneXZfYAyW3fDk6Pdl6Ffg8MAUaevA/p0awvA+ti/Vh0ZSTcI81nDTjkzONvrcIcjYAN7x0oSg==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-linux-x64@0.0.394':
+    resolution: {integrity: sha512-toahsYQORrP/TPSBQ7sxj4/fJg3YUrD0ksCj/Z4y2vT6EwrE9iC2BspKgQRa4CBoCqxYDNB2blc+mQ1UuzPOxg==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-sdk@0.1.18':
+    resolution: {integrity: sha512-BjHJihKOQXjd05mlG+aJ0fo/56q72CfbSHpTJvoSnQMJQ1oG2ztsYoQshFMCJYap/q0FtsYnIMu5x2v8nIzN8Q==}
+    engines: {node: '>=18.0.0'}
+
+  '@github/copilot-win32-arm64@0.0.394':
+    resolution: {integrity: sha512-R7XBP3l+oeDuBrP0KD80ZBEMsZoxAW8QO2MNsDUV8eVrNJnp6KtGHoA+iCsKYKNOD6wHA/q5qm/jR+gpsz46Aw==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot-win32-x64@0.0.394':
+    resolution: {integrity: sha512-/XYV8srP+pMXbf9Gc3wr58zCzBZvsdA3X4poSvr2uU8yCZ6E4pD0agFaZ1c/CikANJi8nb0Id3kulhEhePz/3A==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot@0.0.394':
+    resolution: {integrity: sha512-koSiaHvVwjgppgh+puxf6dgsR8ql/WST1scS5bjzMsJFfWk7f4xtEXla7TCQfSGoZkCmCsr2Tis27v5TpssiCg==}
+    hasBin: true
 
   '@glideapps/ts-necessities@2.2.3':
     resolution: {integrity: sha512-gXi0awOZLHk3TbW55GZLCPP6O+y/b5X1pBXKBVckFONSwF1z1E5ND2BGJsghQFah+pW7pkkyFb2VhUQI2qhL5w==}
@@ -3123,6 +3170,11 @@ packages:
 
   class-variance-authority@0.7.1:
     resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
+
+  clawdbot@2026.1.24:
+    resolution: {integrity: sha512-foszbNXzk743kQBx2Nfc2KNlStZyBAVAYLQJ+KaONh009r8oB1a74kQ8wTnKX+SDNaQ9MvaE9tOisVUi+H3F+Q==}
+    engines: {node: '>=22.12.0'}
+    hasBin: true
 
   cli-cursor@5.0.0:
     resolution: {integrity: sha512-aCj4O5wKyszjMmDT4tZj93kxyydN/K5zPWSCe6/0AV/AA1pqe5ZBIw0a2ZfPQV7lL5/yb5HsUreJ6UFAF1tEQw==}
@@ -5355,6 +5407,10 @@ packages:
       jsdom:
         optional: true
 
+  vscode-jsonrpc@8.2.1:
+    resolution: {integrity: sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ==}
+    engines: {node: '>=14.0.0'}
+
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
@@ -6495,6 +6551,39 @@ snapshots:
 
   '@eshaz/web-worker@1.2.2':
     optional: true
+
+  '@github/copilot-darwin-arm64@0.0.394':
+    optional: true
+
+  '@github/copilot-darwin-x64@0.0.394':
+    optional: true
+
+  '@github/copilot-linux-arm64@0.0.394':
+    optional: true
+
+  '@github/copilot-linux-x64@0.0.394':
+    optional: true
+
+  '@github/copilot-sdk@0.1.18':
+    dependencies:
+      '@github/copilot': 0.0.394
+      vscode-jsonrpc: 8.2.1
+      zod: 4.3.6
+
+  '@github/copilot-win32-arm64@0.0.394':
+    optional: true
+
+  '@github/copilot-win32-x64@0.0.394':
+    optional: true
+
+  '@github/copilot@0.0.394':
+    optionalDependencies:
+      '@github/copilot-darwin-arm64': 0.0.394
+      '@github/copilot-darwin-x64': 0.0.394
+      '@github/copilot-linux-arm64': 0.0.394
+      '@github/copilot-linux-x64': 0.0.394
+      '@github/copilot-win32-arm64': 0.0.394
+      '@github/copilot-win32-x64': 0.0.394
 
   '@glideapps/ts-necessities@2.2.3': {}
 
@@ -8861,6 +8950,84 @@ snapshots:
   class-variance-authority@0.7.1:
     dependencies:
       clsx: 2.1.1
+
+  clawdbot@2026.1.24(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3):
+    dependencies:
+      '@agentclientprotocol/sdk': 0.13.1(zod@4.3.6)
+      '@aws-sdk/client-bedrock': 3.975.0
+      '@buape/carbon': 0.14.0(hono@4.11.4)
+      '@clack/prompts': 0.11.0
+      '@grammyjs/runner': 2.0.3(grammy@1.39.3)
+      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.39.3)
+      '@homebridge/ciao': 1.3.4
+      '@line/bot-sdk': 10.6.0
+      '@lydell/node-pty': 1.2.0-beta.3
+      '@mariozechner/pi-agent-core': 0.49.3(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.49.3(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.49.3(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.49.3
+      '@mozilla/readability': 0.6.0
+      '@sinclair/typebox': 0.34.47
+      '@slack/bolt': 4.6.0(@types/express@5.0.6)
+      '@slack/web-api': 7.13.0
+      '@whiskeysockets/baileys': 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
+      ajv: 8.17.1
+      body-parser: 2.2.2
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      chromium-bidi: 13.0.1(devtools-protocol@0.0.1561482)
+      cli-highlight: 2.1.11
+      commander: 14.0.2
+      croner: 9.1.0
+      detect-libc: 2.1.2
+      discord-api-types: 0.38.37
+      dotenv: 17.2.3
+      express: 5.2.1
+      file-type: 21.3.0
+      grammy: 1.39.3
+      hono: 4.11.4
+      jiti: 2.6.1
+      json5: 2.2.3
+      jszip: 3.10.1
+      linkedom: 0.18.12
+      long: 5.3.2
+      markdown-it: 14.1.0
+      node-edge-tts: 1.2.9
+      osc-progress: 0.3.0
+      pdfjs-dist: 5.4.530
+      playwright-core: 1.58.0
+      proper-lockfile: 4.1.2
+      qrcode-terminal: 0.12.0
+      sharp: 0.34.5
+      sqlite-vec: 0.1.7-alpha.2
+      tar: 7.5.4
+      tslog: 4.10.2
+      undici: 7.19.0
+      ws: 8.19.0
+      yaml: 2.8.2
+      zod: 4.3.6
+    optionalDependencies:
+      '@napi-rs/canvas': 0.1.88
+      node-llama-cpp: 3.15.0(typescript@5.9.3)
+    transitivePeerDependencies:
+      - '@discordjs/opus'
+      - '@modelcontextprotocol/sdk'
+      - '@types/express'
+      - audio-decode
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - devtools-protocol
+      - encoding
+      - ffmpeg-static
+      - jimp
+      - link-preview-js
+      - node-opus
+      - opusscript
+      - supports-color
+      - typescript
+      - utf-8-validate
 
   cli-cursor@5.0.0:
     dependencies:
@@ -11373,6 +11540,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  vscode-jsonrpc@8.2.1: {}
 
   web-streams-polyfill@3.3.3: {}
 

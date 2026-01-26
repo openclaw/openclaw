@@ -11,7 +11,7 @@ export async function applyAuthChoiceGitHubCopilot(
 
   await params.prompter.note(
     [
-      "This will open a GitHub device login to authorize Copilot.",
+      "This will open Copilot CLI login to authorize GitHub Copilot.",
       "Requires an active GitHub Copilot subscription.",
     ].join("\n"),
     "GitHub Copilot",

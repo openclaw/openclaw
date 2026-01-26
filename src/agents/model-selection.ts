@@ -34,10 +34,15 @@ export function normalizeProviderId(provider: string): string {
 
 export function isCliProvider(provider: string, cfg?: ClawdbotConfig): boolean {
   const normalized = normalizeProviderId(provider);
+  if (normalized === "github-copilot") return true;
   if (normalized === "claude-cli") return true;
   if (normalized === "codex-cli") return true;
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
   return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
+}
+
+export function isCopilotSdkProvider(provider: string): boolean {
+  return normalizeProviderId(provider) === "github-copilot";
 }
 
 function normalizeAnthropicModelId(model: string): string {

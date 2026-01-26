@@ -1,8 +1,8 @@
 ---
-summary: "Sign in to GitHub Copilot from Clawdbot using the device flow"
+summary: "Use GitHub Copilot via the official Copilot CLI SDK"
 read_when:
   - You want to use GitHub Copilot as a model provider
-  - You need the `clawdbot models auth login-github-copilot` flow
+  - You need the Copilot CLI + SDK flow
 ---
 # Github Copilot
 
@@ -10,35 +10,25 @@ read_when:
 
 GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
 models for your GitHub account and plan. Clawdbot can use Copilot as a model
-provider in two different ways.
+provider via the official Copilot CLI SDK.
 
-## Two ways to use Copilot in Clawdbot
+## Use Copilot in Clawdbot
 
-### 1) Built-in GitHub Copilot provider (`github-copilot`)
-
-Use the native device-login flow to obtain a GitHub token, then exchange it for
-Copilot API tokens when Clawdbot runs. This is the **default** and simplest path
-because it does not require VS Code.
-
-### 2) Copilot Proxy plugin (`copilot-proxy`)
-
-Use the **Copilot Proxy** VS Code extension as a local bridge. Clawdbot talks to
-the proxy’s `/v1` endpoint and uses the model list you configure there. Choose
-this when you already run Copilot Proxy in VS Code or need to route through it.
-You must enable the plugin and keep the VS Code extension running.
-
-Use GitHub Copilot as a model provider (`github-copilot`). The login command runs
-the GitHub device flow, saves an auth profile, and updates your config to use that
-profile.
+Clawdbot integrates with GitHub Copilot through the official Copilot CLI SDK.
+This requires the Copilot CLI to be installed and authenticated on the gateway
+host.
 
 ## CLI setup
 
 ```bash
-clawdbot models auth login-github-copilot
+copilot auth login
 ```
 
-You'll be prompted to visit a URL and enter a one-time code. Keep the terminal
-open until it completes.
+Then validate Copilot in Clawdbot:
+
+```bash
+clawdbot models auth login-github-copilot
+```
 
 ### Optional flags
 
@@ -66,5 +56,4 @@ clawdbot models set github-copilot/gpt-4o
 - Requires an interactive TTY; run it directly in a terminal.
 - Copilot model availability depends on your plan; if a model is rejected, try
   another ID (for example `github-copilot/gpt-4.1`).
-- The login stores a GitHub token in the auth profile store and exchanges it for a
-  Copilot API token when Clawdbot runs.
+- Copilot CLI must stay available on the gateway host.

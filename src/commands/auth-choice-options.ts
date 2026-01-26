@@ -82,8 +82,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "copilot",
     label: "Copilot",
-    hint: "GitHub + local proxy",
-    choices: ["github-copilot", "copilot-proxy"],
+    hint: "GitHub Copilot CLI",
+    choices: ["github-copilot"],
   },
   {
     value: "openrouter",
@@ -204,8 +204,8 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({
     value: "github-copilot",
-    label: "GitHub Copilot (GitHub device login)",
-    hint: "Uses GitHub device flow",
+    label: "GitHub Copilot (Copilot CLI)",
+    hint: "Uses the official Copilot CLI + SDK",
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({
@@ -220,11 +220,6 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
   options.push({ value: "qwen-portal", label: "Qwen OAuth" });
-  options.push({
-    value: "copilot-proxy",
-    label: "Copilot Proxy (local)",
-    hint: "Local proxy for VS Code Copilot models",
-  });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({

@@ -32,7 +32,6 @@ const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
   { pluginId: "google-antigravity-auth", providerId: "google-antigravity" },
   { pluginId: "google-gemini-cli-auth", providerId: "google-gemini-cli" },
   { pluginId: "qwen-portal-auth", providerId: "qwen-portal" },
-  { pluginId: "copilot-proxy", providerId: "copilot-proxy" },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
