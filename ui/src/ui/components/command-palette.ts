@@ -31,14 +31,86 @@ export type CommandPaletteProps = {
   onSelect: (command: Command) => void;
 };
 
+function fuzzyScorePart(query: string, text: string): number {
+  const q = query.trim().toLowerCase();
+  const t = text.trim().toLowerCase();
+
+  if (!q) return 0;
+  if (!t) return 0;
+
+  if (t === q) return 1000;
+  if (t.startsWith(q)) return 700;
+
+  const containsAt = t.indexOf(q);
+  if (containsAt !== -1) {
+    // Prefer matches closer to the beginning.
+    return 500 - Math.min(containsAt * 5, 250);
+  }
+
+  // Fuzzy character match (in-order). Scores consecutive matches higher.
+  let score = 0;
+  let qIndex = 0;
+  let consecutive = 0;
+
+  for (let i = 0; i < t.length && qIndex < q.length; i++) {
+    if (t[i] === q[qIndex]) {
+      const isWordBoundary =
+        i === 0 ||
+        t[i - 1] === " " ||
+        t[i - 1] === "-" ||
+        t[i - 1] === "_" ||
+        t[i - 1] === "/";
+
+      score += 12 + consecutive * 6 + (isWordBoundary ? 10 : 0);
+      consecutive++;
+      qIndex++;
+    } else {
+      consecutive = 0;
+    }
+  }
+
+  // Must match all query characters.
+  if (qIndex < q.length) return 0;
+
+  // Prefer shorter strings when scores are otherwise similar.
+  return score - Math.min(t.length, 100) * 0.25;
+}
+
+function scoreCommand(cmd: Command, query: string): number {
+  const parts = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (parts.length === 0) return 0;
+
+  let total = 0;
+  for (const part of parts) {
+    const labelScore = fuzzyScorePart(part, cmd.label);
+    const categoryScore = cmd.category ? fuzzyScorePart(part, cmd.category) * 0.8 : 0;
+    const idScore = fuzzyScorePart(part, cmd.id) * 0.3;
+
+    const best = Math.max(labelScore, categoryScore, idScore);
+    if (best <= 0) return 0;
+    total += best;
+  }
+
+  return total;
+}
+
 function filterCommands(commands: Command[], query: string): Command[] {
   if (!query.trim()) return commands;
-  const lower = query.toLowerCase();
-  return commands.filter(
-    (cmd) =>
-      cmd.label.toLowerCase().includes(lower) ||
-      cmd.category?.toLowerCase().includes(lower)
-  );
+
+  return commands
+    .map((cmd, index) => ({ cmd, index, score: scoreCommand(cmd, query) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => {
+      const scoreDiff = b.score - a.score;
+      if (scoreDiff !== 0) return scoreDiff;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.cmd);
 }
 
 function handlePaletteKeydown(
