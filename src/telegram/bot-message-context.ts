@@ -49,7 +49,17 @@ import {
 import { upsertTelegramPairingRequest } from "./pairing-store.js";
 import type { TelegramContext } from "./bot/types.js";
 
-type TelegramMediaRef = { path: string; contentType?: string };
+type TelegramMediaRef = {
+  path: string;
+  contentType?: string;
+  stickerMetadata?: {
+    emoji?: string;
+    setName?: string;
+    fileId?: string;
+    fileUniqueId?: string;
+    cachedDescription?: string;
+  };
+};
 
 type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
@@ -302,6 +312,18 @@ export const buildTelegramMessageContext = async ({
   else if (msg.video) placeholder = "<media:video>";
   else if (msg.audio || msg.voice) placeholder = "<media:audio>";
   else if (msg.document) placeholder = "<media:document>";
+  else if (msg.sticker) placeholder = "<media:sticker>";
+
+  // Check if sticker has a cached description - if so, use it instead of sending the image
+  const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
+  const stickerCacheHit = Boolean(cachedStickerDescription);
+  if (stickerCacheHit) {
+    // Format cached description with sticker context
+    const emoji = allMedia[0]?.stickerMetadata?.emoji;
+    const setName = allMedia[0]?.stickerMetadata?.setName;
+    const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
+    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
+  }
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
@@ -525,15 +547,26 @@ export const buildTelegramMessageContext = async ({
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    MediaPath: allMedia[0]?.path,
-    MediaType: allMedia[0]?.contentType,
-    MediaUrl: allMedia[0]?.path,
-    MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-    MediaUrls: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      allMedia.length > 0
+    // Filter out cached stickers from media - their description is already in the message body
+    MediaPath: stickerCacheHit ? undefined : allMedia[0]?.path,
+    MediaType: stickerCacheHit ? undefined : allMedia[0]?.contentType,
+    MediaUrl: stickerCacheHit ? undefined : allMedia[0]?.path,
+    MediaPaths: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
+        ? allMedia.map((m) => m.path)
+        : undefined,
+    MediaUrls: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
+        ? allMedia.map((m) => m.path)
+        : undefined,
+    MediaTypes: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
         ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
+    Sticker: allMedia[0]?.stickerMetadata,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     MessageThreadId: resolvedThreadId,

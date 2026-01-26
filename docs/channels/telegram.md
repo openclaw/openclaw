@@ -383,6 +383,129 @@ For message tool sends, set `asVoice: true` with a voice-compatible audio `media
 }
 ```
 
+## Stickers
+
+Clawdbot supports receiving and sending Telegram stickers with intelligent caching.
+
+### Receiving stickers
+
+When a user sends a sticker, Clawdbot handles it based on the sticker type:
+
+- **Static stickers (WEBP):** Downloaded and processed through vision. The sticker appears as a `<media:sticker>` placeholder in the message content.
+- **Animated stickers (TGS):** Skipped (Lottie format not supported for processing).
+- **Video stickers (WEBM):** Skipped (video format not supported for processing).
+
+Template context fields available when receiving stickers:
+- `StickerEmoji` — the emoji associated with the sticker
+- `StickerSetName` — the name of the sticker set
+- `StickerFileId` — the Telegram file ID (used for sending the same sticker back)
+
+### Sticker cache
+
+Stickers are processed through the AI's vision capabilities to generate descriptions. Since the same stickers are often sent repeatedly, Clawdbot caches these descriptions to avoid redundant API calls.
+
+**How it works:**
+
+1. **First encounter:** The sticker image is sent to the AI for vision analysis. The AI generates a description (e.g., "A cartoon cat waving enthusiastically").
+2. **Cache storage:** The description is saved along with the sticker's file ID, emoji, and set name.
+3. **Subsequent encounters:** When the same sticker is seen again, the cached description is used directly. The image is not sent to the AI.
+
+**Cache location:** `~/.clawdbot/telegram/sticker-cache.json`
+
+**Cache entry format:**
+```json
+{
+  "fileId": "CAACAgIAAxkBAAI...",
+  "emoji": "👋",
+  "setName": "CoolCats",
+  "description": "A cartoon cat waving enthusiastically",
+  "addedAt": "2026-01-15T10:30:00.000Z"
+}
+```
+
+**Benefits:**
+- Reduces API costs by avoiding repeated vision calls for the same sticker
+- Faster response times for cached stickers (no vision processing delay)
+- Enables sticker search functionality based on cached descriptions
+
+The cache is populated automatically as stickers are received. There is no manual cache management required.
+
+### Sending stickers
+
+The agent can send and search stickers using the `sticker` and `sticker-search` actions. These are disabled by default and must be enabled in config:
+
+```json5
+{
+  channels: {
+    telegram: {
+      actions: {
+        sticker: true
+      }
+    }
+  }
+}
+```
+
+**Send a sticker:**
+
+```json5
+{
+  "action": "sticker",
+  "channel": "telegram",
+  "to": "123456789",
+  "fileId": "CAACAgIAAxkBAAI..."
+}
+```
+
+Parameters:
+- `fileId` (required) — the Telegram file ID of the sticker. Obtain this from `StickerFileId` when receiving a sticker, or from a `sticker-search` result.
+- `replyTo` (optional) — message ID to reply to.
+- `threadId` (optional) — message thread ID for forum topics.
+
+**Search for stickers:**
+
+The agent can search cached stickers by description, emoji, or set name:
+
+```json5
+{
+  "action": "sticker-search",
+  "channel": "telegram",
+  "query": "cat waving",
+  "limit": 5
+}
+```
+
+Returns matching stickers from the cache:
+```json5
+{
+  "ok": true,
+  "count": 2,
+  "stickers": [
+    {
+      "fileId": "CAACAgIAAxkBAAI...",
+      "emoji": "👋",
+      "description": "A cartoon cat waving enthusiastically",
+      "setName": "CoolCats"
+    }
+  ]
+}
+```
+
+The search uses fuzzy matching across description text, emoji characters, and set names.
+
+**Example with threading:**
+
+```json5
+{
+  "action": "sticker",
+  "channel": "telegram",
+  "to": "-1001234567890",
+  "fileId": "CAACAgIAAxkBAAI...",
+  "replyTo": 42,
+  "threadId": 123
+}
+```
+
 ## Streaming (drafts)
 Telegram can stream **draft bubbles** while the agent is generating a response.
 Clawdbot uses Bot API `sendMessageDraft` (not real messages) and then sends the
@@ -537,6 +660,7 @@ Provider options:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
+- `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
 
