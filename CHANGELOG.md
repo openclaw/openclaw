@@ -19,6 +19,7 @@ Status: unreleased.
 - Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
 - Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
 - Gateway: prefer newest session metadata when combining stores. (#1823) Thanks @emanuelst.
+- Web UI: keep sub-agent announce replies visible in WebChat. (#1977) Thanks @andrescardonas7.
 - CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
 - macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.
 - Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
