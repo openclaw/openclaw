@@ -57,4 +57,6 @@ export type ReplyPayload = {
   isStatusMessage?: boolean;
   isError?: boolean;
   editMessageId?: string;
+  /** Inline keyboard buttons (reply markup). */
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
 };
