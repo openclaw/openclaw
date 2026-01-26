@@ -19,6 +19,7 @@ Status: unreleased.
 - Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
 - Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
+- TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
 
 ## 2026.1.24-3
 
