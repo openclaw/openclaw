@@ -77,7 +77,7 @@ UX audit: `docs/audits/agentic-workflow-ux-audit.md`
 Reference: `dgarson/IMPROVEMENT-IDEAS.md` (198 incomplete items across 14 categories)
 
 ### Command Palette Enhancement
-- [ ] Implement fuzzy search (replace `string.includes()`)
+- [~] Implement fuzzy search (replace `string.includes()`)
 - [ ] Add command history and recents (persisted to localStorage)
 - [ ] Add favorites system
 - [ ] Add context-aware commands based on current view
