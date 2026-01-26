@@ -382,6 +382,52 @@ export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
 // -----------------------------------------------------------------------------
 
 /**
+ * Resolves the configuration by merging environment variables into missing fields.
+ * Returns a new configuration object with environment variables applied.
+ */
+export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
+  const resolved = JSON.parse(JSON.stringify(config)) as VoiceCallConfig;
+
+  // Telnyx
+  if (resolved.provider === "telnyx") {
+    resolved.telnyx = resolved.telnyx ?? {};
+    resolved.telnyx.apiKey =
+      resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
+    resolved.telnyx.connectionId =
+      resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
+    resolved.telnyx.publicKey =
+      resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+  }
+
+  // Twilio
+  if (resolved.provider === "twilio") {
+    resolved.twilio = resolved.twilio ?? {};
+    resolved.twilio.accountSid =
+      resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
+    resolved.twilio.authToken =
+      resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+  }
+
+  // Plivo
+  if (resolved.provider === "plivo") {
+    resolved.plivo = resolved.plivo ?? {};
+    resolved.plivo.authId =
+      resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
+    resolved.plivo.authToken =
+      resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
+  }
+
+  // Tunnel Config
+  resolved.tunnel = resolved.tunnel ?? { provider: "none", allowNgrokFreeTier: true };
+  resolved.tunnel.ngrokAuthToken =
+      resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
+  resolved.tunnel.ngrokDomain = 
+      resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+
+  return resolved;
+}
+
+/**
  * Validate that the configuration has all required fields for the selected provider.
  */
 export function validateProviderConfig(config: VoiceCallConfig): {
