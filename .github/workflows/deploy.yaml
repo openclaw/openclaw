@@ -1,0 +1,93 @@
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+name: deploy-clawdbot
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    environment: prod
+    runs-on: ubuntu-latest
+    env:
+      HELM_FILE: deploy/prod/values.yaml
+      REGION: us-east-1
+      CLUSTER_NAME: maker-prod
+      NAMESPACE: clawdbot
+      SERVICE_NAME: clawdbot
+      AWS_ECR_NAME: clawdbot
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-oidc-eks-prod
+          aws-region: ${{ env.REGION }}
+
+      - name: Login to AWS ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        if: ${{ !contains(github.event.head_commit.message, '[skip build]') }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract commit hash
+        id: vars
+        if: ${{ !contains(github.event.head_commit.message, '[skip build]') }}
+        shell: bash
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build, tag, and push image to ECR
+        id: build-image
+        if: ${{ !contains(github.event.head_commit.message, '[skip build]') }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.prod
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.AWS_ECR_NAME }}:${{ steps.vars.outputs.sha_short }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.AWS_ECR_NAME }}:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.AWS_ECR_NAME }}:prod
+          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/${{ env.AWS_ECR_NAME }}:cache
+          cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/${{ env.AWS_ECR_NAME }}:cache,mode=max
+
+      - name: Replace variables in the Helm values file
+        if: ${{ !contains(github.event.head_commit.message, '[skip deploy]') }}
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        run: |
+          sed -i 's|${ECR_REGISTRY}|'"$ECR_REGISTRY"'|g' $HELM_FILE
+          sed -i 's|${IMAGE_TAG}|'"$IMAGE_TAG"'|g' $HELM_FILE
+
+      - name: Configure kubectl
+        if: ${{ !contains(github.event.head_commit.message, '[skip deploy]') }}
+        run: |
+          aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.REGION }}
+
+      - name: Deploy to Kubernetes with Helm
+        if: ${{ !contains(github.event.head_commit.message, '[skip deploy]') }}
+        uses: bitovi/github-actions-deploy-eks-helm@v1.2.10
+        with:
+          cluster-name: ${{ env.CLUSTER_NAME }}
+          config-files: ${{ env.HELM_FILE }}
+          chart-path: techops-services/common
+          namespace: ${{ env.NAMESPACE }}
+          timeout: 5m0s
+          name: ${{ env.SERVICE_NAME }}
+          chart-repository: https://techops-services.github.io/helm-charts
+          version: 0.2.1
+          atomic: true
