@@ -856,6 +856,7 @@
           "install/docker",
           "railway",
           "render",
+          "northflank",
           "install/bun"
         ]
       },
