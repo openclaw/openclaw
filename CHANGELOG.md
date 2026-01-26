@@ -6,7 +6,7 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
-- TBD.
+- Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
 
 ## 2026.1.24-3
 
