@@ -159,9 +159,10 @@ export async function authorizeGatewayConnect(params: {
   const { auth, connectAuth, req, trustedProxies } = params;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
-  // Local direct requests (localhost without forwarding headers) are
-  // automatically authenticated - no password/token needed.
-  if (localDirect) {
+  // Local direct requests (localhost without forwarding headers) are treated
+  // as trusted *only* when auth is disabled. When auth is enabled (token or
+  // password), local callers must still present credentials.
+  if (localDirect && auth.mode === "none") {
     return { ok: true, method: "none" };
   }
 
