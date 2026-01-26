@@ -20,6 +20,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const threadId = readStringParam(params, "threadId");
   const buttons = params.buttons;
   const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
+  const silent = typeof params.silent === "boolean" ? params.silent : undefined;
   return {
     to,
     content,
@@ -28,6 +29,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     messageThreadId: threadId ?? undefined,
     buttons,
     asVoice,
+    silent,
   };
 }
 

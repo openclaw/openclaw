@@ -40,6 +40,8 @@ type TelegramSendOpts = {
   plainText?: string;
   /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
   asVoice?: boolean;
+  /** Send message silently (no notification). Defaults to false. */
+  silent?: boolean;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
@@ -245,6 +247,7 @@ export async function sendMessageTelegram(
     const sendParams = {
       parse_mode: "HTML" as const,
       ...baseParams,
+      ...(opts.silent === true ? { disable_notification: true } : {}),
     };
     const res = await requestWithDiag(
       () => api.sendMessage(chatId, htmlText, sendParams),
@@ -298,6 +301,7 @@ export async function sendMessageTelegram(
       caption: htmlCaption,
       ...(htmlCaption ? { parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
+      ...(opts.silent === true ? { disable_notification: true } : {}),
     };
     let result:
       | Awaited<ReturnType<typeof api.sendPhoto>>

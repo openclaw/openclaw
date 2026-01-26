@@ -176,6 +176,7 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
+      silent: typeof params.silent === "boolean" ? params.silent : undefined,
     });
     return jsonResult({
       ok: true,
