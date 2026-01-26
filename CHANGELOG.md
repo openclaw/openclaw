@@ -38,6 +38,7 @@ Status: unreleased.
 
 ### Fixes
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
+- Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
 - Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
 - Build: align memory-core peer dependency with lockfile.
 - Security: add mDNS discovery mode with minimal default to reduce information disclosure. (#1882) Thanks @orlyjamie.
