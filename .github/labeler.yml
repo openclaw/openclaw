@@ -24,6 +24,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/line/**"
+          - "docs/channels/line.md"
 "channel: matrix":
   - changed-files:
       - any-glob-to-any-file:
