@@ -1,29 +1,61 @@
-# Stage 1: Build extension
-FROM node:22-slim AS builder
+# Stage 1: Build clawdbot from source
+FROM node:22-bookworm AS clawdbot-builder
 
-# Install git (needed by npm for some deps)
+# Install Bun (required for build scripts)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+RUN corepack enable
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts ./scripts
+
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm build
+
+# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
+ENV CLAWDBOT_PREFER_PNPM=1
+RUN pnpm ui:install
+RUN pnpm ui:build
+
+# Stage 2: Build checkins extension
+FROM node:22-slim AS extension-builder
+
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 COPY extensions/checkins ./
 
-# Install all deps (including devDependencies for tsc) and build
 RUN npm install && npm run build
 
-# Stage 2: Production image
-FROM ghcr.io/clawdbot/clawdbot:main
+# Stage 3: Production image
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+# Copy built clawdbot
+COPY --from=clawdbot-builder /app/dist ./dist
+COPY --from=clawdbot-builder /app/node_modules ./node_modules
+COPY --from=clawdbot-builder /app/package.json ./package.json
+COPY --from=clawdbot-builder /app/ui/dist ./ui/dist
 
 # Copy the pre-built extension to staging (PVC will mount over /root/.clawdbot)
-COPY --from=builder /build /app/bundled-plugins/checkins
+COPY --from=extension-builder /build /app/bundled-plugins/checkins
 
 # Copy default config
 COPY deploy/prod/clawdbot.json /app/clawdbot.default.json
 
-# Install production dependencies in staging
+# Install production dependencies for extension
 WORKDIR /app/bundled-plugins/checkins
 RUN rm -rf node_modules && npm install --omit=dev
 
-# Create entrypoint script - copies plugin from staging to plugins dir at runtime
+# Create entrypoint script
 RUN echo '#!/bin/sh\n\
 if [ ! -f "/root/.clawdbot/clawdbot.json" ]; then\n\
   echo "Creating default config..."\n\
@@ -36,6 +68,7 @@ cp -r /app/bundled-plugins/checkins /root/.clawdbot/extensions/\n\
 exec node /app/dist/entry.js gateway run\n\
 ' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
+ENV NODE_ENV=production
 WORKDIR /root/.clawdbot
 
 ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
