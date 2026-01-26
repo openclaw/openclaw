@@ -142,6 +142,16 @@ Clawdbot’s stance:
 - **Scope next:** decide where the bot is allowed to act (group allowlists + mention gating, tools, sandboxing, device permissions).
 - **Model last:** assume the model can be manipulated; design so manipulation has limited blast radius.
 
+## Command authorization model
+
+Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
+channel allowlists/pairing plus `commands.useAccessGroups` (see [Configuration](/gateway/configuration)
+and [Slash commands](/tools/slash-commands)). If a channel allowlist is empty or includes `"*"`,
+commands are effectively open for that channel.
+
+`/exec` is a session-only convenience for authorized operators. It does **not** write config or
+change other sessions.
+
 ## Plugins/extensions
 
 Plugins run **in-process** with the Gateway. Treat them as trusted code:
