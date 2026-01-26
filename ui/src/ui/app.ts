@@ -205,6 +205,7 @@ export class ClawdbotApp extends LitElement {
   @state() analyticsLoading = false;
   @state() analyticsError: string | null = null;
   @state() analyticsData: unknown | null = null;
+  @state() analyticsQuota: unknown | null = null;
   @state() analyticsDays = 30;
 
   @state() cronLoading = false;

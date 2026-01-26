@@ -115,6 +115,7 @@ export type AppViewState = {
   analyticsLoading: boolean;
   analyticsError: string | null;
   analyticsData: unknown | null;
+  analyticsQuota: unknown | null;
   analyticsDays: number;
   cronLoading: boolean;
   cronJobs: CronJob[];

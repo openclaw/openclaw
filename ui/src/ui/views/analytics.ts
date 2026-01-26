@@ -21,10 +21,30 @@ export type CostUsageSummary = {
   totals: CostUsageTotals;
 };
 
+export type UsageWindow = {
+  label: string;
+  usedPercent: number;
+  resetAt?: number;
+};
+
+export type ProviderQuota = {
+  provider: string;
+  displayName: string;
+  windows: UsageWindow[];
+  plan?: string;
+  error?: string;
+};
+
+export type UsageSummary = {
+  updatedAt: number;
+  providers: ProviderQuota[];
+};
+
 export type AnalyticsProps = {
   loading: boolean;
   error: string | null;
   data: CostUsageSummary | null;
+  quota: ProviderQuota[] | null;
   days: number;
   onDaysChange: (days: number) => void;
   onRefresh: () => void;
@@ -42,6 +62,25 @@ function formatCost(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+function formatPercent(n: number): string {
+  return `${Math.round(n)}%`;
+}
+
+function formatResetTime(timestamp?: number): string {
+  if (!timestamp) return "";
+  const now = Date.now();
+  const diff = timestamp - now;
+  if (diff <= 0) return "now";
+  const hours = Math.floor(diff / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  if (hours > 24) {
+    const days = Math.floor(hours / 24);
+    return `${days}d ${hours % 24}h`;
+  }
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 function renderBarChart(daily: CostUsageDailyEntry[], metric: "totalTokens" | "totalCost") {
   if (!daily.length) {
     return html`<div class="chart-empty">No data for this period</div>`;
@@ -54,7 +93,7 @@ function renderBarChart(daily: CostUsageDailyEntry[], metric: "totalTokens" | "t
   return html`
     <div class="chart-container">
       <div class="chart-bars">
-        ${daily.map((entry, i) => {
+        ${daily.map((entry) => {
           const value = entry[metric];
           const height = Math.max(2, (value / max) * 150);
           const label = metric === "totalCost" ? formatCost(value) : formatNumber(value);
@@ -76,9 +115,59 @@ function renderBarChart(daily: CostUsageDailyEntry[], metric: "totalTokens" | "t
   `;
 }
 
+function renderQuotaBar(percent: number) {
+  const color = percent >= 90 ? "var(--danger)" : percent >= 70 ? "var(--warning)" : "var(--accent)";
+  return html`
+    <div class="quota-bar-container">
+      <div class="quota-bar-fill" style="width: ${Math.min(100, percent)}%; background: ${color}"></div>
+    </div>
+  `;
+}
+
+function renderProviderQuota(provider: ProviderQuota) {
+  if (provider.error) {
+    return html`
+      <div class="quota-provider">
+        <div class="quota-provider-name">${provider.displayName}</div>
+        <div class="quota-error">${provider.error}</div>
+      </div>
+    `;
+  }
+
+  if (!provider.windows.length) {
+    return nothing;
+  }
+
+  return html`
+    <div class="quota-provider">
+      <div class="quota-provider-header">
+        <div class="quota-provider-name">${provider.displayName}</div>
+        ${provider.plan ? html`<div class="quota-plan">${provider.plan}</div>` : nothing}
+      </div>
+      <div class="quota-windows">
+        ${provider.windows.map(
+          (w) => html`
+            <div class="quota-window">
+              <div class="quota-window-header">
+                <span class="quota-window-label">${w.label}</span>
+                <span class="quota-window-value">${formatPercent(w.usedPercent)} used</span>
+              </div>
+              ${renderQuotaBar(w.usedPercent)}
+              ${w.resetAt ? html`<div class="quota-reset">Resets in ${formatResetTime(w.resetAt)}</div>` : nothing}
+            </div>
+          `,
+        )}
+      </div>
+    </div>
+  `;
+}
+
 export function renderAnalytics(props: AnalyticsProps) {
-  const { loading, error, data, days } = props;
+  const { loading, error, data, quota, days } = props;
   const totals = data?.totals;
+  const hasQuota = quota && quota.some((p) => p.windows.length > 0);
+  const hasQuotaError = quota && quota.some((p) => p.error);
+  const quotaEmpty = quota && quota.length === 0;
 
   return html`
     <style>
@@ -164,9 +253,104 @@ export function renderAnalytics(props: AnalyticsProps) {
         font-weight: 600;
         font-variant-numeric: tabular-nums;
       }
+      .quota-section {
+        margin-bottom: 24px;
+      }
+      .quota-providers {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+      }
+      .quota-provider {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .quota-provider-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .quota-provider-name {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .quota-plan {
+        font-size: 11px;
+        color: var(--fg-muted);
+        background: var(--bg);
+        padding: 2px 8px;
+        border-radius: 10px;
+      }
+      .quota-error {
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+      .quota-windows {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .quota-window {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .quota-window-header {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+      }
+      .quota-window-label {
+        color: var(--fg-muted);
+      }
+      .quota-window-value {
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+      .quota-bar-container {
+        height: 8px;
+        background: var(--bg);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .quota-bar-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.3s ease;
+      }
+      .quota-reset {
+        font-size: 11px;
+        color: var(--fg-muted);
+      }
     </style>
 
-    <section class="card">
+    ${hasQuota || hasQuotaError
+      ? html`
+          <section class="card">
+            <div class="card-title">Plan Quota</div>
+            <div class="card-sub">Current usage against your plan limits.</div>
+            <div class="quota-providers" style="margin-top: 16px;">
+              ${quota!.map((p) => renderProviderQuota(p))}
+            </div>
+          </section>
+        `
+      : quotaEmpty
+        ? html`
+            <section class="card">
+              <div class="card-title">Plan Quota</div>
+              <div class="card-sub">Current usage against your plan limits.</div>
+              <div class="callout" style="margin-top: 16px;">
+                No plan quota data available. To see usage limits for Claude Max or other plans,
+                configure OAuth authentication with the required scopes.
+              </div>
+            </section>
+          `
+        : nothing}
+
+    <section class="card" style="margin-top: ${hasQuota || hasQuotaError || quotaEmpty ? "18px" : "0"};">
       <div class="card-title">Usage Summary</div>
       <div class="card-sub">Token consumption and estimated costs.</div>
 

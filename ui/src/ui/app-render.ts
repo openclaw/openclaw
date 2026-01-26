@@ -311,6 +311,7 @@ export function renderApp(state: AppViewState) {
               loading: state.analyticsLoading,
               error: state.analyticsError,
               data: state.analyticsData,
+              quota: state.analyticsQuota,
               days: state.analyticsDays,
               onDaysChange: (days) => {
                 state.analyticsDays = days;

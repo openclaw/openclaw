@@ -88,6 +88,7 @@ describe("analytics data types", () => {
       loading: false,
       error: null,
       data: null,
+      quota: null,
       days: 30,
       onDaysChange: () => {},
       onRefresh: () => {},
@@ -95,5 +96,6 @@ describe("analytics data types", () => {
 
     expect(props.loading).toBe(false);
     expect(props.days).toBe(30);
+    expect(props.quota).toBeNull();
   });
 });
