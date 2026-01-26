@@ -4,7 +4,7 @@
  * DynamoDBでθサイクルのセッション状態を永続化するための型
  */
 
-import type { ThetaCycleState, ThetaPhase } from "../theta/types.js";
+import type { ThetaCycleState } from "../theta/types.js";
 
 /**
  * セッションの状態

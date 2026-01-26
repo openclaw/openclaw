@@ -3,18 +3,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  save,
-  saveFile,
-  getDownloadUrl,
-  get,
-  listBySession,
-  listByUser,
-  deleteArtifact,
-  deleteBySession,
-  initializeTable,
-} from "./manager.js";
-import { ArtifactType } from "./types.js";
 
 // AWS SDKモック
 vi.mock("@aws-sdk/client-s3");
@@ -23,9 +11,6 @@ vi.mock("@aws-sdk/lib-dynamodb");
 vi.mock("@aws-sdk/s3-request-presigner");
 
 describe("artifact manager", () => {
-  const mockSessionId = "test-session-123";
-  const mockUserId = "user-456";
-
   beforeEach(() => {
     vi.clearAllMocks();
   });

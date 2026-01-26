@@ -15,9 +15,7 @@
  * - θサイクル (Observe → Analyze → Decide → Allocate → Execute → Improve)
  */
 
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { describe, it, expect } from "vitest";
 
 // Agent definitions based on Miyabi Agent Society
 interface Agent {
@@ -119,13 +117,6 @@ function executeAgentTask(agentId: string, task: string): ThetaCycleResult {
     status: "completed",
     output: `${agent.name} completed: ${task}`,
   };
-}
-
-function validateDependencies(agentId: string): boolean {
-  const agent = MIYABI_AGENTS[agentId];
-  if (!agent) return false;
-
-  return agent.dependencies.every((dep) => MIYABI_AGENTS[dep]);
 }
 
 function validateHandoff(fromAgent: string, toAgent: string): boolean {
@@ -305,13 +296,6 @@ describe("Agent Flow Integration Tests", () => {
 
   describe("Escalation (エスカレーション)", () => {
     it("should escalate to しきるん on failure", () => {
-      const failureResult: ThetaCycleResult = {
-        phase: "execute",
-        agent: "kaede",
-        status: "blocked",
-        error: "Technical issue",
-      };
-
       // Escalate to conductor
       const escalation = {
         from: "kaede",

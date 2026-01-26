@@ -323,7 +323,7 @@ function buildCodexCommand(
           }
         },
       };
-    } catch (_error) {
+    } catch {
       // ファイル書き込みエラー時はフォールバック
       console.warn("[CodexReviewer] Failed to write temp file, using inline content");
     }

@@ -3,46 +3,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  restoreState,
-  getPendingSessions,
-  deleteSession,
-  updateStatus,
-  cleanupExpiredSessions,
-  initializeTable,
-} from "./manager.js";
 import { SessionStatus } from "./types.js";
-import type { PersistedSessionState } from "./types.js";
 
 // DynamoDBモック
 vi.mock("@aws-sdk/client-dynamodb");
 vi.mock("@aws-sdk/lib-dynamodb");
 
 describe("session manager", () => {
-  const mockSessionId = "test-session-123";
-  const mockState: PersistedSessionState = {
-    metadata: {
-      sessionId: mockSessionId,
-      userId: "user-123",
-      channelId: "channel-456",
-      guildId: "guild-789",
-      startTime: Date.now(),
-      lastUpdateTime: Date.now(),
-      status: SessionStatus.RUNNING,
-      expiresAt: Math.floor(Date.now() / 1000) + 3600,
-    },
-    thetaState: {
-      runId: "run-123",
-      startTime: Date.now(),
-      currentPhase: "θ₁ OBSERVE" as any,
-      events: [],
-      context: new Map(),
-    },
-    context: {
-      testKey: "testValue",
-    },
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
   });

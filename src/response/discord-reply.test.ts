@@ -3,22 +3,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendReply, createDiscordReply } from "./discord-reply.js";
-import { ResponseFormat } from "./types.js";
 
 // Carbonモック
 vi.mock("@buape/carbon");
 
 describe("discord-reply", () => {
-  const mockApi = {
-    rest: {
-      post: vi.fn().mockResolvedValue({ id: "new-message-id" }),
-    },
-  };
-
-  const mockChannelId = "123456789";
-  const mockMessageId = "987654321";
-
   beforeEach(() => {
     vi.clearAllMocks();
   });

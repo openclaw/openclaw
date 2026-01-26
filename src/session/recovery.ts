@@ -129,7 +129,7 @@ export async function recoverPendingSessions(
  * @param ttl - 新しいTTL (秒), デフォルト: 1時間
  */
 export async function heartbeatSession(sessionId: string, ttl: number = 3600): Promise<void> {
-  const expiresAt = Math.floor(Date.now() / 1000) + ttl;
+  const _expiresAt = Math.floor(Date.now() / 1000) + ttl;
 
   // TODO: UpdateItemでexpiresAtを更新
   // 現状のupdateStatus()はlastUpdateTimeのみ更新

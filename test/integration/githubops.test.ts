@@ -8,10 +8,9 @@
  * 4. PR creation/review
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { execSync } from "child_process";
-import { readFileSync, unlinkSync, existsSync } from "fs";
-import { join } from "path";
+import { unlinkSync, existsSync } from "fs";
 
 // Test repository configuration
 const TEST_REPO = process.env.GITHUBOPS_TEST_REPO || "ShunsukeHayashi/dev-workspace";
