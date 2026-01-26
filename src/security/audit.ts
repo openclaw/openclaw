@@ -274,11 +274,22 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     findings.push({
       checkId: "gateway.control_ui.insecure_auth",
-      severity: "warn",
+      severity: "critical",
       title: "Control UI allows insecure HTTP auth",
       detail:
         "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
+    });
+  }
+
+  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
+    findings.push({
+      checkId: "gateway.control_ui.device_auth_disabled",
+      severity: "critical",
+      title: "DANGEROUS: Control UI device auth disabled",
+      detail:
+        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
+      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
     });
   }
 

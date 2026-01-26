@@ -293,7 +293,30 @@ describe("security audit", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "gateway.control_ui.insecure_auth",
-          severity: "warn",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("warns when control UI device auth is disabled", async () => {
+    const cfg: ClawdbotConfig = {
+      gateway: {
+        controlUi: { dangerouslyDisableDeviceAuth: true },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.control_ui.device_auth_disabled",
+          severity: "critical",
         }),
       ]),
     );
