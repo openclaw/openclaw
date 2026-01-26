@@ -78,7 +78,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "nearai",
     label: "NEAR AI",
     hint: "Private and verifiable inference (TEE)",
-    choices: ["near-ai-api-key"],
+    choices: ["nearai-api-key"],
   },
   {
     value: "google",
