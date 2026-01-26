@@ -827,6 +827,7 @@
           "install/nix",
           "install/docker",
           "railway",
+          "render",
           "install/bun"
         ]
       },
