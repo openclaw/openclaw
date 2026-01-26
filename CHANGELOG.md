@@ -16,6 +16,7 @@ Status: unreleased.
 - Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
 - Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
 - Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
+- Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
 
 ## 2026.1.24-3
 
