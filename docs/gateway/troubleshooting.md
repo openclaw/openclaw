@@ -214,7 +214,7 @@ the Gateway likely refused to bind.
 - Fix: run `clawdbot doctor` to update it (or `clawdbot gateway install --force` for a full rewrite).
 
 **If `Last gateway error:` mentions “refusing to bind … without auth”**
-- You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) but left auth off.
+- You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) but didn’t configure auth.
 - Fix: set `gateway.auth.mode` + `gateway.auth.token` (or export `CLAWDBOT_GATEWAY_TOKEN`) and restart the service.
 
 **If `clawdbot gateway status` says `bind=tailnet` but no tailnet interface was found**

@@ -78,7 +78,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
-    .option("--gateway-auth <mode>", "Gateway auth: off|token|password")
+    .option("--gateway-auth <mode>", "Gateway auth: token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")

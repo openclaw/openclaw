@@ -314,7 +314,7 @@ Options:
 - `--opencode-zen-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto|custom>`
-- `--gateway-auth <off|token|password>`
+- `--gateway-auth <token|password>`
 - `--gateway-token <token>`
 - `--gateway-password <password>`
 - `--remote-url <url>`
