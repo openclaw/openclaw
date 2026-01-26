@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
 import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -97,10 +100,11 @@ describe("POST /tools/invoke", () => {
 
     const port = await getFreePort();
     const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
