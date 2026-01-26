@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 
+import { skeleton } from "../components/design-utils";
 import { clampText, formatAgo, formatDurationMs, formatList } from "../format";
 import { icon, type IconName } from "../icons";
 import type {
@@ -157,6 +158,11 @@ export function setupOverseerKeyboardShortcuts(props: {
 }
 
 export function renderOverseer(props: OverseerProps) {
+  // Show skeleton on initial load (no data yet)
+  if (props.loading && !props.status) {
+    return renderOverseerSkeleton();
+  }
+
   const overseerLayout = buildOverseerGraphLayout(props.goal?.goal);
   const systemLayout = buildSystemGraphLayout({
     nodes: props.nodes,
@@ -232,6 +238,66 @@ export function renderOverseer(props: OverseerProps) {
       ${props.createGoalOpen ? renderCreateGoalModal(props) : nothing}
       ${renderSimulator(simulatorFullProps)}
       ${props.createGoalOpen ? renderCreateGoalModal(props) : nothing}
+    </div>
+  `;
+}
+
+function renderOverseerSkeleton() {
+  return html`
+    <div class="overseer-view">
+      <!-- Header skeleton -->
+      <div class="overseer-header">
+        <div class="overseer-header__info" style="display:flex;align-items:center;gap:12px;">
+          ${skeleton({ width: "24px", height: "24px", rounded: true })}
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            ${skeleton({ width: "120px", height: "24px" })}
+            ${skeleton({ width: "360px", height: "14px" })}
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          ${skeleton({ width: "80px", height: "28px" })}
+          ${skeleton({ width: "80px", height: "28px" })}
+        </div>
+      </div>
+
+      <!-- Stats cards skeleton -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:20px 0;">
+        ${Array.from({ length: 4 }, () => html`
+          <div style="padding:16px;border-radius:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+              ${skeleton({ width: "100px", height: "14px" })}
+              ${skeleton({ width: "20px", height: "20px", rounded: true })}
+            </div>
+            ${skeleton({ width: "48px", height: "28px" })}
+          </div>
+        `)}
+      </div>
+
+      <!-- Controls skeleton -->
+      <div style="display:flex;gap:8px;margin-bottom:20px;">
+        ${skeleton({ width: "140px", height: "36px" })}
+        ${skeleton({ width: "100px", height: "36px" })}
+        ${skeleton({ width: "100px", height: "36px" })}
+      </div>
+
+      <!-- Main grid skeleton -->
+      <div style="display:grid;grid-template-columns:1fr 380px;gap:20px;">
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          ${skeleton({ width: "100%", height: "400px" })}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          ${skeleton({ width: "140px", height: "20px" })}
+          ${Array.from({ length: 5 }, (_, i) => html`
+            <div style="padding:12px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                ${skeleton({ width: `${150 - i * 10}px`, height: "14px" })}
+                ${skeleton({ width: "60px", height: "12px" })}
+              </div>
+              ${skeleton({ width: "100%", height: "12px" })}
+            </div>
+          `)}
+        </div>
+      </div>
     </div>
   `;
 }

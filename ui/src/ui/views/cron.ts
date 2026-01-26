@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 
+import { skeleton } from "../components/design-utils";
 import { formatMs } from "../format";
 import { icon } from "../icons";
 import {
@@ -53,7 +54,57 @@ function resolveChannelLabel(props: CronProps, channel: string): string {
   return props.channelLabels?.[channel] ?? channel;
 }
 
+function renderCronSkeleton() {
+  return html`
+    <section class="grid grid-cols-2">
+      <!-- Status card skeleton -->
+      <div class="card">
+        <div class="card-header">
+          <div style="display:flex;align-items:center;gap:10px;">
+            ${skeleton({ width: "20px", height: "20px", rounded: true })}
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              ${skeleton({ width: "100px", height: "18px" })}
+              ${skeleton({ width: "240px", height: "12px" })}
+            </div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px;">
+          ${Array.from({ length: 2 }, () => html`
+            <div style="padding:12px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);">
+              ${skeleton({ width: "70px", height: "12px" })}
+              ${skeleton({ width: "50px", height: "20px" })}
+            </div>
+          `)}
+        </div>
+        <div style="margin-top:12px;padding:12px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);">
+          ${skeleton({ width: "80px", height: "12px" })}
+          ${skeleton({ width: "120px", height: "14px" })}
+        </div>
+      </div>
+      <!-- Jobs list skeleton -->
+      <div class="card">
+        <div class="card-header" style="margin-bottom:16px;">
+          ${skeleton({ width: "120px", height: "18px" })}
+        </div>
+        ${Array.from({ length: 4 }, (_, i) => html`
+          <div style="padding:12px;margin-bottom:8px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              ${skeleton({ width: `${160 - i * 10}px`, height: "14px" })}
+              ${skeleton({ width: `${200 - i * 15}px`, height: "12px" })}
+            </div>
+            ${skeleton({ width: "60px", height: "28px" })}
+          </div>
+        `)}
+      </div>
+    </section>
+  `;
+}
+
 export function renderCron(props: CronProps) {
+  // Show skeleton on initial load
+  if (props.loading && !props.status && props.jobs.length === 0) {
+    return renderCronSkeleton();
+  }
   const channelOptions = buildChannelOptions(props);
   return html`
     <section class="grid grid-cols-2">

@@ -6,6 +6,7 @@
 import { html, nothing } from "lit";
 import { icon, type IconName } from "../icons";
 import type { Tab } from "../navigation";
+import { filterByFuzzy } from "./fuzzy-search";
 import { getRecentCommandIds, recordCommandUsage } from "./command-history";
 
 export type Command = {
@@ -32,117 +33,8 @@ export type CommandPaletteProps = {
   onSelect: (command: Command) => void;
 };
 
-function fuzzyScorePart(query: string, text: string): number {
-  const q = query.trim().toLowerCase();
-  const t = text.trim().toLowerCase();
-
-  if (!q) return 0;
-  if (!t) return 0;
-
-  if (t === q) return 1000;
-  if (t.startsWith(q)) return 700;
-
-  const containsAt = t.indexOf(q);
-  if (containsAt !== -1) {
-    // Prefer matches closer to the beginning.
-    return 500 - Math.min(containsAt * 5, 250);
-  }
-
-  // Fuzzy character match (in-order). Scores consecutive matches higher.
-  let score = 0;
-  let qIndex = 0;
-  let consecutive = 0;
-
-  for (let i = 0; i < t.length && qIndex < q.length; i++) {
-    if (t[i] === q[qIndex]) {
-      const isWordBoundary =
-        i === 0 ||
-        t[i - 1] === " " ||
-        t[i - 1] === "-" ||
-        t[i - 1] === "_" ||
-        t[i - 1] === "/";
-
-      score += 12 + consecutive * 6 + (isWordBoundary ? 10 : 0);
-      consecutive++;
-      qIndex++;
-    } else {
-      consecutive = 0;
-    }
-  }
-
-  // Must match all query characters.
-  if (qIndex < q.length) return 0;
-
-  // Prefer shorter strings when scores are otherwise similar.
-  return score - Math.min(t.length, 100) * 0.25;
-}
-
-function scoreCommand(cmd: Command, query: string): number {
-  const parts = query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-
-  if (parts.length === 0) return 0;
-
-  let total = 0;
-  for (const part of parts) {
-    const labelScore = fuzzyScorePart(part, cmd.label);
-    const categoryScore = cmd.category ? fuzzyScorePart(part, cmd.category) * 0.8 : 0;
-    const idScore = fuzzyScorePart(part, cmd.id) * 0.3;
-
-    const best = Math.max(labelScore, categoryScore, idScore);
-    if (best <= 0) return 0;
-    total += best;
-  }
-
-  return total;
-}
-
-/**
- * Reorder commands to show recent ones first (in a "Recent" category),
- * keeping the rest in their original categories. Used when the query is empty.
- */
-function applyRecents(commands: Command[]): Command[] {
-  const recentIds = getRecentCommandIds(5);
-  if (recentIds.length === 0) return commands;
-
-  const recentSet = new Set(recentIds);
-  const recent: Command[] = [];
-  const rest: Command[] = [];
-
-  // Build recent list in recency order (most recent first).
-  for (const id of recentIds) {
-    const cmd = commands.find((c) => c.id === id);
-    if (cmd) recent.push({ ...cmd, category: "Recent" });
-  }
-
-  // Keep all commands in their original categories (including ones in recent).
-  for (const cmd of commands) {
-    if (!recentSet.has(cmd.id)) {
-      rest.push(cmd);
-    } else {
-      // Still show in original category too so user can find by category.
-      rest.push(cmd);
-    }
-  }
-
-  return [...recent, ...rest];
-}
-
 function filterCommands(commands: Command[], query: string): Command[] {
-  if (!query.trim()) return applyRecents(commands);
-
-  return commands
-    .map((cmd, index) => ({ cmd, index, score: scoreCommand(cmd, query) }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => {
-      const scoreDiff = b.score - a.score;
-      if (scoreDiff !== 0) return scoreDiff;
-      return a.index - b.index;
-    })
-    .map((entry) => entry.cmd);
+  return filterByFuzzy(commands, query);
 }
 
 function handlePaletteKeydown(
@@ -182,19 +74,35 @@ export function renderCommandPalette(props: CommandPaletteProps) {
 
   const filtered = filterCommands(commands, state.query);
 
-  /** Wraps onSelect to record usage before executing the command. */
+  // Build the "Recents" group when the query is empty.
+  const recentIds = !state.query.trim() ? getRecentCommandIds() : [];
+  const commandById = new Map(commands.map((c) => [c.id, c]));
+  const recentCommands = recentIds
+    .map((id) => commandById.get(id))
+    .filter((c): c is Command => c !== undefined);
+
+  // IDs already shown in Recents — avoid duplicating them in the main list.
+  const recentIdSet = new Set(recentCommands.map((c) => c.id));
+
+  // Group commands by category, excluding recents when they are shown.
+  const grouped = new Map<string, Command[]>();
+  for (const cmd of filtered) {
+    if (recentCommands.length > 0 && recentIdSet.has(cmd.id)) continue;
+    const cat = cmd.category ?? "Actions";
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat)!.push(cmd);
+  }
+
+  // Wrap onSelect to record history.
   const handleSelect = (cmd: Command) => {
     recordCommandUsage(cmd.id);
     onSelect(cmd);
   };
 
-  // Group commands by category
-  const grouped = new Map<string, Command[]>();
-  for (const cmd of filtered) {
-    const cat = cmd.category ?? "Actions";
-    if (!grouped.has(cat)) grouped.set(cat, []);
-    grouped.get(cat)!.push(cmd);
-  }
+  // Total visible items = recents + remaining grouped items.
+  const totalVisible =
+    recentCommands.length +
+    [...grouped.values()].reduce((sum, cmds) => sum + cmds.length, 0);
 
   let globalIndex = 0;
   const renderItem = (cmd: Command) => {
@@ -216,6 +124,9 @@ export function renderCommandPalette(props: CommandPaletteProps) {
     `;
   };
 
+  // Build the flat list for keyboard navigation (recents first, then grouped).
+  const allVisible = [...recentCommands, ...[...grouped.values()].flat()];
+
   return html`
     <div class="command-palette-overlay" @click=${onClose}>
       <div class="command-palette" @click=${(e: Event) => e.stopPropagation()}>
@@ -231,25 +142,35 @@ export function renderCommandPalette(props: CommandPaletteProps) {
               onIndexChange(0);
             }}
             @keydown=${(e: KeyboardEvent) =>
-              handlePaletteKeydown(e, state, filtered, onClose, handleSelect, onIndexChange)}
+              handlePaletteKeydown(e, state, allVisible, onClose, handleSelect, onIndexChange)}
             autofocus
           />
           <kbd class="command-palette__kbd">ESC</kbd>
         </div>
         <div class="command-palette__list">
-          ${filtered.length === 0
+          ${totalVisible === 0
             ? html`<div class="command-palette__empty">
                 ${icon("search", { size: 24 })}
                 <span>No commands found</span>
               </div>`
-            : [...grouped.entries()].map(
-                ([category, cmds]) => html`
-                  <div class="command-palette__group">
-                    <div class="command-palette__group-label">${category}</div>
-                    ${cmds.map(renderItem)}
-                  </div>
-                `
-              )}
+            : html`
+                ${recentCommands.length > 0
+                  ? html`
+                      <div class="command-palette__group">
+                        <div class="command-palette__group-label">Recents</div>
+                        ${recentCommands.map(renderItem)}
+                      </div>
+                    `
+                  : nothing}
+                ${[...grouped.entries()].map(
+                  ([category, cmds]) => html`
+                    <div class="command-palette__group">
+                      <div class="command-palette__group-label">${category}</div>
+                      ${cmds.map(renderItem)}
+                    </div>
+                  `
+                )}
+              `}
         </div>
       </div>
     </div>

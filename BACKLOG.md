@@ -17,12 +17,13 @@ This file tracks work items for autonomous development.
 
 Branch: `landing-page-ux` | Design doc: `docs/plans/2026-01-25-landing-page-design.md`
 
-- [~] Complete landing page structure (PR #6 open)
-- [ ] Polish landing page copy and design
+- [x] Complete landing page structure (PR #13 — `autodev-landing-page`)
+- [x] Polish landing page copy and design (PR #13)
+- [~] Mobile navigation + accessibility improvements (PR from `landing-page-ux`)
 - [ ] Implement interactive demos/previews (live Overseer visualization, chat preview)
-- [ ] Responsive breakpoints (mobile, tablet, desktop)
+- [~] Responsive breakpoints (mobile, tablet, desktop) — mobile hamburger menu + back-to-top added
 - [ ] Wire CTA flows (signup, waitlist, demo request)
-- [ ] SEO optimization
+- [ ] SEO optimization (meta tags, structured data, og tags)
 - [ ] Performance pass (lazy load sections, optimize animations)
 
 ---
@@ -34,11 +35,11 @@ Branch: `landing-page-ux` | Design doc: `docs/plans/2026-01-25-landing-page-desi
 Existing code: `src/infra/overseer/`, `src/infra/decisions/`, `ui/src/ui/views/overseer*.ts`
 UX audit: `docs/audits/agentic-workflow-ux-audit.md`
 
-### Goal Lifecycle (Web UI) — Currently CLI-only
-- [ ] Create goal from Web UI (with guided wizard)
-- [ ] Pause/resume goals from Web UI
-- [ ] Mark work done / block work nodes from Web UI
-- [ ] Wire the broken "Retry" button (`overseer.ts:1112`)
+### Goal Lifecycle (Web UI)
+- [x] Create goal from Web UI (with guided wizard) — PR #14
+- [x] Pause/resume goals from Web UI — PR #14
+- [x] Mark work done / block work nodes from Web UI — PR #14
+- [x] Wire the "Retry" button — PR #14 (overseer.goal.resume + work.update endpoints)
 - [ ] Inline goal editing (title, constraints, success criteria)
 - [ ] Goal templates (common workflow presets)
 
@@ -80,13 +81,13 @@ Reference: `dgarson/IMPROVEMENT-IDEAS.md` (198 incomplete items across 14 catego
 - [x] Implement fuzzy search (replace `string.includes()`)
 - [~] Add command history and recents (persisted to localStorage) — PR #21
 - [ ] Add favorites system
-- [ ] Add context-aware commands based on current view
+- [~] Add context-aware commands based on current view — PR #24
 - [ ] Add nested/sub-command menus
 - [ ] Add category filtering in search
 - [ ] See `dgarson/COMMAND-PALETTE.md` for full design doc
 
 ### Loading States
-- [ ] Add skeleton screens for views that load data
+- [~] Add skeleton screens for views that load data (sessions, agents, nodes, skills, logs, chat already done; overseer + cron added in `autodev-skeleton-screens`)
 - [ ] Add progress indicators for long-running operations
 - [ ] Implement optimistic UI updates
 

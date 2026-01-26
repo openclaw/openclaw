@@ -1,89 +1,66 @@
 /**
- * Command History — localStorage-backed store for recently used commands.
- * Tracks the last N commands used in the command palette so they can be
- * surfaced as a "Recent" category when the palette opens.
+ * Command History — localStorage-backed recents tracking for the command palette.
+ *
+ * Records command IDs when they are executed and returns them in
+ * most-recently-used order.  History is capped at {@link MAX_HISTORY}
+ * entries and survives page reloads via localStorage.
  */
 
 const STORAGE_KEY = "clawdbot:command-history";
-const MAX_HISTORY = 20;
 
-export type CommandHistoryEntry = {
-  /** Command ID. */
-  id: string;
-  /** Unix timestamp (ms) of last use. */
-  lastUsedAt: number;
-  /** Total number of times this command was used. */
-  useCount: number;
-};
+/** Maximum number of recent command IDs to retain. */
+export const MAX_HISTORY = 10;
 
-export type CommandHistoryStore = {
-  entries: CommandHistoryEntry[];
-};
+// ---------------------------------------------------------------------------
+// Storage helpers (gracefully degrade when localStorage is unavailable)
+// ---------------------------------------------------------------------------
 
-function loadStore(): CommandHistoryStore {
+function readStorage(): string[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { entries: [] };
-    const parsed = JSON.parse(raw) as CommandHistoryStore;
-    if (!Array.isArray(parsed.entries)) return { entries: [] };
-    return parsed;
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string");
   } catch {
-    return { entries: [] };
+    return [];
   }
 }
 
-function saveStore(store: CommandHistoryStore): void {
+function writeStorage(ids: string[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
   } catch {
-    // localStorage might be full or unavailable; silently ignore.
+    // localStorage may be unavailable (private browsing, quota exceeded, etc.)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 /**
- * Record a command usage. Moves it to the top if already present,
- * increments its use count, and trims to MAX_HISTORY.
+ * Record a command execution.  The command moves to the front of the
+ * recents list; duplicates are removed so each ID appears at most once.
  */
 export function recordCommandUsage(commandId: string): void {
-  const store = loadStore();
-  const now = Date.now();
-
-  const existingIndex = store.entries.findIndex((e) => e.id === commandId);
-  if (existingIndex !== -1) {
-    const existing = store.entries.splice(existingIndex, 1)[0];
-    existing.lastUsedAt = now;
-    existing.useCount++;
-    store.entries.unshift(existing);
-  } else {
-    store.entries.unshift({ id: commandId, lastUsedAt: now, useCount: 1 });
-  }
-
-  // Trim to max size.
-  if (store.entries.length > MAX_HISTORY) {
-    store.entries = store.entries.slice(0, MAX_HISTORY);
-  }
-
-  saveStore(store);
+  const history = readStorage();
+  const deduped = history.filter((id) => id !== commandId);
+  const updated = [commandId, ...deduped].slice(0, MAX_HISTORY);
+  writeStorage(updated);
 }
 
 /**
- * Get recent command IDs, ordered by most recently used first.
+ * Return the most-recently-used command IDs (newest first).
+ * @param limit — maximum entries to return (defaults to {@link MAX_HISTORY})
  */
 export function getRecentCommandIds(limit: number = MAX_HISTORY): string[] {
-  const store = loadStore();
-  return store.entries.slice(0, limit).map((e) => e.id);
-}
-
-/**
- * Get the full history entries for more detailed display.
- */
-export function getCommandHistory(): CommandHistoryEntry[] {
-  return loadStore().entries;
+  return readStorage().slice(0, limit);
 }
 
 /**
  * Clear all command history.
  */
 export function clearCommandHistory(): void {
-  saveStore({ entries: [] });
+  writeStorage([]);
 }
