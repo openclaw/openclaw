@@ -3175,6 +3175,20 @@ Auto-generated certs require `openssl` on PATH; if generation fails, the bridge 
 }
 ```
 
+### `discovery.mdns` (Bonjour / mDNS broadcast mode)
+
+Controls LAN mDNS discovery broadcasts (`_clawdbot-gw._tcp`).
+
+- `minimal` (default): omit `cliPath` + `sshPort` from TXT records
+- `full`: include `cliPath` + `sshPort` in TXT records
+- `off`: disable mDNS broadcasts entirely
+
+```json5
+{
+  discovery: { mdns: { mode: "minimal" } }
+}
+```
+
 ### `discovery.wideArea` (Wide-Area Bonjour / unicast DNS‑SD)
 
 When enabled, the Gateway writes a unicast DNS-SD zone for `_clawdbot-bridge._tcp` under `~/.clawdbot/dns/` using the standard discovery domain `clawdbot.internal.`

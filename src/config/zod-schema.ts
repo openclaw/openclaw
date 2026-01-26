@@ -272,6 +272,12 @@ export const ClawdbotSchema = z
           })
           .strict()
           .optional(),
+        mdns: z
+          .object({
+            mode: z.enum(["off", "minimal", "full"]).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
