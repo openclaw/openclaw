@@ -42,6 +42,7 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  isStatusMessage?: boolean;
 };
 
 type TelegramSendResult = {
@@ -202,6 +203,10 @@ export async function sendMessageTelegram(
   const linkPreviewEnabled = account.config.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
 
+  // Status message optimization:
+  // Moved to delivery.ts to centralize logic.
+  // We no longer attempt to optimize here to avoid race conditions and split-brain logic.
+
   const sendTelegramText = async (
     rawText: string,
     params?: Record<string, unknown>,
@@ -241,6 +246,11 @@ export async function sendMessageTelegram(
         throw wrapChatNotFound(err);
       },
     );
+    if (res?.message_id) {
+      console.error(
+        `[CRITICAL LOG] [telegram/send.ts] Sent message ${res.message_id} to ${chatId}. Payload: ${JSON.stringify({ text: rawText, params: sendParams })}`,
+      );
+    }
     return res;
   };
 
@@ -324,7 +334,11 @@ export async function sendMessageTelegram(
     const mediaMessageId = String(result?.message_id ?? "unknown");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     if (result?.message_id) {
-      recordSentMessage(chatId, result.message_id);
+      if (opts.isStatusMessage) {
+        recordSentMessage(chatId, result.message_id, true);
+      } else {
+        recordSentMessage(chatId, result.message_id, false);
+      }
     }
     recordChannelActivity({
       channel: "telegram",
@@ -366,7 +380,11 @@ export async function sendMessageTelegram(
   const res = await sendTelegramText(text, textParams, opts.plainText);
   const messageId = String(res?.message_id ?? "unknown");
   if (res?.message_id) {
-    recordSentMessage(chatId, res.message_id);
+    if (opts.isStatusMessage) {
+      recordSentMessage(chatId, Number(res.message_id), true);
+    } else {
+      recordSentMessage(chatId, Number(res.message_id), false);
+    }
   }
   recordChannelActivity({
     channel: "telegram",
@@ -448,6 +466,89 @@ export async function deleteMessageTelegram(
   });
   await request(() => api.deleteMessage(chatId, messageId), "deleteMessage");
   logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
+  return { ok: true };
+}
+
+type TelegramEditOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  textMode?: "markdown" | "html";
+  buttons?: TelegramSendOpts["buttons"];
+};
+
+export async function editMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  text: string,
+  opts: TelegramEditOpts = {},
+): Promise<{ ok: true }> {
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const messageId = normalizeMessageId(messageIdInput);
+  const fetchImpl = resolveTelegramFetch();
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  const replyMarkup = buildInlineKeyboard(opts.buttons);
+
+  const renderHtmlText = (rawText: string) =>
+    renderTelegramHtmlText(rawText, {
+      tableMode: resolveMarkdownTableMode({
+        cfg,
+        channel: "telegram",
+        accountId: opts.accountId,
+      }),
+    });
+
+  const textMode = opts.textMode ?? "html";
+  const htmlText = textMode === "html" ? renderHtmlText(text) : text;
+
+  try {
+    await request(
+      () =>
+        api.editMessageText(chatId, messageId, htmlText, {
+          parse_mode: textMode === "html" ? "HTML" : "MarkdownV2",
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        }),
+      "editMessage",
+    );
+    console.error(
+      `[CRITICAL LOG] [telegram/send.ts] Edited message ${messageId} in chat ${chatId}. Payload: ${JSON.stringify({ text, htmlText })}`,
+    );
+  } catch (err) {
+    // If HTML parsing fails, fall back to plain text
+    const errText = formatErrorMessage(err);
+    if (PARSE_ERR_RE.test(errText)) {
+      if (opts.verbose) {
+        console.warn(`telegram HTML parse failed on edit, retrying as plain text: ${errText}`);
+      }
+      await request(
+        () =>
+          api.editMessageText(chatId, messageId, text, {
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }),
+        "editMessage-plain",
+      );
+      logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId} (plain text fallback)`);
+    } else {
+      throw err;
+    }
+  }
+
   return { ok: true };
 }
 

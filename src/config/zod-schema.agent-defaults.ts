@@ -11,6 +11,7 @@ import {
   BlockStreamingCoalesceSchema,
   CliBackendSchema,
   HumanDelaySchema,
+  StatusUpdateSchema,
 } from "./zod-schema.core.js";
 
 export const AgentDefaultsSchema = z
@@ -132,6 +133,8 @@ export const AgentDefaultsSchema = z
         z.literal("message"),
       ])
       .optional(),
+    /** Configure intermittent status messages during AI processing. */
+    statusUpdates: StatusUpdateSchema,
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z

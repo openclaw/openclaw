@@ -41,6 +41,17 @@ import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  createAgentStatusController,
+  createStatusUpdateRunContext,
+  completeStatusUpdate,
+  cleanupStatusUpdate,
+  handleAgentEventForStatus,
+  noopStatusCallbacks,
+} from "./status-updates-integration.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("agent-runner");
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
@@ -111,6 +122,10 @@ export async function runReplyAgent(params: {
     mode: typingMode,
     isHeartbeat,
   });
+
+  // Ensure we have a runId for event tracking
+  const runId = opts?.runId ?? crypto.randomUUID();
+  const optsWithRunId = opts?.runId ? opts : { ...opts, runId };
 
   const shouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
@@ -298,13 +313,80 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+
+  // ===== STATUS UPDATES INTEGRATION =====
+  // Create status update controller for this agent run
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+
+  log.info(`Setting up status updates for agentId=${agentId}, channel=${replyToChannel}`);
+
+  // Create callbacks using onBlockReply if available
+  // NOTE: Edit mode requires channel-specific edit APIs which aren't available
+  // at the agent-runner level. Use mode="inline" in config for now.
+  // Telegram/Discord support editing but need integration at dispatch level.
+  let lastStatusMessageId: string | undefined;
+  const statusCallbacks = optsWithRunId?.onBlockReply
+    ? {
+        sendStatus: async (text: string, _messageId?: string) => {
+          log.debug(`Sending status update: ${text}`);
+          // Send as new message via block reply
+          const res = await optsWithRunId.onBlockReply?.(
+            { text, isStatusMessage: true },
+            { timeoutMs: 3000 },
+          );
+          if (typeof res === "string") {
+            lastStatusMessageId = res;
+            return res;
+          }
+          return undefined;
+        },
+        editFinal: async (text: string, messageId: string) => {
+          log.debug(`Editing final status update: ${messageId} (tracked: ${lastStatusMessageId})`);
+          await optsWithRunId.onBlockReply?.(
+            { text, isStatusMessage: true, editMessageId: messageId },
+            { timeoutMs: 3000 },
+          );
+        },
+        supportsEdit: () => true,
+      }
+    : noopStatusCallbacks;
+
+  const statusController = createAgentStatusController({
+    cfg,
+    agentId,
+    callbacks: statusCallbacks,
+  });
+
+  const statusUpdateContext = createStatusUpdateRunContext(statusController);
+  log.info(
+    `Status update context created, controller=${statusController ? "present" : "undefined"}`,
+  );
+
+  // Subscribe to agent events for status phase updates
+  let removeEventListener: (() => void) | undefined;
+  if (statusUpdateContext.controller) {
+    const { onAgentEvent } = await import("../../infra/agent-events.js");
+    removeEventListener = onAgentEvent((evt) => {
+      // Only handle events for this run
+      if (evt.runId === runId) {
+        handleAgentEventForStatus(statusUpdateContext, {
+          stream: evt.stream,
+          data: evt.data,
+        }).catch((err) => {
+          log.debug(`Error handling agent event for status: ${String(err)}`);
+        });
+      }
+    });
+  }
+  // ===== END STATUS UPDATES INTEGRATION =====
+
   try {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
       sessionCtx,
-      opts,
+      opts: optsWithRunId,
       typingSignals,
       blockReplyPipeline,
       blockStreamingEnabled,
@@ -322,6 +404,7 @@ export async function runReplyAgent(params: {
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      statusUpdateContext,
     });
 
     if (runOutcome.kind === "final") {
@@ -502,6 +585,20 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
+    // ===== STATUS UPDATES: Complete and mark final response =====
+    if (statusUpdateContext && replyPayloads.length > 0) {
+      const lastPayload = replyPayloads[replyPayloads.length - 1];
+      if (lastPayload?.text) {
+        log.info(`[agent-runner] Completing status update with final text (fast-path)`);
+        const markedText = await completeStatusUpdate(statusUpdateContext, lastPayload.text);
+        if (markedText) {
+          // Just update the text. The delivery layer handles replacement.
+          replyPayloads[replyPayloads.length - 1] = { ...lastPayload, text: markedText };
+        }
+      }
+    }
+    // ===== END STATUS UPDATES =====
+
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
@@ -510,5 +607,15 @@ export async function runReplyAgent(params: {
   } finally {
     blockReplyPipeline?.stop();
     typing.markRunComplete();
+
+    // ===== STATUS UPDATES: Cleanup =====
+    if (removeEventListener) {
+      removeEventListener();
+    }
+    if (statusUpdateContext) {
+      log.info(`Cleaning up status update context`);
+      await cleanupStatusUpdate(statusUpdateContext);
+    }
+    // ===== END STATUS UPDATES =====
   }
 }

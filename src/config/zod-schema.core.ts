@@ -500,3 +500,35 @@ export const ProviderCommandsSchema = z
   })
   .strict()
   .optional();
+
+/**
+ * Status Updates Configuration Schema
+ *
+ * Configures intermittent status messages sent during AI processing
+ * to keep users informed about what's happening.
+ */
+export const StatusUpdateModeSchema = z.union([
+  z.literal("off"),
+  z.literal("edit"),
+  z.literal("inline"),
+]);
+
+export const StatusUpdateSchema = z
+  .object({
+    /** Enable status updates (default: false). */
+    enabled: z.boolean().optional(),
+    /** Mode for status updates: "off", "edit" (update same message), "inline" (new messages). */
+    mode: StatusUpdateModeSchema.optional(),
+    /** Interval in milliseconds between elapsed time updates (default: 5000). */
+    updateIntervalMs: z.number().int().positive().optional(),
+    /** Show phase descriptions like "Sending query..." (default: true). */
+    showPhases: z.boolean().optional(),
+    /** Show elapsed time in status messages (default: true). */
+    showElapsedTime: z.boolean().optional(),
+    /** Mark final responses with ✅ (default: true). */
+    markFinalWithCheckmark: z.boolean().optional(),
+    /** Minimum duration before showing elapsed time (ms, default: 3000). */
+    elapsedTimeThresholdMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();

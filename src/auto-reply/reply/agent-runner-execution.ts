@@ -37,6 +37,13 @@ import type { FollowupRun } from "./queue.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
+import {
+  handleAgentEventForStatus,
+  type StatusUpdateRunContext,
+} from "./status-updates-integration.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("agent-runner-execution");
 
 export type AgentRunLoopResult =
   | {
@@ -77,6 +84,7 @@ export async function runAgentTurnWithFallback(params: {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  statusUpdateContext?: StatusUpdateRunContext;
 }): Promise<AgentRunLoopResult> {
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
@@ -283,6 +291,13 @@ export async function runAgentTurnWithFallback(params: {
                   }
                 : undefined,
             onAgentEvent: async (evt) => {
+              // ===== STATUS UPDATES: Handle agent events =====
+              if (params.statusUpdateContext) {
+                log.debug(`onAgentEvent: forwarding to status updates, stream=${evt.stream}`);
+                await handleAgentEventForStatus(params.statusUpdateContext, evt);
+              }
+              // ===== END STATUS UPDATES =====
+
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {

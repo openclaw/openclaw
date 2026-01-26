@@ -27,7 +27,10 @@ export type GetReplyOptions = {
   isHeartbeat?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
-  onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply?: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<string | void> | string | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
@@ -51,5 +54,9 @@ export type ReplyPayload = {
   replyToCurrent?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  isStatusMessage?: boolean;
   isError?: boolean;
+  editMessageId?: string;
+  /** Whether this payload should replace the last status message (provider-specific logic). */
+  replaceStatus?: boolean;
 };

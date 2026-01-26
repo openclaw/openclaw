@@ -1,5 +1,5 @@
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
-import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { HumanDelayConfig, IdentityConfig, StatusUpdateConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type {
   SandboxBrowserSettings,
@@ -29,6 +29,8 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  /** Per-agent status update configuration. */
+  statusUpdates?: StatusUpdateConfig;
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {

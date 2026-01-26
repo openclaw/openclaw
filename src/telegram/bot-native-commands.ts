@@ -341,6 +341,7 @@ export const registerTelegramNativeCommands = ({
                   replies: [payload],
                   chatId: String(chatId),
                   token: opts.token,
+                  accountId,
                   runtime,
                   bot,
                   replyToMode,

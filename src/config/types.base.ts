@@ -164,3 +164,28 @@ export type IdentityConfig = {
   /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
   avatar?: string;
 };
+
+/**
+ * Status Update Configuration
+ *
+ * Configures intermittent status messages sent during AI processing
+ * to keep users informed about what's happening.
+ */
+export type StatusUpdateMode = "off" | "edit" | "inline";
+
+export type StatusUpdateConfig = {
+  /** Enable status updates (default: false). */
+  enabled?: boolean;
+  /** Mode for status updates: "off", "edit" (update same message), "inline" (new messages). */
+  mode?: StatusUpdateMode;
+  /** Interval in milliseconds between elapsed time updates (default: 5000). */
+  updateIntervalMs?: number;
+  /** Show phase descriptions like "Sending query..." (default: true). */
+  showPhases?: boolean;
+  /** Show elapsed time in status messages (default: true). */
+  showElapsedTime?: boolean;
+  /** Mark final responses with ✅ (default: true). */
+  markFinalWithCheckmark?: boolean;
+  /** Minimum duration before showing elapsed time (ms, default: 3000). */
+  elapsedTimeThresholdMs?: number;
+};

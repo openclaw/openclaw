@@ -12,6 +12,7 @@ import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
+import { invalidateLastStatus } from "./sent-message-cache.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
@@ -383,6 +384,10 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(ctx)) return;
 
       const chatId = msg.chat.id;
+      // Invalidate status message state on ANY inbound message.
+      // This ensures we never edit a previous turn's message.
+      invalidateLastStatus(chatId);
+
       const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
       const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
       const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
@@ -477,6 +482,7 @@ export const registerTelegramHandlers = ({
       // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
       // We buffer “near-limit” messages and append immediately-following parts.
       const text = typeof msg.text === "string" ? msg.text : undefined;
+
       const isCommandLike = (text ?? "").trim().startsWith("/");
       if (text && !isCommandLike) {
         const nowMs = Date.now();

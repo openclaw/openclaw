@@ -2,6 +2,7 @@ import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   HumanDelayConfig,
+  StatusUpdateConfig,
   TypingMode,
 } from "./types.base.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -161,6 +162,11 @@ export type AgentDefaultsConfig = {
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
+  /**
+   * Intermittent status message configuration.
+   * Sends status updates during AI processing to keep users informed.
+   */
+  statusUpdates?: StatusUpdateConfig;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */

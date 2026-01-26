@@ -69,7 +69,7 @@ export function createBlockReplyPipeline(params: {
   onBlockReply: (
     payload: ReplyPayload,
     options?: { abortSignal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<void> | void;
+  ) => Promise<string | void> | string | void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
@@ -102,10 +102,12 @@ export function createBlockReplyPipeline(params: {
       .then(async () => {
         if (aborted) return false;
         await withTimeout(
-          onBlockReply(payload, {
-            abortSignal: abortController.signal,
-            timeoutMs,
-          }) ?? Promise.resolve(),
+          Promise.resolve(
+            onBlockReply(payload, {
+              abortSignal: abortController.signal,
+              timeoutMs,
+            }),
+          ),
           timeoutMs,
           timeoutError,
         );

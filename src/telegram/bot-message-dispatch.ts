@@ -12,6 +12,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { editMessageTelegram } from "./send.js";
 
 export const dispatchTelegramMessage = async ({
   context,
@@ -143,6 +144,7 @@ export const dispatchTelegramMessage = async ({
           replies: [payload],
           chatId: String(chatId),
           token: opts.token,
+          accountId: route.accountId,
           runtime,
           bot,
           replyToMode,

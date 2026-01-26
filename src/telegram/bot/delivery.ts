@@ -1,3 +1,4 @@
+import { sendMessageTelegram, editMessageTelegram } from "../send.js";
 import { type Bot, InputFile } from "grammy";
 import {
   markdownToTelegramChunks,
@@ -6,6 +7,7 @@ import {
 } from "../format.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { splitTelegramCaption } from "../caption.js";
+import { getLastSentMessage, recordSentMessage } from "../sent-message-cache.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -27,6 +29,7 @@ export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
   token: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   bot: Bot;
   replyToMode: ReplyToMode;
@@ -80,19 +83,70 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     if (mediaList.length === 0) {
-      const chunks = chunkText(reply.text || "");
-      for (const chunk of chunks) {
-        await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId:
-            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
-          messageThreadId,
-          textMode: "html",
-          plainText: chunk.text,
-          linkPreview,
-        });
-        if (replyToId && !hasReplied) {
-          hasReplied = true;
+      // Check if the previous message was a status message.
+      // If so, we should edit it instead of sending a new message.
+      const lastSent = getLastSentMessage(chatId);
+      const shouldEditLast =
+        lastSent?.isStatus && lastSent.messageId && Date.now() - lastSent.timestamp < 120000; // 2 min threshold
+
+      let sentMessageId: string | undefined;
+
+      if (shouldEditLast && reply.text) {
+        const editId = String(lastSent!.messageId);
+        console.error(
+          `[CRITICAL LOG] [telegram/bot/delivery.ts] Editing previous STATUS message ${editId} with: ${JSON.stringify(reply.text)}`,
+        );
+        try {
+          await editMessageTelegram(chatId, editId, reply.text, {
+            token: params.token,
+            accountId: params.accountId,
+            api: bot.api,
+          });
+          sentMessageId = editId;
+        } catch (err) {
+          console.error(
+            `[CRITICAL LOG] [telegram/bot/delivery.ts] Edit failed, falling back to new message: ${String(err)}`,
+          );
+          // Fall through to send new message
         }
+      }
+
+      if (!sentMessageId && reply.isStatusMessage && reply.text) {
+        console.error(
+          `[CRITICAL LOG] [telegram/bot/delivery.ts] Sending NEW status message: ${JSON.stringify(reply.text)}`,
+        );
+        const result = await sendMessageTelegram(chatId, reply.text, {
+          token: params.token,
+          accountId: params.accountId,
+          api: bot.api,
+          isStatusMessage: true,
+          messageThreadId,
+        });
+        sentMessageId = result.messageId;
+      } else if (!sentMessageId) {
+        const chunks = chunkText(reply.text || "");
+        for (const chunk of chunks) {
+          console.error(
+            `[CRITICAL LOG] [telegram/bot/delivery.ts] Sending text chunk: ${JSON.stringify(chunk.text)}`,
+          );
+          const msgId = await sendTelegramText(bot, chatId, chunk.html, runtime, {
+            replyToMessageId:
+              replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
+            messageThreadId,
+            textMode: "html",
+            plainText: chunk.text,
+            linkPreview,
+          });
+          if (msgId) sentMessageId = String(msgId);
+          if (replyToId && !hasReplied) {
+            hasReplied = true;
+          }
+        }
+      }
+
+      // Record the message state for next time
+      if (sentMessageId) {
+        recordSentMessage(chatId, Number(sentMessageId), !!reply.isStatusMessage);
       }
       continue;
     }
