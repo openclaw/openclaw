@@ -372,6 +372,10 @@ fly ips list -a my-clawdbot
 fly ips release <public-ipv4> -a my-clawdbot
 fly ips release <public-ipv6> -a my-clawdbot
 
+# Switch to private config so future deploys don't re-allocate public IPs
+# (remove [http_service] or deploy with the private template)
+fly deploy -c fly.private.toml
+
 # Allocate private-only IPv6
 fly ips allocate-v6 --private -a my-clawdbot
 ```
