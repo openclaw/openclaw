@@ -11,6 +11,7 @@ Status: unreleased.
 - Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
 - Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
 - Docs: add Render deployment guide. (#1975) Thanks @anurag.
+- Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
 - CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
 - macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.
 - Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
@@ -58,7 +59,7 @@ Status: unreleased.
 - Telegram: treat DM topics as separate sessions and keep DM history limits stable with thread suffixes. (#1597) Thanks @rohannagpal.
 - Telegram: add `channels.telegram.linkPreview` to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.clawd.bot/channels/telegram
 - Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.clawd.bot/tools/web
-- UI: refresh Control UI dashboard design system (typography, colors, spacing). (#1786) Thanks @mousberg.
+- UI: refresh Control UI dashboard design system (colors, icons, typography). (#1745, #1786) Thanks @EnzeD, @mousberg.
 - Exec approvals: forward approval prompts to chat with `/approve` for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands
 - Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.
 - Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.clawd.bot/diagnostics/flags
