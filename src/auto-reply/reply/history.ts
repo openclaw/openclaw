@@ -54,6 +54,10 @@ export function appendHistoryEntry<T extends HistoryEntry>(params: {
   const history = historyMap.get(historyKey) ?? [];
   history.push(entry);
   while (history.length > params.limit) history.shift();
+  if (historyMap.has(historyKey)) {
+    // Refresh insertion order so eviction keeps recently used histories.
+    historyMap.delete(historyKey);
+  }
   historyMap.set(historyKey, history);
   // Evict oldest keys if map exceeds max size to prevent unbounded memory growth
   evictOldHistoryKeys(historyMap);
