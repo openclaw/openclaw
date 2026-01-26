@@ -133,6 +133,17 @@
           - "docs/**"
           - "docs.acp.md"
 
+"cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/cli/**"
+
+"security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/cli/security.md"
+          - "docs/gateway/security.md"
+
 "extensions: copilot-proxy":
   - changed-files:
       - any-glob-to-any-file:
