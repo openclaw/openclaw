@@ -9,7 +9,7 @@
 #
 # See https://fly.io/docs/reference/configuration/
 
-app = "clawdbot"
+app = "my-clawdbot"  # change to your app name
 primary_region = "iad"  # change to your closest region
 
 [build]
