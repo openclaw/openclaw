@@ -1,9 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import yaml from "yaml";
-
-type LabelConfig = Record<string, unknown>;
 
 type RepoLabel = {
   name: string;
@@ -20,13 +17,12 @@ const COLOR_BY_PREFIX = new Map<string, string>([
 ]);
 
 const configPath = resolve(".github/labeler.yml");
-const config = yaml.parse(readFileSync(configPath, "utf8")) as LabelConfig;
+const labelNames = extractLabelNames(readFileSync(configPath, "utf8"));
 
-if (!config || typeof config !== "object") {
-  throw new Error("labeler.yml must be a mapping of label names to globs.");
+if (!labelNames.length) {
+  throw new Error("labeler.yml must declare at least one label.");
 }
 
-const labelNames = Object.keys(config).filter(Boolean);
 const repo = resolveRepo();
 const existing = fetchExistingLabels(repo);
 
@@ -53,6 +49,26 @@ for (const label of missing) {
     { stdio: "inherit" },
   );
   console.log(`Created label: ${label}`);
+}
+
+function extractLabelNames(contents: string): string[] {
+  const labels: string[] = [];
+  for (const line of contents.split("\n")) {
+    if (!line.trim() || line.trimStart().startsWith("#")) {
+      continue;
+    }
+    if (/^\s/.test(line)) {
+      continue;
+    }
+    const match = line.match(/^(["'])(.+)\1\s*:/) ?? line.match(/^([^:]+):/);
+    if (match) {
+      const name = (match[2] ?? match[1] ?? "").trim();
+      if (name) {
+        labels.push(name);
+      }
+    }
+  }
+  return labels;
 }
 
 function pickColor(label: string): string {
