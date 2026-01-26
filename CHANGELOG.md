@@ -20,6 +20,7 @@ Status: unreleased.
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
 - Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
 - TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
+- Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
 
 ## 2026.1.24-3
 
