@@ -44,6 +44,7 @@ describe("security audit", () => {
 
     const res = await runSecurityAudit({
       config: cfg,
+      env: {},
       includeFilesystem: false,
       includeChannelSecurity: false,
     });
@@ -88,6 +89,7 @@ describe("security audit", () => {
 
     const res = await runSecurityAudit({
       config: cfg,
+      env: {},
       includeFilesystem: false,
       includeChannelSecurity: false,
     });

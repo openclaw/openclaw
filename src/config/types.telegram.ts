@@ -15,6 +15,7 @@ export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   deleteMessage?: boolean;
+  editMessage?: boolean;
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";

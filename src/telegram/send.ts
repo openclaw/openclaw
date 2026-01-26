@@ -495,6 +495,99 @@ export async function deleteMessageTelegram(
   return { ok: true };
 }
 
+type TelegramEditOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  textMode?: "markdown" | "html";
+  /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  /** Optional config injection to avoid global loadConfig() (improves testability). */
+  cfg?: ReturnType<typeof loadConfig>;
+};
+
+export async function editMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  text: string,
+  opts: TelegramEditOpts = {},
+): Promise<{ ok: true; messageId: string; chatId: string }> {
+  const cfg = opts.cfg ?? loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const messageId = normalizeMessageId(messageIdInput);
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    request(fn, label).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const textMode = opts.textMode ?? "markdown";
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "telegram",
+    accountId: account.accountId,
+  });
+  const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
+
+  // Reply markup semantics:
+  // - buttons === undefined → don't send reply_markup (keep existing)
+  // - buttons is [] (or filters to empty) → send { inline_keyboard: [] } (remove)
+  // - otherwise → send built inline keyboard
+  const shouldTouchButtons = opts.buttons !== undefined;
+  const builtKeyboard = shouldTouchButtons ? buildInlineKeyboard(opts.buttons) : undefined;
+  const replyMarkup = shouldTouchButtons ? (builtKeyboard ?? { inline_keyboard: [] }) : undefined;
+
+  const editParams: Record<string, unknown> = {
+    parse_mode: "HTML",
+  };
+  if (replyMarkup !== undefined) {
+    editParams.reply_markup = replyMarkup;
+  }
+
+  await requestWithDiag(
+    () => api.editMessageText(chatId, messageId, htmlText, editParams),
+    "editMessage",
+  ).catch(async (err) => {
+    // Telegram rejects malformed HTML. Fall back to plain text.
+    const errText = formatErrorMessage(err);
+    if (PARSE_ERR_RE.test(errText)) {
+      if (opts.verbose) {
+        console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+      }
+      const plainParams: Record<string, unknown> = {};
+      if (replyMarkup !== undefined) {
+        plainParams.reply_markup = replyMarkup;
+      }
+      return await requestWithDiag(
+        () =>
+          Object.keys(plainParams).length > 0
+            ? api.editMessageText(chatId, messageId, text, plainParams)
+            : api.editMessageText(chatId, messageId, text),
+        "editMessage-plain",
+      );
+    }
+    throw err;
+  });
+
+  logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);
+  return { ok: true, messageId: String(messageId), chatId };
+}
+
 function inferFilename(kind: ReturnType<typeof mediaKindFromMime>) {
   switch (kind) {
     case "image":
