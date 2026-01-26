@@ -333,9 +333,11 @@ Rotation checklist (token/password):
 
 When `gateway.auth.allowTailscale` is `true` (default for Serve), Clawdbot
 accepts Tailscale Serve identity headers (`tailscale-user-login`) as
-authentication. This only triggers for requests that hit loopback and include
-`x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as injected by
-Tailscale.
+authentication. Clawdbot verifies the identity by resolving the
+`x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`)
+and matching it to the header. This only triggers for requests that hit loopback
+and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
+injected by Tailscale.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
