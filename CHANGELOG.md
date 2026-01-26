@@ -8,6 +8,9 @@ Status: unreleased.
 ### Changes
 - TBD.
 
+### Fixes
+- macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1 (fixes NSBundle.module assertion in CodeTokenizer). (#1451, #1600, #1640, #1652, #1687, #1833, #1841, #1847, #1853, #1929, #2002)
+
 ## 2026.1.24-3
 
 ### Fixes
