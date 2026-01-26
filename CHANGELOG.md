@@ -7,6 +7,7 @@ Status: unreleased.
 
 ### Changes
 - Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
+- Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.
 
 ## 2026.1.24-3
 

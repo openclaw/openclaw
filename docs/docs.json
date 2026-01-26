@@ -983,6 +983,7 @@
           "bedrock",
           "providers/moonshot",
           "providers/minimax",
+          "providers/vercel-ai-gateway",
           "providers/openrouter",
           "providers/synthetic",
           "providers/opencode",
