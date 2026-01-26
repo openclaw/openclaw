@@ -360,7 +360,6 @@ export async function runOnboardingWizard(
       prompter,
       store: authStore,
       includeSkip: true,
-      includeClaudeCliIfMissing: true,
     }));
 
   const authResult = await applyAuthChoice({
