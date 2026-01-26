@@ -29,6 +29,7 @@ Status: unreleased.
 - Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
 - Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
 - Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
+- Telegram: support plugin sendPayload channelData (media/buttons) and validate plugin commands. (#1917) Thanks @JoshuaLelon.
 - Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
 - Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
