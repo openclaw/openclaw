@@ -12,6 +12,7 @@ import {
   formatValidationErrors,
   validateOverseerGoalCreateParams,
   validateOverseerGoalStatusParams,
+  validateOverseerGoalUpdateParams,
   validateOverseerStatusParams,
   validateOverseerTickParams,
   validateOverseerWorkUpdateParams,
@@ -19,6 +20,7 @@ import {
 import type {
   OverseerGoalCreateParams,
   OverseerGoalCreateResult,
+  OverseerGoalUpdateParams,
   OverseerStatusResult,
   OverseerTickParams,
   OverseerWorkUpdateParams,
@@ -455,6 +457,98 @@ export const overseerHandlers: GatewayRequestHandlers = {
           goalId: goal.goalId,
         });
       }
+      return { store, result: true };
+    });
+    respond(true, { ok: true }, undefined);
+  },
+  "overseer.goal.update": async ({ params, respond }) => {
+    if (!validateOverseerGoalUpdateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid overseer.goal.update params: ${formatValidationErrors(
+            validateOverseerGoalUpdateParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const request = params as OverseerGoalUpdateParams;
+    await updateOverseerStore(async (store) => {
+      const goal = store.goals[request.goalId];
+      if (!goal) return { store, result: true };
+      if (typeof request.title === "string") {
+        goal.title = request.title.trim();
+      }
+      if (typeof request.problemStatement === "string") {
+        goal.problemStatement = request.problemStatement.trim();
+      }
+      if (Array.isArray(request.successCriteria)) {
+        goal.successCriteria = request.successCriteria.map((item) => item.trim()).filter(Boolean);
+      }
+      if (Array.isArray(request.constraints)) {
+        goal.constraints = request.constraints.map((item) => item.trim()).filter(Boolean);
+      }
+      goal.updatedAt = Date.now();
+      appendOverseerEvent(store, {
+        ts: Date.now(),
+        type: "goal.updated",
+        goalId: goal.goalId,
+      });
+      return { store, result: true };
+    });
+    respond(true, { ok: true }, undefined);
+  },
+  "overseer.goal.cancel": async ({ params, respond }) => {
+    if (!validateOverseerGoalStatusParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid overseer.goal.cancel params: ${formatValidationErrors(
+            validateOverseerGoalStatusParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const request = params as { goalId: string };
+    const now = Date.now();
+    await updateOverseerStore(async (store) => {
+      const goal = store.goals[request.goalId];
+      if (!goal) return { store, result: true };
+
+      goal.status = "cancelled";
+      goal.updatedAt = now;
+
+      if (goal.plan) {
+        for (const phase of goal.plan.phases) {
+          const nodes = [phase, ...phase.tasks, ...phase.tasks.flatMap((task) => task.subtasks)];
+          for (const node of nodes) {
+            if (node.status === "done") continue;
+            node.status = "cancelled";
+            node.updatedAt = now;
+            node.endedAt = node.endedAt ?? now;
+          }
+        }
+      }
+
+      for (const assignment of Object.values(store.assignments ?? {})) {
+        if (assignment.goalId !== goal.goalId) continue;
+        if (assignment.status === "done") continue;
+        assignment.status = "cancelled";
+        assignment.updatedAt = now;
+      }
+
+      appendOverseerEvent(store, {
+        ts: now,
+        type: "goal.cancelled",
+        goalId: goal.goalId,
+      });
+
       return { store, result: true };
     });
     respond(true, { ok: true }, undefined);

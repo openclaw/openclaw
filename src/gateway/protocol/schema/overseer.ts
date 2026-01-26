@@ -104,6 +104,22 @@ export type OverseerGoalStatusParams = {
   goalId: string;
 };
 
+export const OverseerGoalUpdateParamsSchema = Type.Object({
+  goalId: Type.String(),
+  title: Type.Optional(Type.String()),
+  problemStatement: Type.Optional(Type.String()),
+  successCriteria: Type.Optional(Type.Array(Type.String())),
+  constraints: Type.Optional(Type.Array(Type.String())),
+});
+
+export type OverseerGoalUpdateParams = {
+  goalId: string;
+  title?: string;
+  problemStatement?: string;
+  successCriteria?: string[];
+  constraints?: string[];
+};
+
 const OverseerPlanNodeBaseFields = {
   id: Type.String(),
   parentId: Type.Optional(Type.String()),

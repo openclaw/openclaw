@@ -346,6 +346,9 @@ export function reconcileOverseerState(params: {
 
   for (const assignment of assignments) {
     if (!isAssignmentAllowed(cfg, assignment)) continue;
+    const goal = store.goals[assignment.goalId];
+    if (!goal) continue;
+    const goalIsActive = goal.status === "active";
     const telemetryEntry = telemetry.assignments[assignment.assignmentId];
     if (telemetryEntry?.structuredUpdate) {
       applyStructuredUpdate({
@@ -369,21 +372,39 @@ export function reconcileOverseerState(params: {
 
     if (telemetryEntry?.runActive) {
       assignment.lastObservedActivityAt = now;
-      assignment.status = "active";
+      if (
+        assignment.status !== "done" &&
+        assignment.status !== "blocked" &&
+        assignment.status !== "cancelled"
+      ) {
+        assignment.status = "active";
+      }
     } else if (
       telemetryEntry?.sessionUpdatedAt &&
       assignment.lastDispatchAt &&
       telemetryEntry.sessionUpdatedAt > assignment.lastDispatchAt
     ) {
       assignment.lastObservedActivityAt = telemetryEntry.sessionUpdatedAt;
-      assignment.status = "active";
+      if (
+        assignment.status !== "done" &&
+        assignment.status !== "blocked" &&
+        assignment.status !== "cancelled"
+      ) {
+        assignment.status = "active";
+      }
     } else if (
       telemetryEntry?.lastMessageFingerprint &&
       telemetryEntry.lastMessageFingerprint !== assignment.lastMessageFingerprint
     ) {
       assignment.lastObservedActivityAt = now;
       assignment.lastMessageFingerprint = telemetryEntry.lastMessageFingerprint;
-      assignment.status = "active";
+      if (
+        assignment.status !== "done" &&
+        assignment.status !== "blocked" &&
+        assignment.status !== "cancelled"
+      ) {
+        assignment.status = "active";
+      }
     }
 
     const lastActivity =
@@ -393,7 +414,13 @@ export function reconcileOverseerState(params: {
     const isOverdue =
       (assignment.expectedNextUpdateAt && assignment.expectedNextUpdateAt <= now) ||
       (lastActivity && now - lastActivity > idleAfterMs);
-    if (isOverdue && assignment.status !== "done" && assignment.status !== "blocked") {
+    if (
+      goalIsActive &&
+      isOverdue &&
+      assignment.status !== "done" &&
+      assignment.status !== "blocked" &&
+      assignment.status !== "cancelled"
+    ) {
       assignment.status = "stalled";
       if (!wasStalled) {
         appendOverseerEvent(store, {
@@ -406,10 +433,12 @@ export function reconcileOverseerState(params: {
       }
     }
 
+    if (!goalIsActive) {
+      continue;
+    }
+
     if (assignment.status === "queued") {
-      const workNode = store.goals[assignment.goalId]
-        ? findWorkNode(store.goals[assignment.goalId], assignment.workNodeId)
-        : null;
+      const workNode = findWorkNode(goal, assignment.workNodeId);
       const title = workNode?.name ?? assignment.workNodeId;
       const message = buildNudgeMessage({
         goalId: assignment.goalId,
@@ -580,6 +609,7 @@ async function maybeApplyPlanner(store: OverseerStore, now: number): Promise<boo
   for (const assignment of stalledAssignments) {
     const goal = store.goals[assignment.goalId];
     if (!goal) continue;
+    if (goal.status !== "active") continue;
     if (!goal.problemStatement || !goal.title) continue;
     try {
       const planResult = await generateOverseerPlan({
