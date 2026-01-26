@@ -18,6 +18,7 @@ Status: unreleased.
 - Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
 - Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
+- Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
 
 ## 2026.1.24-3
 
