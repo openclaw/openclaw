@@ -51,6 +51,8 @@ Use `clawdbot configure --section web` to set up your API key and choose a provi
 
 Perplexity provides $5 in API credits on a monthly rolling basis to Perplexity Pro subscribers. Check the Perplexity API docs for current limits and pricing.
 
+See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quickstart) for more details.
+
 ### Brave Search
 
 1) Create a Brave Search API account at https://brave.com/search/api/
@@ -132,12 +134,21 @@ Search the web using your configured provider.
 
 ### Tool parameters
 
-- `query` (required)
-- `count` (1–10; default from config)
-- `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). If omitted, Brave chooses its default region.
-- `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
-- `ui_lang` (optional): ISO language code for UI elements
-- `freshness` (optional, Brave only): filter by discovery time (`pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`)
+All parameters work for both Brave and Perplexity unless noted.
+
+| Parameter | Description |
+|-----------|-------------|
+| `query` | Search query (required) |
+| `count` | Results to return (1-10, default: 5) |
+| `country` | 2-letter ISO country code (e.g., "US", "DE") |
+| `language` | ISO 639-1 language code (e.g., "en", "de") |
+| `freshness` | Time filter: `day`, `week`, `month`, or `year` |
+| `date_after` | Results after this date (YYYY-MM-DD) |
+| `date_before` | Results before this date (YYYY-MM-DD) |
+| `ui_lang` | UI language code (Brave only) |
+| `domain_filter` | Domain allowlist/denylist array (Perplexity only) |
+| `max_tokens` | Total content budget, default 25000 (Perplexity only) |
+| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only) |
 
 **Examples:**
 
@@ -145,23 +156,40 @@ Search the web using your configured provider.
 // German-specific search
 await web_search({
   query: "TV online schauen",
-  count: 10,
   country: "DE",
-  search_lang: "de"
-});
-
-// French search with French UI
-await web_search({
-  query: "actualités",
-  country: "FR",
-  search_lang: "fr",
-  ui_lang: "fr"
+  language: "de"
 });
 
 // Recent results (past week)
 await web_search({
   query: "TMBG interview",
-  freshness: "pw"
+  freshness: "week"
+});
+
+// Date range search
+await web_search({
+  query: "AI developments",
+  date_after: "2024-01-01",
+  date_before: "2024-06-30"
+});
+
+// Domain filtering (Perplexity only)
+await web_search({
+  query: "climate research",
+  domain_filter: ["nature.com", "science.org", ".edu"]
+});
+
+// Exclude domains (Perplexity only)
+await web_search({
+  query: "product reviews",
+  domain_filter: ["-reddit.com", "-pinterest.com"]
+});
+
+// More content extraction (Perplexity only)
+await web_search({
+  query: "detailed AI research",
+  max_tokens: 50000,
+  max_tokens_per_page: 4096
 });
 ```
 

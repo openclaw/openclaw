@@ -56,7 +56,7 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get("country")).toBe("DE");
   });
 
-  it("should pass search_lang parameter to Brave API", async () => {
+  it("should pass language parameter to Brave API as search_lang", async () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
@@ -67,7 +67,7 @@ describe("web_search country and language parameters", () => {
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    await tool?.execute?.(1, { query: "test", search_lang: "de" });
+    await tool?.execute?.(1, { query: "test", language: "de" });
 
     const url = new URL(mockFetch.mock.calls[0][0] as string);
     expect(url.searchParams.get("search_lang")).toBe("de");
@@ -261,7 +261,7 @@ describe("web_search perplexity Search API", () => {
     expect(authHeader).toBe("Bearer pplx-config");
   });
 
-  it("passes recency filter to Perplexity Search API", async () => {
+  it("passes freshness filter to Perplexity Search API", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const mockFetch = vi.fn(() =>
       Promise.resolve({
@@ -276,14 +276,14 @@ describe("web_search perplexity Search API", () => {
       config: { tools: { web: { search: { provider: "perplexity" } } } },
       sandboxed: true,
     });
-    await tool?.execute?.(1, { query: "test", recency: "week" });
+    await tool?.execute?.(1, { query: "test", freshness: "week" });
 
     expect(mockFetch).toHaveBeenCalled();
     const body = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
     expect(body.search_recency_filter).toBe("week");
   });
 
-  it("accepts all valid recency values", async () => {
+  it("accepts all valid freshness values for Perplexity", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const mockFetch = vi.fn(() =>
       Promise.resolve({
@@ -299,15 +299,15 @@ describe("web_search perplexity Search API", () => {
       sandboxed: true,
     });
 
-    for (const recency of ["day", "week", "month", "year"]) {
+    for (const freshness of ["day", "week", "month", "year"]) {
       webSearchTesting.SEARCH_CACHE.clear();
-      await tool?.execute?.(1, { query: `test-${recency}`, recency });
+      await tool?.execute?.(1, { query: `test-${freshness}`, freshness });
       const body = JSON.parse(mockFetch.mock.calls.at(-1)?.[1]?.body as string);
-      expect(body.search_recency_filter).toBe(recency);
+      expect(body.search_recency_filter).toBe(freshness);
     }
   });
 
-  it("rejects invalid recency values", async () => {
+  it("rejects invalid freshness values", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const mockFetch = vi.fn(() =>
       Promise.resolve({
@@ -322,10 +322,10 @@ describe("web_search perplexity Search API", () => {
       config: { tools: { web: { search: { provider: "perplexity" } } } },
       sandboxed: true,
     });
-    const result = await tool?.execute?.(1, { query: "test", recency: "yesterday" });
+    const result = await tool?.execute?.(1, { query: "test", freshness: "yesterday" });
 
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(result?.details).toMatchObject({ error: "invalid_recency" });
+    expect(result?.details).toMatchObject({ error: "invalid_freshness" });
   });
 
   it("passes domain filter to Perplexity Search API", async () => {
@@ -378,7 +378,7 @@ describe("web_search perplexity Search API", () => {
     expect(body.search_domain_filter).toEqual(["-reddit.com", "-pinterest.com"]);
   });
 
-  it("passes language filter to Perplexity Search API", async () => {
+  it("passes language to Perplexity Search API as search_language_filter array", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const mockFetch = vi.fn(() =>
       Promise.resolve({
@@ -395,12 +395,12 @@ describe("web_search perplexity Search API", () => {
     });
     await tool?.execute?.(1, {
       query: "test",
-      language_filter: ["en", "de", "fr"],
+      language: "en",
     });
 
     expect(mockFetch).toHaveBeenCalled();
     const body = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
-    expect(body.search_language_filter).toEqual(["en", "de", "fr"]);
+    expect(body.search_language_filter).toEqual(["en"]);
   });
 
   it("passes multiple filters together to Perplexity Search API", async () => {
@@ -421,9 +421,9 @@ describe("web_search perplexity Search API", () => {
     await tool?.execute?.(1, {
       query: "climate research",
       country: "US",
-      recency: "month",
+      freshness: "month",
       domain_filter: ["nature.com", ".gov"],
-      language_filter: ["en"],
+      language: "en",
     });
 
     expect(mockFetch).toHaveBeenCalled();

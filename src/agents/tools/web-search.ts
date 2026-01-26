@@ -26,8 +26,41 @@ const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
-const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
+
+const FRESHNESS_TO_RECENCY: Record<string, string> = {
+  pd: "day",
+  pw: "week",
+  pm: "month",
+  py: "year",
+};
+const RECENCY_TO_FRESHNESS: Record<string, string> = {
+  day: "pd",
+  week: "pw",
+  month: "pm",
+  year: "py",
+};
+
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const PERPLEXITY_DATE_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+
+function isoToPerplexityDate(iso: string): string | undefined {
+  const match = iso.match(ISO_DATE_PATTERN);
+  if (!match) return undefined;
+  const [, year, month, day] = match;
+  return `${parseInt(month, 10)}/${parseInt(day, 10)}/${year}`;
+}
+
+function normalizeToIsoDate(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (ISO_DATE_PATTERN.test(trimmed)) return trimmed;
+  const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
+  if (match) {
+    const [, month, day, year] = match;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+  return undefined;
+}
 
 function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
   const baseSchema = {
@@ -45,47 +78,58 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
           "2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
       }),
     ),
+    language: Type.Optional(
+      Type.String({
+        description: "ISO 639-1 language code for results (e.g., 'en', 'de', 'fr').",
+      }),
+    ),
+    freshness: Type.Optional(
+      Type.String({
+        description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
+      }),
+    ),
+    date_after: Type.Optional(
+      Type.String({
+        description: "Only results published after this date (YYYY-MM-DD).",
+      }),
+    ),
+    date_before: Type.Optional(
+      Type.String({
+        description: "Only results published before this date (YYYY-MM-DD).",
+      }),
+    ),
   } as const;
 
   if (provider === "brave") {
     return Type.Object({
       ...baseSchema,
-      search_lang: Type.Optional(
-        Type.String({
-          description: "ISO language code for search results (e.g., 'de', 'en', 'fr').",
-        }),
-      ),
       ui_lang: Type.Optional(
         Type.String({
           description: "ISO language code for UI elements.",
         }),
       ),
-      freshness: Type.Optional(
-        Type.String({
-          description:
-            "Filter results by discovery time. Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
-        }),
-      ),
     });
   }
 
-  // Perplexity provider schema
   return Type.Object({
     ...baseSchema,
-    recency: Type.Optional(
-      Type.String({
-        description: "Filter by time period: 'day', 'week', 'month', or 'year'.",
-      }),
-    ),
     domain_filter: Type.Optional(
       Type.Array(Type.String(), {
         description:
           "Domain filter (max 20). Allowlist: ['nature.com'] or denylist: ['-reddit.com']. Cannot mix.",
       }),
     ),
-    language_filter: Type.Optional(
-      Type.Array(Type.String(), {
-        description: "ISO 639-1 language codes (max 10). Example: ['en', 'de'].",
+    max_tokens: Type.Optional(
+      Type.Number({
+        description: "Total content budget across all results (default: 25000, max: 1000000).",
+        minimum: 1,
+        maximum: 1000000,
+      }),
+    ),
+    max_tokens_per_page: Type.Optional(
+      Type.Number({
+        description: "Max tokens extracted per page (default: 2048).",
+        minimum: 1,
       }),
     ),
   });
@@ -208,33 +252,30 @@ function resolveSearchCount(value: unknown, fallback: number): number {
   return clamped;
 }
 
-function normalizeFreshness(value: string | undefined): string | undefined {
+/**
+ * Normalizes freshness shortcut to the provider's expected format.
+ * Accepts both Brave format (pd/pw/pm/py) and Perplexity format (day/week/month/year).
+ * Use date_after/date_before for specific date ranges.
+ */
+function normalizeFreshness(
+  value: string | undefined,
+  provider: (typeof SEARCH_PROVIDERS)[number],
+): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
 
   const lower = trimmed.toLowerCase();
-  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) return lower;
 
-  const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
-  if (!match) return undefined;
+  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
+    return provider === "brave" ? lower : FRESHNESS_TO_RECENCY[lower];
+  }
 
-  const [, start, end] = match;
-  if (!isValidIsoDate(start) || !isValidIsoDate(end)) return undefined;
-  if (start > end) return undefined;
+  if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
+    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+  }
 
-  return `${start}to${end}`;
-}
-
-function isValidIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return false;
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
-  );
+  return undefined;
 }
 
 function resolveSiteName(url: string | undefined): string | undefined {
@@ -255,6 +296,10 @@ async function runPerplexitySearchApi(params: {
   searchDomainFilter?: string[];
   searchRecencyFilter?: string;
   searchLanguageFilter?: string[];
+  searchAfterDate?: string;
+  searchBeforeDate?: string;
+  maxTokens?: number;
+  maxTokensPerPage?: number;
 }): Promise<
   Array<{ title: string; url: string; description: string; published?: string; siteName?: string }>
 > {
@@ -274,6 +319,18 @@ async function runPerplexitySearchApi(params: {
   }
   if (params.searchLanguageFilter && params.searchLanguageFilter.length > 0) {
     body.search_language_filter = params.searchLanguageFilter;
+  }
+  if (params.searchAfterDate) {
+    body.search_after_date = params.searchAfterDate;
+  }
+  if (params.searchBeforeDate) {
+    body.search_before_date = params.searchBeforeDate;
+  }
+  if (params.maxTokens !== undefined) {
+    body.max_tokens = params.maxTokens;
+  }
+  if (params.maxTokensPerPage !== undefined) {
+    body.max_tokens_per_page = params.maxTokensPerPage;
   }
 
   const res = await fetch(PERPLEXITY_SEARCH_ENDPOINT, {
@@ -313,17 +370,17 @@ async function runWebSearch(params: {
   cacheTtlMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
   country?: string;
-  search_lang?: string;
+  language?: string;
   ui_lang?: string;
   freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
   searchDomainFilter?: string[];
-  searchRecencyFilter?: string;
-  searchLanguageFilter?: string[];
+  maxTokens?: number;
+  maxTokensPerPage?: number;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.searchRecencyFilter || "default"}:${params.searchLanguageFilter?.join(",") || "default"}`,
+    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) return { ...cached.value, cached: true };
@@ -338,8 +395,12 @@ async function runWebSearch(params: {
       timeoutSeconds: params.timeoutSeconds,
       country: params.country,
       searchDomainFilter: params.searchDomainFilter,
-      searchRecencyFilter: params.searchRecencyFilter,
-      searchLanguageFilter: params.searchLanguageFilter,
+      searchRecencyFilter: params.freshness,
+      searchLanguageFilter: params.language ? [params.language] : undefined,
+      searchAfterDate: params.dateAfter ? isoToPerplexityDate(params.dateAfter) : undefined,
+      searchBeforeDate: params.dateBefore ? isoToPerplexityDate(params.dateBefore) : undefined,
+      maxTokens: params.maxTokens,
+      maxTokensPerPage: params.maxTokensPerPage,
     });
 
     const payload = {
@@ -363,14 +424,23 @@ async function runWebSearch(params: {
   if (params.country) {
     url.searchParams.set("country", params.country);
   }
-  if (params.search_lang) {
-    url.searchParams.set("search_lang", params.search_lang);
+  if (params.language) {
+    url.searchParams.set("search_lang", params.language);
   }
   if (params.ui_lang) {
     url.searchParams.set("ui_lang", params.ui_lang);
   }
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
+  } else if (params.dateAfter && params.dateBefore) {
+    url.searchParams.set("freshness", `${params.dateAfter}to${params.dateBefore}`);
+  } else if (params.dateAfter) {
+    url.searchParams.set(
+      "freshness",
+      `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`,
+    );
+  } else if (params.dateBefore) {
+    url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
   }
 
   const res = await fetch(url.toString(), {
@@ -420,7 +490,7 @@ export function createWebSearchTool(options?: {
 
   const description =
     provider === "perplexity"
-      ? "Search the web using Perplexity Search API. Returns structured results (title, URL, snippet). Supports recency filter, domain filtering, and language filtering."
+      ? "Search the web using Perplexity Search API. Returns structured results (title, URL, snippet). Supports freshness filter, domain filtering, and language filtering."
       : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
@@ -442,32 +512,38 @@ export function createWebSearchTool(options?: {
       const count =
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
       const country = readStringParam(params, "country");
-      const search_lang = readStringParam(params, "search_lang");
+      const language = readStringParam(params, "language");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
+      const freshness = rawFreshness ? normalizeFreshness(rawFreshness, provider) : undefined;
       if (rawFreshness && !freshness) {
         return jsonResult({
           error: "invalid_freshness",
-          message:
-            "freshness must be one of pd, pw, pm, py, or a range like YYYY-MM-DDtoYYYY-MM-DD.",
+          message: "freshness must be day, week, month, or year.",
           docs: "https://docs.clawd.bot/tools/web",
         });
       }
-      const rawRecency = readStringParam(params, "recency");
-      const recency =
-        rawRecency && PERPLEXITY_RECENCY_VALUES.has(rawRecency.toLowerCase())
-          ? rawRecency.toLowerCase()
-          : undefined;
-      if (rawRecency && !recency) {
+      const rawDateAfter = readStringParam(params, "date_after");
+      const dateAfter = rawDateAfter ? normalizeToIsoDate(rawDateAfter) : undefined;
+      if (rawDateAfter && !dateAfter) {
         return jsonResult({
-          error: "invalid_recency",
-          message: "recency must be one of: day, week, month, year.",
+          error: "invalid_date",
+          message: "date_after must be YYYY-MM-DD format.",
+          docs: "https://docs.clawd.bot/tools/web",
+        });
+      }
+      const rawDateBefore = readStringParam(params, "date_before");
+      const dateBefore = rawDateBefore ? normalizeToIsoDate(rawDateBefore) : undefined;
+      if (rawDateBefore && !dateBefore) {
+        return jsonResult({
+          error: "invalid_date",
+          message: "date_before must be YYYY-MM-DD format.",
           docs: "https://docs.clawd.bot/tools/web",
         });
       }
       const domainFilter = readStringArrayParam(params, "domain_filter");
-      const languageFilter = readStringArrayParam(params, "language_filter");
+      const maxTokens = readNumberParam(params, "max_tokens", { integer: true });
+      const maxTokensPerPage = readNumberParam(params, "max_tokens_per_page", { integer: true });
 
       const result = await runWebSearch({
         query,
@@ -477,12 +553,14 @@ export function createWebSearchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
         country,
-        search_lang,
+        language,
         ui_lang,
         freshness,
+        dateAfter,
+        dateBefore,
         searchDomainFilter: domainFilter,
-        searchRecencyFilter: recency,
-        searchLanguageFilter: languageFilter,
+        maxTokens: maxTokens ?? undefined,
+        maxTokensPerPage: maxTokensPerPage ?? undefined,
       });
       return jsonResult(result);
     },
@@ -491,6 +569,9 @@ export function createWebSearchTool(options?: {
 
 export const __testing = {
   normalizeFreshness,
+  normalizeToIsoDate,
+  isoToPerplexityDate,
   SEARCH_CACHE,
-  PERPLEXITY_RECENCY_VALUES,
+  FRESHNESS_TO_RECENCY,
+  RECENCY_TO_FRESHNESS,
 } as const;
