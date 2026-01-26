@@ -12,7 +12,7 @@ import {
   promptModelAllowlist,
 } from "./model-picker.js";
 
-type GatewayAuthChoice = "off" | "token" | "password";
+type GatewayAuthChoice = "token" | "password";
 
 const ANTHROPIC_OAUTH_MODEL_KEYS = [
   "anthropic/claude-opus-4-5",
@@ -30,9 +30,6 @@ export function buildGatewayAuthConfig(params: {
   const base: GatewayAuthConfig = {};
   if (typeof allowTailscale === "boolean") base.allowTailscale = allowTailscale;
 
-  if (params.mode === "off") {
-    return Object.keys(base).length > 0 ? base : undefined;
-  }
   if (params.mode === "token") {
     return { ...base, mode: "token", token: params.token };
   }
