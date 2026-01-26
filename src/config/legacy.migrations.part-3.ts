@@ -9,6 +9,84 @@ import {
   resolveDefaultAgentIdFromRaw,
 } from "./legacy.shared.js";
 
+function mergeAlsoAllowIntoAllow(node: unknown): boolean {
+  if (!isRecord(node)) return false;
+  const allow = node.allow;
+  const alsoAllow = node.alsoAllow;
+  if (!Array.isArray(allow) || allow.length === 0) return false;
+  if (!Array.isArray(alsoAllow) || alsoAllow.length === 0) return false;
+  const merged = Array.from(new Set([...(allow as unknown[]), ...(alsoAllow as unknown[])]));
+  node.allow = merged;
+  delete node.alsoAllow;
+  return true;
+}
+
+function migrateAlsoAllowInToolConfig(raw: Record<string, unknown>, changes: string[]) {
+  let mutated = false;
+
+  // Global tools
+  const tools = getRecord(raw.tools);
+  if (mergeAlsoAllowIntoAllow(tools)) {
+    mutated = true;
+    changes.push("Merged tools.alsoAllow into tools.allow (and removed tools.alsoAllow).");
+  }
+
+  // tools.byProvider.*
+  const byProvider = getRecord(tools?.byProvider);
+  if (byProvider) {
+    for (const [key, value] of Object.entries(byProvider)) {
+      if (mergeAlsoAllowIntoAllow(value)) {
+        mutated = true;
+        changes.push(`Merged tools.byProvider.${key}.alsoAllow into allow (and removed alsoAllow).`);
+      }
+    }
+  }
+
+  // agents.list[].tools
+  const agentsList = getAgentsList(raw);
+  for (const agent of agentsList) {
+    const agentTools = getRecord(agent.tools);
+    if (mergeAlsoAllowIntoAllow(agentTools)) {
+      mutated = true;
+      const id = typeof agent.id === "string" ? agent.id : "<unknown>";
+      changes.push(`Merged agents.list[${id}].tools.alsoAllow into allow (and removed alsoAllow).`);
+    }
+
+    const agentByProvider = getRecord(agentTools?.byProvider);
+    if (agentByProvider) {
+      for (const [key, value] of Object.entries(agentByProvider)) {
+        if (mergeAlsoAllowIntoAllow(value)) {
+          mutated = true;
+          const id = typeof agent.id === "string" ? agent.id : "<unknown>";
+          changes.push(
+            `Merged agents.list[${id}].tools.byProvider.${key}.alsoAllow into allow (and removed alsoAllow).`,
+          );
+        }
+      }
+    }
+  }
+
+  // Provider group tool policies: channels.<provider>.groups.*.tools and similar nested tool policy objects.
+  const channels = getRecord(raw.channels);
+  if (channels) {
+    for (const [provider, providerCfg] of Object.entries(channels)) {
+      const groups = getRecord(getRecord(providerCfg)?.groups);
+      if (!groups) continue;
+      for (const [groupKey, groupCfg] of Object.entries(groups)) {
+        const toolsCfg = getRecord(getRecord(groupCfg)?.tools);
+        if (mergeAlsoAllowIntoAllow(toolsCfg)) {
+          mutated = true;
+          changes.push(
+            `Merged channels.${provider}.groups.${groupKey}.tools.alsoAllow into allow (and removed alsoAllow).`,
+          );
+        }
+      }
+    }
+  }
+
+  return mutated;
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
     id: "auth.anthropic-claude-cli-mode-oauth",
@@ -22,6 +100,13 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       if (claudeCli.mode !== "token") return;
       claudeCli.mode = "oauth";
       changes.push('Updated auth.profiles["anthropic:claude-cli"].mode → "oauth".');
+    },
+  },
+  {
+    id: "tools.alsoAllow-merge",
+    describe: "Merge tools.alsoAllow into allow when allow is present",
+    apply: (raw, changes) => {
+      migrateAlsoAllowInToolConfig(raw, changes);
     },
   },
   {
