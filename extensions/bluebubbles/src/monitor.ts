@@ -267,23 +267,6 @@ type BlueBubblesDebounceEntry = {
 const DEFAULT_INBOUND_DEBOUNCE_MS = 350;
 
 /**
- * Known URLBalloonProvider bundle IDs that indicate a rich link preview message.
- */
-const URL_BALLOON_BUNDLE_IDS = new Set([
-  "com.apple.messages.URLBalloonProvider",
-  "com.apple.messages.richLinkProvider",
-]);
-
-/**
- * Checks if a message is a URL balloon/link preview message.
- */
-function isUrlBalloonMessage(message: NormalizedWebhookMessage): boolean {
-  const bundleId = message.balloonBundleId?.trim();
-  if (!bundleId) return false;
-  return URL_BALLOON_BUNDLE_IDS.has(bundleId);
-}
-
-/**
  * Combines multiple debounced messages into a single message for processing.
  * Used when multiple webhook events arrive within the debounce window.
  */
@@ -297,7 +280,6 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
 
   // Use the first message as the base (typically the text message)
   const first = entries[0].message;
-  const rest = entries.slice(1);
 
   // Combine text from all entries, filtering out duplicates and empty strings
   const seenTexts = new Set<string>();
@@ -414,7 +396,7 @@ function getOrCreateDebouncer(target: WebhookTarget) {
       await processMessage(combined, flushTarget);
     },
     onError: (err) => {
-      runtime.error?.(`[bluebubbles] debounce flush failed: ${String(err)}`);
+      runtime.error?.(`[${account.accountId}] [bluebubbles] debounce flush failed: ${String(err)}`);
     },
   });
 
