@@ -862,12 +862,33 @@ describe("security audit", () => {
     await fs.chmod(configPath, 0o600);
 
     const cfg: ClawdbotConfig = { logging: { redactSensitive: "off" } };
+    const user = "DESKTOP-TEST\\Tester";
+    const execIcacls = isWindows
+      ? async (_cmd: string, args: string[]) => {
+          const target = args[0];
+          if (target === includePath) {
+            return {
+              stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(W)\n ${user}:(F)\n`,
+              stderr: "",
+            };
+          }
+          return {
+            stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n ${user}:(F)\n`,
+            stderr: "",
+          };
+        }
+      : undefined;
     const res = await runSecurityAudit({
       config: cfg,
       includeFilesystem: true,
       includeChannelSecurity: false,
       stateDir,
       configPath,
+      platform: isWindows ? "win32" : undefined,
+      env: isWindows
+        ? { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" }
+        : undefined,
+      execIcacls,
     });
 
     const expectedCheckId = isWindows
