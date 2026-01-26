@@ -327,7 +327,7 @@ export function renderAnalytics(props: AnalyticsProps) {
       }
     </style>
 
-    ${hasQuota || hasQuotaError
+    ${hasQuota
       ? html`
           <section class="card">
             <div class="card-title">Plan Quota</div>
@@ -337,14 +337,16 @@ export function renderAnalytics(props: AnalyticsProps) {
             </div>
           </section>
         `
-      : quotaEmpty
+      : hasQuotaError || quotaEmpty
         ? html`
             <section class="card">
               <div class="card-title">Plan Quota</div>
               <div class="card-sub">Current usage against your plan limits.</div>
               <div class="callout" style="margin-top: 16px;">
-                No plan quota data available. To see usage limits for Claude Max or other plans,
-                configure OAuth authentication with the required scopes.
+                Plan quota is not available for Claude Code authentication.
+                <a href="https://claude.ai/settings/usage" target="_blank" rel="noopener" style="color: var(--accent);">
+                  Check your usage at claude.ai
+                </a>
               </div>
             </section>
           `
