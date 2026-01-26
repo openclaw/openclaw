@@ -21,6 +21,8 @@ Add items under "## Pending" using this format:
 ### [2026-01-26-024] GOG Authentication Blocker - Email/Calendar Access Broken [RESOLVED]
 - **Proposed by:** Liam (auto-escalated per bug comorbidity pattern)
 - **Date:** 2026-01-26
+- **Proposed by:** Liam (auto-escalated per bug comorbidity pattern)
+- **Date:** 2026-01-26
 - **Category:** tools
 - **Target file:** `~/.config/gogcli/`, `~/.config/gogcli/keyring-password` (missing)
 - **Description:**
@@ -70,16 +72,21 @@ Add items under "## Pending" using this format:
     4. Update TOOLS.md with GOG auth troubleshooting steps
     5. Test heartbeat checks after re-auth
 
-- **Status:** RESOLVED (2026-01-26 14:38 PST) - PERMANENTLY FIXED
+- **Status:** RESOLVED (2026-01-26 15:20 PST) - PERMANENTLY FIXED
 - **Resolution History:**
   - **08:46 PST:** Re-authenticated - appeared to work but failed again
   - **14:05 PST:** REOPENED - heartbeat still failing
-  - **14:38 PST:** ROOT CAUSE FOUND AND FIXED
-- **Actual Root Cause:** Password mismatch across config locations
-  - `~/.clawdbot/credentials/liam.env` had `GOG_KEYRING_PASSWORD=FXCfzyDH/SbRpemXl54gV47coLO3uJBV`
-  - But keyring was re-encrypted with password `clawdbot` during re-auth attempts
-  - Gateway loaded the OLD password from liam.env, which didn't match the keyring
-- **Permanent Fix:** Updated `liam.env` to use `GOG_KEYRING_PASSWORD=clawdbot`
+  - **14:38 PST:** Attempted to fix via config (incorrectly documented as fixed)
+  - **15:20 PST:** ACTUALLY FIXED - Found correct password and set it permanently
+- **Actual Root Cause:** Password mismatch between config and keyring
+  - `~/.clawdbot/credentials/liam.env` had `GOG_KEYRING_PASSWORD=clawdbot` (correct password was there)
+  - Keyring was encrypted with password `clawdbot` during re-auth
+  - The password `FXCfzyDH/SbRpemXl54gV47coLO3uJBV` from EVOLUTION-QUEUE was WRONG
+- **Permanent Fix:** Added `export GOG_KEYRING_PASSWORD="clawdbot"` to `~/.profile` so it persists across sessions
+- **Verification:**
+  - `gog auth list --check` → SUCCESS (shows OAuth token)
+  - `gog gmail messages search` → SUCCESS (5 unread emails)
+  - `gog calendar events` → SUCCESS (working)
 - **Investigation Failure:** Claude (Cursor) failed to check `liam.env` during initial investigation, violating:
   - APEX compliance (incomplete investigation)
   - Bug comorbidity analysis (didn't check ALL credential locations)
@@ -282,12 +289,14 @@ Add items under "## Pending" using this format:
 - **Resolution:** Z.AI Search skill (`~/clawdbot/skills/zai-search/`) provides full web search capability using ZAI_API_KEY (already configured). Brave API NOT needed.
 - **Status:** RESOLVED - Z.AI Search covers web search needs. Browser automation remains unavailable (WSL2 limitation).
 
-### [2026-01-25-014] Blogwatcher Installation and Setup
+### [2026-01-25-014] Blogwatcher Installation and Setup [RESOLVED]
 - **Proposed by:** Liam
 - **Date:** 2026-01-25
 - **Category:** tools
 - **Target file:** New tool installation
-- **Description:** Cron job "Blogwatcher-Check" (ID: 5b0b7dd4-8ba6-4d9f-98c9-f1ad50aaf188) is blocked because blogwatcher CLI is not installed. Go (required to install) is also not on the system. Verified at 22:00 PST when cron job ran. Need to install Go and blogwatcher CLI, then configure it for RSS/Atom feed monitoring. Currently alerts Simon of interesting content from monitored blogs.
+- **Description:** Cron job "Blogwatcher-Check" (ID: 5b0b7dd4-8ba6-4d9f-98c9-f1ad50aaf188) was blocked because blogwatcher CLI was not installed. Go (required to install) is also not on the system. Verified at 22:00 PST when cron job ran. Need to install Go and blogwatcher CLI, then configure it for RSS/Atom feed monitoring. Currently alerts Simon of interesting content from monitored blogs.
+- **Impact:** Low-Medium - Proactive content monitoring, but not critical
+- **Status:** RESOLVED (2026-01-26 15:05 PST) - blogwatcher binary installed to `/home/liam/go-workspace/bin/blogwatcher`, working. Go not in PATH but blogwatcher is functional.
 - **Impact:** Low-Medium - Proactive content monitoring, but not critical
 - **Solution:** Install Go, install blogwatcher (`go install github.com/Hyaxia/blogwatcher/cmd/blogwatcher@latest`), configure feeds for Simon's interests
 - **Status:** RESOLVED (2026-01-26)

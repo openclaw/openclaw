@@ -77,3 +77,37 @@ GEMINI_API_KEY="$(jq -r '.env.GEMINI_API_KEY' ~/.clawdbot/clawdbot.json)" \
 
 ---
 *Add tool-specific notes as you learn them.*
+
+## Data Analytics (`data-analytics` skill)
+
+**Location:** `~/clawdbot/skills/data-analytics/SKILL.md`
+**Created:** 2026-01-26 14:51 PST
+
+**Capabilities:**
+- **SQL/SQLite Querying:** Full SQL with JOINs, subqueries, window functions, exports to CSV/JSON/tables
+- **Python/Pandas Analysis:** Load CSV/JSON/Excel/Parquet, descriptive stats, data cleaning, groupby aggregations, pivot tables, time series
+- **Excel Processing:** Read/write .xlsx files, multiple sheets, formatting preservation, formula support, VLOOKUP via pandas merge
+- **Visualization:** Bar/line/scatter/histogram/box/heatmap/pie charts in PNG/SVG/HTML formats
+
+**Using the skill:**
+```bash
+# Use venv Python directly
+~/clawdbot/skills/data-analytics/.venv/bin/python ~/clawdbot/skills/data-analytics/analyze.py <command>
+~/clawdbot/skills/data-analytics/.venv/bin/python ~/clawdbot/skills/data-analytics/excel.py <command>
+~/clawdbot/skills/data-analytics/.venv/bin/python ~/clawdbot/skills/data-analytics/visualize.py <command>
+```
+
+**Expertise areas:** Workday, SAP SuccessFactors, Salesforce CRM data
+
+## Calendar Enhanced (`calendar-enhanced` skill)
+
+**Location:** `~/clawdbot/skills/calendar-enhanced/SKILL.md`
+**Created:** 2026-01-26 00:09 PST
+
+**Capabilities:**
+- **Natural Language Parsing:** "Schedule a meeting with John on Tuesday at 2pm" → automatic calendar creation
+- **Time Parsing:** "tomorrow" = next day, "morning" = 9 AM, "afternoon" = 2 PM, "evening" = 6 PM (1 hour default)
+- **PARA Project Linking:** Events tagged with `[Project: name]` for linking to PARA projects
+- **Smart Reminders:** 24h alerts, 2h reminders, conflict detection via HEARTBEAT
+
+**Integration:** Google Calendar API (clawdbot@puenteworks.com), all interactions via Telegram

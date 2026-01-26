@@ -36,3 +36,4 @@ if [ -f "$HOME/.clawdbot/credentials/liam.env" ]; then
 fi
 
 . "$HOME/.cargo/env"
+export GOG_KEYRING_PASSWORD="clawdbot"
