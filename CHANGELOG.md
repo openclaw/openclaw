@@ -8,6 +8,7 @@ Status: unreleased.
 ### Changes
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
 - Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.
+- Docs: add migration guide for moving to a new machine. (#2381)
 - Gateway: warn on hook tokens via query params; document header auth preference. (#2200) Thanks @YuriNachos.
 - Gateway: add dangerous Control UI device auth bypass flag + audit warnings. (#2248)
 - Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.

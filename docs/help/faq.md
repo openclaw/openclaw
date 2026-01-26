@@ -401,7 +401,7 @@ remote mode, remember the gateway host owns the session store and workspace.
 up **memory + bootstrap files**, but **not** session history or auth. Those live
 under `~/.clawdbot/` (for example `~/.clawdbot/agents/<agentId>/sessions/`).
 
-Related: [Where things live on disk](/help/faq#where-does-clawdbot-store-its-data),
+Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-does-clawdbot-store-its-data),
 [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
 [Remote mode](/gateway/remote).
 
