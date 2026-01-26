@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../types";
-import type { ChatQueueItem } from "../ui-types";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types";
 import type { ChatItem, MessageGroup } from "../types/chat-types";
 import { icons } from "../icons";
 import {
@@ -20,12 +20,6 @@ export type CompactionIndicatorStatus = {
   active: boolean;
   startedAt: number | null;
   completedAt: number | null;
-};
-
-export type ChatAttachment = {
-  id: string;
-  dataUrl: string;
-  mimeType: string;
 };
 
 export type ChatProps = {
@@ -305,7 +299,12 @@ export function renderChat(props: ChatProps) {
                 ${props.queue.map(
                   (item) => html`
                     <div class="chat-queue__item">
-                      <div class="chat-queue__text">${item.text}</div>
+                      <div class="chat-queue__text">
+                        ${item.text ||
+                        (item.attachments?.length
+                          ? `Image (${item.attachments.length})`
+                          : "")}
+                      </div>
                       <button
                         class="btn chat-queue__remove"
                         type="button"

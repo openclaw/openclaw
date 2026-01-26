@@ -34,6 +34,9 @@ Status: unreleased.
 - Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
 
+### Fixes
+- Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
+
 ## 2026.1.24-3
 
 ### Fixes
