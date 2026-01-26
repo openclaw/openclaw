@@ -53,13 +53,12 @@ clawdbot models status
 
 This means the stored Anthropic OAuth token expired and the refresh failed.
 If you’re on a Claude subscription (no API key), the most reliable fix is to
-switch to a **Claude Code setup-token** or re-sync Claude Code CLI OAuth on the
-**gateway host**.
+switch to a **Claude Code setup-token** and paste it on the **gateway host**.
 
 **Recommended (setup-token):**
 
 ```bash
-# Run on the gateway host (runs Claude Code CLI)
+# Run on the gateway host (paste the setup-token)
 clawdbot models auth setup-token --provider anthropic
 clawdbot models status
 ```
@@ -70,10 +69,6 @@ If you generated the token elsewhere:
 clawdbot models auth paste-token --provider anthropic
 clawdbot models status
 ```
-
-**If you want to keep OAuth reuse:**
-log in with Claude Code CLI on the gateway host, then run `clawdbot models status`
-to sync the refreshed token into Clawdbot’s auth store.
 
 More detail: [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
