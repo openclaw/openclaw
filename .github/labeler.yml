@@ -1,109 +1,172 @@
 "channel: bluebubbles":
-  - "extensions/bluebubbles/**"
-  - "docs/channels/bluebubbles.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bluebubbles/**"
+          - "docs/channels/bluebubbles.md"
 "channel: discord":
-  - "src/discord/**"
-  - "extensions/discord/**"
-  - "docs/channels/discord.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/discord/**"
+          - "extensions/discord/**"
+          - "docs/channels/discord.md"
 "channel: googlechat":
-  - "extensions/googlechat/**"
-  - "docs/channels/googlechat.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/googlechat/**"
+          - "docs/channels/googlechat.md"
 "channel: imessage":
-  - "src/imessage/**"
-  - "extensions/imessage/**"
-  - "docs/channels/imessage.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/imessage/**"
+          - "extensions/imessage/**"
+          - "docs/channels/imessage.md"
 "channel: line":
-  - "extensions/line/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/line/**"
 "channel: matrix":
-  - "extensions/matrix/**"
-  - "docs/channels/matrix.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/matrix/**"
+          - "docs/channels/matrix.md"
 "channel: mattermost":
-  - "extensions/mattermost/**"
-  - "docs/channels/mattermost.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mattermost/**"
+          - "docs/channels/mattermost.md"
 "channel: msteams":
-  - "extensions/msteams/**"
-  - "docs/channels/msteams.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/msteams/**"
+          - "docs/channels/msteams.md"
 "channel: nextcloud-talk":
-  - "extensions/nextcloud-talk/**"
-  - "docs/channels/nextcloud-talk.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nextcloud-talk/**"
+          - "docs/channels/nextcloud-talk.md"
 "channel: nostr":
-  - "extensions/nostr/**"
-  - "docs/channels/nostr.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nostr/**"
+          - "docs/channels/nostr.md"
 "channel: signal":
-  - "src/signal/**"
-  - "extensions/signal/**"
-  - "docs/channels/signal.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/signal/**"
+          - "extensions/signal/**"
+          - "docs/channels/signal.md"
 "channel: slack":
-  - "src/slack/**"
-  - "extensions/slack/**"
-  - "docs/channels/slack.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/slack/**"
+          - "extensions/slack/**"
+          - "docs/channels/slack.md"
 "channel: telegram":
-  - "src/telegram/**"
-  - "extensions/telegram/**"
-  - "docs/channels/telegram.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/telegram/**"
+          - "extensions/telegram/**"
+          - "docs/channels/telegram.md"
 "channel: tlon":
-  - "extensions/tlon/**"
-  - "docs/channels/tlon.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tlon/**"
+          - "docs/channels/tlon.md"
 "channel: voice-call":
-  - "extensions/voice-call/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/voice-call/**"
 "channel: whatsapp-web":
-  - "src/web/**"
-  - "extensions/whatsapp/**"
-  - "docs/channels/whatsapp.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/web/**"
+          - "extensions/whatsapp/**"
+          - "docs/channels/whatsapp.md"
 "channel: zalo":
-  - "extensions/zalo/**"
-  - "docs/channels/zalo.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zalo/**"
+          - "docs/channels/zalo.md"
 "channel: zalouser":
-  - "extensions/zalouser/**"
-  - "docs/channels/zalouser.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zalouser/**"
+          - "docs/channels/zalouser.md"
 
 "app: android":
-  - "apps/android/**"
-  - "docs/platforms/android.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/**"
+          - "docs/platforms/android.md"
 "app: ios":
-  - "apps/ios/**"
-  - "docs/platforms/ios.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/ios/**"
+          - "docs/platforms/ios.md"
 "app: macos":
-  - "apps/macos/**"
-  - "docs/platforms/macos.md"
-  - "docs/platforms/mac/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/macos/**"
+          - "docs/platforms/macos.md"
+          - "docs/platforms/mac/**"
 "app: web-ui":
-  - "ui/**"
-  - "src/gateway/control-ui.ts"
-  - "src/gateway/control-ui-shared.ts"
-  - "src/infra/control-ui-assets.ts"
-
-"cli":
-  - "src/cli/**"
-  - "src/commands/**"
-  - "src/tui/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ui/**"
+          - "src/gateway/control-ui.ts"
+          - "src/gateway/control-ui-shared.ts"
+          - "src/infra/control-ui-assets.ts"
 
 "gateway":
-  - "src/gateway/**"
-  - "src/daemon/**"
-  - "docs/gateway/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/gateway/**"
+          - "src/daemon/**"
+          - "docs/gateway/**"
 
 "docs":
-  - "docs/**"
-  - "docs.acp.md"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "docs.acp.md"
 
 "extensions: copilot-proxy":
-  - "extensions/copilot-proxy/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/copilot-proxy/**"
 "extensions: diagnostics-otel":
-  - "extensions/diagnostics-otel/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-otel/**"
 "extensions: google-antigravity-auth":
-  - "extensions/google-antigravity-auth/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-antigravity-auth/**"
 "extensions: google-gemini-cli-auth":
-  - "extensions/google-gemini-cli-auth/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-gemini-cli-auth/**"
 "extensions: llm-task":
-  - "extensions/llm-task/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llm-task/**"
 "extensions: lobster":
-  - "extensions/lobster/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/lobster/**"
 "extensions: memory-core":
-  - "extensions/memory-core/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-core/**"
 "extensions: memory-lancedb":
-  - "extensions/memory-lancedb/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-lancedb/**"
 "extensions: open-prose":
-  - "extensions/open-prose/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/open-prose/**"
 "extensions: qwen-portal-auth":
-  - "extensions/qwen-portal-auth/**"
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qwen-portal-auth/**"
