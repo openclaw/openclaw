@@ -46,7 +46,7 @@ Use **Raspberry Pi OS Lite (64-bit)** — no desktop needed for a headless serve
 1. Download [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
 2. Choose OS: **Raspberry Pi OS Lite (64-bit)**
 3. Click the gear icon (⚙️) to pre-configure:
-   - Set hostname: `clawdbot`
+   - Set hostname: `gateway-host`
    - Enable SSH
    - Set username/password
    - Configure WiFi (if not using Ethernet)
@@ -56,9 +56,9 @@ Use **Raspberry Pi OS Lite (64-bit)** — no desktop needed for a headless serve
 ## 2) Connect via SSH
 
 ```bash
-ssh pi@clawdbot.local
+ssh user@gateway-host
 # or use the IP address
-ssh pi@192.168.x.x
+ssh user@192.168.x.x
 ```
 
 ## 3) System Setup
@@ -156,7 +156,7 @@ Since the Pi is headless, use an SSH tunnel:
 
 ```bash
 # From your laptop/desktop
-ssh -L 18789:localhost:18789 pi@clawdbot.local
+ssh -L 18789:localhost:18789 user@gateway-host
 
 # Then open in browser
 open http://localhost:18789
