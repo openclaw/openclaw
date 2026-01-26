@@ -17,6 +17,7 @@ Status: unreleased.
 - Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
 - Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
 - Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
+- Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
 
 ## 2026.1.24-3
 
