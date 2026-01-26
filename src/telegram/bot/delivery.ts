@@ -21,7 +21,8 @@ import { loadWebMedia } from "../../web/media.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
-import type { TelegramContext } from "./types.js";
+import type { StickerMetadata, TelegramContext } from "./types.js";
+import { getCachedSticker } from "../sticker-cache.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
@@ -261,8 +262,79 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
-): Promise<{ path: string; contentType?: string; placeholder: string } | null> {
+): Promise<{
+  path: string;
+  contentType?: string;
+  placeholder: string;
+  stickerMetadata?: StickerMetadata;
+} | null> {
   const msg = ctx.message;
+
+  // Handle stickers separately - only static stickers (WEBP) are supported
+  if (msg.sticker) {
+    const sticker = msg.sticker;
+    // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
+    if (sticker.is_animated || sticker.is_video) {
+      logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
+      return null;
+    }
+    if (!sticker.file_id) return null;
+
+    try {
+      const file = await ctx.getFile();
+      if (!file.file_path) {
+        logVerbose("telegram: getFile returned no file_path for sticker");
+        return null;
+      }
+      const fetchImpl = proxyFetch ?? globalThis.fetch;
+      if (!fetchImpl) {
+        logVerbose("telegram: fetch not available for sticker download");
+        return null;
+      }
+      const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+      const fetched = await fetchRemoteMedia({
+        url,
+        fetchImpl,
+        filePathHint: file.file_path,
+      });
+      const saved = await saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes);
+
+      // Check sticker cache for existing description
+      const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+      if (cached) {
+        logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
+        return {
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: "<media:sticker>",
+          stickerMetadata: {
+            emoji: cached.emoji,
+            setName: cached.setName,
+            fileId: cached.fileId,
+            fileUniqueId: sticker.file_unique_id,
+            cachedDescription: cached.description,
+          },
+        };
+      }
+
+      // Cache miss - return metadata for vision processing
+      return {
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: "<media:sticker>",
+        stickerMetadata: {
+          emoji: sticker.emoji ?? undefined,
+          setName: sticker.set_name ?? undefined,
+          fileId: sticker.file_id,
+          fileUniqueId: sticker.file_unique_id,
+        },
+      };
+    } catch (err) {
+      logVerbose(`telegram: failed to process sticker: ${err}`);
+      return null;
+    }
+  }
+
   const m =
     msg.photo?.[msg.photo.length - 1] ?? msg.video ?? msg.document ?? msg.audio ?? msg.voice;
   if (!m?.file_id) return null;

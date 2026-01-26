@@ -12,6 +12,8 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 
 export const dispatchTelegramMessage = async ({
   context,
@@ -128,6 +130,49 @@ export const dispatchTelegramMessage = async ({
   });
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
+  // Handle uncached stickers: get a dedicated vision description before dispatch
+  // This ensures we cache a raw description rather than a conversational response
+  const sticker = ctxPayload.Sticker;
+  if (sticker?.fileUniqueId && !sticker.cachedDescription && ctxPayload.MediaPath) {
+    const agentDir = resolveAgentDir(cfg, route.agentId);
+    const description = await describeStickerImage({
+      imagePath: ctxPayload.MediaPath,
+      cfg,
+      agentDir,
+    });
+    if (description) {
+      // Format the description with sticker context
+      const stickerContext = [sticker.emoji, sticker.setName ? `from "${sticker.setName}"` : null]
+        .filter(Boolean)
+        .join(" ");
+      const formattedDesc = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
+
+      // Update context to use description instead of image
+      sticker.cachedDescription = description;
+      ctxPayload.Body = formattedDesc;
+      ctxPayload.BodyForAgent = formattedDesc;
+      // Clear media paths so native vision doesn't process the image again
+      ctxPayload.MediaPath = undefined;
+      ctxPayload.MediaType = undefined;
+      ctxPayload.MediaUrl = undefined;
+      ctxPayload.MediaPaths = undefined;
+      ctxPayload.MediaUrls = undefined;
+      ctxPayload.MediaTypes = undefined;
+
+      // Cache the description for future encounters
+      cacheSticker({
+        fileId: sticker.fileId,
+        fileUniqueId: sticker.fileUniqueId,
+        emoji: sticker.emoji,
+        setName: sticker.setName,
+        description,
+        cachedAt: new Date().toISOString(),
+        receivedFrom: ctxPayload.From,
+      });
+      logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
+    }
+  }
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
@@ -139,6 +184,7 @@ export const dispatchTelegramMessage = async ({
           await flushDraft();
           draftStream?.stop();
         }
+
         await deliverReplies({
           replies: [payload],
           chatId: String(chatId),
