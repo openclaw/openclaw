@@ -315,6 +315,9 @@ REDPILL_API_KEY=rp_xxxxxxxxxxxx
 # Optional: messaging channels (auto-configure on boot)
 # TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 # DISCORD_BOT_TOKEN=your-discord-bot-token
+# Optional: pre-approve specific users (skips pairing step)
+# TELEGRAM_ALLOWED_USERS=123456789,987654321
+# DISCORD_ALLOWED_USERS=123456789012345678,987654321098765432
 # Optional: protect the web UI with password auth
 # GATEWAY_AUTH=password
 # GATEWAY_PASSWORD=your-secure-password
@@ -378,6 +381,8 @@ Access your gateway URL to:
 | `REDPILL_API_KEY` | Yes | Your Redpill API key (auto-configures all 18 GPU TEE models on first boot) |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram bot token (auto-configures and starts Telegram channel on boot) |
 | `DISCORD_BOT_TOKEN` | No | Discord bot token (auto-configures and starts Discord channel on boot) |
+| `TELEGRAM_ALLOWED_USERS` | No | Comma-separated Telegram user IDs to pre-approve (e.g. `123456789,987654321`) |
+| `DISCORD_ALLOWED_USERS` | No | Comma-separated Discord user IDs to pre-approve (e.g. `123456789012345678,987654321098765432`) |
 | `GATEWAY_PORT` | No | Gateway port (default: `18789`) |
 | `GATEWAY_AUTH` | No | Gateway auth mode: `off`, `token`, or `password` (default: `off`) |
 | `GATEWAY_TOKEN` | No | Gateway token (required when `GATEWAY_AUTH=token`) |
@@ -420,6 +425,46 @@ The following channels work in Docker/Linux environments (no Mac services requir
 | **Signal** | Hard | Requires `signal-cli` + Java |
 
 Configure channels via the `/setup` wizard at `https://<cvm-url>:18789/setup`.
+
+### Finding Your User IDs
+
+To pre-approve users (skip pairing), you need their platform-specific user IDs:
+
+**Telegram User ID:**
+1. Send a message to your bot on Telegram
+2. The bot will reply with a pairing code and show your user ID:
+   ```
+   Clawdbot: access not configured.
+
+   Your Telegram user id: 1868695838
+
+   Pairing code: ABCD1234
+   ```
+3. Copy the user ID (e.g., `1868695838`)
+4. Add it to `.env`: `TELEGRAM_ALLOWED_USERS=1868695838`
+
+**Discord User ID:**
+1. Send a message to your bot on Discord
+2. The bot will reply with a pairing code and show your user ID:
+   ```
+   Clawdbot: access not configured.
+
+   Your Discord user id: 723570216251949194
+
+   Pairing code: XYZW5678
+   ```
+3. Copy the user ID (e.g., `723570216251949194`)
+4. Add it to `.env`: `DISCORD_ALLOWED_USERS=723570216251949194`
+
+**Alternative Methods:**
+
+Telegram:
+- Use [@userinfobot](https://t.me/userinfobot) on Telegram
+- Forward a message to the bot to get the sender's ID
+
+Discord:
+- Enable Developer Mode: Settings → Advanced → Developer Mode
+- Right-click your username → Copy User ID
 
 ### Persistent Storage
 
