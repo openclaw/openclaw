@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -8,6 +12,12 @@ import { applyAuthProfileConfig } from "./onboard-auth.js";
 const QUOTIO_DEFAULT_BASE_URL = "http://127.0.0.1:18317/v1";
 const QUOTIO_DEFAULT_API_KEY = "quotio-local";
 const QUOTIO_PROBE_TIMEOUT_MS = 3000;
+
+type QuotioConfigFile = {
+  host?: string;
+  port?: number;
+  "api-keys"?: string[];
+};
 
 type QuotioModel = {
   id: string;
@@ -33,6 +43,38 @@ function getEnvQuotioConfig(): { baseUrl?: string; apiKey?: string } {
     baseUrl: process.env.QUOTIO_BASE_URL || process.env.QUOTIO_URL,
     apiKey: process.env.QUOTIO_API_KEY || process.env.QUOTIO_KEY,
   };
+}
+
+function getQuotioConfigPaths(): string[] {
+  const home = homedir();
+  return [
+    join(home, "Library", "Application Support", "Quotio", "config.yaml"),
+    join(home, ".config", "quotio", "config.yaml"),
+    join(home, ".quotio", "config.yaml"),
+  ];
+}
+
+function readQuotioConfigFile(): { baseUrl?: string; apiKey?: string } {
+  for (const configPath of getQuotioConfigPaths()) {
+    try {
+      const content = readFileSync(configPath, "utf-8");
+      const config = parseYaml(content) as QuotioConfigFile;
+
+      if (!config) continue;
+
+      const host = config.host || "127.0.0.1";
+      const port = config.port || 18317;
+      const apiKeys = config["api-keys"];
+
+      return {
+        baseUrl: `http://${host}:${port}/v1`,
+        apiKey: apiKeys?.[0],
+      };
+    } catch {
+      continue;
+    }
+  }
+  return {};
 }
 
 async function probeQuotioEndpoint(
@@ -69,9 +111,10 @@ async function probeQuotioEndpoint(
 
 async function autoDetectQuotio(): Promise<QuotioDetectionResult | null> {
   const env = getEnvQuotioConfig();
+  const fileConfig = readQuotioConfigFile();
 
-  const baseUrl = env.baseUrl || QUOTIO_DEFAULT_BASE_URL;
-  const apiKey = env.apiKey || QUOTIO_DEFAULT_API_KEY;
+  const baseUrl = env.baseUrl || fileConfig.baseUrl || QUOTIO_DEFAULT_BASE_URL;
+  const apiKey = env.apiKey || fileConfig.apiKey || QUOTIO_DEFAULT_API_KEY;
 
   const result = await probeQuotioEndpoint(baseUrl, apiKey);
   if (result.ok) {
@@ -83,7 +126,7 @@ async function autoDetectQuotio(): Promise<QuotioDetectionResult | null> {
     };
   }
 
-  if (env.baseUrl || env.apiKey) {
+  if (baseUrl !== QUOTIO_DEFAULT_BASE_URL || apiKey !== QUOTIO_DEFAULT_API_KEY) {
     const defaultResult = await probeQuotioEndpoint(
       QUOTIO_DEFAULT_BASE_URL,
       QUOTIO_DEFAULT_API_KEY,
