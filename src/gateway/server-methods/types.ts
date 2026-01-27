@@ -6,6 +6,7 @@ import type { WizardSession } from "../../wizard/session.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
+import type { GatewayRateLimiter } from "../rate-limit.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -84,6 +85,7 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  rateLimiter: GatewayRateLimiter;
 };
 
 export type GatewayRequestOptions = {

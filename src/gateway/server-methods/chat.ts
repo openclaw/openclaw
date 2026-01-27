@@ -39,7 +39,8 @@ import {
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
-import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { sanitizeIncomingMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { canAccessAgent } from "../../security/rbac.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -362,7 +363,25 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+
+    // Sanitize incoming message for injection attacks
     const { cfg, entry } = loadSessionEntry(p.sessionKey);
+    const sanitized = sanitizeIncomingMessage(parsedMessage, {
+      stripEnvelopes: true,
+      blockCritical: false, // Default: warn but don't block critical injection attempts
+      logAttempts: true,
+      useBoundaries: true,
+    });
+    if (sanitized.blocked) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "message blocked by security policy"),
+      );
+      return;
+    }
+    parsedMessage = sanitized.text;
+
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -465,6 +484,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: p.sessionKey,
         config: cfg,
       });
+
+      // RBAC: Check if sender can access this agent
+      const senderId = clientInfo?.id ?? "anonymous";
+      const agentAccessCheck = canAccessAgent(senderId, agentId ?? "default", cfg);
+      if (!agentAccessCheck.allowed) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `RBAC denied: ${agentAccessCheck.reason ?? "agent access not allowed"}`,
+          ),
+        );
+        return;
+      }
+
       let prefixContext: ResponsePrefixContext = {
         identityName: resolveIdentityName(cfg, agentId),
       };
@@ -613,10 +648,26 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
 
     // Load session to find transcript file
-    const { storePath, entry } = loadSessionEntry(p.sessionKey);
+    const { cfg, storePath, entry } = loadSessionEntry(p.sessionKey);
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+      return;
+    }
+
+    // Sanitize injected message
+    const sanitized = sanitizeIncomingMessage(p.message, {
+      stripEnvelopes: false, // Don't strip envelopes from injected content
+      blockCritical: false, // Default: warn but don't block critical injection attempts
+      logAttempts: true,
+      useBoundaries: false, // Don't wrap injected assistant messages
+    });
+    if (sanitized.blocked) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "message blocked by security policy"),
+      );
       return;
     }
 

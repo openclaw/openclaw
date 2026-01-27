@@ -84,13 +84,39 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
       return;
     }
 
+    // Try plaintext backup first
     const backupRaw = readCredsJsonRaw(backupPath);
-    if (!backupRaw) return;
+    if (backupRaw) {
+      // Ensure backup is parseable before restoring.
+      JSON.parse(backupRaw);
+      // Check if backup is encrypted (.bak.enc exists) or plaintext (.bak exists)
+      const encBackupPath = resolveWebCredsBackupEncryptedPath(authDir);
+      if (fsSync.existsSync(encBackupPath)) {
+        // Encrypted backup -> restore to encrypted creds
+        const encCredsPath = resolveWebCredsEncryptedPath(authDir);
+        fsSync.copyFileSync(encBackupPath, encCredsPath);
+        logger.warn(
+          { credsPath: encCredsPath },
+          "restored WhatsApp creds.json.enc from encrypted backup",
+        );
+      } else if (fsSync.existsSync(backupPath)) {
+        // Plaintext backup -> restore to plaintext creds
+        fsSync.copyFileSync(backupPath, credsPath);
+        logger.warn({ credsPath }, "restored WhatsApp creds.json from backup");
+      }
+      return;
+    }
 
-    // Ensure backup is parseable before restoring.
-    JSON.parse(backupRaw);
-    fsSync.copyFileSync(backupPath, credsPath);
-    logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
+    // If readCredsJsonRaw returned null but encrypted backup exists, try direct copy
+    const encBackupPath = resolveWebCredsBackupEncryptedPath(authDir);
+    if (fsSync.existsSync(encBackupPath)) {
+      const encCredsPath = resolveWebCredsEncryptedPath(authDir);
+      fsSync.copyFileSync(encBackupPath, encCredsPath);
+      logger.warn(
+        { credsPath: encCredsPath },
+        "restored WhatsApp creds.json.enc from encrypted backup",
+      );
+    }
   } catch {
     // ignore
   }

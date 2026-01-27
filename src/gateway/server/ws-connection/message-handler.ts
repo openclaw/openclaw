@@ -614,6 +614,10 @@ export function attachGatewayWsMessageHandler(params: {
             reason: authResult.reason ?? "unauthorized",
           });
 
+          // Rate limit: record auth failure for exponential backoff
+          const authClientId = clientIp ?? remoteAddr ?? "unknown";
+          buildRequestContext().rateLimiter.recordAuthFailure(authClientId);
+
           setCloseCause("unauthorized", {
             authMode: resolvedAuth.mode,
             authProvided,
@@ -780,6 +784,10 @@ export function attachGatewayWsMessageHandler(params: {
           method: authMethod,
         });
 
+        // Rate limit: clear auth failure state on successful login
+        const authSuccessClientId = clientIp ?? remoteAddr ?? "unknown";
+        buildRequestContext().rateLimiter.clearAuthFailure(authSuccessClientId);
+
         if (isWebchatConnect(connectParams)) {
           logWsControl.info(
             `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
@@ -943,13 +951,31 @@ export function attachGatewayWsMessageHandler(params: {
       };
 
       void (async () => {
+        // Rate limit: check if request is allowed
+        const context = buildRequestContext();
+        const rateLimitClientId =
+          client?.connect.auth?.token?.slice(0, 16) ?? remoteAddr ?? "unknown";
+        const isAuthenticated = !!client?.connect.auth?.token;
+        const rateCheck = context.rateLimiter.checkRequest(rateLimitClientId, isAuthenticated);
+        if (!rateCheck.allowed) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.TOO_MANY_REQUESTS,
+              `rate limit exceeded: retry after ${rateCheck.retryAfterMs ?? 1000}ms`,
+            ),
+          );
+          return;
+        }
+
         await handleGatewayRequest({
           req,
           respond,
           client,
           isWebchatConnect,
           extraHandlers,
-          context: buildRequestContext(),
+          context,
         });
       })().catch((err) => {
         logGateway.error(`request handler failed: ${formatForLog(err)}`);

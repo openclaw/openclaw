@@ -438,7 +438,7 @@ final class NodeAppModel {
             var text: String
             var sessionKey: String?
         }
-        let payload = Payload(text: text, sessionKey: sessionKey)
+        let payload = Payload(text: text, sessionKey: key)
         let data = try JSONEncoder().encode(payload)
         guard let json = String(bytes: data, encoding: .utf8) else {
             throw NSError(domain: "NodeAppModel", code: 1, userInfo: [

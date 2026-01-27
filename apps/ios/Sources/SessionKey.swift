@@ -8,8 +8,6 @@ enum SessionKey {
 
     static func isCanonicalMainSessionKey(_ value: String?) -> Bool {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return false }
-        if trimmed == "global" { return true }
-        return trimmed.hasPrefix("agent:")
+        return trimmed.caseInsensitiveCompare("main") == .orderedSame
     }
 }

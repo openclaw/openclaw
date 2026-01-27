@@ -24,6 +24,8 @@ import {
   type ExecAllowlistEntry,
   type ExecCommandSegment,
 } from "../infra/exec-approvals.js";
+import { evaluateBlocklist } from "../infra/exec-blocklist.js";
+import { canExecuteCommand, isRbacEnabled } from "../security/rbac.js";
 import {
   requestExecHostViaSocket,
   type ExecHostRequest,
@@ -822,6 +824,33 @@ async function handleInvoke(
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const sessionKey = params.sessionKey?.trim() || "node";
   const runId = params.runId?.trim() || crypto.randomUUID();
+
+  // RBAC: Check if command execution is allowed for this session
+  if (isRbacEnabled(cfg)) {
+    const execCheck = canExecuteCommand(sessionKey, cmdText, cfg);
+    if (!execCheck.allowed) {
+      await sendNodeEvent(
+        client,
+        "exec.denied",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          reason: `rbac:${execCheck.reason ?? "denied"}`,
+        }),
+      );
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: {
+          code: "RBAC_DENIED",
+          message: `RBAC denied: ${execCheck.reason ?? "command execution not allowed"}`,
+        },
+      });
+      return;
+    }
+  }
+
   const env = sanitizeEnv(params.env ?? undefined);
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
@@ -846,6 +875,32 @@ async function handleInvoke(
     segments = allowlistEval.segments;
   } else {
     const analysis = analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
+
+    // SECURITY: Check blocklist for argv path (matches rawCommand path behavior)
+    const cmdForBlocklist = argv.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ");
+    const blocklistResult = evaluateBlocklist(cmdForBlocklist);
+    if (blocklistResult.blocked) {
+      await sendNodeEvent(
+        client,
+        "exec.denied",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          reason: blocklistResult.reason ?? "blocklist",
+        }),
+      );
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: {
+          code: "BLOCKLIST",
+          message: blocklistResult.reason ?? "command blocked by security policy",
+        },
+      });
+      return;
+    }
+
     const allowlistEval = evaluateExecAllowlist({
       analysis,
       allowlist: approvals.allowlist,

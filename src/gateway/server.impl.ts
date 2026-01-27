@@ -478,6 +478,7 @@ export async function startGatewayServer(
       markChannelLoggedOut,
       wizardRunner,
       broadcastVoiceWakeChanged,
+      rateLimiter,
     },
   });
   logGatewayStartup({

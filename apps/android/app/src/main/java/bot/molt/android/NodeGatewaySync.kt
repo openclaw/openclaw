@@ -264,15 +264,6 @@ internal fun parseHexColorArgb(raw: String?): Long? {
     return 0xFF000000L or rgb
 }
 
-internal fun normalizeMainKey(raw: String?): String {
-    val trimmed = raw?.trim().orEmpty()
-    return trimmed.ifEmpty { "main" }
-}
-
-internal fun isCanonicalMainSessionKey(key: String): Boolean {
-    return key.trim().equals("main", ignoreCase = true)
-}
-
 // MARK: - JSON Helpers
 
 internal fun kotlinx.serialization.json.JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

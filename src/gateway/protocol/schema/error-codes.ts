@@ -6,6 +6,7 @@ export const ErrorCodes = {
   AGENT_TIMEOUT: "AGENT_TIMEOUT",
   INVALID_REQUEST: "INVALID_REQUEST",
   UNAVAILABLE: "UNAVAILABLE",
+  TOO_MANY_REQUESTS: "TOO_MANY_REQUESTS",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

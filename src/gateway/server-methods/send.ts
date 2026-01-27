@@ -115,6 +115,21 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Rate limit: check channel message rate
+    const channelKey = accountId ? `${channel}:${accountId}` : channel;
+    const channelRateCheck = context.rateLimiter.checkChannelMessage(channelKey);
+    if (!channelRateCheck.allowed) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.TOO_MANY_REQUESTS,
+          `channel rate limit exceeded: retry after ${channelRateCheck.retryAfterMs ?? 1000}ms`,
+        ),
+      );
+      return;
+    }
+
     const work = (async (): Promise<InflightResult> => {
       try {
         const cfg = loadConfig();
