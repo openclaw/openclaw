@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 type LockFilePayload = {
@@ -14,6 +14,9 @@ type HeldLock = {
 };
 
 const HELD_LOCKS = new Map<string, HeldLock>();
+const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
+type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
+const cleanupHandlers = new Map<CleanupSignal, () => void>();
 
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) return false;
@@ -22,6 +25,65 @@ function isAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Synchronously release all held locks.
+ * Used during process exit when async operations aren't reliable.
+ */
+function releaseAllLocksSync(): void {
+  for (const [sessionFile, held] of HELD_LOCKS) {
+    try {
+      if (typeof held.handle.fd === "number") {
+        fsSync.closeSync(held.handle.fd);
+      }
+    } catch {
+      // Ignore errors during cleanup - best effort
+    }
+    try {
+      fsSync.rmSync(held.lockPath, { force: true });
+    } catch {
+      // Ignore errors during cleanup - best effort
+    }
+    HELD_LOCKS.delete(sessionFile);
+  }
+}
+
+let cleanupRegistered = false;
+
+function handleTerminationSignal(signal: CleanupSignal): void {
+  releaseAllLocksSync();
+  const shouldReraise = process.listenerCount(signal) === 1;
+  if (shouldReraise) {
+    const handler = cleanupHandlers.get(signal);
+    if (handler) process.off(signal, handler);
+    try {
+      process.kill(process.pid, signal);
+    } catch {
+      // Ignore errors during shutdown
+    }
+  }
+}
+
+function registerCleanupHandlers(): void {
+  if (cleanupRegistered) return;
+  cleanupRegistered = true;
+
+  // Cleanup on normal exit and process.exit() calls
+  process.on("exit", () => {
+    releaseAllLocksSync();
+  });
+
+  // Handle termination signals
+  for (const signal of CLEANUP_SIGNALS) {
+    try {
+      const handler = () => handleTerminationSignal(signal);
+      cleanupHandlers.set(signal, handler);
+      process.on(signal, handler);
+    } catch {
+      // Ignore unsupported signals on this platform.
+    }
   }
 }
 
@@ -44,6 +106,7 @@ export async function acquireSessionWriteLock(params: {
 }): Promise<{
   release: () => Promise<void>;
 }> {
+  registerCleanupHandlers();
   const timeoutMs = params.timeoutMs ?? 10_000;
   const staleMs = params.staleMs ?? 30 * 60 * 1000;
   const sessionFile = path.resolve(params.sessionFile);
@@ -118,52 +181,8 @@ export async function acquireSessionWriteLock(params: {
   throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
 }
 
-/**
- * Synchronously release all held locks.
- * Used during process exit when async operations aren't reliable.
- */
-function releaseAllLocksSync(): void {
-  for (const [sessionFile, held] of HELD_LOCKS) {
-    try {
-      fsSync.closeSync(held.handle.fd);
-    } catch {
-      // Ignore close errors during cleanup - best effort
-    }
-    try {
-      fsSync.rmSync(held.lockPath, { force: true });
-    } catch {
-      // Ignore errors during cleanup - best effort
-    }
-    HELD_LOCKS.delete(sessionFile);
-  }
-}
-
-let cleanupRegistered = false;
-
-function registerCleanupHandlers(): void {
-  if (cleanupRegistered) return;
-  cleanupRegistered = true;
-
-  // Cleanup on normal exit and process.exit() calls
-  process.on("exit", () => {
-    releaseAllLocksSync();
-  });
-
-  // Handle SIGINT (Ctrl+C) and SIGTERM
-  const handleSignal = (signal: NodeJS.Signals) => {
-    releaseAllLocksSync();
-    // Remove only our handlers and re-raise signal for proper exit code.
-    process.off("SIGINT", onSigInt);
-    process.off("SIGTERM", onSigTerm);
-    process.kill(process.pid, signal);
-  };
-
-  const onSigInt = () => handleSignal("SIGINT");
-  const onSigTerm = () => handleSignal("SIGTERM");
-
-  process.on("SIGINT", onSigInt);
-  process.on("SIGTERM", onSigTerm);
-}
-
-// Register cleanup handlers when module loads
-registerCleanupHandlers();
+export const __testing = {
+  cleanupSignals: [...CLEANUP_SIGNALS],
+  handleTerminationSignal,
+  releaseAllLocksSync,
+};
