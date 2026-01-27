@@ -10,7 +10,7 @@ This page tracks Moltbot’s **formal security models** (TLA+/TLC today; more as
 
 > Moltbot was formerly named Clawdbot; some older references and commands may still use `clawdbot`.
 
-**Goal (north star):** provide a machine-checked argument that Clawdbot enforces its
+**Goal (north star):** provide a machine-checked argument that Moltbot enforces its
 intended security policy (authorization, session isolation, tool gating, and
 misconfiguration safety), under explicit assumptions.
 
@@ -18,7 +18,7 @@ misconfiguration safety), under explicit assumptions.
 - Each claim has a runnable model-check over a finite state space.
 - Many claims have a paired **negative model** that produces a counterexample trace for a realistic bug class.
 
-**What this is not (yet):** a proof that “Clawdbot is secure in all respects” or that the full TypeScript implementation is correct.
+**What this is not (yet):** a proof that “Moltbot is secure in all respects” or that the full TypeScript implementation is correct.
 
 ## Where the models live
 

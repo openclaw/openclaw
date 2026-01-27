@@ -28,7 +28,7 @@ It flags common footguns (Gateway auth exposure, browser control exposure, eleva
 
 Running an AI agent with shell access on your machine is... *spicy*. Here’s how to not get pwned.
 
-Clawdbot is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
+Moltbot is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
 - who can talk to your bot
 - where the bot is allowed to act
 - what the bot can touch
@@ -747,7 +747,7 @@ Mario asking for find ~
 
 ## Reporting Security Issues
 
-Found a vulnerability in Clawdbot? Please report responsibly:
+Found a vulnerability in Moltbot? Please report responsibly:
 
 1. Email: security@clawd.bot
 2. Don't post publicly until fixed
