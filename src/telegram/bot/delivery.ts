@@ -22,7 +22,7 @@ import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
-import { getCachedSticker } from "../sticker-cache.js";
+import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
@@ -303,14 +303,26 @@ export async function resolveMedia(
       const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
       if (cached) {
         logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
+        const fileId = sticker.file_id ?? cached.fileId;
+        const emoji = sticker.emoji ?? cached.emoji;
+        const setName = sticker.set_name ?? cached.setName;
+        if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
+          // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
+          cacheSticker({
+            ...cached,
+            fileId,
+            emoji,
+            setName,
+          });
+        }
         return {
           path: saved.path,
           contentType: saved.contentType,
           placeholder: "<media:sticker>",
           stickerMetadata: {
-            emoji: cached.emoji,
-            setName: cached.setName,
-            fileId: cached.fileId,
+            emoji,
+            setName,
+            fileId,
             fileUniqueId: sticker.file_unique_id,
             cachedDescription: cached.description,
           },
@@ -330,7 +342,7 @@ export async function resolveMedia(
         },
       };
     } catch (err) {
-      logVerbose(`telegram: failed to process sticker: ${err}`);
+      logVerbose(`telegram: failed to process sticker: ${String(err)}`);
       return null;
     }
   }

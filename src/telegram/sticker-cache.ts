@@ -4,7 +4,13 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { STATE_DIR_CLAWDBOT } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { logVerbose } from "../globals.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../agents/model-catalog.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveAutoImageModel } from "../media-understanding/runner.js";
 
 const CACHE_FILE = path.join(STATE_DIR_CLAWDBOT, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
@@ -135,18 +141,11 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
 
-const VISION_PROVIDERS = ["anthropic", "openai", "google", "minimax"] as const;
-const DEFAULT_VISION_MODELS: Record<string, string> = {
-  anthropic: "claude-sonnet-4-20250514",
-  openai: "gpt-4o-mini",
-  google: "gemini-2.0-flash",
-  minimax: "MiniMax-VL-01",
-};
-
 export interface DescribeStickerParams {
   imagePath: string;
   cfg: ClawdbotConfig;
   agentDir?: string;
+  agentId?: string;
 }
 
 /**
@@ -155,26 +154,35 @@ export interface DescribeStickerParams {
  * Returns null if no vision provider is available.
  */
 export async function describeStickerImage(params: DescribeStickerParams): Promise<string | null> {
-  const { imagePath, cfg, agentDir } = params;
+  const { imagePath, cfg, agentDir, agentId } = params;
 
-  // Find a vision provider with available API key
-  let provider: string | null = null;
-  for (const p of VISION_PROVIDERS) {
-    try {
-      await resolveApiKeyForProvider({ provider: p, cfg, agentDir });
-      provider = p;
-      break;
-    } catch {
-      // No key for this provider, try next
+  const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
+  let activeModel = undefined as { provider: string; model: string } | undefined;
+  try {
+    const catalog = await loadModelCatalog({ config: cfg });
+    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
+    if (modelSupportsVision(entry)) {
+      activeModel = { provider: defaultModel.provider, model: defaultModel.model };
     }
+  } catch {
+    // Ignore catalog failures; fall back to auto selection.
   }
 
-  if (!provider) {
+  const resolved = await resolveAutoImageModel({
+    cfg,
+    agentDir,
+    activeModel,
+  });
+  if (!resolved) {
     logVerbose("telegram: no vision provider available for sticker description");
     return null;
   }
 
-  const model = DEFAULT_VISION_MODELS[provider];
+  const { provider, model } = resolved;
+  if (!model) {
+    logVerbose(`telegram: no vision model available for ${provider}`);
+    return null;
+  }
   logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
@@ -195,7 +203,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     });
     return result.text;
   } catch (err) {
-    logVerbose(`telegram: failed to describe sticker: ${err}`);
+    logVerbose(`telegram: failed to describe sticker: ${String(err)}`);
     return null;
   }
 }
