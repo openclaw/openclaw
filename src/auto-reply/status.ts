@@ -34,9 +34,9 @@ import {
   listChatCommandsForConfig,
   type ChatCommandDefinition,
 } from "./commands-registry.js";
-import type { CommandCategory } from "./commands-registry.types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
+import type { CommandCategory } from "./commands-registry.types.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 
@@ -471,12 +471,10 @@ function groupCommandsByCategory(
 export function buildHelpMessage(cfg?: ClawdbotConfig): string {
   const lines = ["ℹ️ Help", ""];
 
-  // Session commands - quick shortcuts
   lines.push("Session");
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  // Options - most commonly used
   const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
   if (cfg?.commands?.config === true) optionParts.push("/config");
   if (cfg?.commands?.debug === true) optionParts.push("/debug");
@@ -484,12 +482,10 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
   lines.push(`  ${optionParts.join("  |  ")}`);
   lines.push("");
 
-  // Status commands
   lines.push("Status");
   lines.push("  /status  |  /whoami  |  /context");
   lines.push("");
 
-  // Skills
   lines.push("Skills");
   lines.push("  /skill <name> [input]");
 
@@ -534,6 +530,54 @@ function formatCommandEntry(command: ChatCommandDefinition): string {
   return `${primary}${aliasLabel}${scopeLabel} - ${command.description}`;
 }
 
+type CommandsListItem = {
+  label: string;
+  text: string;
+};
+
+function buildCommandItems(
+  commands: ChatCommandDefinition[],
+  pluginCommands: ReturnType<typeof listPluginCommands>,
+): CommandsListItem[] {
+  const grouped = groupCommandsByCategory(commands);
+  const items: CommandsListItem[] = [];
+
+  for (const category of CATEGORY_ORDER) {
+    const categoryCommands = grouped.get(category) ?? [];
+    if (categoryCommands.length === 0) continue;
+    const label = CATEGORY_LABELS[category];
+    for (const command of categoryCommands) {
+      items.push({ label, text: formatCommandEntry(command) });
+    }
+  }
+
+  for (const command of pluginCommands) {
+    const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
+    items.push({
+      label: "Plugins",
+      text: `/${command.name}${pluginLabel} - ${command.description}`,
+    });
+  }
+
+  return items;
+}
+
+function formatCommandList(items: CommandsListItem[]): string {
+  const lines: string[] = [];
+  let currentLabel: string | null = null;
+
+  for (const item of items) {
+    if (item.label !== currentLabel) {
+      if (lines.length > 0) lines.push("");
+      lines.push(item.label);
+      currentLabel = item.label;
+    }
+    lines.push(`  ${item.text}`);
+  }
+
+  return lines.join("\n");
+}
+
 export function buildCommandsMessage(
   cfg?: ClawdbotConfig,
   skillCommands?: SkillCommandSpec[],
@@ -556,31 +600,11 @@ export function buildCommandsMessagePaginated(
     ? listChatCommandsForConfig(cfg, { skillCommands })
     : listChatCommands({ skillCommands });
   const pluginCommands = listPluginCommands();
+  const items = buildCommandItems(commands, pluginCommands);
 
-  // For non-Telegram surfaces, show grouped list without pagination
   if (!isTelegram) {
-    const grouped = groupCommandsByCategory(commands);
     const lines = ["ℹ️ Slash commands", ""];
-
-    for (const category of CATEGORY_ORDER) {
-      const categoryCommands = grouped.get(category) ?? [];
-      if (categoryCommands.length === 0) continue;
-
-      lines.push(`${CATEGORY_LABELS[category]}`);
-      for (const command of categoryCommands) {
-        lines.push(`  ${formatCommandEntry(command)}`);
-      }
-      lines.push("");
-    }
-
-    if (pluginCommands.length > 0) {
-      lines.push("Plugins");
-      for (const command of pluginCommands) {
-        const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
-        lines.push(`  /${command.name}${pluginLabel} - ${command.description}`);
-      }
-    }
-
+    lines.push(formatCommandList(items));
     return {
       text: lines.join("\n").trim(),
       totalPages: 1,
@@ -590,87 +614,18 @@ export function buildCommandsMessagePaginated(
     };
   }
 
-  // For Telegram, use pagination
-  const grouped = groupCommandsByCategory(commands);
-
-  // Flatten commands with category headers for pagination
-  type PageItem =
-    | { type: "header"; category: CommandCategory }
-    | { type: "command"; command: ChatCommandDefinition };
-  const items: PageItem[] = [];
-
-  for (const category of CATEGORY_ORDER) {
-    const categoryCommands = grouped.get(category) ?? [];
-    if (categoryCommands.length === 0) continue;
-    items.push({ type: "header", category });
-    for (const command of categoryCommands) {
-      items.push({ type: "command", command });
-    }
-  }
-
-  // Add plugin commands
-  if (pluginCommands.length > 0) {
-    items.push({ type: "header", category: "tools" }); // Reuse tools category for plugins header indicator
-  }
-
-  // Calculate pages based on command count (headers don't count toward limit)
-  const commandItems = items.filter((item) => item.type === "command");
-  const totalCommands = commandItems.length + pluginCommands.length;
+  const totalCommands = items.length;
   const totalPages = Math.max(1, Math.ceil(totalCommands / COMMANDS_PER_PAGE));
   const currentPage = Math.min(page, totalPages);
   const startIndex = (currentPage - 1) * COMMANDS_PER_PAGE;
   const endIndex = startIndex + COMMANDS_PER_PAGE;
+  const pageItems = items.slice(startIndex, endIndex);
 
-  // Build page content
   const lines = [`ℹ️ Commands (${currentPage}/${totalPages})`, ""];
-
-  let commandIndex = 0;
-  let currentCategory: CommandCategory | null = null;
-  let pageCommandCount = 0;
-
-  for (const item of items) {
-    if (pageCommandCount >= COMMANDS_PER_PAGE) break;
-
-    if (item.type === "header") {
-      currentCategory = item.category;
-      continue;
-    }
-
-    if (commandIndex >= startIndex && commandIndex < endIndex) {
-      // Add category header if this is the first command of a category on this page
-      if (
-        (currentCategory && pageCommandCount === 0) ||
-        items[items.indexOf(item) - 1]?.type === "header"
-      ) {
-        if (currentCategory) {
-          if (pageCommandCount > 0) lines.push("");
-          lines.push(CATEGORY_LABELS[currentCategory]);
-        }
-      }
-      lines.push(`  ${formatCommandEntry(item.command)}`);
-      pageCommandCount++;
-    }
-    commandIndex++;
-  }
-
-  // Add plugin commands if they fall within this page range
-  const pluginStartIndex = commandItems.length;
-  for (let i = 0; i < pluginCommands.length && pageCommandCount < COMMANDS_PER_PAGE; i++) {
-    const pluginIndex = pluginStartIndex + i;
-    if (pluginIndex >= startIndex && pluginIndex < endIndex) {
-      if (i === 0 || pluginIndex === startIndex) {
-        if (pageCommandCount > 0) lines.push("");
-        lines.push("Plugins");
-      }
-      const command = pluginCommands[i];
-      const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
-      lines.push(`  /${command.name}${pluginLabel} - ${command.description}`);
-      pageCommandCount++;
-    }
-  }
+  lines.push(formatCommandList(pageItems));
 
   return {
-    text: lines.join("\n"),
+    text: lines.join("\n").trim(),
     totalPages,
     currentPage,
     hasNext: currentPage < totalPages,

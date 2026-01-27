@@ -1,5 +1,5 @@
 import { logVerbose } from "../../globals.js";
-import { listSkillCommandsForWorkspace } from "../skill-commands.js";
+import { listSkillCommandsForAgents } from "../skill-commands.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -35,20 +35,18 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   }
   const skillCommands =
     params.skillCommands ??
-    listSkillCommandsForWorkspace({
-      workspaceDir: params.workspaceDir,
+    listSkillCommandsForAgents({
       cfg: params.cfg,
+      agentIds: params.agentId ? [params.agentId] : undefined,
     });
   const surface = params.ctx.Surface;
 
-  // For Telegram, return paginated result with inline buttons
   if (surface === "telegram") {
     const result = buildCommandsMessagePaginated(params.cfg, skillCommands, {
       page: 1,
       surface,
     });
 
-    // Build inline keyboard for pagination if there are multiple pages
     if (result.totalPages > 1) {
       return {
         shouldContinue: false,
@@ -56,7 +54,11 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
           text: result.text,
           channelData: {
             telegram: {
-              buttons: buildCommandsPaginationKeyboard(result.currentPage, result.totalPages),
+              buttons: buildCommandsPaginationKeyboard(
+                result.currentPage,
+                result.totalPages,
+                params.agentId,
+              ),
             },
           },
         },
@@ -78,17 +80,28 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
 export function buildCommandsPaginationKeyboard(
   currentPage: number,
   totalPages: number,
+  agentId?: string,
 ): Array<Array<{ text: string; callback_data: string }>> {
   const buttons: Array<{ text: string; callback_data: string }> = [];
+  const suffix = agentId ? `:${agentId}` : "";
 
   if (currentPage > 1) {
-    buttons.push({ text: "◀ Prev", callback_data: `commands_page_${currentPage - 1}` });
+    buttons.push({
+      text: "◀ Prev",
+      callback_data: `commands_page_${currentPage - 1}${suffix}`,
+    });
   }
 
-  buttons.push({ text: `${currentPage}/${totalPages}`, callback_data: "commands_page_noop" });
+  buttons.push({
+    text: `${currentPage}/${totalPages}`,
+    callback_data: `commands_page_noop${suffix}`,
+  });
 
   if (currentPage < totalPages) {
-    buttons.push({ text: "Next ▶", callback_data: `commands_page_${currentPage + 1}` });
+    buttons.push({
+      text: "Next ▶",
+      callback_data: `commands_page_${currentPage + 1}${suffix}`,
+    });
   }
 
   return [buttons];
