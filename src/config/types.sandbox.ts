@@ -44,15 +44,75 @@ export type SandboxDockerSettings = {
   binds?: string[];
 };
 
+/** Browser provider for sandbox sessions. */
+export type SandboxBrowserProvider = "docker" | "anchorbrowser";
+
+/** Anchorbrowser proxy configuration. */
+export type AnchorBrowserProxySettings = {
+  /** Enable proxy. */
+  active?: boolean;
+  /** Proxy type (anchor_proxy, anchor_residential, anchor_mobile, anchor_gov). */
+  type?: "anchor_proxy" | "anchor_residential" | "anchor_mobile" | "anchor_gov";
+  /** Country code (ISO 2 lowercase, e.g. "us"). */
+  countryCode?: string;
+  /** Region code for geographic targeting. */
+  region?: string;
+  /** City name for precise targeting (requires region). */
+  city?: string;
+};
+
+/** Anchorbrowser timeout configuration. */
+export type AnchorBrowserTimeoutSettings = {
+  /** Max session duration in minutes (default: 20). */
+  maxDuration?: number;
+  /** Idle timeout in minutes before session stops (default: 5). */
+  idleTimeout?: number;
+};
+
+/** Anchorbrowser-specific settings. */
+export type AnchorBrowserSettings = {
+  /** API key (prefer env var ANCHORBROWSER_API_KEY). */
+  apiKey?: string;
+  /** Override API URL (default: https://api.anchorbrowser.io/v1). */
+  apiUrl?: string;
+  /** Proxy configuration. */
+  proxy?: AnchorBrowserProxySettings;
+  /** Timeout configuration. */
+  timeout?: AnchorBrowserTimeoutSettings;
+  /** Enable captcha solving (requires proxy). */
+  captchaSolver?: boolean;
+  /** Enable ad blocking (default: true). */
+  adblock?: boolean;
+  /** Enable popup blocking (default: true). */
+  popupBlocker?: boolean;
+  /** Run browser headless (default: false). */
+  headless?: boolean;
+  /** Viewport dimensions. */
+  viewport?: { width: number; height: number };
+  /** Enable session recording (default: true). */
+  recording?: boolean;
+  /** Enable extra stealth mode (requires proxy). */
+  extraStealth?: boolean;
+};
+
 export type SandboxBrowserSettings = {
   enabled?: boolean;
+  /** Browser provider: "docker" (default) or "anchorbrowser". */
+  provider?: SandboxBrowserProvider;
+
+  // Docker-specific settings
   image?: string;
   containerPrefix?: string;
   cdpPort?: number;
   vncPort?: number;
   noVncPort?: number;
-  headless?: boolean;
   enableNoVnc?: boolean;
+
+  // Anchorbrowser-specific settings
+  anchorbrowser?: AnchorBrowserSettings;
+
+  // Common settings
+  headless?: boolean;
   /**
    * Allow sandboxed sessions to target the host browser control server.
    * Default: false.

@@ -1,4 +1,8 @@
 export {
+  cleanupAnchorBrowserSession,
+  cleanupAllAnchorBrowserSessions,
+} from "./sandbox/anchorbrowser-session.js";
+export {
   resolveSandboxBrowserConfig,
   resolveSandboxConfigForAgent,
   resolveSandboxDockerConfig,
@@ -21,6 +25,7 @@ export {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "./sandbox/manage.js";
+export { cleanupSandboxBrowserForScope } from "./sandbox/prune.js";
 export {
   formatSandboxToolPolicyBlockedMessage,
   resolveSandboxRuntimeStatus,
@@ -29,8 +34,10 @@ export {
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 
 export type {
+  AnchorBrowserSettings,
   SandboxBrowserConfig,
   SandboxBrowserContext,
+  SandboxBrowserProvider,
   SandboxConfig,
   SandboxContext,
   SandboxDockerConfig,

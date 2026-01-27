@@ -1,6 +1,8 @@
 import type { SandboxDockerConfig } from "./types.docker.js";
+import type { AnchorBrowserSettings, SandboxBrowserProvider } from "../../config/types.sandbox.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
+export type { AnchorBrowserSettings, SandboxBrowserProvider } from "../../config/types.sandbox.js";
 
 export type SandboxToolPolicy = {
   allow?: string[];
@@ -29,13 +31,22 @@ export type SandboxWorkspaceAccess = "none" | "ro" | "rw";
 
 export type SandboxBrowserConfig = {
   enabled: boolean;
+  /** Browser provider: "docker" (default) or "anchorbrowser". */
+  provider: SandboxBrowserProvider;
+
+  // Docker-specific settings
   image: string;
   containerPrefix: string;
   cdpPort: number;
   vncPort: number;
   noVncPort: number;
-  headless: boolean;
   enableNoVnc: boolean;
+
+  // Anchorbrowser-specific settings
+  anchorbrowser?: AnchorBrowserSettings;
+
+  // Common settings
+  headless: boolean;
   allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;
@@ -61,8 +72,14 @@ export type SandboxConfig = {
 
 export type SandboxBrowserContext = {
   bridgeUrl: string;
+  /** NoVNC URL for Docker-based browsers. */
   noVncUrl?: string;
-  containerName: string;
+  /** Live view URL for Anchorbrowser sessions. */
+  liveViewUrl?: string;
+  /** Docker container name (Docker provider only). */
+  containerName?: string;
+  /** Anchorbrowser session ID (Anchorbrowser provider only). */
+  sessionId?: string;
 };
 
 export type SandboxContext = {

@@ -86,8 +86,32 @@ export function resolveSandboxBrowserConfig(params: {
 }): SandboxBrowserConfig {
   const agentBrowser = params.scope === "shared" ? undefined : params.agentBrowser;
   const globalBrowser = params.globalBrowser;
+
+  // Merge Anchorbrowser settings
+  const globalAnchor = globalBrowser?.anchorbrowser;
+  const agentAnchor = agentBrowser?.anchorbrowser;
+  const anchorbrowser =
+    globalAnchor || agentAnchor
+      ? {
+          apiKey: agentAnchor?.apiKey ?? globalAnchor?.apiKey ?? process.env.ANCHORBROWSER_API_KEY,
+          apiUrl: agentAnchor?.apiUrl ?? globalAnchor?.apiUrl,
+          proxy: agentAnchor?.proxy ?? globalAnchor?.proxy,
+          timeout: agentAnchor?.timeout ?? globalAnchor?.timeout,
+          captchaSolver: agentAnchor?.captchaSolver ?? globalAnchor?.captchaSolver,
+          adblock: agentAnchor?.adblock ?? globalAnchor?.adblock,
+          popupBlocker: agentAnchor?.popupBlocker ?? globalAnchor?.popupBlocker,
+          headless: agentAnchor?.headless ?? globalAnchor?.headless,
+          viewport: agentAnchor?.viewport ?? globalAnchor?.viewport,
+          recording: agentAnchor?.recording ?? globalAnchor?.recording,
+          extraStealth: agentAnchor?.extraStealth ?? globalAnchor?.extraStealth,
+        }
+      : undefined;
+
   return {
     enabled: agentBrowser?.enabled ?? globalBrowser?.enabled ?? false,
+    provider: agentBrowser?.provider ?? globalBrowser?.provider ?? "docker",
+
+    // Docker-specific settings
     image: agentBrowser?.image ?? globalBrowser?.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE,
     containerPrefix:
       agentBrowser?.containerPrefix ??
@@ -97,8 +121,13 @@ export function resolveSandboxBrowserConfig(params: {
     vncPort: agentBrowser?.vncPort ?? globalBrowser?.vncPort ?? DEFAULT_SANDBOX_BROWSER_VNC_PORT,
     noVncPort:
       agentBrowser?.noVncPort ?? globalBrowser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
-    headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
     enableNoVnc: agentBrowser?.enableNoVnc ?? globalBrowser?.enableNoVnc ?? true,
+
+    // Anchorbrowser-specific settings
+    anchorbrowser,
+
+    // Common settings
+    headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
     allowHostControl: agentBrowser?.allowHostControl ?? globalBrowser?.allowHostControl ?? false,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
     autoStartTimeoutMs:

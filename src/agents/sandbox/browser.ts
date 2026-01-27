@@ -4,6 +4,7 @@ import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_CLAWD_BROWSER_COLOR,
 } from "../../browser/constants.js";
+import { ensureAnchorBrowser } from "./anchorbrowser-session.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -86,6 +87,17 @@ export async function ensureSandboxBrowser(params: {
   if (!params.cfg.browser.enabled) return null;
   if (!isToolAllowed(params.cfg.tools, "browser")) return null;
 
+  // Branch based on provider
+  const provider = params.cfg.browser.provider ?? "docker";
+  if (provider === "anchorbrowser") {
+    return ensureAnchorBrowser({
+      scopeKey: params.scopeKey,
+      cfg: params.cfg.browser,
+      evaluateEnabled: params.evaluateEnabled,
+    });
+  }
+
+  // Docker provider (default)
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);

@@ -1,5 +1,6 @@
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
+import { cleanupAnchorBrowserSession } from "./anchorbrowser-session.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { dockerContainerState, execDocker } from "./docker.js";
 import {
@@ -92,4 +93,22 @@ export async function ensureDockerContainerIsRunning(containerName: string) {
   if (state.exists && !state.running) {
     await execDocker(["start", containerName]);
   }
+}
+
+/**
+ * Clean up sandbox browser resources for a specific session scope.
+ *
+ * For Docker-based browsers: stops the bridge server.
+ * For Anchorbrowser sessions: ends the remote session via API.
+ */
+export async function cleanupSandboxBrowserForScope(scopeKey: string): Promise<void> {
+  // Clean up Docker-based browser bridge
+  const bridge = BROWSER_BRIDGES.get(scopeKey);
+  if (bridge) {
+    await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
+    BROWSER_BRIDGES.delete(scopeKey);
+  }
+
+  // Clean up Anchorbrowser session
+  await cleanupAnchorBrowserSession(scopeKey);
 }
