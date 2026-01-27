@@ -18,6 +18,11 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
 };
 
+export type TelegramNetworkConfig = {
+  /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
+  autoSelectFamily?: boolean;
+};
+
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 
 export type TelegramCapabilitiesConfig =
@@ -96,6 +101,8 @@ export type TelegramAccountConfig = {
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
+  /** Network transport overrides for Telegram. */
+  network?: TelegramNetworkConfig;
   proxy?: string;
   webhookUrl?: string;
   webhookSecret?: string;

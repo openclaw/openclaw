@@ -310,6 +310,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
   "channels.telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
   "channels.telegram.retry.jitter": "Telegram Retry Jitter",
+  "channels.telegram.network.autoSelectFamily": "Telegram autoSelectFamily",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
   "channels.telegram.capabilities.inlineButtons": "Telegram Inline Buttons",
   "channels.whatsapp.dmPolicy": "WhatsApp DM Policy",
@@ -643,6 +644,8 @@ const FIELD_HELP: Record<string, string> = {
   "channels.telegram.retry.maxDelayMs":
     "Maximum retry delay cap in ms for Telegram outbound calls.",
   "channels.telegram.retry.jitter": "Jitter factor (0-1) applied to Telegram retry delays.",
+  "channels.telegram.network.autoSelectFamily":
+    "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.whatsapp.dmPolicy":
