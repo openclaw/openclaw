@@ -12,7 +12,16 @@ export interface LineWebhookOptions {
 
 function validateSignature(body: string, signature: string, channelSecret: string): boolean {
   const hash = crypto.createHmac("SHA256", channelSecret).update(body).digest("base64");
-  return hash === signature;
+  const hashBuffer = Buffer.from(hash);
+  const signatureBuffer = Buffer.from(signature);
+
+  // Use constant-time comparison to prevent timing attacks
+  // Ensure buffers are same length before comparison to prevent timing leak
+  if (hashBuffer.length !== signatureBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(hashBuffer, signatureBuffer);
 }
 
 function readRawBody(req: Request): string | null {
