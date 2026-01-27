@@ -23,6 +23,9 @@ import {
   modelsListCommand,
   modelsLMStudioDiscoverCommand,
   modelsLMStudioSetupCommand,
+  modelsLocalSetupCommand,
+  modelsOllamaDiscoverCommand,
+  modelsOllamaSetupCommand,
   modelsScanCommand,
   modelsSetCommand,
   modelsSetImageCommand,
@@ -301,6 +304,65 @@ export function registerModelsCli(program: Command) {
           {
             url: opts.url as string | undefined,
             json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  // Ollama commands
+  const ollama = models
+    .command("ollama")
+    .description("Ollama local model setup and discovery");
+
+  ollama
+    .command("setup")
+    .description("Discover and configure Ollama models")
+    .option("--url <url>", "Ollama server URL (default: http://127.0.0.1:11434/v1)")
+    .option("--set-default", "Set discovered model as default", false)
+    .option("--yes", "Accept defaults without prompting", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsOllamaSetupCommand(
+          {
+            url: opts.url as string | undefined,
+            setDefault: Boolean(opts.setDefault),
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  ollama
+    .command("discover")
+    .description("List models available on Ollama server")
+    .option("--url <url>", "Ollama server URL (default: http://127.0.0.1:11434/v1)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsOllamaDiscoverCommand(
+          {
+            url: opts.url as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  // Unified local models command
+  models
+    .command("local")
+    .description("Auto-detect and configure local model servers (LM Studio, Ollama)")
+    .option("--set-default", "Set discovered model as default", false)
+    .option("--yes", "Accept defaults without prompting", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsLocalSetupCommand(
+          {
+            setDefault: Boolean(opts.setDefault),
+            yes: Boolean(opts.yes),
           },
           defaultRuntime,
         );

@@ -15,21 +15,26 @@ Best current local stack. Load MiniMax M2.1 in LM Studio, enable the local serve
 
 ### Quick setup (auto-discovery)
 
-The fastest way to configure LM Studio:
+The fastest way to configure local models:
 
 ```bash
-# Discover and configure models from default URL (127.0.0.1:1234)
+# Auto-detect LM Studio and Ollama, configure what's available
+clawdbot models local --set-default
+
+# LM Studio specific
 clawdbot models lmstudio setup --set-default
+clawdbot models lmstudio setup --url http://your-server:1234/v1 --set-default
+clawdbot models lmstudio discover --json
 
-# Or specify a custom URL (e.g., remote server)
-clawdbot models lmstudio setup --url http://brian:1234/v1 --set-default
-
-# Just list available models without configuring
-clawdbot models lmstudio discover
-clawdbot models lmstudio discover --url http://brian:1234/v1 --json
+# Ollama specific
+clawdbot models ollama setup --set-default
+clawdbot models ollama setup --url http://your-server:11434/v1 --set-default
+clawdbot models ollama discover --json
 ```
 
 This auto-discovers all loaded models and adds them to your config. Use `--set-default` to also set the first model as your primary.
+
+The setup wizard prompts for the server URL - enter a custom URL for remote servers or accept the default (127.0.0.1) for local.
 
 ### Manual configuration
 
