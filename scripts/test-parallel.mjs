@@ -23,6 +23,8 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macOS";
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
 const isWindowsCi = isCI && isWindows;
+const shardOverride = Number.parseInt(process.env.CLAWDBOT_TEST_SHARDS ?? "", 10);
+const shardCount = isWindowsCi ? (Number.isFinite(shardOverride) && shardOverride > 1 ? shardOverride : 2) : 1;
 const overrideWorkers = Number.parseInt(process.env.CLAWDBOT_TEST_WORKERS ?? "", 10);
 const resolvedOverride = Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
 const parallelRuns = isWindowsCi ? [] : runs.filter((entry) => entry.name !== "gateway");
@@ -41,9 +43,11 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=DEP0060",
 ];
 
-const run = (entry) =>
+const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
-    const args = maxWorkers ? [...entry.args, "--maxWorkers", String(maxWorkers)] : entry.args;
+    const args = maxWorkers
+      ? [...entry.args, "--maxWorkers", String(maxWorkers), ...extraArgs]
+      : [...entry.args, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
@@ -60,6 +64,16 @@ const run = (entry) =>
       resolve(code ?? (signal ? 1 : 0));
     });
   });
+
+const run = async (entry) => {
+  if (shardCount <= 1) return runOnce(entry);
+  for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const code = await runOnce(entry, ["--shard", `${shardIndex}/${shardCount}`]);
+    if (code !== 0) return code;
+  }
+  return 0;
+};
 
 const shutdown = (signal) => {
   for (const child of children) {
