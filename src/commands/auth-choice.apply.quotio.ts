@@ -270,8 +270,10 @@ export async function applyAuthChoiceQuotio(
     await params.prompter.note(
       [
         "Could not auto-detect Quotio.",
-        "Make sure Quotio is running, or configure manually.",
-        "Tip: Set QUOTIO_BASE_URL and QUOTIO_API_KEY environment variables for auto-detection.",
+        "Quotio is a macOS menu bar app that unifies your AI subscriptions with quota tracking.",
+        "Download from: https://www.quotio.dev",
+        "",
+        "If already installed, make sure Quotio is running.",
       ].join("\n"),
       "Not detected",
     );

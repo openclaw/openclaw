@@ -117,7 +117,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "quotio",
     label: "Quotio",
-    hint: "Local OpenAI-compatible proxy",
+    hint: "Unified AI accounts with quota tracking",
     choices: ["quotio"],
   },
 ];
@@ -192,8 +192,8 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({
     value: "quotio",
-    label: "Quotio (local proxy)",
-    hint: "OpenAI-compatible proxy for Claude, Gemini, etc.",
+    label: "Quotio",
+    hint: "Unified AI accounts with smart failover (macOS)",
   });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
