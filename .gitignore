@@ -42,7 +42,6 @@ apps/ios/*.xcfilelist
 vendor/a2ui/renderers/lit/dist/
 src/canvas-host/a2ui/*.bundle.js
 src/canvas-host/a2ui/*.map
-src/canvas-host/a2ui/index.html
 .bundle.hash
 
 # fastlane (iOS)
