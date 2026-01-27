@@ -421,7 +421,8 @@ export const registerTelegramNativeCommands = ({
             },
           });
           const baseSessionKey = route.sessionKey;
-          const dmThreadId = !isGroup ? resolvedThreadId : undefined;
+          // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
+          const dmThreadId = !isGroup ? messageThreadId : undefined;
           const threadKeys =
             dmThreadId != null
               ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
