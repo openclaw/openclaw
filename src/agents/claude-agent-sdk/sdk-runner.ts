@@ -19,6 +19,7 @@ import { bridgeClawdbotToolsToMcpServer } from "./tool-bridge.js";
 import type { SdkRunnerQueryOptions } from "./tool-bridge.types.js";
 import { extractTextFromClaudeAgentSdkEvent } from "./extract.js";
 import { loadClaudeAgentSdk } from "./sdk.js";
+import { buildHistorySystemPromptSuffix } from "./sdk-history.js";
 import type { SdkRunnerParams, SdkRunnerResult } from "./sdk-runner.types.js";
 
 // ---------------------------------------------------------------------------
@@ -104,11 +105,9 @@ function classifyEvent(event: unknown): { kind: EventKind; event: unknown } {
  * When using mcpServers, the SDK requires an AsyncIterable<SDKUserMessage>
  * as the prompt (not a plain string). We generate this from the user message.
  *
- * NOTE: This is a key limitation noted during implementation. The SDK's
- * stateless nature means we cannot inject conversation history as structured
- * messages. The system prompt + user prompt must carry all context.
- * A future enhancement could serialize prior conversation turns into the
- * system prompt or user message to simulate multi-turn behavior.
+ * The SDK is stateless per query, so conversation history is injected as
+ * serialized text appended to the system prompt (see buildHistorySystemPromptSuffix).
+ * This provides multi-turn context without requiring structured message history.
  */
 function buildSdkPrompt(params: {
   prompt: string;
@@ -264,9 +263,10 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     sdkOptions.permissionMode = params.permissionMode;
   }
 
-  // System prompt.
-  if (params.systemPrompt) {
-    sdkOptions.systemPrompt = params.systemPrompt;
+  // System prompt (with optional conversation history suffix).
+  const historySuffix = buildHistorySystemPromptSuffix(params.conversationHistory);
+  if (params.systemPrompt || historySuffix) {
+    sdkOptions.systemPrompt = (params.systemPrompt ?? "") + historySuffix;
   }
 
   // Provider env overrides (z.AI, custom endpoints, etc.).
@@ -329,7 +329,7 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
       }),
     );
 
-    params.onAssistantMessageStart?.();
+    void params.onAssistantMessageStart?.();
 
     for await (const event of stream) {
       // Check abort before processing each event.

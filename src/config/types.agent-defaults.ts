@@ -91,7 +91,15 @@ export type CliBackendConfig = {
   serialize?: boolean;
 };
 
+export type AgentRuntime = "pi" | "sdk";
+
 export type AgentDefaultsConfig = {
+  /**
+   * Agent runtime engine selection.
+   * - "pi" (default): Pi Agent embedded runner (multi-turn, session history)
+   * - "sdk": Claude Agent SDK runner (stateless per turn, dual-provider support)
+   */
+  runtime?: AgentRuntime;
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
   /** Optional image-capable model and fallbacks (provider/model). */

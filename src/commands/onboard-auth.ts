@@ -18,6 +18,7 @@ export {
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
+  applyZaiSdkConfig,
 } from "./onboard-auth.config-core.js";
 export {
   applyMinimaxApiConfig,

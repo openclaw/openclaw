@@ -186,6 +186,21 @@ export type CodingTaskToolConfig = {
    * Additional directories the SDK is allowed to access, outside `cwd`.
    */
   additionalDirectories?: string[];
+  /**
+   * SDK provider configurations for dual-provider support (z.AI, Anthropic, etc).
+   * Each provider specifies environment variable overrides and optional model/maxTurns.
+   * Env values support `${VAR_NAME}` syntax for process.env expansion.
+   */
+  providers?: Record<string, CodingTaskSdkProviderDef>;
+};
+
+export type CodingTaskSdkProviderDef = {
+  /** Environment variable overrides passed to the SDK per-call. */
+  env?: Record<string, string>;
+  /** Model alias override (e.g., "sonnet", "opus"). */
+  model?: string;
+  /** Max agent turns before the SDK stops. */
+  maxTurns?: number;
 };
 
 export type GroupToolPolicyConfig = {

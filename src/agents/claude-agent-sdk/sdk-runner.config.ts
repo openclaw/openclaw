@@ -7,8 +7,8 @@
  */
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import type { CodingTaskToolConfig } from "../../config/types.tools.js";
 import { logDebug } from "../../logger.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { SdkProviderConfig, SdkProviderEnv } from "./sdk-runner.types.js";
 
 // ---------------------------------------------------------------------------
@@ -75,16 +75,8 @@ export function resolveSdkProviders(params: {
   const codingTaskCfg = params.config?.tools?.codingTask;
   if (!codingTaskCfg) return [];
 
-  // The config stores providers under tools.codingTask.providers.
   // Each provider has an `env` dict with potential ${VAR} references.
-  const providersCfg = (
-    codingTaskCfg as CodingTaskToolConfig & {
-      providers?: Record<
-        string,
-        { env?: Record<string, string>; model?: string; maxTurns?: number }
-      >;
-    }
-  ).providers;
+  const providersCfg = codingTaskCfg.providers;
 
   if (!providersCfg) return [];
 
@@ -140,27 +132,24 @@ function resolveEnvValue(value: string, env: NodeJS.ProcessEnv): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Check whether the Claude Agent SDK runner is enabled for main agent use.
+ * Check whether the Claude Agent SDK runner is enabled as the main agent runtime.
  *
- * The SDK runner is enabled when:
- * 1. `tools.codingTask.enabled` is true, AND
- * 2. A provider is configured in `tools.codingTask.providers`
+ * The SDK runner is enabled when EITHER:
+ * 1. `agents.defaults.runtime` is "sdk", OR
+ * 2. `tools.codingTask.enabled` is true AND providers are configured
  *
- * This is distinct from using the `coding_task` tool (which is a Pi Agent
- * tool that wraps a single SDK query). The SDK runner replaces the Pi Agent
- * embedded runner entirely.
+ * When enabled, the SDK runner replaces the Pi Agent embedded runner for
+ * the main agent loop (not just the `coding_task` sub-tool).
  */
 export function isSdkRunnerEnabled(config?: ClawdbotConfig): boolean {
+  // Explicit runtime toggle takes precedence.
+  if (config?.agents?.defaults?.runtime === "sdk") return true;
+
+  // Legacy enablement path: codingTask-based SDK config.
   const codingTaskCfg = config?.tools?.codingTask;
   if (!codingTaskCfg?.enabled) return false;
 
-  const providersCfg = (
-    codingTaskCfg as CodingTaskToolConfig & {
-      providers?: Record<string, unknown>;
-    }
-  ).providers;
-
-  return !!providersCfg && Object.keys(providersCfg).length > 0;
+  return !!codingTaskCfg.providers && Object.keys(codingTaskCfg.providers).length > 0;
 }
 
 /**
@@ -186,4 +175,104 @@ export function resolveDefaultSdkProvider(params: {
 
   // Fall back to the first provider.
   return providers[0];
+}
+
+// ---------------------------------------------------------------------------
+// Auth profile integration
+// ---------------------------------------------------------------------------
+
+/**
+ * Mapping of SDK provider keys to auth profile id prefixes.
+ * Used to resolve API keys from the auth profile store when
+ * `${PROFILE:zai}` syntax or implicit profile lookup is used.
+ */
+const PROVIDER_TO_AUTH_PROFILE: Record<string, string> = {
+  zai: "zai:default",
+  anthropic: "anthropic:default",
+};
+
+/**
+ * Resolve an API key from the auth profile store for a given SDK provider key.
+ *
+ * Looks up the provider's auth profile (e.g., "zai" → "zai:default") and
+ * returns the stored API key if found. Returns undefined if the profile
+ * doesn't exist or has no key.
+ */
+export function resolveApiKeyFromAuthProfile(params: {
+  providerKey: string;
+  store?: AuthProfileStore;
+}): string | undefined {
+  if (!params.store) return undefined;
+
+  const profileId = PROVIDER_TO_AUTH_PROFILE[params.providerKey];
+  if (!profileId) return undefined;
+
+  const cred = params.store.profiles[profileId];
+  if (!cred) return undefined;
+
+  if (cred.type === "api_key") return cred.key;
+  if (cred.type === "token") return cred.token;
+  // OAuth tokens require async refresh — not supported in sync resolution.
+  // The caller should use resolveApiKeyForProfile() for OAuth.
+  return undefined;
+}
+
+/**
+ * Enrich resolved SDK providers with API keys from the auth profile store.
+ *
+ * For each provider that uses `${PROFILE}` syntax or has an empty auth token,
+ * this function looks up the corresponding auth profile and injects the key.
+ * This is the bridge between the auth profile store and the SDK env config.
+ */
+export function enrichProvidersWithAuthProfiles(params: {
+  providers: SdkProviderEntry[];
+  store?: AuthProfileStore;
+}): SdkProviderEntry[] {
+  if (!params.store) return params.providers;
+
+  return params.providers.map((entry) => {
+    const authKey = entry.config.env?.ANTHROPIC_AUTH_TOKEN;
+
+    // If the auth token is a ${PROFILE} reference, resolve from store.
+    if (authKey === "${PROFILE}" || authKey === "") {
+      const resolved = resolveApiKeyFromAuthProfile({
+        providerKey: entry.key,
+        store: params.store,
+      });
+      if (resolved) {
+        return {
+          ...entry,
+          config: {
+            ...entry.config,
+            env: {
+              ...entry.config.env,
+              ANTHROPIC_AUTH_TOKEN: resolved,
+            },
+          },
+        };
+      }
+    }
+
+    // If no auth token at all, try implicit profile lookup.
+    if (!authKey && entry.key !== "anthropic") {
+      const resolved = resolveApiKeyFromAuthProfile({
+        providerKey: entry.key,
+        store: params.store,
+      });
+      if (resolved) {
+        return {
+          ...entry,
+          config: {
+            ...entry.config,
+            env: {
+              ...entry.config.env,
+              ANTHROPIC_AUTH_TOKEN: resolved,
+            },
+          },
+        };
+      }
+    }
+
+    return entry;
+  });
 }

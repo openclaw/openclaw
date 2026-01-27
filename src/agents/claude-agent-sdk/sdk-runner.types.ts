@@ -120,6 +120,29 @@ export type SdkRunnerParams = {
    * Defaults to "clawdbot".
    */
   mcpServerName?: string;
+
+  /**
+   * Prior conversation history to serialize into the SDK prompt.
+   * Since the SDK is stateless, prior turns are injected as context
+   * in the system prompt or user message to simulate multi-turn behavior.
+   */
+  conversationHistory?: SdkConversationTurn[];
+};
+
+// ---------------------------------------------------------------------------
+// Conversation history types
+// ---------------------------------------------------------------------------
+
+/**
+ * A single conversation turn for SDK history serialization.
+ * These are simplified representations of prior Pi Agent messages,
+ * stripped of tool results and other internal state.
+ */
+export type SdkConversationTurn = {
+  role: "user" | "assistant";
+  content: string;
+  /** Optional ISO timestamp for context ordering. */
+  timestamp?: string;
 };
 
 // ---------------------------------------------------------------------------

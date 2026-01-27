@@ -55,6 +55,57 @@ export function applyZaiConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
+/**
+ * Apply z.AI configuration for Claude Code SDK mode.
+ *
+ * Configures z.AI as a Claude Agent SDK provider under
+ * `tools.codingTask.providers`, sets the agent runtime to "sdk",
+ * and enables the codingTask tool. The API key is resolved from
+ * the auth profile store at runtime via the ${PROFILE} reference.
+ */
+export function applyZaiSdkConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[ZAI_DEFAULT_MODEL_REF] = {
+    ...models[ZAI_DEFAULT_MODEL_REF],
+    alias: models[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
+  };
+
+  const existingCodingTask = cfg.tools?.codingTask;
+  const existingProviders = existingCodingTask?.providers ?? {};
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        runtime: "sdk",
+        models,
+      },
+    },
+    tools: {
+      ...cfg.tools,
+      codingTask: {
+        ...existingCodingTask,
+        enabled: true,
+        providers: {
+          ...existingProviders,
+          zai: {
+            env: {
+              ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+              ANTHROPIC_AUTH_TOKEN: "${PROFILE}",
+              API_TIMEOUT_MS: "3000000",
+              ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.7",
+              ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-4.7",
+              ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air",
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 export function applyOpenrouterProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[OPENROUTER_DEFAULT_MODEL_REF] = {
