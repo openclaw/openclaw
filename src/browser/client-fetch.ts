@@ -14,7 +14,13 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     ? "If this is a sandboxed session, ensure the sandbox browser is running and try again."
     : `Start (or restart) the Clawdbot gateway (Clawdbot.app menubar, or \`${formatCliCommand("clawdbot gateway")}\`) and try again.`;
   const msg = String(err);
-  if (msg.toLowerCase().includes("timed out") || msg.toLowerCase().includes("timeout")) {
+  const msgLower = msg.toLowerCase();
+  const looksLikeTimeout =
+    msgLower.includes("timed out") ||
+    msgLower.includes("timeout") ||
+    msgLower.includes("aborted") ||
+    msgLower.includes("abort");
+  if (looksLikeTimeout) {
     return new Error(
       `Can't reach the clawd browser control service (timed out after ${timeoutMs}ms). ${hint}`,
     );
@@ -48,7 +54,7 @@ export async function fetchBrowserJson<T>(
   const timeoutMs = init?.timeoutMs ?? 5000;
   try {
     if (isAbsoluteHttp(url)) {
-      return await fetchHttpJson<T>(url, init ? { ...init, timeoutMs } : { timeoutMs });
+      return await fetchHttpJson<T>(url, { ...init, timeoutMs });
     }
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {

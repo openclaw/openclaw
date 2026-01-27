@@ -308,6 +308,8 @@ describe("backward compatibility (profile parameter)", () => {
 
     testPort = await getFreePort();
     _cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
+    prevGatewayPort = process.env.CLAWDBOT_GATEWAY_PORT;
+    process.env.CLAWDBOT_GATEWAY_PORT = String(testPort - 2);
 
     vi.stubGlobal(
       "fetch",
@@ -344,6 +346,11 @@ describe("backward compatibility (profile parameter)", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    if (prevGatewayPort === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_PORT;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_PORT = prevGatewayPort;
+    }
     const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });

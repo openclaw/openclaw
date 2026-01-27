@@ -1,8 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildPairingReply } from "./pairing-messages.js";
 
 describe("buildPairingReply", () => {
+  let previousProfile: string | undefined;
+
+  beforeEach(() => {
+    previousProfile = process.env.CLAWDBOT_PROFILE;
+    process.env.CLAWDBOT_PROFILE = "isolated";
+  });
+
+  afterEach(() => {
+    if (previousProfile === undefined) {
+      delete process.env.CLAWDBOT_PROFILE;
+      return;
+    }
+    process.env.CLAWDBOT_PROFILE = previousProfile;
+  });
+
   const cases = [
     {
       channel: "discord",

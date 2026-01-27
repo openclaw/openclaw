@@ -572,6 +572,9 @@ If that browser profile already contains logged-in sessions, the model can
 access those accounts and data. Treat browser profiles as **sensitive state**:
 - Prefer a dedicated profile for the agent (the default `clawd` profile).
 - Avoid pointing the agent at your personal daily-driver profile.
+- `act:evaluate` and `wait --fn` run arbitrary JavaScript in the page context.
+  Prompt injection can steer the model into calling them. If you do not need
+  them, set `browser.evaluateEnabled=false` (see [Configuration](/gateway/configuration#browser-clawd-managed-browser)).
 - Keep host browser control disabled for sandboxed agents unless you trust them.
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
