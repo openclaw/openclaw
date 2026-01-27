@@ -23,6 +23,7 @@ export type AuthChoice =
   | "venice-api-key"
   | "together-api-key"
   | "huggingface-api-key"
+  | "ovhcloud-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
@@ -67,6 +68,7 @@ export type AuthChoiceGroupId =
   | "qwen"
   | "together"
   | "huggingface"
+  | "ovhcloud"
   | "qianfan"
   | "xai"
   | "custom";
@@ -115,6 +117,7 @@ export type OnboardOptions = {
   veniceApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
+  ovhcloudApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;

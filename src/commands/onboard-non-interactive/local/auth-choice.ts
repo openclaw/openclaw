@@ -20,6 +20,7 @@ import {
   applyMoonshotConfigCn,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
+  applyOvhcloudConfig,
   applySyntheticConfig,
   applyVeniceConfig,
   applyTogetherConfig,
@@ -39,6 +40,7 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setOvhcloudApiKey,
   setSyntheticApiKey,
   setXaiApiKey,
   setVeniceApiKey,
@@ -565,6 +567,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyVeniceConfig(nextConfig);
+  }
+
+  if (authChoice === "ovhcloud-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "ovhcloud",
+      cfg: baseConfig,
+      flagValue: opts.ovhcloudApiKey,
+      flagName: "--ovhcloud-api-key",
+      envVar: "OVHCLOUD_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setOvhcloudApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "ovhcloud:default",
+      provider: "ovhcloud",
+      mode: "api_key",
+    });
+    return applyOvhcloudConfig(nextConfig);
   }
 
   if (

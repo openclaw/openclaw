@@ -8,6 +8,7 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -148,6 +149,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["cloudflare-ai-gateway-api-key"],
   },
   {
+    value: "ovhcloud",
+    label: "OVHcloud AI Endpoints",
+    hint: "European-based with sovereignty and data privacy",
+    choices: ["ovhcloud-api-key"],
+  },
+  {
     value: "custom",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",
@@ -226,6 +233,11 @@ export function buildAuthChoiceOptions(params: {
     value: "huggingface-api-key",
     label: "Hugging Face API key (HF token)",
     hint: "Inference Providers — OpenAI-compatible chat",
+  });
+  options.push({
+    value: "ovhcloud-api-key",
+    label: "OVHcloud AI Endpoints API key",
+    hint: "European-based with sovereignty and data privacy",
   });
   options.push({
     value: "github-copilot",

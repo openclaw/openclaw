@@ -1,5 +1,13 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
 import { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
+import {
+  OVHCLOUD_BASE_URL,
+  OVHCLOUD_DEFAULT_COST,
+  OVHCLOUD_DEFAULT_CONTEXT_WINDOW,
+  OVHCLOUD_DEFAULT_MAX_TOKENS,
+  OVHCLOUD_DEFAULT_MODEL_ID,
+  OVHCLOUD_DEFAULT_MODEL_REF,
+} from "../agents/ovhcloud-models.js";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
@@ -72,6 +80,16 @@ export const ZAI_DEFAULT_COST = {
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
+};
+
+// Re-export OVHcloud constants from ovhcloud-models.ts
+export {
+  OVHCLOUD_BASE_URL,
+  OVHCLOUD_DEFAULT_COST,
+  OVHCLOUD_DEFAULT_CONTEXT_WINDOW,
+  OVHCLOUD_DEFAULT_MAX_TOKENS,
+  OVHCLOUD_DEFAULT_MODEL_ID,
+  OVHCLOUD_DEFAULT_MODEL_REF,
 };
 
 const MINIMAX_MODEL_CATALOG = {
@@ -177,5 +195,17 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
     cost: XAI_DEFAULT_COST,
     contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function buildOvhcloudModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: OVHCLOUD_DEFAULT_MODEL_ID,
+    name: "gpt-oss-120b",
+    reasoning: false,
+    input: ["text"],
+    cost: OVHCLOUD_DEFAULT_COST,
+    contextWindow: OVHCLOUD_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: OVHCLOUD_DEFAULT_MAX_TOKENS,
   };
 }
