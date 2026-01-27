@@ -7,6 +7,8 @@ read_when:
 
 ## Quick check: `clawdbot security audit`
 
+See also: [Formal Verification (Security Models)](/gateway/security/formal-verification/)
+
 Run this regularly (especially after changing config or exposing network surfaces):
 
 ```bash
