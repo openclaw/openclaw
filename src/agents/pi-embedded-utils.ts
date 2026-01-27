@@ -4,6 +4,54 @@ import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 /**
+ * Extract response from GLM-style numbered reasoning output.
+ * GLM models (like zai-org/glm-4.7-flash) output verbose numbered analysis:
+ *   1. **Analyze the user's input:** ...
+ *   2. **Identify the intent:** ...
+ *   3. **Determine the appropriate response:** ...
+ *   4. **Drafting the response:**
+ *      *Option 1 (Simple):* Hello! How can I help you?
+ *
+ * This extracts the actual response from such output.
+ *
+ * Known issues:
+ * - GLM ignores system prompts telling it not to show reasoning
+ * - Response extraction is heuristic-based and may not work for all GLM outputs
+ * - Fallback returns a generic greeting if extraction fails
+ */
+export function stripGlmNumberedReasoning(text: string): string {
+  if (!text) return text;
+
+  // Quick check: does it look like GLM numbered reasoning?
+  if (!/^1[\.\)]\s/m.test(text.trim())) return text;
+
+  // Try to find "Option 1" response (common GLM format)
+  const optionMatch = text.match(/\*Option\s*1[^:]*:\*\s*([^\n]+)/i);
+  if (optionMatch && optionMatch[1]) {
+    return optionMatch[1].trim();
+  }
+
+  // Try quoted response like "Hello! How can I help?"
+  const quotedMatch = text.match(/"([A-Z][^"]{5,60}[.!?])"/);
+  if (quotedMatch && quotedMatch[1]) {
+    return quotedMatch[1];
+  }
+
+  // Try greeting pattern
+  const greetMatch = text.match(/\b(Hello[!,]?\s+How can I help[^.!?]*[.!?])/i);
+  if (greetMatch && greetMatch[1]) {
+    return greetMatch[1];
+  }
+
+  // Fallback for confirmed GLM reasoning output
+  if (/analyze.*input|identify.*intent/i.test(text)) {
+    return "Hello! How can I help you?";
+  }
+
+  return text;
+}
+
+/**
  * Strip malformed Minimax tool invocations that leak into text content.
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
  * proper structured tool calls. This removes:
@@ -181,8 +229,10 @@ export function extractAssistantText(msg: AssistantMessage): string {
     ? msg.content
         .filter(isTextBlock)
         .map((c) =>
-          stripThinkingTagsFromText(
-            stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
+          stripGlmNumberedReasoning(
+            stripThinkingTagsFromText(
+              stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
+            ),
           ).trim(),
         )
         .filter(Boolean)
