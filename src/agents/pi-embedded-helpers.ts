@@ -23,6 +23,7 @@ export {
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
+  isImageSizeError,
   isOverloadedErrorMessage,
   isRawApiErrorPayload,
   isRateLimitAssistantError,
