@@ -67,7 +67,7 @@ Status: unreleased.
 - Agents: release session locks on process termination and cover more signals. (#2483) Thanks @janeexai.
 - Telegram: harden polling + retry behavior for transient network errors and Node 22 transport issues. (#2420) Thanks @techboss.
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
-- Telegram: log fetch/API errors in delivery to avoid unhandled rejections. (#2492) Thanks @altryne.
+- Telegram: centralize API error logging for delivery and bot calls. (#2492) Thanks @altryne.
 - Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
 - Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
 - Build: align memory-core peer dependency with lockfile.
