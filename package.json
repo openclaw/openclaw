@@ -8,7 +8,7 @@
     ".": "./dist/index.js",
     "./plugin-sdk": "./dist/plugin-sdk/index.js",
     "./plugin-sdk/*": "./dist/plugin-sdk/*",
-    "./cli-entry": "./dist/entry.js"
+    "./cli-entry": "./moltbot.mjs"
   },
   "bin": {
     "moltbot": "./moltbot.mjs",
