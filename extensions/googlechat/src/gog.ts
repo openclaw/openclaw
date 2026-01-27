@@ -9,7 +9,6 @@ type GogTokenEntry = {
 };
 
 const tokenCache = new Map<string, string>();
-const jwtPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 function resolveWildcardJsonFile(
   dirs: string[],
@@ -76,52 +75,6 @@ function readJsonFile(pathname: string): unknown | null {
   }
 }
 
-function tryParseJson(value: string): unknown | null {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function decodeBase64Payload(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.includes(".")) return null;
-  const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
-  if (!/^[A-Za-z0-9+/=]+$/.test(normalized)) return null;
-  try {
-    const decoded = Buffer.from(normalized, "base64").toString("utf8");
-    return decoded.trim() ? decoded : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveGogKeyringFiles(params: {
-  gogClient?: string | null;
-  gogAccount?: string | null;
-}): string[] {
-  const dirs = resolveConfigDirs().map((dir) => path.join(dir, "keyring"));
-  const files: string[] = [];
-  for (const dir of dirs) {
-    try {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isFile()) continue;
-        files.push(path.join(dir, entry.name));
-      }
-    } catch {
-      // Ignore missing/permission issues; we'll fall back to other sources.
-    }
-  }
-  const account = params.gogAccount?.trim();
-  if (account) {
-    const matches = files.filter((file) => file.includes(account));
-    if (matches.length > 0) return matches;
-  }
-  return files;
-}
-
 function resolveConfigDirs(): string[] {
   const dirs: string[] = [];
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -153,30 +106,12 @@ export function resolveGogCredentialsFile(params: {
   return resolveGogJsonFile(params, "credentials");
 }
 
-function resolveGogTokenFile(params: {
-  gogClient?: string | null;
-  gogAccount?: string | null;
-}): string | null {
-  return resolveGogJsonFile(params, "tokens");
-}
-
-function looksLikeJwt(token: string): boolean {
-  return jwtPattern.test(token.trim());
-}
-
 function looksLikeRefreshToken(token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith("ya29.")) return false;
-  if (looksLikeJwt(trimmed)) return false;
   if (trimmed.startsWith("1//")) return true;
   return trimmed.length > 30;
-}
-
-function collectTokensFromString(value: string, out: GogTokenEntry[]) {
-  const trimmed = value.trim();
-  if (!trimmed) return;
-  if (looksLikeRefreshToken(trimmed)) out.push({ refreshToken: trimmed });
 }
 
 function collectTokens(value: unknown, out: GogTokenEntry[]) {
@@ -208,34 +143,28 @@ function collectTokens(value: unknown, out: GogTokenEntry[]) {
   }
 }
 
-function collectTokensFromRaw(value: string, out: GogTokenEntry[]) {
-  const trimmed = value.trim();
-  if (!trimmed) return;
-
-  const parsed = tryParseJson(trimmed);
-  if (parsed) {
-    if (typeof parsed === "string") {
-      collectTokensFromString(parsed, out);
-    } else {
-      collectTokens(parsed, out);
-    }
-    return;
+function parseTokenEmails(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const keys = Array.isArray(record.keys)
+    ? record.keys.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const emails = new Set<string>();
+  for (const key of keys) {
+    const email = parseTokenEmail(key);
+    if (email) emails.add(email);
   }
+  return Array.from(emails);
+}
 
-  const decoded = decodeBase64Payload(trimmed);
-  if (decoded) {
-    const decodedParsed = tryParseJson(decoded);
-    if (decodedParsed) {
-      if (typeof decodedParsed === "string") {
-        collectTokensFromString(decodedParsed, out);
-      } else {
-        collectTokens(decodedParsed, out);
-      }
-      return;
-    }
-  }
-
-  collectTokensFromString(trimmed, out);
+function parseTokenEmail(key: string): string | null {
+  const trimmed = key.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(":");
+  if (parts.length < 2) return null;
+  if (parts[0] !== "token") return null;
+  if (parts.length === 2) return parts[1] || null;
+  return parts[2] || null;
 }
 
 export function readGogRefreshTokenSync(params: {
@@ -245,25 +174,6 @@ export function readGogRefreshTokenSync(params: {
   const cacheKey = `${params.gogClient ?? ""}:${params.gogAccount ?? ""}`;
   const cached = tokenCache.get(cacheKey);
   if (cached) return cached;
-
-  const tokens: GogTokenEntry[] = [];
-  const tokenFile = resolveGogTokenFile(params);
-  if (tokenFile) {
-    const parsed = readJsonFile(tokenFile);
-    if (parsed) collectTokens(parsed, tokens);
-  }
-
-  if (tokens.length === 0) {
-    const keyringFiles = resolveGogKeyringFiles(params);
-    for (const file of keyringFiles) {
-      try {
-        const raw = fs.readFileSync(file, "utf8");
-        collectTokensFromRaw(raw, tokens);
-      } catch {
-        // Ignore keyring read errors and keep trying other entries.
-      }
-    }
-  }
 
   const env = {
     ...process.env,
@@ -277,7 +187,7 @@ export function readGogRefreshTokenSync(params: {
 
   const runGogJson = (args: string[]): unknown | null => {
     try {
-      const stdout = execFileSync("gog", ["--no-input", ...args], {
+      const stdout = execFileSync("gog", ["--no-input", "--json", ...args], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 3000,
@@ -289,34 +199,62 @@ export function readGogRefreshTokenSync(params: {
     }
   };
 
-  if (tokens.length === 0) {
-    const parsed = runGogJson(["auth", "tokens", "list", "--json"]);
-    if (parsed) collectTokens(parsed, tokens);
+  const explicitAccount = params.gogAccount?.trim();
+  let account = explicitAccount;
+  if (!account) {
+    const parsed = runGogJson(["auth", "tokens", "list"]);
+    const emails = parseTokenEmails(parsed);
+    if (emails.length === 1) {
+      account = emails[0];
+    } else {
+      return null;
+    }
   }
-  if (tokens.length === 0) {
-    const exported = runGogJson(["auth", "tokens", "export", "--json"]);
-    if (exported) collectTokens(exported, tokens);
-  }
-  if (tokens.length === 0) return null;
 
-  const target = params.gogAccount?.trim().toLowerCase();
-  if (target) {
-    const match = tokens.find(
-      (entry) => entry.account?.trim().toLowerCase() === target,
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-gog-"));
+  const outPath = path.join(tmpDir, "token.json");
+  try {
+    execFileSync(
+      "gog",
+      [
+        "--no-input",
+        "--json",
+        "auth",
+        "tokens",
+        "export",
+        account,
+        "--out",
+        outPath,
+        "--overwrite",
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 5000,
+        env,
+      },
     );
-    if (match?.refreshToken) {
-      tokenCache.set(cacheKey, match.refreshToken);
-      return match.refreshToken;
+  } catch {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
     }
+    return null;
   }
 
-  if (tokens.length === 1) {
-    const only = tokens[0]?.refreshToken;
-    if (only) {
-      tokenCache.set(cacheKey, only);
-      return only;
-    }
+  const parsed = readJsonFile(outPath);
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup errors
   }
 
-  return null;
+  const tokens: GogTokenEntry[] = [];
+  if (parsed) collectTokens(parsed, tokens);
+  const token = tokens[0]?.refreshToken?.trim();
+  if (!token) return null;
+
+  tokenCache.set(cacheKey, token);
+  return token;
 }

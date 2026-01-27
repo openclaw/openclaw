@@ -73,7 +73,7 @@ If you already use `gog` for Google Workspace, you can reuse its OAuth client + 
    }
    ```
 3) Ensure `gog` can access its keyring on the gateway host.
-   - `gog` stores refresh tokens in the system keychain by default. citeturn6view0
+   - `gog` stores refresh tokens in the system keychain by default (not inside `credentials.json`). citeturn6view0
    - For headless systems (systemd, SSH-only), switch to file keyring + password (see `gog` docs). citeturn6view0
      - Set `GOG_KEYRING_BACKEND=file` and `GOG_KEYRING_PASSWORD=...` for the gateway service.
      - The file keyring lives under your gog config directory (for example `~/.config/gogcli/keyring/`).
@@ -81,7 +81,7 @@ If you already use `gog` for Google Workspace, you can reuse its OAuth client + 
    ```bash
    gog auth tokens list --json
    ```
-   If this fails, install `gog` on the gateway host and ensure the keyring is accessible.
+   This lists token keys only (no secrets). If this fails, install `gog` on the gateway host and ensure the keyring is accessible.
    For non-interactive services, set `GOG_KEYRING_PASSWORD` in the gateway environment so `gog` can unlock the keyring.
 
 Clawdbot reads `gog` OAuth client files from:
@@ -89,7 +89,7 @@ Clawdbot reads `gog` OAuth client files from:
 - `~/.config/gogcli/credentials-<client>.json`
 - `~/.config/gogcli/credentials-<domain>.json` (or macOS equivalent) citeturn9view0
 
-Clawdbot queries `gog auth tokens list --json` (and falls back to `gog auth tokens export --json`) to reuse the stored refresh token. If this fails, set `oauthRefreshToken` manually.
+Clawdbot queries `gog auth tokens list --json` to discover which account to use, then runs `gog auth tokens export <email> --out <tmp>` to read the refresh token. If you have multiple gog accounts, set `gogAccount` (or `GOG_ACCOUNT`) to pick the right one. If this fails, set `oauthRefreshToken` manually.
 
 ### Option B: Manual OAuth
 1) Configure OAuth consent + create OAuth client credentials in your Google Cloud project (desktop app recommended). citeturn6view0
