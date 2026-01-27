@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildInlineProviderModels } from "./model.js";
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
+  discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+}));
+
+import type { MoltbotConfig } from "../../config/config.js";
+import { buildInlineProviderModels, resolveModel } from "./model.js";
 
 const makeModel = (id: string) => ({
   id,
@@ -15,15 +21,25 @@ const makeModel = (id: string) => ({
 describe("buildInlineProviderModels", () => {
   it("attaches provider ids to inline models", () => {
     const providers = {
-      " alpha ": { models: [makeModel("alpha-model")] },
-      beta: { models: [makeModel("beta-model")] },
+      " alpha ": { baseUrl: "http://alpha.local", models: [makeModel("alpha-model")] },
+      beta: { baseUrl: "http://beta.local", models: [makeModel("beta-model")] },
     };
 
     const result = buildInlineProviderModels(providers);
 
     expect(result).toEqual([
-      { ...makeModel("alpha-model"), provider: "alpha", baseUrl: undefined, api: undefined },
-      { ...makeModel("beta-model"), provider: "beta", baseUrl: undefined, api: undefined },
+      {
+        ...makeModel("alpha-model"),
+        provider: "alpha",
+        baseUrl: "http://alpha.local",
+        api: undefined,
+      },
+      {
+        ...makeModel("beta-model"),
+        provider: "beta",
+        baseUrl: "http://beta.local",
+        api: undefined,
+      },
     ]);
   });
 
@@ -44,6 +60,7 @@ describe("buildInlineProviderModels", () => {
   it("inherits api from provider when model does not specify it", () => {
     const providers = {
       custom: {
+        baseUrl: "http://localhost:8000",
         api: "anthropic-messages",
         models: [makeModel("custom-model")],
       },
@@ -58,7 +75,8 @@ describe("buildInlineProviderModels", () => {
   it("model-level api takes precedence over provider-level api", () => {
     const providers = {
       custom: {
-        api: "openai-chat",
+        baseUrl: "http://localhost:8000",
+        api: "openai-responses",
         models: [{ ...makeModel("custom-model"), api: "anthropic-messages" as const }],
       },
     };
@@ -87,5 +105,26 @@ describe("buildInlineProviderModels", () => {
       api: "anthropic-messages",
       name: "claude-opus-4.5",
     });
+  });
+});
+
+describe("resolveModel", () => {
+  it("includes provider baseUrl in fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [],
+          },
+        },
+      },
+    } as MoltbotConfig;
+
+    const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.model?.baseUrl).toBe("http://localhost:9000");
+    expect(result.model?.provider).toBe("custom");
+    expect(result.model?.id).toBe("missing-model");
   });
 });
