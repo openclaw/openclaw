@@ -57,6 +57,7 @@ Status: unreleased.
 - Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
 - Telegram: add optional silent send flag (disable notifications). (#2382) Thanks @Suksham-sharma.
 - Telegram: support editing sent messages via message(action="edit"). (#2394) Thanks @marcelomar21.
+- Telegram: support quote replies for message tool and inbound context. (#2900) Thanks @aduk059.
 - Telegram: add sticker receive/send with vision caching. (#2629) Thanks @longjos.
 - Telegram: send sticker pixels to vision models. (#2650)
 - Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
