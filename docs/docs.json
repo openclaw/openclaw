@@ -346,10 +346,6 @@
       "destination": "/automation/auth-monitoring"
     },
     {
-      "source": "/scripts",
-      "destination": "/scripts"
-    },
-    {
       "source": "/camera",
       "destination": "/nodes/camera"
     },
