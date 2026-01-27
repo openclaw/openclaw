@@ -48,7 +48,7 @@ export async function fetchBrowserJson<T>(
   const timeoutMs = init?.timeoutMs ?? 5000;
   try {
     if (isAbsoluteHttp(url)) {
-      return await fetchHttpJson<T>(url, { ...(init ?? {}), timeoutMs });
+      return await fetchHttpJson<T>(url, init ? { ...init, timeoutMs } : { timeoutMs });
     }
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {

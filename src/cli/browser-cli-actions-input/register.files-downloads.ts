@@ -26,7 +26,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest(
+        const result = await callBrowserRequest<{ download: { path: string } }>(
           parent,
           {
             method: "POST",
@@ -68,7 +68,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest(
+        const result = await callBrowserRequest<{ download: { path: string } }>(
           parent,
           {
             method: "POST",
@@ -108,7 +108,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest(
+        const result = await callBrowserRequest<{ download: { path: string } }>(
           parent,
           {
             method: "POST",
