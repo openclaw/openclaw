@@ -180,6 +180,10 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.exec.node": "Exec Node Binding",
   "tools.exec.pathPrepend": "Exec PATH Prepend",
   "tools.exec.safeBins": "Exec Safe Bins",
+  "hooks.exec.emitEvents": "Exec Events Enabled",
+  "hooks.exec.commandWhitelist": "Exec Event Command Allowlist",
+  "hooks.exec.outputThrottleMs": "Exec Output Throttle (ms)",
+  "hooks.exec.outputMaxChunkBytes": "Exec Output Max Chunk (bytes)",
   "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
@@ -420,6 +424,14 @@ const FIELD_HELP: Record<string, string> = {
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
+  "hooks.exec.emitEvents":
+    "Emit exec.started/output/completed gateway events for whitelisted commands (default: true).",
+  "hooks.exec.commandWhitelist":
+    "Command basenames eligible for exec event emission (default includes codex, claude, opencode, pi, playwright, and puppeteer).",
+  "hooks.exec.outputThrottleMs":
+    "Minimum delay between exec output events per process in milliseconds (default: 150).",
+  "hooks.exec.outputMaxChunkBytes":
+    "Maximum bytes per exec output event chunk (default: 4096).",
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":

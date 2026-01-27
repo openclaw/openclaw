@@ -110,6 +110,17 @@ export type InternalHooksConfig = {
   installs?: Record<string, HookInstallRecord>;
 };
 
+export type HooksExecConfig = {
+  /** Emit exec lifecycle events to gateway clients. */
+  emitEvents?: boolean;
+  /** Allowlist of command names to emit exec events for. */
+  commandWhitelist?: string[];
+  /** Minimum delay between exec output events per process (ms). */
+  outputThrottleMs?: number;
+  /** Maximum output chunk size per exec output event (bytes). */
+  outputMaxChunkBytes?: number;
+};
+
 export type HooksConfig = {
   enabled?: boolean;
   path?: string;
@@ -121,4 +132,6 @@ export type HooksConfig = {
   gmail?: HooksGmailConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
+  /** Exec lifecycle event emission settings. */
+  exec?: HooksExecConfig;
 };

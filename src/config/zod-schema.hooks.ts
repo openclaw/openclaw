@@ -128,3 +128,13 @@ export const HooksGmailSchema = z
   })
   .strict()
   .optional();
+
+export const HooksExecSchema = z
+  .object({
+    emitEvents: z.boolean().optional(),
+    commandWhitelist: z.array(z.string()).optional(),
+    outputThrottleMs: z.number().int().nonnegative().optional(),
+    outputMaxChunkBytes: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
