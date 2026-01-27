@@ -219,6 +219,32 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("does not provide onToolResult for native slash commands", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const cfg = {} as ClawdbotConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      CommandSource: "native",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts: GetReplyOptions | undefined,
+      _cfg: ClawdbotConfig,
+    ) => {
+      expect(opts?.onToolResult).toBeUndefined();
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("fast-aborts without calling the reply resolver", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
       handled: true,

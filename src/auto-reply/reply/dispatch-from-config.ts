@@ -277,7 +277,7 @@ export async function dispatchReplyFromConfig(params: {
       {
         ...params.replyOptions,
         onToolResult:
-          ctx.ChatType !== "group"
+          ctx.ChatType !== "group" && ctx.CommandSource !== "native"
             ? (payload: ReplyPayload) => {
                 const run = async () => {
                   const ttsPayload = await maybeApplyTtsToPayload({
