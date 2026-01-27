@@ -42,7 +42,7 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
   const sendTypingIndicator = async () => {
-    await params.context.sendActivity([{ type: "typing" }]);
+    await params.context.sendActivity({ type: "typing" });
   };
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
