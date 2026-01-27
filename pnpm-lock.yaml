@@ -355,9 +355,9 @@ importers:
   extensions/mattermost: {}
 
   extensions/memory-core:
-    dependencies:
+    devDependencies:
       moltbot:
-        specifier: '>=2026.1.26'
+        specifier: workspace:*
         version: link:../..
 
   extensions/memory-lancedb:
