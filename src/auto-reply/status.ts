@@ -30,6 +30,7 @@ import {
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry.js";
+import { listPluginCommands } from "../plugins/commands.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
@@ -472,6 +473,15 @@ export function buildCommandsMessage(
     const aliasLabel = aliases.length ? ` (aliases: ${aliases.join(", ")})` : "";
     const scopeLabel = command.scope === "text" ? " (text-only)" : "";
     lines.push(`${primary}${aliasLabel}${scopeLabel} - ${command.description}`);
+  }
+  const pluginCommands = listPluginCommands();
+  if (pluginCommands.length > 0) {
+    lines.push("");
+    lines.push("Plugin commands:");
+    for (const command of pluginCommands) {
+      const pluginLabel = command.pluginId ? ` (plugin: ${command.pluginId})` : "";
+      lines.push(`/${command.name}${pluginLabel} - ${command.description}`);
+    }
   }
   return lines.join("\n");
 }

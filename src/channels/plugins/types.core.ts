@@ -240,6 +240,12 @@ export type ChannelThreadingToolContext = {
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
+  /**
+   * When true, skip cross-context decoration (e.g., "[from X]" prefix).
+   * Use this for direct tool invocations where the agent is composing a new message,
+   * not forwarding/relaying a message from another conversation.
+   */
+  skipCrossContextDecoration?: boolean;
 };
 
 export type ChannelMessagingAdapter = {

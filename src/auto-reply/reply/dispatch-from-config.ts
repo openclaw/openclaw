@@ -206,6 +206,7 @@ export async function dispatchReplyFromConfig(params: {
   const sendPayloadAsync = async (
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
+    mirror?: boolean,
   ): Promise<void> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
@@ -220,6 +221,7 @@ export async function dispatchReplyFromConfig(params: {
       threadId: ctx.MessageThreadId,
       cfg,
       abortSignal,
+      mirror,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -268,24 +270,6 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
-        onToolResult: (payload: ReplyPayload) => {
-          const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "tool",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
-            if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload);
-            } else {
-              dispatcher.sendToolResult(ttsPayload);
-            }
-          };
-          return run();
-        },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -297,7 +281,7 @@ export async function dispatchReplyFromConfig(params: {
               ttsAuto: sessionTtsAuto,
             });
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal);
+              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
               dispatcher.sendBlockReply(ttsPayload);
             }

@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
-
 import type { CoreConfig } from "./src/core-bridge.js";
 import {
   VoiceCallConfigSchema,
+  resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
@@ -74,9 +74,26 @@ const voiceCallConfigSchema = {
     },
     "streaming.sttModel": { label: "Realtime STT Model", advanced: true },
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
-    "tts.model": { label: "TTS Model", advanced: true },
-    "tts.voice": { label: "TTS Voice", advanced: true },
-    "tts.instructions": { label: "TTS Instructions", advanced: true },
+    "tts.provider": {
+      label: "TTS Provider Override",
+      help: "Deep-merges with messages.tts (Edge is ignored for calls).",
+      advanced: true,
+    },
+    "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },
+    "tts.openai.voice": { label: "OpenAI TTS Voice", advanced: true },
+    "tts.openai.apiKey": {
+      label: "OpenAI API Key",
+      sensitive: true,
+      advanced: true,
+    },
+    "tts.elevenlabs.modelId": { label: "ElevenLabs Model ID", advanced: true },
+    "tts.elevenlabs.voiceId": { label: "ElevenLabs Voice ID", advanced: true },
+    "tts.elevenlabs.apiKey": {
+      label: "ElevenLabs API Key",
+      sensitive: true,
+      advanced: true,
+    },
+    "tts.elevenlabs.baseUrl": { label: "ElevenLabs Base URL", advanced: true },
     publicUrl: { label: "Public Webhook URL", advanced: true },
     skipSignatureVerification: {
       label: "Skip Signature Verification",
@@ -128,8 +145,10 @@ const voiceCallPlugin = {
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
   configSchema: voiceCallConfigSchema,
   register(api) {
-    const cfg = voiceCallConfigSchema.parse(api.pluginConfig);
-    const validation = validateProviderConfig(cfg);
+    const config = resolveVoiceCallConfig(
+      voiceCallConfigSchema.parse(api.pluginConfig),
+    );
+    const validation = validateProviderConfig(config);
 
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
       const raw = api.pluginConfig as Record<string, unknown>;
@@ -150,7 +169,7 @@ const voiceCallPlugin = {
     let runtime: VoiceCallRuntime | null = null;
 
     const ensureRuntime = async () => {
-      if (!cfg.enabled) {
+      if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
       }
       if (!validation.valid) {
@@ -159,8 +178,9 @@ const voiceCallPlugin = {
       if (runtime) return runtime;
       if (!runtimePromise) {
         runtimePromise = createVoiceCallRuntime({
-          config: cfg,
+          config,
           coreConfig: api.config as CoreConfig,
+          ttsRuntime: api.runtime.tts,
           logger: api.logger,
         });
       }
@@ -439,7 +459,7 @@ const voiceCallPlugin = {
       ({ program }) =>
         registerVoiceCallCli({
           program,
-          config: cfg,
+          config,
           ensureRuntime,
           logger: api.logger,
         }),
@@ -449,7 +469,7 @@ const voiceCallPlugin = {
     api.registerService({
       id: "voicecall",
       start: async () => {
-        if (!cfg.enabled) return;
+        if (!config.enabled) return;
         try {
           await ensureRuntime();
         } catch (err) {

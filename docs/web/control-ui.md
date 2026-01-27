@@ -70,10 +70,11 @@ Open:
 
 By default, Serve requests can authenticate via Tailscale identity headers
 (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. Clawdbot
-only accepts these when the request hits loopback with Tailscale’s
-`x-forwarded-*` headers. Set `gateway.auth.allowTailscale: false` (or force
-`gateway.auth.mode: "password"`) if you want to require a token/password even
-for Serve traffic.
+verifies the identity by resolving the `x-forwarded-for` address with
+`tailscale whois` and matching it to the header, and only accepts these when the
+request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
+`gateway.auth.allowTailscale: false` (or force `gateway.auth.mode: "password"`)
+if you want to require a token/password even for Serve traffic.
 
 ### Bind to tailnet + token
 
@@ -108,8 +109,8 @@ Clawdbot **blocks** Control UI connections without device identity.
 }
 ```
 
-This disables device identity + pairing for the Control UI. Use only if you
-trust the network.
+This disables device identity + pairing for the Control UI (even on HTTPS). Use
+only if you trust the network.
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 

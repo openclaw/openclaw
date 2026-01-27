@@ -59,4 +59,6 @@ export type ReplyPayload = {
   editMessageId?: string;
   /** Inline keyboard buttons (reply markup). */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  /** Channel-specific payload data (per-channel envelope). */
+  channelData?: Record<string, unknown>;
 };

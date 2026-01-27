@@ -7,7 +7,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   listDeliverableMessageChannels,
 } from "../../utils/message-channel.js";
-import { resolveChunkMode, resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
+import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
@@ -69,15 +69,11 @@ export function resolveBlockStreamingChunking(
   });
   const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
 
-  // When chunkMode is "newline", use newline-based streaming
-  const channelChunkMode = resolveChunkMode(cfg, providerKey, accountId);
-  if (channelChunkMode === "newline") {
-    // For newline mode: use very low minChars to flush quickly on newlines
-    const minChars = Math.max(1, Math.floor(chunkCfg?.minChars ?? 1));
-    const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? textLimit));
-    const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
-    return { minChars, maxChars, breakPreference: "newline" };
-  }
+  // Note: chunkMode="newline" used to imply splitting on each newline, but outbound
+  // delivery now treats it as paragraph-aware chunking (only split on blank lines).
+  // Block streaming should follow the same rule, so we do NOT special-case newline
+  // mode here.
+  // (chunkMode no longer alters block streaming behavior)
 
   const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX));
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
@@ -103,11 +99,8 @@ export function resolveBlockStreamingCoalescing(
 ): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
 
-  // When chunkMode is "newline", disable coalescing to send each line immediately
-  const channelChunkMode = resolveChunkMode(cfg, providerKey, accountId);
-  if (channelChunkMode === "newline") {
-    return undefined;
-  }
+  // Note: chunkMode="newline" is paragraph-aware in outbound delivery (blank-line splits),
+  // so block streaming should not disable coalescing or flush per single newline.
 
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId

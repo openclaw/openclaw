@@ -1,5 +1,5 @@
 import { sendMessageTelegram, editMessageTelegram } from "../send.js";
-import { type Bot, InputFile } from "grammy";
+import { type Bot, GrammyError, InputFile } from "grammy";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -19,11 +19,13 @@ import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
+import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -82,31 +84,54 @@ export async function deliverReplies(params: {
       : reply.mediaUrl
         ? [reply.mediaUrl]
         : [];
+    const telegramData = reply.channelData?.telegram as
+      | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+      | undefined;
+    const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {
-      // Check if the previous message was a status message.
-      // If so, we should edit it instead of sending a new message.
-      const lastSent = getLastSentMessage(chatId);
-      const shouldEditLast =
-        lastSent?.isStatus && lastSent.messageId && Date.now() - lastSent.timestamp < 120000; // 2 min threshold
+      let sentMessageId: string | undefined = reply.editMessageId;
 
-      let sentMessageId: string | undefined;
-
-      if (shouldEditLast && reply.text) {
-        const editId = String(lastSent!.messageId);
-
+      if (reply.editMessageId && reply.text) {
+        // Explicit edit requested via payload (local functionality)
         try {
-          await editMessageTelegram(chatId, editId, reply.text, {
+          await editMessageTelegram(chatId, reply.editMessageId, reply.text, {
             token: params.token,
             accountId: params.accountId,
             api: bot.api,
           });
-          sentMessageId = editId;
+          // sentMessageId is already set by initialization
         } catch (err) {
-          console.warn(`Telegram edit failed, falling back to new message: ${String(err)}`);
-          // Fall through to send new message
+          console.warn(
+            `Telegram explicit edit failed, falling back to new message: ${String(err)}`,
+          );
+          sentMessageId = undefined;
         }
       }
 
+      // Check if the previous message was a status message and try to edit it (local branch functionality).
+      if (!sentMessageId) {
+        const lastSent = getLastSentMessage(chatId);
+        const shouldEditLast =
+          lastSent?.isStatus && lastSent.messageId && Date.now() - lastSent.timestamp < 120000; // 2 min threshold
+
+        if (shouldEditLast && reply.text) {
+          const editId = String(lastSent!.messageId);
+
+          try {
+            await editMessageTelegram(chatId, editId, reply.text, {
+              token: params.token,
+              accountId: params.accountId,
+              api: bot.api,
+            });
+            sentMessageId = editId;
+          } catch (err) {
+            console.warn(
+              `Telegram status edit failed, falling back to new message: ${String(err)}`,
+            );
+            // Fall through to send new message
+          }
+        }
+      }
       if (!sentMessageId && reply.isStatusMessage && reply.text) {
         const result = await sendMessageTelegram(chatId, reply.text, {
           token: params.token,
@@ -114,6 +139,7 @@ export async function deliverReplies(params: {
           api: bot.api,
           isStatusMessage: true,
           messageThreadId,
+          buttons: telegramData?.buttons,
         });
         sentMessageId = result.messageId;
       } else if (!sentMessageId) {
@@ -168,10 +194,12 @@ export async function deliverReplies(params: {
       first = false;
       const replyToMessageId =
         replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
+      const shouldAttachButtonsToMedia = isFirstMedia && replyMarkup && !followUpText;
       const mediaParams: Record<string, unknown> = {
         caption: htmlCaption,
         reply_to_message_id: replyToMessageId,
         ...(htmlCaption ? { parse_mode: "HTML" } : {}),
+        ...(shouldAttachButtonsToMedia ? { reply_markup: replyMarkup } : {}),
       };
       if (threadParams) {
         mediaParams.message_thread_id = threadParams.message_thread_id;
@@ -199,9 +227,40 @@ export async function deliverReplies(params: {
           // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
-          await bot.api.sendVoice(chatId, file, {
-            ...mediaParams,
-          });
+          try {
+            await bot.api.sendVoice(chatId, file, {
+              ...mediaParams,
+            });
+          } catch (voiceErr) {
+            // Fall back to text if voice messages are forbidden in this chat.
+            // This happens when the recipient has Telegram Premium privacy settings
+            // that block voice messages (Settings > Privacy > Voice Messages).
+            if (isVoiceMessagesForbidden(voiceErr)) {
+              const fallbackText = reply.text;
+              if (!fallbackText || !fallbackText.trim()) {
+                throw voiceErr;
+              }
+              logVerbose(
+                "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
+              );
+              hasReplied = await sendTelegramVoiceFallbackText({
+                bot,
+                chatId,
+                runtime,
+                text: fallbackText,
+                chunkText,
+                replyToId,
+                replyToMode,
+                hasReplied,
+                messageThreadId,
+                linkPreview,
+                replyMarkup,
+              });
+              // Skip this media item; continue with next.
+              continue;
+            }
+            throw voiceErr;
+          }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
           await bot.api.sendAudio(chatId, file, {
@@ -220,7 +279,8 @@ export async function deliverReplies(params: {
       // Chunk it in case it's extremely long (same logic as text-only replies).
       if (pendingFollowUpText && isFirstMedia) {
         const chunks = chunkText(pendingFollowUpText);
-        for (const chunk of chunks) {
+        for (let i = 0; i < chunks.length; i += 1) {
+          const chunk = chunks[i];
           const replyToMessageIdFollowup =
             replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
           await sendTelegramText(bot, chatId, chunk.html, runtime, {
@@ -229,6 +289,7 @@ export async function deliverReplies(params: {
             textMode: "html",
             plainText: chunk.text,
             linkPreview,
+            replyMarkup: i === 0 ? replyMarkup : undefined,
           });
           if (replyToId && !hasReplied) {
             hasReplied = true;
@@ -272,6 +333,46 @@ export async function resolveMedia(
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
 
+function isVoiceMessagesForbidden(err: unknown): boolean {
+  if (err instanceof GrammyError) {
+    return VOICE_FORBIDDEN_RE.test(err.description);
+  }
+  return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+}
+
+async function sendTelegramVoiceFallbackText(opts: {
+  bot: Bot;
+  chatId: string;
+  runtime: RuntimeEnv;
+  text: string;
+  chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+  replyToId?: number;
+  replyToMode: ReplyToMode;
+  hasReplied: boolean;
+  messageThreadId?: number;
+  linkPreview?: boolean;
+  replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+}): Promise<boolean> {
+  const chunks = opts.chunkText(opts.text);
+  let hasReplied = opts.hasReplied;
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
+      replyToMessageId:
+        opts.replyToId && (opts.replyToMode === "all" || !hasReplied) ? opts.replyToId : undefined,
+      messageThreadId: opts.messageThreadId,
+      textMode: "html",
+      plainText: chunk.text,
+      linkPreview: opts.linkPreview,
+      replyMarkup: i === 0 ? opts.replyMarkup : undefined,
+    });
+    if (opts.replyToId && !hasReplied) {
+      hasReplied = true;
+    }
+  }
+  return hasReplied;
+}
+
 function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
   messageThreadId?: number;
@@ -298,6 +399,7 @@ async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
+    replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
@@ -313,6 +415,7 @@ async function sendTelegramText(
     const res = await bot.api.sendMessage(chatId, htmlText, {
       parse_mode: "HTML",
       ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+      ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
       ...baseParams,
     });
     return res.message_id;
@@ -323,6 +426,7 @@ async function sendTelegramText(
       const fallbackText = opts?.plainText ?? text;
       const res = await bot.api.sendMessage(chatId, fallbackText, {
         ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
         ...baseParams,
       });
       return res.message_id;

@@ -59,6 +59,7 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
+    silent: Type.Optional(Type.Boolean()),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     buttons: Type.Optional(
@@ -333,7 +334,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     name: "message",
     description,
     parameters: schema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
+      // Check if already aborted before doing any work
+      if (signal?.aborted) {
+        const err = new Error("Message send aborted");
+        err.name = "AbortError";
+        throw err;
+      }
       const params = args as Record<string, unknown>;
       const cfg = options?.config ?? loadConfig();
       const action = readStringParam(params, "action", {
@@ -366,6 +373,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               currentThreadTs: options?.currentThreadTs,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
+              // Direct tool invocations should not add cross-context decoration.
+              // The agent is composing a message, not forwarding from another chat.
+              skipCrossContextDecoration: true,
             }
           : undefined;
 
@@ -379,6 +389,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,
+        abortSignal: signal,
       });
 
       const toolResult = getToolResult(result);
