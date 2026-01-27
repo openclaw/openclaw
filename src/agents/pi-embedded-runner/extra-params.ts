@@ -51,7 +51,7 @@ function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
 ): CacheRetention | undefined {
-  if (provider !== "anthropic") {
+  if (provider !== "anthropic" && provider !== "kilocode") {
     return undefined;
   }
 

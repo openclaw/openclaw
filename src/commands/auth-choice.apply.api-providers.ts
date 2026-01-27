@@ -18,6 +18,8 @@ import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
+  applyKilocodeConfig,
+  applyKilocodeProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
   applyKimiCodeConfig,
@@ -43,6 +45,7 @@ import {
   applyZaiConfig,
   applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -55,6 +58,7 @@ import {
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
+  setKilocodeApiKey,
   setLitellmApiKey,
   setKimiCodingApiKey,
   setMoonshotApiKey,
@@ -115,6 +119,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "huggingface-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
+    } else if (params.opts.tokenProvider === "kilocode") {
+      authChoice = "kilocode-api-key";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
     }
@@ -213,6 +219,84 @@ export async function applyAuthChoiceApiProviders(
     });
     nextConfig = applied.config;
     agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "kilocode-api-key") {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const profileOrder = resolveAuthProfileOrder({
+      cfg: nextConfig,
+      store,
+      provider: "kilocode",
+    });
+    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
+    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+    let profileId = "kilocode:default";
+    let mode: "api_key" | "oauth" | "token" = "api_key";
+    let hasCredential = false;
+
+    if (existingProfileId && existingCred?.type) {
+      profileId = existingProfileId;
+      mode =
+        existingCred.type === "oauth"
+          ? "oauth"
+          : existingCred.type === "token"
+            ? "token"
+            : "api_key";
+      hasCredential = true;
+    }
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "kilocode") {
+      await setKilocodeApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("kilocode");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing KILOCODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setKilocodeApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Kilo Gateway API key",
+        validate: validateApiKeyInput,
+      });
+      await setKilocodeApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "kilocode",
+        mode,
+      });
+    }
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: KILOCODE_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyKilocodeConfig,
+        applyProviderConfig: applyKilocodeProviderConfig,
+        noteDefault: KILOCODE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
     return { config: nextConfig, agentModelOverride };
   }
 
