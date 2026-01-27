@@ -1,6 +1,10 @@
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
-import { buildCommandsMessage, buildHelpMessage } from "../status.js";
+import {
+  buildCommandsMessage,
+  buildCommandsMessagePaginated,
+  buildHelpMessage,
+} from "../status.js";
 import { buildStatusReply } from "./commands-status.js";
 import { buildContextReply } from "./commands-context-report.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -35,11 +39,60 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
       workspaceDir: params.workspaceDir,
       cfg: params.cfg,
     });
+  const surface = params.ctx.Surface;
+
+  // For Telegram, return paginated result with inline buttons
+  if (surface === "telegram") {
+    const result = buildCommandsMessagePaginated(params.cfg, skillCommands, {
+      page: 1,
+      surface,
+    });
+
+    // Build inline keyboard for pagination if there are multiple pages
+    if (result.totalPages > 1) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: result.text,
+          channelData: {
+            telegram: {
+              buttons: buildCommandsPaginationKeyboard(result.currentPage, result.totalPages),
+            },
+          },
+        },
+      };
+    }
+
+    return {
+      shouldContinue: false,
+      reply: { text: result.text },
+    };
+  }
+
   return {
     shouldContinue: false,
-    reply: { text: buildCommandsMessage(params.cfg, skillCommands) },
+    reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
   };
 };
+
+export function buildCommandsPaginationKeyboard(
+  currentPage: number,
+  totalPages: number,
+): Array<Array<{ text: string; callback_data: string }>> {
+  const buttons: Array<{ text: string; callback_data: string }> = [];
+
+  if (currentPage > 1) {
+    buttons.push({ text: "◀ Prev", callback_data: `commands_page_${currentPage - 1}` });
+  }
+
+  buttons.push({ text: `${currentPage}/${totalPages}`, callback_data: "commands_page_noop" });
+
+  if (currentPage < totalPages) {
+    buttons.push({ text: "Next ▶", callback_data: `commands_page_${currentPage + 1}` });
+  }
+
+  return [buttons];
+}
 
 export const handleStatusCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
