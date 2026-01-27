@@ -105,44 +105,56 @@ See also: `docs/gateway-exposure-matrix.md` in the models repo.
 
 These are follow-on models that tighten fidelity around real-world failure modes (non-atomic updates, retries, and message fan-out).
 
-### Pairing store (concurrency / idempotency)
+### Pairing store concurrency / idempotency
 
-- Cap-check race:
-  - `make pairing-race` (green: atomic/locked)
-  - `make pairing-race-negative` (red: non-atomic begin/commit)
+**Claim:** a pairing store should enforce `MaxPending` and idempotency even under interleavings (i.e., “check-then-write” must be atomic / locked; refresh shouldn’t create duplicates).
 
-- Idempotency (avoid duplicates for repeated requests):
+What it means:
+- Under concurrent requests, you can’t exceed `MaxPending` for a channel.
+- Repeated requests/refreshes for the same `(channel, sender)` should not create duplicate live pending rows.
+
+- Green runs:
+  - `make pairing-race` (atomic/locked cap check)
   - `make pairing-idempotency`
-  - `make pairing-idempotency-negative`
-
-- Refresh semantics (refresh should stay enabled + be safe under interleavings):
   - `make pairing-refresh`
-  - `make pairing-refresh-negative`
   - `make pairing-refresh-race`
+- Red (expected):
+  - `make pairing-race-negative` (non-atomic begin/commit cap race)
+  - `make pairing-idempotency-negative`
+  - `make pairing-refresh-negative`
   - `make pairing-refresh-race-negative`
 
-### Ingress (trace correlation / idempotency)
+### Ingress trace correlation / idempotency
 
-- Trace correlation across multi-part message fan-out:
+**Claim:** ingestion should preserve trace correlation across fan-out and be idempotent under provider retries.
+
+What it means:
+- When one external event becomes multiple internal messages, every part keeps the same trace/event identity.
+- Retries do not result in double-processing.
+- If provider event IDs are missing, dedupe falls back to a safe key (e.g., trace ID) to avoid dropping distinct events.
+
+- Green:
   - `make ingress-trace`
-  - `make ingress-trace-negative`
   - `make ingress-trace2`
-  - `make ingress-trace2-negative`
-
-- Provider retry/idempotency:
   - `make ingress-idempotency`
-  - `make ingress-idempotency-negative`
-
-- Dedupe-key fallback when provider event IDs are missing:
   - `make ingress-dedupe-fallback`
+- Red (expected):
+  - `make ingress-trace-negative`
+  - `make ingress-trace2-negative`
+  - `make ingress-idempotency-negative`
   - `make ingress-dedupe-fallback-negative`
 
-### Routing (dmScope precedence + identityLinks)
+### Routing dmScope precedence + identityLinks
 
-- dmScope precedence (channel override wins):
+**Claim:** routing must keep DM sessions isolated by default, and only collapse sessions when explicitly configured (channel precedence + identity links).
+
+What it means:
+- Channel-specific dmScope overrides must win over global defaults.
+- identityLinks should collapse only within explicit linked groups, not across unrelated peers.
+
+- Green:
   - `make routing-precedence`
-  - `make routing-precedence-negative`
-
-- identityLinks (collapse only within explicit link groups):
   - `make routing-identitylinks`
+- Red (expected):
+  - `make routing-precedence-negative`
   - `make routing-identitylinks-negative`
