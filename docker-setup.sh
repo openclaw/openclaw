@@ -191,7 +191,7 @@ echo "Telegram (bot token):"
 echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers add --provider telegram --token <token>"
 echo "Discord (bot token):"
 echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers add --provider discord --token <token>"
-echo "Docs: https://docs.clawd.bot/providers"
+echo "Docs: https://docs.molt.bot/providers"
 
 echo ""
 echo "==> Starting gateway"

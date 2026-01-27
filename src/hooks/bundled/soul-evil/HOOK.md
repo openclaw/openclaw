@@ -1,7 +1,7 @@
 ---
 name: soul-evil
 description: "Swap SOUL.md with SOUL_EVIL.md during a purge window or by random chance"
-homepage: https://docs.clawd.bot/hooks/soul-evil
+homepage: https://docs.molt.bot/hooks/soul-evil
 metadata:
   {
     "clawdbot":

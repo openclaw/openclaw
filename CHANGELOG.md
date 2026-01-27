@@ -1,6 +1,6 @@
 # Changelog
 
-Docs: https://docs.clawd.bot
+Docs: https://docs.molt.bot
 
 ## 2026.1.26
 Status: unreleased.
@@ -113,27 +113,27 @@ Status: unreleased.
 ## 2026.1.24
 
 ### Highlights
-- Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama https://docs.clawd.bot/providers/venice
+- Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.molt.bot/providers/ollama https://docs.molt.bot/providers/venice
 - Channels: LINE plugin (Messaging API) with rich replies + quick replies. (#1630) Thanks @plum-dawg.
-- TTS: Edge fallback (keyless) + `/tts` auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.clawd.bot/tts
-- Exec approvals: approve in-chat via `/approve` across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands
-- Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.clawd.bot/channels/telegram
+- TTS: Edge fallback (keyless) + `/tts` auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.molt.bot/tts
+- Exec approvals: approve in-chat via `/approve` across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands
+- Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.molt.bot/channels/telegram
 
 ### Changes
 - Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.
-- TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.clawd.bot/tts
-- TTS: add auto mode enum (off/always/inbound/tagged) with per-session `/tts` override. (#1667) Thanks @sebslight. https://docs.clawd.bot/tts
+- TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.molt.bot/tts
+- TTS: add auto mode enum (off/always/inbound/tagged) with per-session `/tts` override. (#1667) Thanks @sebslight. https://docs.molt.bot/tts
 - Telegram: treat DM topics as separate sessions and keep DM history limits stable with thread suffixes. (#1597) Thanks @rohannagpal.
-- Telegram: add `channels.telegram.linkPreview` to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.clawd.bot/channels/telegram
-- Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.clawd.bot/tools/web
+- Telegram: add `channels.telegram.linkPreview` to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.molt.bot/channels/telegram
+- Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.molt.bot/tools/web
 - UI: refresh Control UI dashboard design system (colors, icons, typography). (#1745, #1786) Thanks @EnzeD, @mousberg.
-- Exec approvals: forward approval prompts to chat with `/approve` for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands
+- Exec approvals: forward approval prompts to chat with `/approve` for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands
 - Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.
-- Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.clawd.bot/diagnostics/flags
+- Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.molt.bot/diagnostics/flags
 - Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).
 - Docs: add verbose installer troubleshooting guidance.
 - Docs: add macOS VM guide with local/hosted options + VPS/nodes guidance. (#1693) Thanks @f-trycua.
-- Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.clawd.bot/bedrock
+- Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.molt.bot/bedrock
 - Docs: update Fly.io guide notes.
 - Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.
 
@@ -144,11 +144,11 @@ Status: unreleased.
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Gateway: allow Control UI token-only auth to skip device pairing even when device identity is present (`gateway.controlUi.allowInsecureAuth`). (#1679) Thanks @steipete.
 - Matrix: decrypt E2EE media attachments with preflight size guard. (#1744) Thanks @araa47.
-- BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.clawd.bot/channels/bluebubbles
+- BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.molt.bot/channels/bluebubbles
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
 - iMessage: normalize chat_id/chat_guid/chat_identifier prefixes case-insensitively and keep service-prefixed handles stable. (#1708) Thanks @aaronn.
 - Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.
-- Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.clawd.bot/channels/signal
+- Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.molt.bot/channels/signal
 - Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Telegram: honor per-account proxy for outbound API calls. (#1774) Thanks @radek-paclt.
@@ -186,25 +186,25 @@ Status: unreleased.
 ## 2026.1.23
 
 ### Highlights
-- TTS: move Telegram TTS into core + enable model-driven TTS tags by default for expressive audio replies. (#1559) Thanks @Glucksberg. https://docs.clawd.bot/tts
-- Gateway: add `/tools/invoke` HTTP endpoint for direct tool calls (auth + tool policy enforced). (#1575) Thanks @vignesh07. https://docs.clawd.bot/gateway/tools-invoke-http-api
-- Heartbeat: per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer. https://docs.clawd.bot/gateway/heartbeat
-- Deploy: add Fly.io deployment support + guide. (#1570) https://docs.clawd.bot/platforms/fly
-- Channels: add Tlon/Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a. https://docs.clawd.bot/channels/tlon
+- TTS: move Telegram TTS into core + enable model-driven TTS tags by default for expressive audio replies. (#1559) Thanks @Glucksberg. https://docs.molt.bot/tts
+- Gateway: add `/tools/invoke` HTTP endpoint for direct tool calls (auth + tool policy enforced). (#1575) Thanks @vignesh07. https://docs.molt.bot/gateway/tools-invoke-http-api
+- Heartbeat: per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer. https://docs.molt.bot/gateway/heartbeat
+- Deploy: add Fly.io deployment support + guide. (#1570) https://docs.molt.bot/platforms/fly
+- Channels: add Tlon/Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a. https://docs.molt.bot/channels/tlon
 
 ### Changes
-- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt. https://docs.clawd.bot/multi-agent-sandbox-tools
-- Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3. https://docs.clawd.bot/bedrock
-- CLI: add `clawdbot system` for system events + heartbeat controls; remove standalone `wake`. (commit 71203829d) https://docs.clawd.bot/cli/system
-- CLI: add live auth probes to `clawdbot models status` for per-profile verification. (commit 40181afde) https://docs.clawd.bot/cli/models
+- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt. https://docs.molt.bot/multi-agent-sandbox-tools
+- Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3. https://docs.molt.bot/bedrock
+- CLI: add `clawdbot system` for system events + heartbeat controls; remove standalone `wake`. (commit 71203829d) https://docs.molt.bot/cli/system
+- CLI: add live auth probes to `clawdbot models status` for per-profile verification. (commit 40181afde) https://docs.molt.bot/cli/models
 - CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it. (commit 2c85b1b40)
 - Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node). (commit c3cb26f7c)
-- Plugins: add optional `llm-task` JSON-only tool for workflows. (#1498) Thanks @vignesh07. https://docs.clawd.bot/tools/llm-task
+- Plugins: add optional `llm-task` JSON-only tool for workflows. (#1498) Thanks @vignesh07. https://docs.molt.bot/tools/llm-task
 - Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
 - Agents: keep system prompt time zone-only and move current time to `session_status` for better cache hits. (commit 66eec295b)
 - Agents: remove redundant bash tool alias from tool registration/display. (#1571) Thanks @Takhoffman.
-- Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc. https://docs.clawd.bot/automation/cron-vs-heartbeat
-- Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc. https://docs.clawd.bot/gateway/heartbeat
+- Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc. https://docs.molt.bot/automation/cron-vs-heartbeat
+- Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc. https://docs.molt.bot/gateway/heartbeat
 
 ### Fixes
 - Sessions: accept non-UUID sessionIds for history/send/status while preserving agent scoping. (#1518)
@@ -282,14 +282,14 @@ Status: unreleased.
 ## 2026.1.21-2
 
 ### Fixes
-- Control UI: ignore bootstrap identity placeholder text for avatar values and fall back to the default avatar. https://docs.clawd.bot/cli/agents https://docs.clawd.bot/web/control-ui
+- Control UI: ignore bootstrap identity placeholder text for avatar values and fall back to the default avatar. https://docs.molt.bot/cli/agents https://docs.molt.bot/web/control-ui
 - Slack: remove deprecated `filetype` field from `files.uploadV2` to eliminate API warnings. (#1447)
 
 ## 2026.1.21
 
 ### Changes
-- Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.clawd.bot/tools/lobster
-- Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.clawd.bot/tools/lobster
+- Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.molt.bot/tools/lobster
+- Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.molt.bot/tools/lobster
 - Heartbeat: allow running heartbeats in an explicit session key. (#1256) Thanks @zknicker.
 - CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
 - CLI: exec approvals mutations render tables instead of raw JSON.
@@ -301,16 +301,16 @@ Status: unreleased.
 - Sessions: add per-channel reset overrides via `session.resetByChannel`. (#1353) Thanks @cash-echo-bot.
 - Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
 - UI: show per-session assistant identity in the Control UI. (#1420) Thanks @robbyczgw-cla.
-- CLI: add `clawdbot update wizard` for interactive channel selection and restart prompts. https://docs.clawd.bot/cli/update
+- CLI: add `clawdbot update wizard` for interactive channel selection and restart prompts. https://docs.molt.bot/cli/update
 - Signal: add typing indicators and DM read receipts via signal-cli.
 - MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.
 - Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
-- Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.clawd.bot/gateway/troubleshooting
+- Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.molt.bot/gateway/troubleshooting
 - Docs: add /model allowlist troubleshooting note. (#1405)
 - Docs: add per-message Gmail search example for gog. (#1220) Thanks @mbelinky.
 
 ### Breaking
-- **BREAKING:** Control UI now rejects insecure HTTP without device identity by default. Use HTTPS (Tailscale Serve) or set `gateway.controlUi.allowInsecureAuth: true` to allow token-only auth. https://docs.clawd.bot/web/control-ui#insecure-http
+- **BREAKING:** Control UI now rejects insecure HTTP without device identity by default. Use HTTPS (Tailscale Serve) or set `gateway.controlUi.allowInsecureAuth: true` to allow token-only auth. https://docs.molt.bot/web/control-ui#insecure-http
 - **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
 
 ### Fixes
@@ -336,68 +336,68 @@ Status: unreleased.
 ## 2026.1.20
 
 ### Changes
-- Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.clawd.bot/web/control-ui
-- Control UI: drop the legacy list view. (#1345) https://docs.clawd.bot/web/control-ui
-- TUI: add syntax highlighting for code blocks. (#1200) https://docs.clawd.bot/tui
-- TUI: session picker shows derived titles, fuzzy search, relative times, and last message preview. (#1271) https://docs.clawd.bot/tui
-- TUI: add a searchable model picker for quicker model selection. (#1198) https://docs.clawd.bot/tui
-- TUI: add input history (up/down) for submitted messages. (#1348) https://docs.clawd.bot/tui
-- ACP: add `clawdbot acp` for IDE integrations. https://docs.clawd.bot/cli/acp
-- ACP: add `clawdbot acp client` interactive harness for debugging. https://docs.clawd.bot/cli/acp
-- Skills: add download installs with OS-filtered options. https://docs.clawd.bot/tools/skills
-- Skills: add the local sherpa-onnx-tts skill. https://docs.clawd.bot/tools/skills
-- Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback. https://docs.clawd.bot/concepts/memory
-- Memory: add SQLite embedding cache to speed up reindexing and frequent updates. https://docs.clawd.bot/concepts/memory
-- Memory: add OpenAI batch indexing for embeddings when configured. https://docs.clawd.bot/concepts/memory
-- Memory: enable OpenAI batch indexing by default for OpenAI embeddings. https://docs.clawd.bot/concepts/memory
-- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2). https://docs.clawd.bot/concepts/memory
-- Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default. https://docs.clawd.bot/concepts/memory
-- Memory: add `--verbose` logging for memory status + batch indexing details. https://docs.clawd.bot/concepts/memory
-- Memory: add native Gemini embeddings provider for memory search. (#1151) https://docs.clawd.bot/concepts/memory
-- Browser: allow config defaults for efficient snapshots in the tool/CLI. (#1336) https://docs.clawd.bot/tools/browser
-- Nostr: add the Nostr channel plugin with profile management + onboarding defaults. (#1323) https://docs.clawd.bot/channels/nostr
-- Matrix: migrate to matrix-bot-sdk with E2EE support, location handling, and group allowlist upgrades. (#1298) https://docs.clawd.bot/channels/matrix
-- Slack: add HTTP webhook mode via Bolt HTTP receiver. (#1143) https://docs.clawd.bot/channels/slack
-- Telegram: enrich forwarded-message context with normalized origin details + legacy fallback. (#1090) https://docs.clawd.bot/channels/telegram
+- Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.molt.bot/web/control-ui
+- Control UI: drop the legacy list view. (#1345) https://docs.molt.bot/web/control-ui
+- TUI: add syntax highlighting for code blocks. (#1200) https://docs.molt.bot/tui
+- TUI: session picker shows derived titles, fuzzy search, relative times, and last message preview. (#1271) https://docs.molt.bot/tui
+- TUI: add a searchable model picker for quicker model selection. (#1198) https://docs.molt.bot/tui
+- TUI: add input history (up/down) for submitted messages. (#1348) https://docs.molt.bot/tui
+- ACP: add `clawdbot acp` for IDE integrations. https://docs.molt.bot/cli/acp
+- ACP: add `clawdbot acp client` interactive harness for debugging. https://docs.molt.bot/cli/acp
+- Skills: add download installs with OS-filtered options. https://docs.molt.bot/tools/skills
+- Skills: add the local sherpa-onnx-tts skill. https://docs.molt.bot/tools/skills
+- Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback. https://docs.molt.bot/concepts/memory
+- Memory: add SQLite embedding cache to speed up reindexing and frequent updates. https://docs.molt.bot/concepts/memory
+- Memory: add OpenAI batch indexing for embeddings when configured. https://docs.molt.bot/concepts/memory
+- Memory: enable OpenAI batch indexing by default for OpenAI embeddings. https://docs.molt.bot/concepts/memory
+- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2). https://docs.molt.bot/concepts/memory
+- Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default. https://docs.molt.bot/concepts/memory
+- Memory: add `--verbose` logging for memory status + batch indexing details. https://docs.molt.bot/concepts/memory
+- Memory: add native Gemini embeddings provider for memory search. (#1151) https://docs.molt.bot/concepts/memory
+- Browser: allow config defaults for efficient snapshots in the tool/CLI. (#1336) https://docs.molt.bot/tools/browser
+- Nostr: add the Nostr channel plugin with profile management + onboarding defaults. (#1323) https://docs.molt.bot/channels/nostr
+- Matrix: migrate to matrix-bot-sdk with E2EE support, location handling, and group allowlist upgrades. (#1298) https://docs.molt.bot/channels/matrix
+- Slack: add HTTP webhook mode via Bolt HTTP receiver. (#1143) https://docs.molt.bot/channels/slack
+- Telegram: enrich forwarded-message context with normalized origin details + legacy fallback. (#1090) https://docs.molt.bot/channels/telegram
 - Discord: fall back to `/skill` when native command limits are exceeded. (#1287)
 - Discord: expose `/skill` globally. (#1287)
-- Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) https://docs.clawd.bot/plugins/zalouser
-- Plugins: require manifest-embedded config schemas with preflight validation warnings. (#1272) https://docs.clawd.bot/plugins/manifest
-- Plugins: move channel catalog metadata into plugin manifests. (#1290) https://docs.clawd.bot/plugins/manifest
-- Plugins: align Nextcloud Talk policy helpers with core patterns. (#1290) https://docs.clawd.bot/plugins/manifest
-- Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) https://docs.clawd.bot/web/control-ui
-- Agents/UI: add agent avatar support in identity config, IDENTITY.md, and the Control UI. (#1329) https://docs.clawd.bot/gateway/configuration
-- Plugins: add plugin slots with a dedicated memory slot selector. https://docs.clawd.bot/plugins/agent-tools
-- Plugins: ship the bundled BlueBubbles channel plugin (disabled by default). https://docs.clawd.bot/channels/bluebubbles
+- Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) https://docs.molt.bot/plugins/zalouser
+- Plugins: require manifest-embedded config schemas with preflight validation warnings. (#1272) https://docs.molt.bot/plugins/manifest
+- Plugins: move channel catalog metadata into plugin manifests. (#1290) https://docs.molt.bot/plugins/manifest
+- Plugins: align Nextcloud Talk policy helpers with core patterns. (#1290) https://docs.molt.bot/plugins/manifest
+- Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) https://docs.molt.bot/web/control-ui
+- Agents/UI: add agent avatar support in identity config, IDENTITY.md, and the Control UI. (#1329) https://docs.molt.bot/gateway/configuration
+- Plugins: add plugin slots with a dedicated memory slot selector. https://docs.molt.bot/plugins/agent-tools
+- Plugins: ship the bundled BlueBubbles channel plugin (disabled by default). https://docs.molt.bot/channels/bluebubbles
 - Plugins: migrate bundled messaging extensions to the plugin SDK and resolve plugin-sdk imports in the loader.
-- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime. https://docs.clawd.bot/channels/zalo
-- Plugins: migrate the Zalo Personal plugin to the shared plugin SDK runtime. https://docs.clawd.bot/plugins/zalouser
-- Plugins: allow optional agent tools with explicit allowlists and add the plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
+- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime. https://docs.molt.bot/channels/zalo
+- Plugins: migrate the Zalo Personal plugin to the shared plugin SDK runtime. https://docs.molt.bot/plugins/zalouser
+- Plugins: allow optional agent tools with explicit allowlists and add the plugin tool authoring guide. https://docs.molt.bot/plugins/agent-tools
 - Plugins: auto-enable bundled channel/provider plugins when configuration is present.
 - Plugins: sync plugin sources on channel switches and update npm-installed plugins during `clawdbot update`.
 - Plugins: share npm plugin update logic between `clawdbot update` and `clawdbot plugins update`.
 
 - Gateway/API: add `/v1/responses` (OpenResponses) with item-based input + semantic streaming events. (#1229)
 - Gateway/API: expand `/v1/responses` to support file/image inputs, tool_choice, usage, and output limits. (#1229)
-- Usage: add `/usage cost` summaries and macOS menu cost charts. https://docs.clawd.bot/reference/api-usage-costs
-- Security: warn when <=300B models run without sandboxing while web tools are enabled. https://docs.clawd.bot/cli/security
-- Exec: add host/security/ask routing for gateway + node exec. https://docs.clawd.bot/tools/exec
-- Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node). https://docs.clawd.bot/tools/exec
-- Exec approvals: migrate approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists + skill auto-allow toggle, and add approvals UI + node exec lifecycle events. https://docs.clawd.bot/tools/exec-approvals
-- Nodes: add headless node host (`clawdbot node start`) for `system.run`/`system.which`. https://docs.clawd.bot/cli/node
-- Nodes: add node daemon service install/status/start/stop/restart. https://docs.clawd.bot/cli/node
+- Usage: add `/usage cost` summaries and macOS menu cost charts. https://docs.molt.bot/reference/api-usage-costs
+- Security: warn when <=300B models run without sandboxing while web tools are enabled. https://docs.molt.bot/cli/security
+- Exec: add host/security/ask routing for gateway + node exec. https://docs.molt.bot/tools/exec
+- Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node). https://docs.molt.bot/tools/exec
+- Exec approvals: migrate approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists + skill auto-allow toggle, and add approvals UI + node exec lifecycle events. https://docs.molt.bot/tools/exec-approvals
+- Nodes: add headless node host (`clawdbot node start`) for `system.run`/`system.which`. https://docs.molt.bot/cli/node
+- Nodes: add node daemon service install/status/start/stop/restart. https://docs.molt.bot/cli/node
 - Bridge: add `skills.bins` RPC to support node host auto-allow skill bins.
-- Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) https://docs.clawd.bot/concepts/session
-- Sessions: allow `sessions_spawn` to override thinking level for sub-agent runs. https://docs.clawd.bot/tools/subagents
-- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers. https://docs.clawd.bot/concepts/groups
-- Models: add Qwen Portal OAuth provider support. (#1120) https://docs.clawd.bot/providers/qwen
-- Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels. https://docs.clawd.bot/start/onboarding
-- Docs: clarify allowlist input types and onboarding behavior for messaging channels. https://docs.clawd.bot/start/onboarding
-- Docs: refresh Android node discovery docs for the Gateway WS service type. https://docs.clawd.bot/platforms/android
-- Docs: surface Amazon Bedrock in provider lists and clarify Bedrock auth env vars. (#1289) https://docs.clawd.bot/bedrock
-- Docs: clarify WhatsApp voice notes. https://docs.clawd.bot/channels/whatsapp
-- Docs: clarify Windows WSL portproxy LAN access notes. https://docs.clawd.bot/platforms/windows
-- Docs: refresh bird skill install metadata and usage notes. (#1302) https://docs.clawd.bot/tools/browser-login
+- Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) https://docs.molt.bot/concepts/session
+- Sessions: allow `sessions_spawn` to override thinking level for sub-agent runs. https://docs.molt.bot/tools/subagents
+- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers. https://docs.molt.bot/concepts/groups
+- Models: add Qwen Portal OAuth provider support. (#1120) https://docs.molt.bot/providers/qwen
+- Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels. https://docs.molt.bot/start/onboarding
+- Docs: clarify allowlist input types and onboarding behavior for messaging channels. https://docs.molt.bot/start/onboarding
+- Docs: refresh Android node discovery docs for the Gateway WS service type. https://docs.molt.bot/platforms/android
+- Docs: surface Amazon Bedrock in provider lists and clarify Bedrock auth env vars. (#1289) https://docs.molt.bot/bedrock
+- Docs: clarify WhatsApp voice notes. https://docs.molt.bot/channels/whatsapp
+- Docs: clarify Windows WSL portproxy LAN access notes. https://docs.molt.bot/platforms/windows
+- Docs: refresh bird skill install metadata and usage notes. (#1302) https://docs.molt.bot/tools/browser-login
 - Agents: add local docs path resolution and include docs/mirror/source/community pointers in the system prompt.
 - Agents: clarify node_modules read-only guidance in agent instructions.
 - Config: stamp last-touched metadata on write and warn if the config is newer than the running build.
@@ -522,19 +522,19 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ## 2026.1.16-1
 
 ### Highlights
-- Hooks: add hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake. https://docs.clawd.bot/hooks
-- Media: add inbound media understanding (image/audio/video) with provider + CLI fallbacks. https://docs.clawd.bot/nodes/media-understanding
-- Plugins: add Zalo Personal plugin (`@clawdbot/zalouser`) and unify channel directory for plugins. (#1032) — thanks @suminhthanh. https://docs.clawd.bot/plugins/zalouser
-- Models: add Vercel AI Gateway auth choice + onboarding updates. (#1016) — thanks @timolins. https://docs.clawd.bot/providers/vercel-ai-gateway
-- Sessions: add `session.identityLinks` for cross-platform DM session li  nking. (#1033) — thanks @thewilloftheshadow. https://docs.clawd.bot/concepts/session
-- Web search: add `country`/`language` parameters (schema + Brave API) and docs. (#1046) — thanks @YuriNachos. https://docs.clawd.bot/tools/web
+- Hooks: add hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake. https://docs.molt.bot/hooks
+- Media: add inbound media understanding (image/audio/video) with provider + CLI fallbacks. https://docs.molt.bot/nodes/media-understanding
+- Plugins: add Zalo Personal plugin (`@clawdbot/zalouser`) and unify channel directory for plugins. (#1032) — thanks @suminhthanh. https://docs.molt.bot/plugins/zalouser
+- Models: add Vercel AI Gateway auth choice + onboarding updates. (#1016) — thanks @timolins. https://docs.molt.bot/providers/vercel-ai-gateway
+- Sessions: add `session.identityLinks` for cross-platform DM session li  nking. (#1033) — thanks @thewilloftheshadow. https://docs.molt.bot/concepts/session
+- Web search: add `country`/`language` parameters (schema + Brave API) and docs. (#1046) — thanks @YuriNachos. https://docs.molt.bot/tools/web
 
 ### Breaking
 - **BREAKING:** `clawdbot message` and message tool now require `target` (dropping `to`/`channelId` for destinations). (#1034) — thanks @tobalsan.
 - **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.
 - **BREAKING:** Drop legacy `chatType: "room"` support; use `chatType: "channel"`.
 - **BREAKING:** remove legacy provider-specific target resolution fallbacks; target resolution is centralized with plugin hints + directory lookups.
-- **BREAKING:** `clawdbot hooks` is now `clawdbot webhooks`; hooks live under `clawdbot hooks`. https://docs.clawd.bot/cli/webhooks
+- **BREAKING:** `clawdbot hooks` is now `clawdbot webhooks`; hooks live under `clawdbot hooks`. https://docs.molt.bot/cli/webhooks
 - **BREAKING:** `clawdbot plugins install <path>` now copies into `~/.clawdbot/extensions` (use `--link` to keep path-based loading).
 
 ### Changes
@@ -545,7 +545,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Tools: send Chrome-like headers by default for `web_fetch` to improve extraction on bot-sensitive sites.
 - Tools: Firecrawl fallback now uses bot-circumvention + cache by default; remove basic HTML fallback when extraction fails.
 - Tools: default `exec` exit notifications and auto-migrate legacy `tools.bash` to `tools.exec`.
-- Tools: add `exec` PTY support for interactive sessions. https://docs.clawd.bot/tools/exec
+- Tools: add `exec` PTY support for interactive sessions. https://docs.molt.bot/tools/exec
 - Tools: add tmux-style `process send-keys` and bracketed paste helpers for PTY sessions.
 - Tools: add `process submit` helper to send CR for PTY sessions.
 - Tools: respond to PTY cursor position queries to unblock interactive TUIs.
@@ -600,7 +600,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Sessions: hard-stop `sessions.delete` cleanup.
 - Channels: treat replies to the bot as implicit mentions across supported channels.
 - Channels: normalize object-format capabilities in channel capability parsing.
-- Security: default-deny slash/control commands unless a channel computed `CommandAuthorized` (fixes accidental “open” behavior), and ensure WhatsApp + Zalo plugin channels gate inline `/…` tokens correctly. https://docs.clawd.bot/gateway/security
+- Security: default-deny slash/control commands unless a channel computed `CommandAuthorized` (fixes accidental “open” behavior), and ensure WhatsApp + Zalo plugin channels gate inline `/…` tokens correctly. https://docs.molt.bot/gateway/security
 - Security: redact sensitive text in gateway WS logs.
 - Tools: cap pending `exec` process output to avoid unbounded buffers.
 - CLI: speed up `clawdbot sandbox-explain` by avoiding heavy plugin imports when normalizing channel ids.
@@ -906,7 +906,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Agents: add pre-compaction memory flush config (`agents.defaults.compaction.*`) with a soft threshold + system prompt.
 - Config: add `$include` directive for modular config files. (#731) — thanks @pasogott.
 - Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.
-- macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `clawd.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
+- macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `molt.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
 - Docs: add gog calendar event color IDs from `gog calendar colors`. (#715) — thanks @mjrussell.
 - Cron/CLI: add `--model` flag to cron add/edit commands. (#711) — thanks @mjrussell.
 - Cron/CLI: trim model overrides on cron edits and document main-session guidance. (#711) — thanks @mjrussell.
@@ -920,7 +920,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ### Installer
 - Postinstall: replace `git apply` with builtin JS patcher (works npm/pnpm/bun; no git dependency) plus regression tests.
 - Postinstall: skip pnpm patch fallback when the new patcher is active.
-- Installer tests: add root+non-root docker smokes, CI workflow to fetch clawd.bot scripts and run install sh/cli with onboarding skipped.
+- Installer tests: add root+non-root docker smokes, CI workflow to fetch molt.bot scripts and run install sh/cli with onboarding skipped.
 - Installer UX: support `CLAWDBOT_NO_ONBOARD=1` for non-interactive installs; fix npm prefix on Linux and auto-install git.
 - Installer UX: add `install.sh --help` with flags/env and git install hint.
 - Installer UX: add `--install-method git|npm` and auto-detect source checkouts (prompt to update git checkout vs migrate to npm).

@@ -38,7 +38,7 @@ async function noteTelegramTokenHelp(prompter: WizardPrompter): Promise<void> {
       "3) Copy the token (looks like 123456:ABC...)",
       "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
       `Docs: ${formatDocsLink("/telegram")}`,
-      "Website: https://clawd.bot",
+      "Website: https://molt.bot",
     ].join("\n"),
     "Telegram bot token",
   );
@@ -51,7 +51,7 @@ async function noteTelegramUserIdHelp(prompter: WizardPrompter): Promise<void> {
       "2) Or call https://api.telegram.org/bot<bot_token>/getUpdates and read message.from.id",
       "3) Third-party: DM @userinfobot or @getidsbot",
       `Docs: ${formatDocsLink("/telegram")}`,
-      "Website: https://clawd.bot",
+      "Website: https://molt.bot",
     ].join("\n"),
     "Telegram user id",
   );

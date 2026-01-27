@@ -424,7 +424,7 @@ export function registerHooksCli(program: Command): void {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.clawd.bot/cli/hooks")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.molt.bot/cli/hooks")}\n`,
     );
 
   hooks

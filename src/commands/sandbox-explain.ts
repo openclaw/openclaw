@@ -30,7 +30,7 @@ type SandboxExplainOptions = {
   json: boolean;
 };
 
-const SANDBOX_DOCS_URL = "https://docs.clawd.bot/sandbox";
+const SANDBOX_DOCS_URL = "https://docs.molt.bot/sandbox";
 
 function normalizeExplainSessionKey(params: {
   cfg: ClawdbotConfig;
@@ -307,7 +307,7 @@ export async function sandboxExplainCommand(
   lines.push(heading("Fix-it:"));
   for (const key of payload.fixIt) lines.push(`  - ${key}`);
   lines.push("");
-  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.clawd.bot/sandbox")}`);
+  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.molt.bot/sandbox")}`);
 
   runtime.log(`${lines.join("\n")}\n`);
 }

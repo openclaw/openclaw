@@ -66,6 +66,8 @@ const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
+const DEFAULT_PACKAGE_NAME = "moltbot";
+const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, "clawdbot"]);
 
 function normalizeDir(value?: string | null) {
   if (!value) return null;
@@ -105,6 +107,17 @@ async function readPackageVersion(root: string) {
     const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
     const parsed = JSON.parse(raw) as { version?: string };
     return typeof parsed?.version === "string" ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readPackageName(root: string) {
+  try {
+    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { name?: string };
+    const name = parsed?.name?.trim();
+    return name ? name : null;
   } catch {
     return null;
   }
@@ -183,7 +196,8 @@ async function findPackageRoot(candidates: string[]) {
       try {
         const raw = await fs.readFile(pkgPath, "utf-8");
         const parsed = JSON.parse(raw) as { name?: string };
-        if (parsed?.name === "clawdbot") return current;
+        const name = parsed?.name?.trim();
+        if (name && CORE_PACKAGE_NAMES.has(name)) return current;
       } catch {
         // ignore
       }
@@ -277,7 +291,11 @@ function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
 function normalizeTag(tag?: string) {
   const trimmed = tag?.trim();
   if (!trimmed) return "latest";
-  return trimmed.startsWith("clawdbot@") ? trimmed.slice("clawdbot@".length) : trimmed;
+  if (trimmed.startsWith("clawdbot@")) return trimmed.slice("clawdbot@".length);
+  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
+    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
+  }
+  return trimmed;
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
@@ -714,7 +732,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
-    const spec = `clawdbot@${normalizeTag(opts.tag)}`;
+    const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
+    const spec = `${packageName}@${normalizeTag(opts.tag)}`;
     const updateStep = await runStep({
       runCommand,
       name: "global update",

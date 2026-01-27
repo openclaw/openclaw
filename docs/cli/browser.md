@@ -53,7 +53,7 @@ clawdbot browser --browser-profile work tabs
 
 ```bash
 clawdbot browser tabs
-clawdbot browser open https://docs.clawd.bot
+clawdbot browser open https://docs.molt.bot
 clawdbot browser focus <targetId>
 clawdbot browser close <targetId>
 ```

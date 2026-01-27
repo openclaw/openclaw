@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
+INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://molt.bot/install.sh}"
 MODELS_MODE="${CLAWDBOT_E2E_MODELS:-both}" # both|openai|anthropic
 INSTALL_TAG="${CLAWDBOT_INSTALL_TAG:-latest}"
 E2E_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_E2E_PREVIOUS:-}"

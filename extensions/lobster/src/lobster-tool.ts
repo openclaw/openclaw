@@ -131,10 +131,28 @@ async function runLobsterSubprocess(params: {
 }
 
 function parseEnvelope(stdout: string): LobsterEnvelope {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
+  const trimmed = stdout.trim();
+
+  const tryParse = (input: string) => {
+    try {
+      return JSON.parse(input) as unknown;
+    } catch {
+      return undefined;
+    }
+  };
+
+  let parsed: unknown = tryParse(trimmed);
+
+  // Some environments can leak extra stdout (e.g. warnings/logs) before the
+  // final JSON envelope. Be tolerant and parse the last JSON-looking suffix.
+  if (parsed === undefined) {
+    const suffixMatch = trimmed.match(/({[\s\S]*}|\[[\s\S]*])\s*$/);
+    if (suffixMatch?.[1]) {
+      parsed = tryParse(suffixMatch[1]);
+    }
+  }
+
+  if (parsed === undefined) {
     throw new Error("lobster returned invalid JSON");
   }
 

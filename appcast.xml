@@ -28,28 +28,28 @@
             <description><![CDATA[<h2>Clawdbot 2026.1.24</h2>
 <h3>Highlights</h3>
 <ul>
-<li>Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama https://docs.clawd.bot/providers/venice</li>
+<li>Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.molt.bot/providers/ollama https://docs.molt.bot/providers/venice</li>
 <li>Channels: LINE plugin (Messaging API) with rich replies + quick replies. (#1630) Thanks @plum-dawg.</li>
-<li>TTS: Edge fallback (keyless) + <code>/tts</code> auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.clawd.bot/tts</li>
-<li>Exec approvals: approve in-chat via <code>/approve</code> across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands</li>
-<li>Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.clawd.bot/channels/telegram</li>
+<li>TTS: Edge fallback (keyless) + <code>/tts</code> auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.molt.bot/tts</li>
+<li>Exec approvals: approve in-chat via <code>/approve</code> across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands</li>
+<li>Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.molt.bot/channels/telegram</li>
 </ul>
 <h3>Changes</h3>
 <ul>
 <li>Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.</li>
-<li>TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.clawd.bot/tts</li>
-<li>TTS: add auto mode enum (off/always/inbound/tagged) with per-session <code>/tts</code> override. (#1667) Thanks @sebslight. https://docs.clawd.bot/tts</li>
+<li>TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.molt.bot/tts</li>
+<li>TTS: add auto mode enum (off/always/inbound/tagged) with per-session <code>/tts</code> override. (#1667) Thanks @sebslight. https://docs.molt.bot/tts</li>
 <li>Telegram: treat DM topics as separate sessions and keep DM history limits stable with thread suffixes. (#1597) Thanks @rohannagpal.</li>
-<li>Telegram: add <code>channels.telegram.linkPreview</code> to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.clawd.bot/channels/telegram</li>
-<li>Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.clawd.bot/tools/web</li>
+<li>Telegram: add <code>channels.telegram.linkPreview</code> to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.molt.bot/channels/telegram</li>
+<li>Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.molt.bot/tools/web</li>
 <li>UI: refresh Control UI dashboard design system (typography, colors, spacing). (#1786) Thanks @mousberg.</li>
-<li>Exec approvals: forward approval prompts to chat with <code>/approve</code> for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands</li>
+<li>Exec approvals: forward approval prompts to chat with <code>/approve</code> for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands</li>
 <li>Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.</li>
-<li>Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.clawd.bot/diagnostics/flags</li>
+<li>Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.molt.bot/diagnostics/flags</li>
 <li>Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).</li>
 <li>Docs: add verbose installer troubleshooting guidance.</li>
 <li>Docs: add macOS VM guide with local/hosted options + VPS/nodes guidance. (#1693) Thanks @f-trycua.</li>
-<li>Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.clawd.bot/bedrock</li>
+<li>Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.molt.bot/bedrock</li>
 <li>Docs: update Fly.io guide notes.</li>
 <li>Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.</li>
 </ul>
@@ -61,10 +61,10 @@
 <li>Web UI: hide internal <code>message_id</code> hints in chat bubbles.</li>
 <li>Gateway: allow Control UI token-only auth to skip device pairing even when device identity is present (<code>gateway.controlUi.allowInsecureAuth</code>). (#1679) Thanks @steipete.</li>
 <li>Matrix: decrypt E2EE media attachments with preflight size guard. (#1744) Thanks @araa47.</li>
-<li>BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.clawd.bot/channels/bluebubbles</li>
+<li>BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.molt.bot/channels/bluebubbles</li>
 <li>BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.</li>
 <li>Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.</li>
-<li>Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.clawd.bot/channels/signal</li>
+<li>Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.molt.bot/channels/signal</li>
 <li>Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.</li>
 <li>Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)</li>
 <li>Telegram: honor per-account proxy for outbound API calls. (#1774) Thanks @radek-paclt.</li>

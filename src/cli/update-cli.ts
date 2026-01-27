@@ -39,6 +39,7 @@ import { trimLogTail } from "../infra/restart-sentinel.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { formatCliCommand } from "./command-format.js";
+import { replaceCliName, resolveCliName } from "./cli-name.js";
 import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import { renderTable } from "../terminal/table.js";
@@ -81,6 +82,7 @@ const STEP_LABELS: Record<string, string> = {
   build: "Building",
   "ui:build": "Building UI",
   "clawdbot doctor": "Running doctor checks",
+  "moltbot doctor": "Running doctor checks",
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
   "global install": "Installing global package",
@@ -110,6 +112,9 @@ const UPDATE_QUIPS = [
 ];
 
 const MAX_LOG_CHARS = 8000;
+const DEFAULT_PACKAGE_NAME = "moltbot";
+const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, "clawdbot"]);
+const CLI_NAME = resolveCliName();
 const CLAWDBOT_REPO_URL = "https://github.com/clawdbot/clawdbot.git";
 const DEFAULT_GIT_DIR = path.join(os.homedir(), "clawdbot");
 
@@ -117,7 +122,11 @@ function normalizeTag(value?: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  return trimmed.startsWith("clawdbot@") ? trimmed.slice("clawdbot@".length) : trimmed;
+  if (trimmed.startsWith("clawdbot@")) return trimmed.slice("clawdbot@".length);
+  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
+    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
+  }
+  return trimmed;
 }
 
 function pickUpdateQuip(): string {
@@ -157,14 +166,20 @@ async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-async function isClawdbotPackage(root: string): Promise<boolean> {
+async function readPackageName(root: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
     const parsed = JSON.parse(raw) as { name?: string };
-    return parsed?.name === "clawdbot";
+    const name = parsed?.name?.trim();
+    return name ? name : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+async function isCorePackage(root: string): Promise<boolean> {
+  const name = await readPackageName(root);
+  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -269,8 +284,8 @@ async function ensureGitCheckout(params: {
     });
   }
 
-  if (!(await isClawdbotPackage(params.dir))) {
-    throw new Error(`CLAWDBOT_GIT_DIR does not look like a clawdbot checkout: ${params.dir}.`);
+  if (!(await isCorePackage(params.dir))) {
+    throw new Error(`CLAWDBOT_GIT_DIR does not look like a core checkout: ${params.dir}.`);
   }
 
   return null;
@@ -691,10 +706,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       return { stdout: res.stdout, stderr: res.stderr, code: res.code };
     };
     const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, timeoutMs ?? 20 * 60_000);
+    const packageName =
+      (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(root)) ??
+      DEFAULT_PACKAGE_NAME;
     const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
     const updateStep = await runUpdateStep({
       name: "global update",
-      argv: globalInstallArgs(manager, `clawdbot@${tag}`),
+      argv: globalInstallArgs(manager, `${packageName}@${tag}`),
       timeoutMs: timeoutMs ?? 20 * 60_000,
       progress,
     });
@@ -705,7 +723,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       const entryPath = path.join(pkgRoot, "dist", "entry.js");
       if (await pathExists(entryPath)) {
         const doctorStep = await runUpdateStep({
-          name: "clawdbot doctor",
+          name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
           timeoutMs: timeoutMs ?? 20 * 60_000,
           progress,
@@ -806,11 +824,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     if (result.reason === "not-git-install") {
       defaultRuntime.log(
         theme.warn(
-          `Skipped: this Clawdbot install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${formatCliCommand("clawdbot doctor")}\` and \`${formatCliCommand("clawdbot gateway restart")}\`.`,
+          `Skipped: this Clawdbot install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("clawdbot doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("clawdbot gateway restart"), CLI_NAME)}\`.`,
         ),
       );
       defaultRuntime.log(
-        theme.muted("Examples: `npm i -g clawdbot@latest` or `pnpm add -g clawdbot@latest`"),
+        theme.muted(
+          `Examples: \`${replaceCliName("npm i -g clawdbot@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g clawdbot@latest", CLI_NAME)}\``,
+        ),
       );
     }
     defaultRuntime.exit(0);
@@ -926,7 +946,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
         defaultRuntime.log(
           theme.muted(
-            `You may need to restart the service manually: ${formatCliCommand("clawdbot gateway restart")}`,
+            `You may need to restart the service manually: ${replaceCliName(formatCliCommand("clawdbot gateway restart"), CLI_NAME)}`,
           ),
         );
       }
@@ -936,13 +956,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     if (result.mode === "npm" || result.mode === "pnpm") {
       defaultRuntime.log(
         theme.muted(
-          `Tip: Run \`${formatCliCommand("clawdbot doctor")}\`, then \`${formatCliCommand("clawdbot gateway restart")}\` to apply updates to a running gateway.`,
+          `Tip: Run \`${replaceCliName(formatCliCommand("clawdbot doctor"), CLI_NAME)}\`, then \`${replaceCliName(formatCliCommand("clawdbot gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
         ),
       );
     } else {
       defaultRuntime.log(
         theme.muted(
-          `Tip: Run \`${formatCliCommand("clawdbot gateway restart")}\` to apply updates to a running gateway.`,
+          `Tip: Run \`${replaceCliName(formatCliCommand("clawdbot gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
         ),
       );
     }
@@ -1137,7 +1157,7 @@ ${theme.heading("Notes:")}
   - Downgrades require confirmation (can break configuration)
   - Skips update if the working directory has uncommitted changes
 
-${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`;
+${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.molt.bot/cli/update")}`;
     })
     .action(async (opts) => {
       try {
@@ -1161,7 +1181,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/upda
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
     .addHelpText(
       "after",
-      `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}\n`,
+      `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.molt.bot/cli/update")}\n`,
     )
     .action(async (opts) => {
       try {
@@ -1188,7 +1208,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/upda
           "- Shows current update channel (stable/beta/dev) and source",
         )}\n${theme.muted("- Includes git tag/branch/SHA for source checkouts")}\n\n${theme.muted(
           "Docs:",
-        )} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`,
+        )} ${formatDocsLink("/cli/update", "docs.molt.bot/cli/update")}`,
     )
     .action(async (opts) => {
       try {

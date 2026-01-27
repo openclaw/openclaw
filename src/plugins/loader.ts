@@ -206,7 +206,14 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-    ...(pluginSdkAlias ? { alias: { "clawdbot/plugin-sdk": pluginSdkAlias } } : {}),
+    ...(pluginSdkAlias
+      ? {
+          alias: {
+            "clawdbot/plugin-sdk": pluginSdkAlias,
+            "moltbot/plugin-sdk": pluginSdkAlias,
+          },
+        }
+      : {}),
   });
 
   const manifestByRoot = new Map(

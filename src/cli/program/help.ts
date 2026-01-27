@@ -2,7 +2,10 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
+import { replaceCliName, resolveCliName } from "../cli-name.js";
 import type { ProgramContext } from "./context.js";
+
+const CLI_NAME = resolveCliName();
 
 const EXAMPLES = [
   [
@@ -29,7 +32,7 @@ const EXAMPLES = [
 
 export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   program
-    .name("clawdbot")
+    .name(CLI_NAME)
     .description("")
     .version(ctx.programVersion)
     .option(
@@ -77,12 +80,12 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   });
 
   const fmtExamples = EXAMPLES.map(
-    ([cmd, desc]) => `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`,
+    ([cmd, desc]) => `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(desc)}`,
   ).join("\n");
 
   program.addHelpText("afterAll", ({ command }) => {
     if (command !== program) return "";
-    const docs = formatDocsLink("/cli", "docs.clawd.bot/cli");
+    const docs = formatDocsLink("/cli", "docs.molt.bot/cli");
     return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted("Docs:")} ${docs}\n`;
   });
 }

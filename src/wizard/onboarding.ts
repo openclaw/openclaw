@@ -70,7 +70,7 @@ async function requireRiskAcknowledgement(params: {
       "clawdbot security audit --deep",
       "clawdbot security audit --fix",
       "",
-      "Must read: https://docs.clawd.bot/gateway/security",
+      "Must read: https://docs.molt.bot/gateway/security",
     ].join("\n"),
     "Security",
   );
@@ -103,7 +103,7 @@ export async function runOnboardingWizard(
         [
           ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
           "",
-          "Docs: https://docs.clawd.bot/gateway/configuration",
+          "Docs: https://docs.molt.bot/gateway/configuration",
         ].join("\n"),
         "Config issues",
       );

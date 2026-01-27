@@ -97,7 +97,7 @@ tailscale status
 ## 5) Install Clawdbot
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
+curl -fsSL https://molt.bot/install.sh | bash
 source ~/.bashrc
 ```
 

@@ -47,7 +47,7 @@ export async function runNonInteractiveOnboardingRemote(params: {
     runtime.log(`Remote gateway: ${remoteUrl}`);
     runtime.log(`Auth: ${payload.auth}`);
     runtime.log(
-      `Tip: run \`${formatCliCommand("clawdbot configure --section web")}\` to store your Brave API key for web_search. Docs: https://docs.clawd.bot/tools/web`,
+      `Tip: run \`${formatCliCommand("clawdbot configure --section web")}\` to store your Brave API key for web_search. Docs: https://docs.molt.bot/tools/web`,
     );
   }
 }

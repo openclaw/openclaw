@@ -50,7 +50,7 @@ describe("gateway tool", () => {
       };
       expect(parsed.payload?.kind).toBe("restart");
       expect(parsed.payload?.doctorHint).toBe(
-        "Run: clawdbot --profile isolated doctor --non-interactive",
+        "Run: moltbot --profile isolated doctor --non-interactive",
       );
 
       expect(kill).not.toHaveBeenCalled();

@@ -54,7 +54,7 @@ Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native
 ## 1) Install the CLI (recommended)
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
+curl -fsSL https://molt.bot/install.sh | bash
 ```
 
 Installer options (install method, non-interactive, from GitHub): [Install](/install).
@@ -62,7 +62,7 @@ Installer options (install method, non-interactive, from GitHub): [Install](/ins
 Windows (PowerShell):
 
 ```powershell
-iwr -useb https://clawd.bot/install.ps1 | iex
+iwr -useb https://molt.bot/install.ps1 | iex
 ```
 
 Alternative (global install):

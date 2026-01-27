@@ -85,7 +85,7 @@ Details:
   Source: clawdbot-bundled
   Path: /path/to/clawdbot/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/clawdbot/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.clawd.bot/hooks#session-memory
+  Homepage: https://docs.molt.bot/hooks#session-memory
   Events: command:new
 
 Requirements:

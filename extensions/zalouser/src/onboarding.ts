@@ -53,7 +53,7 @@ async function noteZalouserHelp(prompter: WizardPrompter): Promise<void> {
       "1) Install zca-cli",
       "2) You'll scan a QR code with your Zalo app",
       "",
-      "Docs: https://docs.clawd.bot/channels/zalouser",
+      "Docs: https://docs.molt.bot/channels/zalouser",
     ].join("\n"),
     "Zalo Personal Setup",
   );
@@ -316,7 +316,7 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
           "The `zca` binary was not found in PATH.",
           "",
           "Install zca-cli, then re-run onboarding:",
-          "Docs: https://docs.clawd.bot/channels/zalouser",
+          "Docs: https://docs.molt.bot/channels/zalouser",
         ].join("\n"),
         "Missing Dependency",
       );

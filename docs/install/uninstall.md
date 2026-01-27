@@ -113,7 +113,7 @@ If you used a profile, delete the matching task name and `~\.clawdbot-<profile>\
 
 ### Normal install (install.sh / npm / pnpm / bun)
 
-If you used `https://clawd.bot/install.sh` or `install.ps1`, the CLI was installed with `npm install -g clawdbot@latest`.
+If you used `https://molt.bot/install.sh` or `install.ps1`, the CLI was installed with `npm install -g clawdbot@latest`.
 Remove it with `npm rm -g clawdbot` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
 
 ### Source checkout (git clone)

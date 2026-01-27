@@ -560,8 +560,8 @@ export async function statusCommand(
   }
 
   runtime.log("");
-  runtime.log("FAQ: https://docs.clawd.bot/faq");
-  runtime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
+  runtime.log("FAQ: https://docs.molt.bot/faq");
+  runtime.log("Troubleshooting: https://docs.molt.bot/troubleshooting");
   runtime.log("");
   const updateHint = formatUpdateAvailableHint(update);
   if (updateHint) {

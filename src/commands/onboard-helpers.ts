@@ -177,8 +177,8 @@ export function formatControlUiSshHint(params: {
     localUrl,
     authedUrl,
     "Docs:",
-    "https://docs.clawd.bot/gateway/remote",
-    "https://docs.clawd.bot/web/control-ui",
+    "https://docs.molt.bot/gateway/remote",
+    "https://docs.molt.bot/web/control-ui",
   ]
     .filter(Boolean)
     .join("\n");
