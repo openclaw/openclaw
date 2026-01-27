@@ -125,13 +125,16 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expect(consoleWarnSpy).toHaveBeenCalled();
     });
 
-    it("does NOT exit on generic errors without code", () => {
+    it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
       process.emit("unhandledRejection", genericErr, Promise.resolve());
 
-      expect(exitCalls).toEqual([]);
-      expect(consoleWarnSpy).toHaveBeenCalled();
+      expect(exitCalls).toEqual([1]);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "[clawdbot] Unhandled promise rejection:",
+        expect.stringContaining("Something went wrong"),
+      );
     });
 
     it("does NOT exit on connection reset errors", () => {
