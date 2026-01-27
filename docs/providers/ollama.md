@@ -8,7 +8,48 @@ read_when:
 
 Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. Clawdbot integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
+## About the API key
+
+Ollama runs on your own machine. It does **not** need a real API key like OpenAI or Anthropic.
+
+Clawdbot still asks for an "API key" because every provider goes through the same auth system internally. You can type any non-empty string you like. Common choices:
+
+| Value | Works? |
+|-------|--------|
+| `ollama` | Yes |
+| `ollama-local` | Yes |
+| `my-local-key` | Yes |
+| *(empty)* | No -- must be at least one character |
+
+Think of it as a label, not a secret. You will never be charged for it and it never leaves your machine.
+
 ## Quick start
+
+There are two ways to set up Ollama with Clawdbot: the **interactive onboard wizard** (recommended for first-time users) and **manual setup**.
+
+### Option A -- Interactive onboard (recommended)
+
+Run the onboard wizard and pick Ollama from the provider list:
+
+```bash
+clawdbot onboard
+```
+
+1. Choose **QuickStart** when asked for onboarding mode.
+2. Select **Ollama** from the model/auth provider list.
+3. Choose **Ollama (local LLM)**.
+4. If you already have `OLLAMA_API_KEY` set in your environment, the wizard asks whether to reuse it. Pick **Yes**.
+5. If not, type any string (e.g. `ollama`) and press Enter.
+
+Done -- Clawdbot will auto-discover your local Ollama models.
+
+For non-interactive (CI / scripting) use:
+
+```bash
+clawdbot onboard --auth ollama-api-key --non-interactive --accept-risk
+```
+
+### Option B -- Manual setup
 
 1) Install Ollama: https://ollama.ai
 
@@ -22,14 +63,14 @@ ollama pull qwen2.5-coder:32b
 ollama pull deepseek-r1:32b
 ```
 
-3) Enable Ollama for Clawdbot (any value works; Ollama doesn't require a real key):
+3) Enable Ollama for Clawdbot (any value works):
 
 ```bash
 # Set environment variable
-export OLLAMA_API_KEY="ollama-local"
+export OLLAMA_API_KEY="ollama"
 
 # Or configure in your config file
-clawdbot config set models.providers.ollama.apiKey "ollama-local"
+clawdbot config set models.providers.ollama.apiKey "ollama"
 ```
 
 4) Use Ollama models:
