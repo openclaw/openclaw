@@ -1,6 +1,6 @@
 ---
 title: Formal Verification (Security Models)
-summary: Machine-checked security models for Moltbot’s highest-risk paths (formerly Clawdbot).
+summary: Machine-checked security models for Moltbot’s highest-risk paths.
 permalink: /security/formal-verification/
 ---
 
@@ -8,7 +8,7 @@ permalink: /security/formal-verification/
 
 This page tracks Moltbot’s **formal security models** (TLA+/TLC today; more as needed).
 
-> Moltbot was formerly named Clawdbot; some older references and commands may still use `clawdbot`.
+> Note: some older links may refer to the previous project name.
 
 **Goal (north star):** provide a machine-checked argument that Moltbot enforces its
 intended security policy (authorization, session isolation, tool gating, and
