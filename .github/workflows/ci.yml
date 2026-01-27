@@ -342,6 +342,8 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
       - name: Run ${{ matrix.task }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: ${{ matrix.command }}
 
   macos-app:
@@ -628,6 +630,8 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
 
       - name: Install Android SDK packages
         run: |

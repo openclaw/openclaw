@@ -1,6 +1,6 @@
 import process from "node:process";
 
-import { formatUncaughtError } from "./errors.js";
+import { formatErrorMessage, formatUncaughtError } from "./errors.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -11,6 +11,36 @@ export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHan
   return () => {
     handlers.delete(handler);
   };
+}
+
+/**
+ * Check if an error is a recoverable/transient error that shouldn't crash the process.
+ * These include network errors and abort signals during shutdown.
+ */
+function isRecoverableError(reason: unknown): boolean {
+  if (!reason) return false;
+
+  // Check error name for AbortError
+  if (reason instanceof Error && reason.name === "AbortError") {
+    return true;
+  }
+
+  const message = reason instanceof Error ? reason.message : formatErrorMessage(reason);
+  const lowerMessage = message.toLowerCase();
+  return (
+    lowerMessage.includes("fetch failed") ||
+    lowerMessage.includes("network request") ||
+    lowerMessage.includes("econnrefused") ||
+    lowerMessage.includes("econnreset") ||
+    lowerMessage.includes("etimedout") ||
+    lowerMessage.includes("socket hang up") ||
+    lowerMessage.includes("enotfound") ||
+    lowerMessage.includes("network error") ||
+    lowerMessage.includes("getaddrinfo") ||
+    lowerMessage.includes("client network socket disconnected") ||
+    lowerMessage.includes("this operation was aborted") ||
+    lowerMessage.includes("aborted")
+  );
 }
 
 export function isUnhandledRejectionHandled(reason: unknown): boolean {
@@ -30,6 +60,13 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) return;
+
+    // Don't crash on recoverable/transient errors - log them and continue
+    if (isRecoverableError(reason)) {
+      console.error("[clawdbot] Recoverable error (not crashing):", formatUncaughtError(reason));
+      return;
+    }
+
     console.error("[clawdbot] Unhandled promise rejection:", formatUncaughtError(reason));
     process.exit(1);
   });

@@ -374,12 +374,6 @@ Overrides:
 
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
 
-Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.json` (when present on the gateway host):
-- Claude Code → `anthropic:claude-cli`
-  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
-  - Linux/Windows: `~/.claude/.credentials.json`
-- `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
-
 ### `auth`
 
 Optional metadata for auth profiles. This does **not** store secrets; it maps
@@ -399,10 +393,6 @@ rotation order used for failover.
   }
 }
 ```
-
-Note: `anthropic:claude-cli` should use `mode: "oauth"` even when the stored
-credential is a setup-token. Clawdbot auto-migrates older configs that used
-`mode: "token"`.
 
 ### `agents.list[].identity`
 
@@ -964,6 +954,8 @@ Notes:
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
+- Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
+  channel allowlists/pairing plus `commands.useAccessGroups`.
 
 ### `web` (WhatsApp web channel runtime)
 
@@ -1036,6 +1028,9 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
         minDelayMs: 400,
         maxDelayMs: 30000,
         jitter: 0.1
+      },
+      network: {                           // transport overrides
+        autoSelectFamily: false
       },
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
@@ -2847,9 +2842,11 @@ Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
 - Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
 - Default: root (`/`) (unchanged).
-- `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI and skips
-  device identity + pairing (even on HTTPS). Default: `false`. Prefer HTTPS
+- `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI when
+  device identity is omitted (typically over HTTP). Default: `false`. Prefer HTTPS
   (Tailscale Serve) or `127.0.0.1`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth` disables device identity checks for the
+  Control UI (token/password only). Default: `false`. Break-glass only.
 
 Related docs:
 - [Control UI](/web/control-ui)
@@ -2867,21 +2864,22 @@ Notes:
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
-- Non-loopback binds (`lan`/`tailnet`/`auto`) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
+- Gateway auth is required by default (token/password or Tailscale Serve identity). Non-loopback binds require a shared token/password.
 - The onboarding wizard generates a gateway token by default (even on loopback).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
 
 Auth and Tailscale:
-- `gateway.auth.mode` sets the handshake requirements (`token` or `password`).
+- `gateway.auth.mode` sets the handshake requirements (`token` or `password`). When unset, token auth is assumed.
 - `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine).
 - When `gateway.auth.mode` is set, only that method is accepted (plus optional Tailscale headers).
 - `gateway.auth.password` can be set here, or via `CLAWDBOT_GATEWAY_PASSWORD` (recommended).
 - `gateway.auth.allowTailscale` allows Tailscale Serve identity headers
   (`tailscale-user-login`) to satisfy auth when the request arrives on loopback
-  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. When
-  `true`, Serve requests do not need a token/password; set `false` to require
-  explicit credentials. Defaults to `true` when `tailscale.mode = "serve"` and
-  auth mode is not `password`.
+  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. Clawdbot
+  verifies the identity by resolving the `x-forwarded-for` address via
+  `tailscale whois` before accepting it. When `true`, Serve requests do not need
+  a token/password; set `false` to require explicit credentials. Defaults to
+  `true` when `tailscale.mode = "serve"` and auth mode is not `password`.
 - `gateway.tailscale.mode: "serve"` uses Tailscale Serve (tailnet only, loopback bind).
 - `gateway.tailscale.mode: "funnel"` exposes the dashboard publicly; requires auth.
 - `gateway.tailscale.resetOnExit` resets Serve/Funnel config on shutdown.
@@ -3171,6 +3169,20 @@ Auto-generated certs require `openssl` on PATH; if generation fails, the bridge 
       // keyPath: "~/.clawdbot/bridge/tls/bridge-key.pem"
     }
   }
+}
+```
+
+### `discovery.mdns` (Bonjour / mDNS broadcast mode)
+
+Controls LAN mDNS discovery broadcasts (`_clawdbot-gw._tcp`).
+
+- `minimal` (default): omit `cliPath` + `sshPort` from TXT records
+- `full`: include `cliPath` + `sshPort` in TXT records
+- `off`: disable mDNS broadcasts entirely
+
+```json5
+{
+  discovery: { mdns: { mode: "minimal" } }
 }
 ```
 

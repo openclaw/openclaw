@@ -105,6 +105,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How can my agent access my computer if the Gateway is hosted remotely?](#how-can-my-agent-access-my-computer-if-the-gateway-is-hosted-remotely)
   - [Tailscale is connected but I get no replies. What now?](#tailscale-is-connected-but-i-get-no-replies-what-now)
   - [Can two Clawdbots talk to each other (local + VPS)?](#can-two-clawdbots-talk-to-each-other-local-vps)
+  - [Do I need separate VPSes for multiple agents](#do-i-need-separate-vpses-for-multiple-agents)
   - [Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?](#is-there-a-benefit-to-using-a-node-on-my-personal-laptop-instead-of-ssh-from-a-vps)
   - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
@@ -400,7 +401,7 @@ remote mode, remember the gateway host owns the session store and workspace.
 up **memory + bootstrap files**, but **not** session history or auth. Those live
 under `~/.clawdbot/` (for example `~/.clawdbot/agents/<agentId>/sessions/`).
 
-Related: [Where things live on disk](/help/faq#where-does-clawdbot-store-its-data),
+Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-does-clawdbot-store-its-data),
 [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
 [Remote mode](/gateway/remote).
 
@@ -565,7 +566,6 @@ Remote access: [Gateway remote](/gateway/remote).
 We keep a **hosting hub** with the common providers. Pick one and follow the guide:
 
 - [VPS hosting](/vps) (all providers in one place)
-- [Railway](/railway) (one‑click, browser‑based setup)
 - [Fly.io](/platforms/fly)
 - [Hetzner](/platforms/hetzner)
 - [exe.dev](/platforms/exe-dev)
@@ -630,7 +630,7 @@ Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
 
 ### Can I use Claude Max subscription without an API key
 
-Yes. You can authenticate with **Claude Code CLI OAuth** or a **setup-token**
+Yes. You can authenticate with a **setup-token**
 instead of an API key. This is the subscription path.
 
 Claude Pro/Max subscriptions **do not include an API key**, so this is the
@@ -640,11 +640,7 @@ If you want the most explicit, supported path, use an Anthropic API key.
 
 ### How does Anthropic setuptoken auth work
 
-`claude setup-token` generates a **token string** via the Claude Code CLI (it is not available in the web console). You can run it on **any machine**. If Claude Code CLI credentials are present on the gateway host, Clawdbot can reuse them; otherwise choose **Anthropic token (paste setup-token)** and paste the string. The token is stored as an auth profile for the **anthropic** provider and used like an API key or OAuth profile. More detail: [OAuth](/concepts/oauth).
-
-Clawdbot keeps `auth.profiles["anthropic:claude-cli"].mode` set to `"oauth"` so
-the profile accepts both OAuth and setup-token credentials; older `"token"` mode
-entries auto-migrate.
+`claude setup-token` generates a **token string** via the Claude Code CLI (it is not available in the web console). You can run it on **any machine**. Choose **Anthropic token (paste setup-token)** in the wizard or paste it with `clawdbot models auth paste-token --provider anthropic`. The token is stored as an auth profile for the **anthropic** provider and used like an API key (no auto-refresh). More detail: [OAuth](/concepts/oauth).
 
 ### Where do I find an Anthropic setuptoken
 
@@ -656,9 +652,9 @@ claude setup-token
 
 Copy the token it prints, then choose **Anthropic token (paste setup-token)** in the wizard. If you want to run it on the gateway host, use `clawdbot models auth setup-token --provider anthropic`. If you ran `claude setup-token` elsewhere, paste it on the gateway host with `clawdbot models auth paste-token --provider anthropic`. See [Anthropic](/providers/anthropic).
 
-### Do you support Claude subscription auth Claude Code OAuth
+### Do you support Claude subscription auth (Claude Pro/Max)
 
-Yes. Clawdbot can **reuse Claude Code CLI credentials** (OAuth) and also supports **setup-token**. If you have a Claude subscription, we recommend **setup-token** for long‑running setups (requires Claude Pro/Max + the `claude` CLI). You can generate it anywhere and paste it on the gateway host. OAuth reuse is supported, but avoid logging in separately via Clawdbot and Claude Code to prevent token conflicts. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+Yes — via **setup-token**. Clawdbot no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
 Note: Claude subscription access is governed by Anthropic’s terms. For production or multi‑user workloads, API keys are usually the safer choice.
 
@@ -678,13 +674,12 @@ Yes - via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual confi
 
 ### How does Codex auth work
 
-Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI login (`~/.codex/auth.json`). The wizard can import the CLI login or run the OAuth flow and will set the default model to `openai-codex/gpt-5.2` when appropriate. See [Model providers](/concepts/model-providers) and [Wizard](/start/wizard).
+Clawdbot supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). The wizard can run the OAuth flow and will set the default model to `openai-codex/gpt-5.2` when appropriate. See [Model providers](/concepts/model-providers) and [Wizard](/start/wizard).
 
 ### Do you support OpenAI subscription auth Codex OAuth
 
-Yes. Clawdbot fully supports **OpenAI Code (Codex) subscription OAuth** and can also reuse an
-existing Codex CLI login (`~/.codex/auth.json`) on the gateway host. The onboarding wizard
-can import the CLI login or run the OAuth flow for you.
+Yes. Clawdbot fully supports **OpenAI Code (Codex) subscription OAuth**. The onboarding wizard
+can run the OAuth flow for you.
 
 See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
 
@@ -1450,7 +1445,7 @@ Have Bot A send a message to Bot B, then let Bot B reply as usual.
 
 **CLI bridge (generic):** run a script that calls the other Gateway with
 `clawdbot agent --message ... --deliver`, targeting a chat where the other bot
-listens. If one bot is on Railway/VPS, point your CLI at that remote Gateway
+listens. If one bot is on a remote VPS, point your CLI at that remote Gateway
 via SSH/Tailscale (see [Remote access](/gateway/remote)).
 
 Example pattern (run from a machine that can reach the target Gateway):
@@ -1462,6 +1457,16 @@ Tip: add a guardrail so the two bots do not loop endlessly (mention-only, channe
 allowlists, or a "do not reply to bot messages" rule).
 
 Docs: [Remote access](/gateway/remote), [Agent CLI](/cli/agent), [Agent send](/tools/agent-send).
+
+### Do I need separate VPSes for multiple agents
+
+No. One Gateway can host multiple agents, each with its own workspace, model defaults,
+and routing. That is the normal setup and it is much cheaper and simpler than running
+one VPS per agent.
+
+Use separate VPSes only when you need hard isolation (security boundaries) or very
+different configs that you do not want to share. Otherwise, keep one Gateway and
+use multiple agents or sub-agents.
 
 ### Is there a benefit to using a node on my personal laptop instead of SSH from a VPS
 
@@ -1930,8 +1935,8 @@ You can list available models with `/model`, `/model list`, or `/model status`.
 You can also force a specific auth profile for the provider (per session):
 
 ```
-/model opus@anthropic:claude-cli
 /model opus@anthropic:default
+/model opus@anthropic:work
 ```
 
 Tip: `/model status` shows which agent is active, which `auth-profiles.json` file is being used, and which auth profile will be tried next.
@@ -2135,21 +2140,17 @@ It means the system attempted to use the auth profile ID `anthropic:default`, bu
 - **Sanity‑check model/auth status**
   - Use `clawdbot models status` to see configured models and whether providers are authenticated.
 
-**Fix checklist for No credentials found for profile anthropic claude cli**
+**Fix checklist for No credentials found for profile anthropic**
 
-This means the run is pinned to the **Claude Code CLI** profile, but the Gateway
-can’t find that profile in its auth store.
+This means the run is pinned to an Anthropic auth profile, but the Gateway
+can’t find it in its auth store.
 
-- **Sync the Claude Code CLI token on the gateway host**
-  - Run `clawdbot models status` (it loads + syncs Claude Code CLI credentials).
-  - If it still says missing: run `claude setup-token` (or `clawdbot models auth setup-token --provider anthropic`) and retry.
-- **If the token was created on another machine**
-  - Paste it into the gateway host with `clawdbot models auth paste-token --provider anthropic`.
-- **Check the profile mode**
-  - `auth.profiles["anthropic:claude-cli"].mode` must be `"oauth"` (token mode rejects OAuth credentials).
+- **Use a setup-token**
+  - Run `claude setup-token`, then paste it with `clawdbot models auth setup-token --provider anthropic`.
+  - If the token was created on another machine, use `clawdbot models auth paste-token --provider anthropic`.
 - **If you want to use an API key instead**
   - Put `ANTHROPIC_API_KEY` in `~/.clawdbot/.env` on the **gateway host**.
-  - Clear any pinned order that forces `anthropic:claude-cli`:
+  - Clear any pinned order that forces a missing profile:
     ```bash
     clawdbot models auth order clear --provider anthropic
     ```
@@ -2171,7 +2172,7 @@ Fix: Clawdbot now strips unsigned thinking blocks for Google Antigravity Claude.
 
 ## Auth profiles: what they are and how to manage them
 
-Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-account patterns, CLI sync)
+Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-account patterns)
 
 ### What is an auth profile
 
@@ -2202,10 +2203,10 @@ You can also set a **per-agent** order override (stored in that agent’s `auth-
 clawdbot models auth order get --provider anthropic
 
 # Lock rotation to a single profile (only try this one)
-clawdbot models auth order set --provider anthropic anthropic:claude-cli
+clawdbot models auth order set --provider anthropic anthropic:default
 
 # Or set an explicit order (fallback within provider)
-clawdbot models auth order set --provider anthropic anthropic:claude-cli anthropic:default
+clawdbot models auth order set --provider anthropic anthropic:work anthropic:default
 
 # Clear override (fall back to config auth.order / round-robin)
 clawdbot models auth order clear --provider anthropic
@@ -2214,7 +2215,7 @@ clawdbot models auth order clear --provider anthropic
 To target a specific agent:
 
 ```bash
-clawdbot models auth order set --provider anthropic --agent main anthropic:claude-cli
+clawdbot models auth order set --provider anthropic --agent main anthropic:default
 ```
 
 ### OAuth vs API key whats the difference
@@ -2224,7 +2225,7 @@ Clawdbot supports both:
 - **OAuth** often leverages subscription access (where applicable).
 - **API keys** use pay‑per‑token billing.
 
-The wizard explicitly supports Anthropic OAuth and OpenAI Codex OAuth and can store API keys for you.
+The wizard explicitly supports Anthropic setup-token and OpenAI Codex OAuth and can store API keys for you.
 
 ## Gateway: ports, “already running”, and remote mode
 

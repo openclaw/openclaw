@@ -63,6 +63,11 @@ export type {
   ClawdbotPluginService,
   ClawdbotPluginServiceContext,
 } from "../plugins/types.js";
+export type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "../gateway/server-methods/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -197,12 +202,6 @@ export {
 } from "../channels/plugins/setup-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
-export {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-  type ResolvedIMessageAccount,
-} from "../imessage/accounts.js";
 
 export type {
   ChannelOnboardingAdapter,
@@ -210,7 +209,6 @@ export type {
 } from "../channels/plugins/onboarding-types.js";
 export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
-export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
 
 export {
   createActionGate,
@@ -263,6 +261,19 @@ export {
   normalizeDiscordMessagingTarget,
 } from "../channels/plugins/normalize/discord.js";
 export { collectDiscordStatusIssues } from "../channels/plugins/status-issues/discord.js";
+
+// Channel: iMessage
+export {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "../imessage/accounts.js";
+export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
+export {
+  looksLikeIMessageTargetId,
+  normalizeIMessageMessagingTarget,
+} from "../channels/plugins/normalize/imessage.js";
 
 // Channel: Slack
 export {

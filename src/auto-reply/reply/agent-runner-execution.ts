@@ -89,6 +89,7 @@ export async function runAgentTurnWithFallback(params: {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
+      isHeartbeat: params.isHeartbeat,
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -179,6 +180,17 @@ export async function runAgentTurnWithFallback(params: {
               images: params.opts?.images,
             })
               .then((result) => {
+                // CLI backends don't emit streaming assistant events, so we need to
+                // emit one with the final text so server-chat can populate its buffer
+                // and send the response to TUI/WebSocket clients.
+                const cliText = result.payloads?.[0]?.text?.trim();
+                if (cliText) {
+                  emitAgentEvent({
+                    runId,
+                    stream: "assistant",
+                    data: { text: cliText },
+                  });
+                }
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -358,12 +370,13 @@ export async function runAgentTurnWithFallback(params: {
                   // Use pipeline if available (block streaming enabled), otherwise send directly
                   if (params.blockStreamingEnabled && params.blockReplyPipeline) {
                     params.blockReplyPipeline.enqueue(blockPayload);
-                  } else {
-                    // Send directly when flushing before tool execution (no streaming).
+                  } else if (params.blockStreamingEnabled) {
+                    // Send directly when flushing before tool execution (no pipeline but streaming enabled).
                     // Track sent key to avoid duplicate in final payloads.
                     directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
                     await params.opts?.onBlockReply?.(blockPayload);
                   }
+                  // When streaming is disabled entirely, blocks are accumulated in final text instead.
                 }
               : undefined,
             onBlockReplyFlush:

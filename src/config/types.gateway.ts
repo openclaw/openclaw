@@ -17,8 +17,21 @@ export type WideAreaDiscoveryConfig = {
   enabled?: boolean;
 };
 
+export type MdnsDiscoveryMode = "off" | "minimal" | "full";
+
+export type MdnsDiscoveryConfig = {
+  /**
+   * mDNS/Bonjour discovery broadcast mode (default: minimal).
+   * - off: disable mDNS entirely
+   * - minimal: omit cliPath/sshPort from TXT records
+   * - full: include cliPath/sshPort in TXT records
+   */
+  mode?: MdnsDiscoveryMode;
+};
+
 export type DiscoveryConfig = {
   wideArea?: WideAreaDiscoveryConfig;
+  mdns?: MdnsDiscoveryConfig;
 };
 
 export type CanvasHostConfig = {
@@ -53,6 +66,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Allow token-only auth over insecure HTTP (default: false). */
   allowInsecureAuth?: boolean;
+  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
+  dangerouslyDisableDeviceAuth?: boolean;
 };
 
 export type GatewayAuthMode = "token" | "password";

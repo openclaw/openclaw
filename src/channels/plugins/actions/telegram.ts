@@ -1,5 +1,6 @@
 import {
   createActionGate,
+  readNumberParam,
   readStringOrNumberParam,
   readStringParam,
 } from "../../../agents/tools/common.js";
@@ -13,15 +14,14 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const content =
-    readStringParam(params, "message", {
-      required: !mediaUrl,
-      allowEmpty: true,
-    }) ?? "";
+  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const caption = readStringParam(params, "caption", { allowEmpty: true });
+  const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
   const buttons = params.buttons;
   const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
+  const silent = typeof params.silent === "boolean" ? params.silent : undefined;
   return {
     to,
     content,
@@ -30,6 +30,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     messageThreadId: threadId ?? undefined,
     buttons,
     asVoice,
+    silent,
   };
 }
 
@@ -43,6 +44,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const actions = new Set<ChannelMessageActionName>(["send"]);
     if (gate("reactions")) actions.add("react");
     if (gate("deleteMessage")) actions.add("delete");
+    if (gate("editMessage")) actions.add("edit");
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -100,14 +102,39 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         readStringOrNumberParam(params, "chatId") ??
         readStringOrNumberParam(params, "channelId") ??
         readStringParam(params, "to", { required: true });
-      const messageId = readStringParam(params, "messageId", {
+      const messageId = readNumberParam(params, "messageId", {
         required: true,
+        integer: true,
       });
       return await handleTelegramAction(
         {
           action: "deleteMessage",
           chatId,
-          messageId: Number(messageId),
+          messageId,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "edit") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "to", { required: true });
+      const messageId = readNumberParam(params, "messageId", {
+        required: true,
+        integer: true,
+      });
+      const message = readStringParam(params, "message", { required: true, allowEmpty: false });
+      const buttons = params.buttons;
+      return await handleTelegramAction(
+        {
+          action: "editMessage",
+          chatId,
+          messageId,
+          content: message,
+          buttons,
           accountId: accountId ?? undefined,
         },
         cfg,

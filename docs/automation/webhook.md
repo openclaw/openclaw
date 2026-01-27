@@ -27,10 +27,10 @@ Notes:
 
 ## Auth
 
-Every request must include the hook token:
-- `Authorization: Bearer <token>`
-- or `x-clawdbot-token: <token>`
-- or `?token=<token>`
+Every request must include the hook token. Prefer headers:
+- `Authorization: Bearer <token>` (recommended)
+- `x-clawdbot-token: <token>`
+- `?token=<token>` (deprecated; logs a warning and will be removed in a future major release)
 
 ## Endpoints
 
@@ -96,6 +96,8 @@ Mapping options (summary):
 - TS transforms require a TS loader (e.g. `bun` or `tsx`) or precompiled `.js` at runtime.
 - Set `deliver: true` + `channel`/`to` on mappings to route replies to a chat surface
   (`channel` defaults to `last` and falls back to WhatsApp).
+- `allowUnsafeExternalContent: true` disables the external content safety wrapper for that hook
+  (dangerous; only for trusted internal sources).
 - `clawdbot webhooks gmail setup` writes `hooks.gmail` config for `clawdbot webhooks gmail run`.
 See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
 
@@ -148,3 +150,6 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 - Use a dedicated hook token; do not reuse gateway auth tokens.
 - Avoid including sensitive raw payloads in webhook logs.
+- Hook payloads are treated as untrusted and wrapped with safety boundaries by default.
+  If you must disable this for a specific hook, set `allowUnsafeExternalContent: true`
+  in that hook's mapping (dangerous).

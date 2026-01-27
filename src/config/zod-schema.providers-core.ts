@@ -110,6 +110,12 @@ export const TelegramAccountSchemaBase = z
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
+    network: z
+      .object({
+        autoSelectFamily: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     proxy: z.string().optional(),
     webhookUrl: z.string().optional(),
     webhookSecret: z.string().optional(),
@@ -253,6 +259,13 @@ export const DiscordAccountSchema = z
         approvers: z.array(z.union([z.string(), z.number()])).optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    intents: z
+      .object({
+        presence: z.boolean().optional(),
+        guildMembers: z.boolean().optional(),
       })
       .strict()
       .optional(),
