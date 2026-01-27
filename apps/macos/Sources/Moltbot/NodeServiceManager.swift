@@ -52,7 +52,7 @@ extension NodeServiceManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let command = CommandResolver.clawdbotCommand(
+        let command = CommandResolver.moltbotCommand(
             subcommand: "service",
             extraArgs: self.withJsonFlag(args),
             // Service management must always run locally, even if remote mode is configured.
