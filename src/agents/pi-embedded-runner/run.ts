@@ -34,7 +34,7 @@ import {
   isContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
-  isImageSizeError,
+  parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
@@ -442,12 +442,17 @@ export async function runEmbeddedPiAgent(
               };
             }
             // Handle image size errors with a user-friendly message (no retry needed)
-            if (isImageSizeError(errorText)) {
+            const imageSizeError = parseImageSizeError(errorText);
+            if (imageSizeError) {
+              const maxMb = imageSizeError.maxMb;
+              const maxMbLabel =
+                typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
+              const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
               return {
                 payloads: [
                   {
                     text:
-                      "Image too large for the model (max 5MB). " +
+                      `Image too large for the model${maxBytesHint}. ` +
                       "Please compress or resize the image and try again.",
                     isError: true,
                   },
