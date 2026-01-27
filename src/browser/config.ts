@@ -8,6 +8,7 @@ import { resolveGatewayPort } from "../config/paths.js";
 import {
   DEFAULT_CLAWD_BROWSER_COLOR,
   DEFAULT_CLAWD_BROWSER_ENABLED,
+  DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
 } from "./constants.js";
@@ -15,6 +16,7 @@ import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
+  evaluateEnabled: boolean;
   controlPort: number;
   cdpProtocol: "http" | "https";
   cdpHost: string;
@@ -140,6 +142,7 @@ export function resolveBrowserConfig(
   rootConfig?: ClawdbotConfig,
 ): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_CLAWD_BROWSER_ENABLED;
+  const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
   const defaultColor = normalizeHexColor(cfg?.color);
@@ -197,6 +200,7 @@ export function resolveBrowserConfig(
 
   return {
     enabled,
+    evaluateEnabled,
     controlPort,
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,

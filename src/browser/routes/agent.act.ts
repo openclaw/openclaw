@@ -39,6 +39,7 @@ export function registerBrowserAgentActRoutes(
       const cdpUrl = profileCtx.profile.cdpUrl;
       const pw = await requirePwAi(res, `act:${kind}`);
       if (!pw) return;
+      const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
 
       switch (kind) {
         case "click": {
@@ -210,6 +211,16 @@ export function registerBrowserAgentActRoutes(
               : undefined;
           const fn = toStringOrEmpty(body.fn) || undefined;
           const timeoutMs = toNumber(body.timeoutMs) ?? undefined;
+          if (fn && !evaluateEnabled) {
+            return jsonError(
+              res,
+              403,
+              [
+                "wait --fn is disabled by config (browser.evaluateEnabled=false).",
+                "Docs: /gateway/configuration#browser-clawd-managed-browser",
+              ].join("\n"),
+            );
+          }
           if (
             timeMs === undefined &&
             !text &&
@@ -240,6 +251,16 @@ export function registerBrowserAgentActRoutes(
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "evaluate": {
+          if (!evaluateEnabled) {
+            return jsonError(
+              res,
+              403,
+              [
+                "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+                "Docs: /gateway/configuration#browser-clawd-managed-browser",
+              ].join("\n"),
+            );
+          }
           const fn = toStringOrEmpty(body.fn);
           if (!fn) return jsonError(res, 400, "fn is required");
           const ref = toStringOrEmpty(body.ref) || undefined;

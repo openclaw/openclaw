@@ -18,6 +18,33 @@ const configMocks = vi.hoisted(() => ({
 }));
 vi.mock("../config/config.js", () => configMocks);
 
+const sharedMocks = vi.hoisted(() => ({
+  callBrowserRequest: vi.fn(
+    async (_opts: unknown, params: { path?: string; query?: Record<string, unknown> }) => {
+      const format = params.query?.format === "aria" ? "aria" : "ai";
+      if (format === "aria") {
+        return {
+          ok: true,
+          format: "aria",
+          targetId: "t1",
+          url: "https://example.com",
+          nodes: [],
+        };
+      }
+      return {
+        ok: true,
+        format: "ai",
+        targetId: "t1",
+        url: "https://example.com",
+        snapshot: "ok",
+      };
+    },
+  ),
+}));
+vi.mock("./browser-cli-shared.js", () => ({
+  callBrowserRequest: sharedMocks.callBrowserRequest,
+}));
+
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
@@ -44,13 +71,13 @@ describe("browser cli snapshot defaults", () => {
 
     await program.parseAsync(["browser", "snapshot"], { from: "user" });
 
-    expect(clientMocks.browserSnapshot).toHaveBeenCalledWith(
-      "http://127.0.0.1:18791",
-      expect.objectContaining({
-        format: "ai",
-        mode: "efficient",
-      }),
-    );
+    expect(sharedMocks.callBrowserRequest).toHaveBeenCalled();
+    const [, params] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
+    expect(params?.path).toBe("/snapshot");
+    expect(params?.query).toMatchObject({
+      format: "ai",
+      mode: "efficient",
+    });
   });
 
   it("does not apply config snapshot defaults to aria snapshots", async () => {
@@ -71,8 +98,9 @@ describe("browser cli snapshot defaults", () => {
 
     await program.parseAsync(["browser", "snapshot", "--format", "aria"], { from: "user" });
 
-    expect(clientMocks.browserSnapshot).toHaveBeenCalled();
-    const [, opts] = clientMocks.browserSnapshot.mock.calls.at(-1) ?? [];
-    expect(opts?.mode).toBeUndefined();
+    expect(sharedMocks.callBrowserRequest).toHaveBeenCalled();
+    const [, params] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
+    expect(params?.path).toBe("/snapshot");
+    expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
   });
 });
