@@ -25,6 +25,24 @@ import type { TelegramContext } from "./types.js";
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 
+/**
+ * Wraps a Telegram API call with error logging. Ensures network failures are
+ * logged with context before propagating, preventing silent unhandled rejections.
+ */
+async function withMediaErrorHandler<T>(
+  operation: string,
+  runtime: RuntimeEnv,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const errText = formatErrorMessage(err);
+    runtime.error?.(danger(`telegram ${operation} failed: ${errText}`));
+    throw err;
+  }
+}
+
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
@@ -146,17 +164,17 @@ export async function deliverReplies(params: {
         mediaParams.message_thread_id = threadParams.message_thread_id;
       }
       if (isGif) {
-        await bot.api.sendAnimation(chatId, file, {
-          ...mediaParams,
-        });
+        await withMediaErrorHandler("sendAnimation", runtime, () =>
+          bot.api.sendAnimation(chatId, file, { ...mediaParams }),
+        );
       } else if (kind === "image") {
-        await bot.api.sendPhoto(chatId, file, {
-          ...mediaParams,
-        });
+        await withMediaErrorHandler("sendPhoto", runtime, () =>
+          bot.api.sendPhoto(chatId, file, { ...mediaParams }),
+        );
       } else if (kind === "video") {
-        await bot.api.sendVideo(chatId, file, {
-          ...mediaParams,
-        });
+        await withMediaErrorHandler("sendVideo", runtime, () =>
+          bot.api.sendVideo(chatId, file, { ...mediaParams }),
+        );
       } else if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
           wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
@@ -169,9 +187,9 @@ export async function deliverReplies(params: {
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
           try {
-            await bot.api.sendVoice(chatId, file, {
-              ...mediaParams,
-            });
+            await withMediaErrorHandler("sendVoice", runtime, () =>
+              bot.api.sendVoice(chatId, file, { ...mediaParams }),
+            );
           } catch (voiceErr) {
             // Fall back to text if voice messages are forbidden in this chat.
             // This happens when the recipient has Telegram Premium privacy settings
@@ -204,14 +222,14 @@ export async function deliverReplies(params: {
           }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
-          await bot.api.sendAudio(chatId, file, {
-            ...mediaParams,
-          });
+          await withMediaErrorHandler("sendAudio", runtime, () =>
+            bot.api.sendAudio(chatId, file, { ...mediaParams }),
+          );
         }
       } else {
-        await bot.api.sendDocument(chatId, file, {
-          ...mediaParams,
-        });
+        await withMediaErrorHandler("sendDocument", runtime, () =>
+          bot.api.sendDocument(chatId, file, { ...mediaParams }),
+        );
       }
       if (replyToId && !hasReplied) {
         hasReplied = true;
