@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 
 type LockFilePayload = {
@@ -116,3 +117,44 @@ export async function acquireSessionWriteLock(params: {
   const owner = payload?.pid ? `pid=${payload.pid}` : "unknown";
   throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
 }
+
+/**
+ * Synchronously release all held locks.
+ * Used during process exit when async operations aren't reliable.
+ */
+function releaseAllLocksSync(): void {
+  for (const [sessionFile, held] of HELD_LOCKS) {
+    try {
+      fsSync.rmSync(held.lockPath, { force: true });
+    } catch {
+      // Ignore errors during cleanup - best effort
+    }
+    HELD_LOCKS.delete(sessionFile);
+  }
+}
+
+let cleanupRegistered = false;
+
+function registerCleanupHandlers(): void {
+  if (cleanupRegistered) return;
+  cleanupRegistered = true;
+
+  // Cleanup on normal exit and process.exit() calls
+  process.on("exit", () => {
+    releaseAllLocksSync();
+  });
+
+  // Handle SIGINT (Ctrl+C) and SIGTERM
+  const handleSignal = (signal: NodeJS.Signals) => {
+    releaseAllLocksSync();
+    // Remove our handler and re-raise signal for proper exit code
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
+  };
+
+  process.on("SIGINT", () => handleSignal("SIGINT"));
+  process.on("SIGTERM", () => handleSignal("SIGTERM"));
+}
+
+// Register cleanup handlers when module loads
+registerCleanupHandlers();
