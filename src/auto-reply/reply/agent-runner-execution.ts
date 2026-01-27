@@ -41,9 +41,6 @@ import {
   handleAgentEventForStatus,
   type StatusUpdateRunContext,
 } from "./status-updates-integration.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-
-const log = createSubsystemLogger("agent-runner-execution");
 
 export type AgentRunLoopResult =
   | {
@@ -310,7 +307,6 @@ export async function runAgentTurnWithFallback(params: {
             onAgentEvent: async (evt) => {
               // ===== STATUS UPDATES: Handle agent events =====
               if (params.statusUpdateContext) {
-                log.debug(`onAgentEvent: forwarding to status updates, stream=${evt.stream}`);
                 await handleAgentEventForStatus(params.statusUpdateContext, evt);
               }
               // ===== END STATUS UPDATES =====

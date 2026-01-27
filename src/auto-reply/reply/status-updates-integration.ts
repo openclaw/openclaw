@@ -5,8 +5,7 @@
  * and provides helpers for resolving configuration from the config.
  */
 
-import type { ClawdbotConfig } from "../../config/config.js";
-import type { StatusUpdateConfig } from "../../config/types.base.js";
+import type { StatusUpdateConfig, MoltbotConfig } from "../../config/config.js";
 import type { ChannelCapabilities } from "../../channels/plugins/types.core.js";
 import {
   createStatusUpdateController,
@@ -22,14 +21,14 @@ const log = createSubsystemLogger("status-updates-integration");
  * Resolve status update configuration from the Clawdbot config.
  */
 export function resolveStatusUpdateConfigFromConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   agentId?: string,
 ): StatusUpdateConfig {
   log.debug(`Resolving status update config for agentId=${agentId}`);
 
   // Check agent-specific config first
   if (agentId && cfg.agents?.list) {
-    const agentCfg = cfg.agents.list.find((a) => a.id === agentId);
+    const agentCfg = cfg.agents.list.find((a: any) => a.id === agentId);
     if (agentCfg?.statusUpdates) {
       log.debug(`Found agent-specific config: ${JSON.stringify(agentCfg.statusUpdates)}`);
       return agentCfg.statusUpdates;
@@ -54,7 +53,7 @@ export function channelSupportsEdit(capabilities?: ChannelCapabilities): boolean
  * Returns undefined if status updates are disabled.
  */
 export function createAgentStatusController(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentId?: string;
   callbacks: StatusUpdateCallbacks;
 }): StatusUpdateController | undefined {
@@ -180,7 +179,7 @@ export async function completeStatusUpdate(
   }
 
   log.debug(`completeStatusUpdate: finalizing status update`);
-  const result = await ctx.controller.complete(finalText);
+  const result = await (ctx.controller as any).complete(finalText);
   log.debug(`completeStatusUpdate: result=${result?.substring(0, 50)}...`);
   return result;
 }
