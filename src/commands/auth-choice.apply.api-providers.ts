@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyEdenaiConfig,
+  applyEdenaiProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
@@ -30,6 +32,7 @@ import {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
+  EDENAI_DEFAULT_MODEL_REF,
   KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -37,6 +40,7 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  setEdenaiApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMoonshotApiKey,
@@ -73,6 +77,8 @@ export async function applyAuthChoiceApiProviders(
   ) {
     if (params.opts.tokenProvider === "openrouter") {
       authChoice = "openrouter-api-key";
+    } else if (params.opts.tokenProvider === "edenai") {
+      authChoice = "edenai-api-key";
     } else if (params.opts.tokenProvider === "vercel-ai-gateway") {
       authChoice = "ai-gateway-api-key";
     } else if (params.opts.tokenProvider === "moonshot") {
@@ -163,6 +169,94 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyOpenrouterConfig,
         applyProviderConfig: applyOpenrouterProviderConfig,
         noteDefault: OPENROUTER_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "edenai-api-key") {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const profileOrder = resolveAuthProfileOrder({
+      cfg: nextConfig,
+      store,
+      provider: "edenai",
+    });
+    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
+    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+    let profileId = "edenai:default";
+    let mode: "api_key" | "oauth" | "token" = "api_key";
+    let hasCredential = false;
+
+    if (existingProfileId && existingCred?.type) {
+      profileId = existingProfileId;
+      mode =
+        existingCred.type === "oauth"
+          ? "oauth"
+          : existingCred.type === "token"
+            ? "token"
+            : "api_key";
+      hasCredential = true;
+    }
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "edenai") {
+      await setEdenaiApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Eden AI provides unified access to multiple LLM providers.",
+          "Get your API key at: https://app.edenai.run/admin/account/settings",
+        ].join("\n"),
+        "Eden AI",
+      );
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("edenai");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing EDENAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setEdenaiApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Eden AI API key",
+        validate: validateApiKeyInput,
+      });
+      await setEdenaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "edenai",
+        mode,
+      });
+    }
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: EDENAI_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyEdenaiConfig,
+        applyProviderConfig: applyEdenaiProviderConfig,
+        noteDefault: EDENAI_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

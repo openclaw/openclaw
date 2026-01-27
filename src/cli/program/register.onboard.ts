@@ -52,7 +52,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip",
+      "Auth: setup-token|claude-cli|token|chutes|openai-codex|openai-api-key|openrouter-api-key|edenai-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|synthetic-api-key|venice-api-key|codex-cli|gemini-api-key|zai-api-key|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip",
     )
     .option(
       "--token-provider <id>",
@@ -67,6 +67,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--openai-api-key <key>", "OpenAI API key")
     .option("--openrouter-api-key <key>", "OpenRouter API key")
+    .option("--edenai-api-key <key>", "Eden AI API key")
     .option("--ai-gateway-api-key <key>", "Vercel AI Gateway API key")
     .option("--moonshot-api-key <key>", "Moonshot API key")
     .option("--kimi-code-api-key <key>", "Kimi Code API key")
@@ -118,6 +119,7 @@ export function registerOnboardCommand(program: Command) {
             anthropicApiKey: opts.anthropicApiKey as string | undefined,
             openaiApiKey: opts.openaiApiKey as string | undefined,
             openrouterApiKey: opts.openrouterApiKey as string | undefined,
+            edenaiApiKey: opts.edenaiApiKey as string | undefined,
             aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
             moonshotApiKey: opts.moonshotApiKey as string | undefined,
             kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,

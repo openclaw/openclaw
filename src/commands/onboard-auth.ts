@@ -5,6 +5,8 @@ export {
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyEdenaiConfig,
+  applyEdenaiProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
@@ -20,6 +22,7 @@ export {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
+  EDENAI_BASE_URL,
 } from "./onboard-auth.config-core.js";
 export {
   applyMinimaxApiConfig,
@@ -35,8 +38,10 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  EDENAI_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
+  setEdenaiApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,

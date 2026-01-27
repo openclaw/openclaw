@@ -177,3 +177,17 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export const EDENAI_DEFAULT_MODEL_REF = "edenai/anthropic/claude-sonnet-4-5";
+
+export async function setEdenaiApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "edenai:default",
+    credential: {
+      type: "api_key",
+      provider: "edenai",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}

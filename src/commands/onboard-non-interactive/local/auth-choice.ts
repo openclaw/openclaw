@@ -8,6 +8,7 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyEdenaiConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
@@ -20,6 +21,7 @@ import {
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setEdenaiApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
@@ -233,6 +235,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "edenai-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "edenai",
+      cfg: baseConfig,
+      flagValue: opts.edenaiApiKey,
+      flagName: "--edenai-api-key",
+      envVar: "EDENAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setEdenaiApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "edenai:default",
+      provider: "edenai",
+      mode: "api_key",
+    });
+    return applyEdenaiConfig(nextConfig);
   }
 
   if (authChoice === "ai-gateway-api-key") {

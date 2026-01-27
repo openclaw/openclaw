@@ -11,6 +11,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   chutes: "chutes",
   "openai-api-key": "openai",
   "openrouter-api-key": "openrouter",
+  "edenai-api-key": "edenai",
   "ai-gateway-api-key": "vercel-ai-gateway",
   "moonshot-api-key": "moonshot",
   "kimi-code-api-key": "kimi-code",
