@@ -6,7 +6,7 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
-- Agents: summarize dropped messages during compaction safeguard pruning. (#2418)
+- Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
 - Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.
