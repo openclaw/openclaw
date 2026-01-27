@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
+- macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
 - Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
