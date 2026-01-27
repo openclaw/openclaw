@@ -9,6 +9,7 @@ trap on_error ERR
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
+OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 
 INPUT_PATHS=(
   "$ROOT_DIR/package.json"
@@ -39,7 +40,7 @@ compute_hash() {
 current_hash="$(compute_hash)"
 if [[ -f "$HASH_FILE" ]]; then
   previous_hash="$(cat "$HASH_FILE")"
-  if [[ "$previous_hash" == "$current_hash" ]]; then
+  if [[ "$previous_hash" == "$current_hash" && -f "$OUTPUT_FILE" ]]; then
     echo "A2UI bundle up to date; skipping."
     exit 0
   fi
