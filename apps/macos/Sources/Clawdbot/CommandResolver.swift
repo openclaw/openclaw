@@ -83,8 +83,19 @@ enum CommandResolver {
             "/usr/bin",
             "/bin",
         ]
+        #if DEBUG
+        // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
         extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
+<<<<<<< HEAD
         extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1)
+=======
+        #endif
+        let clawdbotPaths = self.clawdbotManagedPaths(home: home)
+        if !clawdbotPaths.isEmpty {
+            extras.insert(contentsOf: clawdbotPaths, at: 1)
+        }
+        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + clawdbotPaths.count)
+>>>>>>> upstream/main
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
@@ -188,9 +199,13 @@ enum CommandResolver {
     }
 
     static func projectClawdbotExecutable(projectRoot: URL? = nil) -> String? {
+        #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
         return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
+        #else
+        return nil
+        #endif
     }
 
     static func nodeCliPath() -> String? {

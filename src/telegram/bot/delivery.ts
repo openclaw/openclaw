@@ -4,6 +4,7 @@ import {
   markdownToTelegramHtml,
   renderTelegramHtmlText,
 } from "../format.js";
+import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { splitTelegramCaption } from "../caption.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -146,16 +147,22 @@ export async function deliverReplies(params: {
         mediaParams.message_thread_id = threadParams.message_thread_id;
       }
       if (isGif) {
-        await bot.api.sendAnimation(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendAnimation",
+          runtime,
+          fn: () => bot.api.sendAnimation(chatId, file, { ...mediaParams }),
         });
       } else if (kind === "image") {
-        await bot.api.sendPhoto(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendPhoto",
+          runtime,
+          fn: () => bot.api.sendPhoto(chatId, file, { ...mediaParams }),
         });
       } else if (kind === "video") {
-        await bot.api.sendVideo(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendVideo",
+          runtime,
+          fn: () => bot.api.sendVideo(chatId, file, { ...mediaParams }),
         });
       } else if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
@@ -169,8 +176,11 @@ export async function deliverReplies(params: {
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
           try {
-            await bot.api.sendVoice(chatId, file, {
-              ...mediaParams,
+            await withTelegramApiErrorLogging({
+              operation: "sendVoice",
+              runtime,
+              shouldLog: (err) => !isVoiceMessagesForbidden(err),
+              fn: () => bot.api.sendVoice(chatId, file, { ...mediaParams }),
             });
           } catch (voiceErr) {
             // Fall back to text if voice messages are forbidden in this chat.
@@ -204,13 +214,17 @@ export async function deliverReplies(params: {
           }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
-          await bot.api.sendAudio(chatId, file, {
-            ...mediaParams,
+          await withTelegramApiErrorLogging({
+            operation: "sendAudio",
+            runtime,
+            fn: () => bot.api.sendAudio(chatId, file, { ...mediaParams }),
           });
         }
       } else {
-        await bot.api.sendDocument(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendDocument",
+          runtime,
+          fn: () => bot.api.sendDocument(chatId, file, { ...mediaParams }),
         });
       }
       if (replyToId && !hasReplied) {
@@ -353,11 +367,17 @@ async function sendTelegramText(
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   try {
-    const res = await bot.api.sendMessage(chatId, htmlText, {
-      parse_mode: "HTML",
-      ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-      ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-      ...baseParams,
+    const res = await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      shouldLog: (err) => !PARSE_ERR_RE.test(formatErrorMessage(err)),
+      fn: () =>
+        bot.api.sendMessage(chatId, htmlText, {
+          parse_mode: "HTML",
+          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...baseParams,
+        }),
     });
     return res.message_id;
   } catch (err) {
@@ -365,10 +385,15 @@ async function sendTelegramText(
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
       const fallbackText = opts?.plainText ?? text;
-      const res = await bot.api.sendMessage(chatId, fallbackText, {
-        ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-        ...baseParams,
+      const res = await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, fallbackText, {
+            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...baseParams,
+          }),
       });
       return res.message_id;
     }

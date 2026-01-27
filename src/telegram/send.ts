@@ -8,6 +8,7 @@ import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import type { RetryConfig } from "../infra/retry.js";
@@ -210,7 +211,10 @@ export async function sendMessageTelegram(
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -442,7 +446,10 @@ export async function reactMessageTelegram(
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -492,7 +499,10 @@ export async function deleteMessageTelegram(
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -537,7 +547,10 @@ export async function editMessageTelegram(
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
