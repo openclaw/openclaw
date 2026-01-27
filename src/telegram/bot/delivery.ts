@@ -274,7 +274,8 @@ export async function deliverReplies(params: {
   }
 
   // If all replies were empty and notifyEmptyResponse is enabled, send a fallback message
-  if (!hasReplied && skippedEmpty > 0 && params.notifyEmptyResponse) {
+  // Check both: (1) replies with no content (skippedEmpty), (2) no replies at all (empty array)
+  if (!hasReplied && (skippedEmpty > 0 || replies.length === 0) && params.notifyEmptyResponse) {
     const fallbackText = "No response generated. Please try again.";
     await sendTelegramText(bot, chatId, fallbackText, runtime, {
       messageThreadId,
