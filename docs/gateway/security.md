@@ -43,6 +43,18 @@ Start with the smallest access that still works, then widen it as you gain confi
 
 If you run `--deep`, Clawdbot also attempts a best-effort live Gateway probe.
 
+## Credential storage map
+
+Use this when auditing access or deciding what to back up:
+
+- **WhatsApp**: `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Discord bot token**: config/env (token file not yet supported)
+- **Slack tokens**: config/env (`channels.slack.*`)
+- **Pairing allowlists**: `~/.clawdbot/credentials/<channel>-allowFrom.json`
+- **Model auth profiles**: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
+- **Legacy OAuth import**: `~/.clawdbot/credentials/oauth.json`
+
 ## Security Audit Checklist
 
 When the audit prints findings, treat this as a priority order:
@@ -58,8 +70,12 @@ When the audit prints findings, treat this as a priority order:
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
 identity. If you enable `gateway.controlUi.allowInsecureAuth`, the UI falls back
-to **token-only auth** and skips device pairing (even on HTTPS). This is a security
+to **token-only auth** and skips device pairing when device identity is omitted. This is a security
 downgrade—prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
+
+For break-glass scenarios only, `gateway.controlUi.dangerouslyDisableDeviceAuth`
+disables device identity checks entirely. This is a severe security downgrade;
+keep it off unless you are actively debugging and can revert quickly.
 
 `clawdbot security audit` warns when this setting is enabled.
 
@@ -125,6 +141,16 @@ Clawdbot’s stance:
 - **Identity first:** decide who can talk to the bot (DM pairing / allowlists / explicit “open”).
 - **Scope next:** decide where the bot is allowed to act (group allowlists + mention gating, tools, sandboxing, device permissions).
 - **Model last:** assume the model can be manipulated; design so manipulation has limited blast radius.
+
+## Command authorization model
+
+Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
+channel allowlists/pairing plus `commands.useAccessGroups` (see [Configuration](/gateway/configuration)
+and [Slash commands](/tools/slash-commands)). If a channel allowlist is empty or includes `"*"`,
+commands are effectively open for that channel.
+
+`/exec` is a session-only convenience for authorized operators. It does **not** write config or
+change other sessions.
 
 ## Plugins/extensions
 
@@ -195,6 +221,7 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
+- Note: sandboxing is opt-in. If sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox, and host exec does not require approvals unless you set host=gateway and configure exec approvals.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 

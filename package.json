@@ -237,6 +237,9 @@
     "vitest": "^4.0.18",
     "wireit": "^0.14.12"
   },
+  "overrides": {
+    "tar": "7.5.4"
+  },
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {

@@ -217,13 +217,17 @@ export const VoiceCallTunnelConfigSchema = z
     /**
      * Allow ngrok free tier compatibility mode.
      * When true, signature verification failures on ngrok-free.app URLs
-     * will be logged but allowed through. Less secure, but necessary
-     * for ngrok free tier which may modify URLs.
+     * will be allowed only for loopback requests (ngrok local agent).
      */
-    allowNgrokFreeTier: z.boolean().default(true),
+    allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
+    /**
+     * Legacy ngrok free tier compatibility mode (deprecated).
+     * Use allowNgrokFreeTierLoopbackBypass instead.
+     */
+    allowNgrokFreeTier: z.boolean().optional(),
   })
   .strict()
-  .default({ provider: "none", allowNgrokFreeTier: true });
+  .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
 export type VoiceCallTunnelConfig = z.infer<typeof VoiceCallTunnelConfigSchema>;
 
 // -----------------------------------------------------------------------------
@@ -418,11 +422,18 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
   }
 
   // Tunnel Config
-  resolved.tunnel = resolved.tunnel ?? { provider: "none", allowNgrokFreeTier: true };
+  resolved.tunnel = resolved.tunnel ?? {
+    provider: "none",
+    allowNgrokFreeTierLoopbackBypass: false,
+  };
+  resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
+    resolved.tunnel.allowNgrokFreeTierLoopbackBypass ||
+    resolved.tunnel.allowNgrokFreeTier ||
+    false;
   resolved.tunnel.ngrokAuthToken =
-      resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
-  resolved.tunnel.ngrokDomain = 
-      resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+    resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
+  resolved.tunnel.ngrokDomain =
+    resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
 
   return resolved;
 }

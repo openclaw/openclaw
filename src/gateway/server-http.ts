@@ -291,10 +291,10 @@ export function createGatewayHttpServer(opts: {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    } catch (err) {
+    } catch {
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end(String(err));
+      res.end("Internal Server Error");
     }
   }
 
