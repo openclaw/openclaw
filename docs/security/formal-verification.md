@@ -1,6 +1,6 @@
 ---
 title: Formal Verification (Security Models)
-summary: Machine-checked security models for Moltbot’s highest-risk paths.
+summary: Machine-checked security models for Moltbot’s highest-risk paths (formerly Clawdbot).
 permalink: /security/formal-verification/
 ---
 
@@ -8,7 +8,9 @@ permalink: /security/formal-verification/
 
 This page tracks Moltbot’s **formal security models** (TLA+/TLC today; more as needed).
 
-**Goal (north star):** provide a machine-checked argument that Moltbot enforces its
+> Moltbot was formerly named Clawdbot; some older references and commands may still use `clawdbot`.
+
+**Goal (north star):** provide a machine-checked argument that Clawdbot enforces its
 intended security policy (authorization, session isolation, tool gating, and
 misconfiguration safety), under explicit assumptions.
 
@@ -16,11 +18,11 @@ misconfiguration safety), under explicit assumptions.
 - Each claim has a runnable model-check over a finite state space.
 - Many claims have a paired **negative model** that produces a counterexample trace for a realistic bug class.
 
-**What this is not (yet):** a proof that “Moltbot is secure in all respects” or that the full TypeScript implementation is correct.
+**What this is not (yet):** a proof that “Clawdbot is secure in all respects” or that the full TypeScript implementation is correct.
 
 ## Where the models live
 
-Models are maintained in a separate repo: [vignesh07/moltbot-formal-models](https://github.com/vignesh07/moltbot-formal-models).
+Models are maintained in a separate repo: [vignesh07/clawdbot-formal-models](https://github.com/vignesh07/clawdbot-formal-models).
 
 ## Important caveats
 
@@ -37,8 +39,8 @@ Today, results are reproduced by cloning the models repo locally and running TLC
 Getting started:
 
 ```bash
-git clone https://github.com/vignesh07/moltbot-formal-models
-cd moltbot-formal-models
+git clone https://github.com/vignesh07/clawdbot-formal-models
+cd clawdbot-formal-models
 
 # Java 11+ required (TLC runs on the JVM).
 # The repo vendors a pinned `tla2tools.jar` (TLA+ tools) and provides `bin/tlc` + Make targets.
