@@ -64,7 +64,7 @@ Status: unreleased.
 - Cron: allow payloads containing "heartbeat" in event filter. (#2219) Thanks @dwfinkelstein.
 - CLI: avoid loading config for global help/version while registering plugin commands. (#2212) Thanks @dial481.
 - Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
-- Agents: release session locks on process termination. (#2483) Thanks @janeexai.
+- Agents: release session locks on process termination and cover more signals. (#2483) Thanks @janeexai.
 - Telegram: harden polling + retry behavior for transient network errors and Node 22 transport issues. (#2420) Thanks @techboss.
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
 - Telegram: log fetch/API errors in delivery to avoid unhandled rejections. (#2492) Thanks @altryne.

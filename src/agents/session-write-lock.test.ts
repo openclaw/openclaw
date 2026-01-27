@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { acquireSessionWriteLock } from "./session-write-lock.js";
+import { __testing, acquireSessionWriteLock } from "./session-write-lock.js";
 
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
@@ -73,9 +73,38 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("removes held locks on termination signals", async () => {
+    const signals = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
+    for (const signal of signals) {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lock-cleanup-"));
+      try {
+        const sessionFile = path.join(root, "sessions.json");
+        const lockPath = `${sessionFile}.lock`;
+        await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+        const keepAlive = () => {};
+        if (signal === "SIGINT") {
+          process.on(signal, keepAlive);
+        }
+
+        __testing.handleTerminationSignal(signal);
+
+        await expect(fs.stat(lockPath)).rejects.toThrow();
+        if (signal === "SIGINT") {
+          process.off(signal, keepAlive);
+        }
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("registers cleanup for SIGQUIT and SIGABRT", () => {
+    expect(__testing.cleanupSignals).toContain("SIGQUIT");
+    expect(__testing.cleanupSignals).toContain("SIGABRT");
+  });
   it("cleans up locks on SIGINT without removing other handlers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lock-"));
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     const killCalls: Array<NodeJS.Signals | undefined> = [];
     let otherHandlerCalled = false;
 
@@ -99,7 +128,7 @@ describe("acquireSessionWriteLock", () => {
 
       await expect(fs.access(lockPath)).rejects.toThrow();
       expect(otherHandlerCalled).toBe(true);
-      expect(killCalls).toEqual(["SIGINT"]);
+      expect(killCalls).toEqual([]);
     } finally {
       process.off("SIGINT", otherHandler);
       process.kill = originalKill;
@@ -120,5 +149,14 @@ describe("acquireSessionWriteLock", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+  it("keeps other signal listeners registered", () => {
+    const keepAlive = () => {};
+    process.on("SIGINT", keepAlive);
+
+    __testing.handleTerminationSignal("SIGINT");
+
+    expect(process.listeners("SIGINT")).toContain(keepAlive);
+    process.off("SIGINT", keepAlive);
   });
 });
