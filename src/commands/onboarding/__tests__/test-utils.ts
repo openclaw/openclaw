@@ -21,5 +21,6 @@ export const makePrompter = (overrides: Partial<WizardPrompter> = {}): WizardPro
   text: vi.fn(async () => "") as WizardPrompter["text"],
   confirm: vi.fn(async () => false),
   progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+  setStepProgress: vi.fn(),
   ...overrides,
 });

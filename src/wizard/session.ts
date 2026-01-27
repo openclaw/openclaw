@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
+import {
+  WizardCancelledError,
+  type StepProgress,
+  type WizardProgress,
+  type WizardPrompter,
+} from "./prompts.js";
 
 export type WizardStepOption = {
   value: unknown;
@@ -151,6 +156,11 @@ class WizardSessionPrompter implements WizardPrompter {
       update: (_message) => {},
       stop: (_message) => {},
     };
+  }
+
+  setStepProgress(_progress: StepProgress | null): void {
+    // Session-based wizard doesn't display step progress inline
+    // (the client UI can track steps separately if needed)
   }
 
   private async prompt(step: Omit<WizardStep, "id">): Promise<unknown> {

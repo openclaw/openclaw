@@ -275,6 +275,143 @@
 }
 
 /* ===========================================
+   Skills Quick Toggle - Topbar dropdown
+   =========================================== */
+
+.skills-quick-toggle {
+  position: relative;
+}
+
+.skills-quick-toggle__button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  height: 32px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--secondary);
+  color: var(--text);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.skills-quick-toggle__button:hover {
+  border-color: var(--accent);
+}
+
+.skills-quick-toggle__icon {
+  display: flex;
+  align-items: center;
+}
+
+.skills-quick-toggle__icon svg {
+  stroke: var(--accent);
+}
+
+.skills-quick-toggle__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.skills-quick-toggle__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.skills-quick-toggle__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 400px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.skills-quick-toggle__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.skills-quick-toggle__close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.skills-quick-toggle__close:hover {
+  background: var(--secondary);
+  color: var(--text);
+}
+
+.skills-quick-toggle__list {
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.skills-quick-toggle__empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.skills-quick-toggle__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.skills-quick-toggle__item:hover {
+  background: var(--secondary);
+}
+
+.skills-quick-toggle__item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.skills-quick-toggle__name {
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ===========================================
    Status Dot - With glow for emphasis
    =========================================== */
 

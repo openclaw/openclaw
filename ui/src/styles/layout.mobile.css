@@ -372,3 +372,257 @@
     height: 11px;
   }
 }
+
+/* ===========================================
+   Mobile UX Polish
+   - Safe area insets for iPhone notch/home indicator
+   - 44px minimum touch targets (Apple HIG)
+   - 16px fonts to prevent iOS zoom on focus
+   - Bottom sheet pattern for dropdowns
+   =========================================== */
+
+/* Safe area insets for iPhone notch and home indicator */
+@supports (padding-top: env(safe-area-inset-top)) {
+  @media (max-width: 600px) {
+    .shell {
+      padding-top: env(safe-area-inset-top);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .topbar {
+      padding-top: calc(10px + env(safe-area-inset-top));
+    }
+
+    /* Bottom compose area needs safe area */
+    .chat-compose {
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+
+    /* Nav needs horizontal safe areas */
+    .nav {
+      padding-left: calc(10px + env(safe-area-inset-left));
+      padding-right: calc(10px + env(safe-area-inset-right));
+    }
+  }
+}
+
+/* 44px minimum touch targets for mobile (Apple HIG) */
+@media (max-width: 600px) {
+  /* Buttons - minimum 44px height */
+  .btn {
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+
+  /* Icon buttons */
+  .btn--icon,
+  .topbar-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 10px;
+  }
+
+  /* Nav items - 44px touch target */
+  .nav-item {
+    min-height: 44px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+  }
+
+  /* Chat compose buttons */
+  .chat-compose__actions .btn {
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+
+  /* Voice button */
+  .chat-voice-btn {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+  }
+
+  /* Skills quick-toggle */
+  .skills-quick-toggle__btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 14px;
+  }
+
+  .skills-quick-toggle__item label {
+    min-height: 44px;
+    padding: 12px 14px;
+  }
+
+  /* Config presets */
+  .config-preset-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .config-preset {
+    min-height: 48px;
+  }
+
+  /* View level toggle */
+  .config-view-level__option {
+    min-height: 44px;
+    padding: 12px 16px;
+  }
+
+  /* Select dropdowns */
+  .field select {
+    min-height: 44px;
+  }
+
+  /* Checkboxes and radios with label */
+  .field input[type="checkbox"],
+  .field input[type="radio"] {
+    width: 22px;
+    height: 22px;
+  }
+
+  /* List items */
+  .list-item {
+    min-height: 44px;
+    padding: 12px;
+  }
+}
+
+/* 16px font for inputs to prevent iOS zoom on focus */
+@media (max-width: 600px) {
+  .field input,
+  .field textarea,
+  .field select {
+    font-size: 16px;
+  }
+
+  /* Chat compose textarea */
+  .chat-compose__field textarea {
+    font-size: 16px;
+  }
+
+  /* Search inputs */
+  input[type="search"],
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"] {
+    font-size: 16px;
+  }
+}
+
+/* Bottom sheet pattern for dropdowns on mobile */
+@media (max-width: 600px) {
+  /* Skills quick-toggle as bottom sheet */
+  .skills-quick-toggle {
+    position: static;
+  }
+
+  .skills-quick-toggle__panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    max-height: 60vh;
+    border-radius: 16px 16px 0 0;
+    width: 100%;
+    z-index: 1000;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.25);
+    animation: slide-up 0.2s ease-out;
+  }
+
+  .skills-quick-toggle__panel::before {
+    content: "";
+    display: block;
+    width: 36px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 8px auto 4px;
+  }
+
+  /* Config preset panel as bottom sheet */
+  .config-preset-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    max-height: 70vh;
+    border-radius: 16px 16px 0 0;
+    width: 100%;
+    z-index: 1000;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.25);
+    animation: slide-up 0.2s ease-out;
+  }
+
+  .config-preset-panel::before {
+    content: "";
+    display: block;
+    width: 36px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 8px auto 4px;
+  }
+
+  /* Backdrop for bottom sheets */
+  .skills-quick-toggle__panel,
+  .config-preset-panel {
+    backdrop-filter: blur(8px);
+    background: var(--bg-secondary);
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Additional mobile polish */
+@media (max-width: 600px) {
+  /* Larger checkbox/toggle spacing */
+  .toggle-field {
+    gap: 12px;
+  }
+
+  /* Better card action spacing */
+  .card-actions {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  /* Compact callout on mobile */
+  .callout {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+
+  /* Better form field labels */
+  .field > span {
+    font-size: 13px;
+    margin-bottom: 6px;
+  }
+
+  /* Scroll momentum */
+  .chat-thread,
+  .log-stream,
+  .content {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}

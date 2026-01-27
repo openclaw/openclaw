@@ -281,6 +281,74 @@
   box-sizing: border-box;
 }
 
+/* Voice input button */
+.chat-voice-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chat-voice-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.chat-voice-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-voice-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Recording state */
+.chat-voice-btn--recording {
+  background: var(--danger-subtle);
+  border-color: var(--danger);
+  color: var(--danger);
+  animation: voice-pulse 1.5s ease-in-out infinite;
+}
+
+.chat-voice-btn--recording:hover:not(:disabled) {
+  background: var(--danger-subtle);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+@keyframes voice-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+  }
+}
+
+/* Voice error message */
+.chat-voice-error {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  background: var(--danger-subtle);
+  color: var(--danger);
+  border-radius: 6px;
+  border: 1px solid var(--danger);
+}
+
 /* Chat controls - moved to content-header area, left aligned */
 .chat-controls {
   display: flex;

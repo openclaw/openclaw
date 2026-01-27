@@ -41,7 +41,29 @@ import { resolveUserPath } from "../utils.js";
 import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
-import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { WizardCancelledError, type StepProgress, type WizardPrompter } from "./prompts.js";
+
+/**
+ * Step definitions for wizard flows.
+ * QuickStart has fewer steps since it skips workspace/gateway prompts.
+ */
+const QUICKSTART_STEPS = {
+  SECURITY: { current: 1, total: 5, label: "Security" },
+  AUTH: { current: 2, total: 5, label: "Model Provider" },
+  CHANNELS: { current: 3, total: 5, label: "Channels" },
+  SKILLS: { current: 4, total: 5, label: "Skills" },
+  FINALIZE: { current: 5, total: 5, label: "Finalize" },
+} as const satisfies Record<string, StepProgress>;
+
+const ADVANCED_STEPS = {
+  SECURITY: { current: 1, total: 7, label: "Security" },
+  CONFIG: { current: 2, total: 7, label: "Configuration" },
+  AUTH: { current: 3, total: 7, label: "Model Provider" },
+  GATEWAY: { current: 4, total: 7, label: "Gateway" },
+  CHANNELS: { current: 5, total: 7, label: "Channels" },
+  SKILLS: { current: 6, total: 7, label: "Skills" },
+  FINALIZE: { current: 7, total: 7, label: "Finalize" },
+} as const satisfies Record<string, StepProgress>;
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -91,6 +113,9 @@ export async function runOnboardingWizard(
 ) {
   printWizardHeader(runtime);
   await prompter.intro("Moltbot onboarding");
+
+  // Security acknowledgement (Step 1 for both flows)
+  prompter.setStepProgress(QUICKSTART_STEPS.SECURITY);
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
@@ -149,6 +174,11 @@ export async function runOnboardingWizard(
       "QuickStart",
     );
     flow = "advanced";
+  }
+
+  // Config handling step (Advanced flow only)
+  if (snapshot.exists && flow === "advanced") {
+    prompter.setStepProgress(ADVANCED_STEPS.CONFIG);
   }
 
   if (snapshot.exists) {
@@ -350,6 +380,9 @@ export async function runOnboardingWizard(
     },
   };
 
+  // Auth/model step
+  prompter.setStepProgress(flow === "quickstart" ? QUICKSTART_STEPS.AUTH : ADVANCED_STEPS.AUTH);
+
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
   });
@@ -390,6 +423,11 @@ export async function runOnboardingWizard(
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
 
+  // Gateway configuration step (only shows indicator for Advanced flow)
+  if (flow === "advanced") {
+    prompter.setStepProgress(ADVANCED_STEPS.GATEWAY);
+  }
+
   const gateway = await configureGatewayForOnboarding({
     flow,
     baseConfig,
@@ -401,6 +439,11 @@ export async function runOnboardingWizard(
   });
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
+
+  // Channels step
+  prompter.setStepProgress(
+    flow === "quickstart" ? QUICKSTART_STEPS.CHANNELS : ADVANCED_STEPS.CHANNELS,
+  );
 
   if (opts.skipChannels ?? opts.skipProviders) {
     await prompter.note("Skipping channel setup.", "Channels");
@@ -426,6 +469,9 @@ export async function runOnboardingWizard(
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
+  // Skills step
+  prompter.setStepProgress(flow === "quickstart" ? QUICKSTART_STEPS.SKILLS : ADVANCED_STEPS.SKILLS);
+
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");
   } else {
@@ -437,6 +483,11 @@ export async function runOnboardingWizard(
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
+
+  // Finalize step
+  prompter.setStepProgress(
+    flow === "quickstart" ? QUICKSTART_STEPS.FINALIZE : ADVANCED_STEPS.FINALIZE,
+  );
 
   await finalizeOnboardingWizard({
     flow,

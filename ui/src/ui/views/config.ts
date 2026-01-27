@@ -7,6 +7,12 @@ import {
   schemaType,
   type JsonSchema,
 } from "./config-form.shared";
+import { CONFIG_PRESETS, type ConfigPreset } from "../config-presets";
+import {
+  VIEW_LEVELS,
+  isSectionVisibleAtLevel,
+  type ConfigViewLevel,
+} from "../config-view-levels";
 
 export type ConfigProps = {
   raw: string;
@@ -27,6 +33,8 @@ export type ConfigProps = {
   searchQuery: string;
   activeSection: string | null;
   activeSubsection: string | null;
+  presetPanelOpen: boolean;
+  viewLevel: "basic" | "standard" | "advanced";
   onRawChange: (next: string) => void;
   onFormModeChange: (mode: "form" | "raw") => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
@@ -37,6 +45,9 @@ export type ConfigProps = {
   onSave: () => void;
   onApply: () => void;
   onUpdate: () => void;
+  onApplyPreset: (presetId: string) => void;
+  onTogglePresetPanel: () => void;
+  onViewLevelChange: (level: "basic" | "standard" | "advanced") => void;
 };
 
 // SVG Icons for sidebar (Lucide-style)
@@ -181,6 +192,57 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
+function renderPresetSelector(props: ConfigProps) {
+  const presetIcon = html`
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3l1.912 5.813a2 2 0 001.275 1.275L21 12l-5.813 1.912a2 2 0 00-1.275 1.275L12 21l-1.912-5.813a2 2 0 00-1.275-1.275L3 12l5.813-1.912a2 2 0 001.275-1.275L12 3z"></path>
+    </svg>
+  `;
+
+  return html`
+    <div class="config-presets">
+      <button
+        class="config-presets__trigger btn btn--sm"
+        @click=${props.onTogglePresetPanel}
+        ?disabled=${props.formMode !== "form"}
+        title=${props.formMode !== "form" ? "Presets only available in Form mode" : "Apply a preset configuration"}
+      >
+        ${presetIcon}
+        <span>Presets</span>
+      </button>
+      ${props.presetPanelOpen ? html`
+        <div class="config-presets__backdrop" @click=${props.onTogglePresetPanel}></div>
+        <div class="config-presets__panel">
+          <div class="config-presets__header">
+            <span>Quick Config Presets</span>
+            <button class="config-presets__close" @click=${props.onTogglePresetPanel}>×</button>
+          </div>
+          <div class="config-presets__list">
+            ${CONFIG_PRESETS.map((preset) => html`
+              <button
+                class="config-presets__item"
+                @click=${() => {
+                  props.onApplyPreset(preset.id);
+                  props.onTogglePresetPanel();
+                }}
+              >
+                <span class="config-presets__emoji">${preset.emoji}</span>
+                <div class="config-presets__info">
+                  <div class="config-presets__name">${preset.name}</div>
+                  <div class="config-presets__desc">${preset.description}</div>
+                </div>
+              </button>
+            `)}
+          </div>
+          <div class="config-presets__footer">
+            Presets merge with your current configuration
+          </div>
+        </div>
+      ` : nothing}
+    </div>
+  `;
+}
+
 export function renderConfig(props: ConfigProps) {
   const validity =
     props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
@@ -200,6 +262,11 @@ export function renderConfig(props: ConfigProps) {
     .map(k => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
 
   const allSections = [...availableSections, ...extraSections];
+
+  // Filter sections based on view level
+  const visibleSections = props.formMode === "form"
+    ? allSections.filter((s) => isSectionVisibleAtLevel(s.key, props.viewLevel))
+    : allSections;
 
   const activeSectionSchema =
     props.activeSection && analysis.schema && schemaType(analysis.schema) === "object"
@@ -289,7 +356,7 @@ export function renderConfig(props: ConfigProps) {
             <span class="config-nav__icon">${sidebarIcons.all}</span>
             <span class="config-nav__label">All Settings</span>
           </button>
-          ${allSections.map(section => html`
+          ${visibleSections.map(section => html`
             <button
               class="config-nav__item ${props.activeSection === section.key ? "active" : ""}"
               @click=${() => props.onSectionChange(section.key)}
@@ -300,8 +367,24 @@ export function renderConfig(props: ConfigProps) {
           `)}
         </nav>
 
-        <!-- Mode toggle at bottom -->
+        <!-- View level and mode toggle at bottom -->
         <div class="config-sidebar__footer">
+          ${props.formMode === "form" ? html`
+            <div class="config-view-level">
+              <label class="config-view-level__label">View Level</label>
+              <div class="config-view-level__toggle">
+                ${VIEW_LEVELS.map((level) => html`
+                  <button
+                    class="config-view-level__btn ${props.viewLevel === level.value ? "active" : ""}"
+                    @click=${() => props.onViewLevelChange(level.value)}
+                    title=${level.description}
+                  >
+                    ${level.label}
+                  </button>
+                `)}
+              </div>
+            </div>
+          ` : nothing}
           <div class="config-mode-toggle">
             <button
               class="config-mode-toggle__btn ${props.formMode === "form" ? "active" : ""}"
@@ -325,6 +408,7 @@ export function renderConfig(props: ConfigProps) {
         <!-- Action bar -->
         <div class="config-actions">
           <div class="config-actions__left">
+            ${renderPresetSelector(props)}
             ${hasChanges ? html`
               <span class="config-changes-badge">${props.formMode === "raw" ? "Unsaved changes" : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span>
             ` : html`

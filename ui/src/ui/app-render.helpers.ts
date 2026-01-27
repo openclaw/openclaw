@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
 import type { AppViewState } from "./app-view-state";
@@ -6,9 +6,10 @@ import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
 import { icons } from "./icons";
 import { loadChatHistory } from "./controllers/chat";
 import { syncUrlWithSessionKey } from "./app-settings";
-import type { SessionsListResult } from "./types";
+import type { SessionsListResult, SkillStatusEntry } from "./types";
 import type { ThemeMode } from "./theme";
 import type { ThemeTransitionContext } from "./theme-transition";
+import { updateSkillEnabled } from "./controllers/skills";
 
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
@@ -238,5 +239,81 @@ function renderMonitorIcon() {
       <line x1="8" x2="16" y1="21" y2="21"></line>
       <line x1="12" x2="12" y1="17" y2="21"></line>
     </svg>
+  `;
+}
+
+export function renderSkillsQuickToggle(state: AppViewState) {
+  const skills = state.skillsReport?.skills ?? [];
+  const eligibleSkills = skills.filter((s) => s.eligible);
+  const enabledCount = eligibleSkills.filter((s) => !s.disabled).length;
+  const isOpen = state.settings.skillsPanelOpen ?? false;
+
+  const togglePanel = () => {
+    state.applySettings({
+      ...state.settings,
+      skillsPanelOpen: !isOpen,
+    });
+  };
+
+  const closePanel = () => {
+    state.applySettings({
+      ...state.settings,
+      skillsPanelOpen: false,
+    });
+  };
+
+  const handleToggle = (skill: SkillStatusEntry) => {
+    void updateSkillEnabled(state, skill.skillKey, skill.disabled);
+  };
+
+  const sparklesIcon = html`
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3l1.912 5.813a2 2 0 001.275 1.275L21 12l-5.813 1.912a2 2 0 00-1.275 1.275L12 21l-1.912-5.813a2 2 0 00-1.275-1.275L3 12l5.813-1.912a2 2 0 001.275-1.275L12 3z"></path>
+    </svg>
+  `;
+
+  return html`
+    <div class="skills-quick-toggle">
+      <button
+        class="skills-quick-toggle__button pill"
+        @click=${togglePanel}
+        aria-expanded=${isOpen}
+        aria-haspopup="true"
+        title="Quick-toggle skills"
+      >
+        <span class="skills-quick-toggle__icon">${sparklesIcon}</span>
+        <span>Skills</span>
+        <span class="skills-quick-toggle__count">${enabledCount}/${eligibleSkills.length}</span>
+      </button>
+      ${isOpen
+        ? html`
+            <div class="skills-quick-toggle__backdrop" @click=${closePanel}></div>
+            <div class="skills-quick-toggle__panel">
+              <div class="skills-quick-toggle__header">
+                <span>Toggle Skills</span>
+                <button class="skills-quick-toggle__close" @click=${closePanel}>×</button>
+              </div>
+              <div class="skills-quick-toggle__list">
+                ${eligibleSkills.length === 0
+                  ? html`<div class="skills-quick-toggle__empty">No eligible skills</div>`
+                  : eligibleSkills.map(
+                      (skill) => html`
+                        <label class="skills-quick-toggle__item">
+                          <input
+                            type="checkbox"
+                            .checked=${!skill.disabled}
+                            @change=${() => handleToggle(skill)}
+                          />
+                          <span class="skills-quick-toggle__name">
+                            ${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}
+                          </span>
+                        </label>
+                      `,
+                    )}
+              </div>
+            </div>
+          `
+        : nothing}
+    </div>
   `;
 }

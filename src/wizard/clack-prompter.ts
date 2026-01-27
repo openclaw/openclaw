@@ -14,7 +14,7 @@ import { createCliProgress } from "../cli/progress.js";
 import { note as emitNote } from "../terminal/note.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
-import type { WizardProgress, WizardPrompter } from "./prompts.js";
+import type { StepProgress, WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
 function guardCancel<T>(value: T | symbol): T {
@@ -26,6 +26,21 @@ function guardCancel<T>(value: T | symbol): T {
 }
 
 export function createClackPrompter(): WizardPrompter {
+  let stepProgress: StepProgress | null = null;
+
+  const formatStepIndicator = (): string | null => {
+    if (!stepProgress) return null;
+    const { current, total, label } = stepProgress;
+    return `Step ${current} of ${total}: ${label}`;
+  };
+
+  const showStepIndicator = () => {
+    const indicator = formatStepIndicator();
+    if (indicator) {
+      emitNote(theme.muted(indicator), "Progress");
+    }
+  };
+
   return {
     intro: async (title) => {
       intro(stylePromptTitle(title) ?? title);
@@ -36,8 +51,9 @@ export function createClackPrompter(): WizardPrompter {
     note: async (message, title) => {
       emitNote(message, title);
     },
-    select: async (params) =>
-      guardCancel(
+    select: async (params) => {
+      showStepIndicator();
+      return guardCancel(
         await select({
           message: stylePromptMessage(params.message),
           options: params.options.map((opt) => {
@@ -46,9 +62,11 @@ export function createClackPrompter(): WizardPrompter {
           }) as Option<(typeof params.options)[number]["value"]>[],
           initialValue: params.initialValue,
         }),
-      ),
-    multiselect: async (params) =>
-      guardCancel(
+      );
+    },
+    multiselect: async (params) => {
+      showStepIndicator();
+      return guardCancel(
         await multiselect({
           message: stylePromptMessage(params.message),
           options: params.options.map((opt) => {
@@ -57,23 +75,28 @@ export function createClackPrompter(): WizardPrompter {
           }) as Option<(typeof params.options)[number]["value"]>[],
           initialValues: params.initialValues,
         }),
-      ),
-    text: async (params) =>
-      guardCancel(
+      );
+    },
+    text: async (params) => {
+      showStepIndicator();
+      return guardCancel(
         await text({
           message: stylePromptMessage(params.message),
           initialValue: params.initialValue,
           placeholder: params.placeholder,
           validate: params.validate,
         }),
-      ),
-    confirm: async (params) =>
-      guardCancel(
+      );
+    },
+    confirm: async (params) => {
+      showStepIndicator();
+      return guardCancel(
         await confirm({
           message: stylePromptMessage(params.message),
           initialValue: params.initialValue,
         }),
-      ),
+      );
+    },
     progress: (label: string): WizardProgress => {
       const spin = spinner();
       spin.start(theme.accent(label));
@@ -93,6 +116,9 @@ export function createClackPrompter(): WizardPrompter {
           spin.stop(message);
         },
       };
+    },
+    setStepProgress: (progress) => {
+      stepProgress = progress;
     },
   };
 }

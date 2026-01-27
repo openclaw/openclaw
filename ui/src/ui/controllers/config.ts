@@ -200,3 +200,51 @@ export function removeConfigFormValue(
     state.configRaw = serializeConfigForm(base);
   }
 }
+
+/**
+ * Apply a preset configuration by merging its values into the current config.
+ */
+export function applyConfigPreset(
+  state: ConfigState,
+  presetValues: Record<string, unknown>,
+) {
+  const base = cloneConfigObject(
+    state.configForm ?? state.configSnapshot?.config ?? {},
+  );
+  const merged = deepMergeConfig(base, presetValues);
+  state.configForm = merged;
+  state.configFormDirty = true;
+  if (state.configFormMode === "form") {
+    state.configRaw = serializeConfigForm(merged);
+  }
+}
+
+/**
+ * Deep merge preset values into a config object.
+ */
+function deepMergeConfig(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    const sourceValue = source[key];
+    const targetValue = result[key];
+    if (
+      sourceValue !== null &&
+      typeof sourceValue === "object" &&
+      !Array.isArray(sourceValue) &&
+      targetValue !== null &&
+      typeof targetValue === "object" &&
+      !Array.isArray(targetValue)
+    ) {
+      result[key] = deepMergeConfig(
+        targetValue as Record<string, unknown>,
+        sourceValue as Record<string, unknown>,
+      );
+    } else {
+      result[key] = sourceValue;
+    }
+  }
+  return result;
+}

@@ -97,6 +97,7 @@ describe("runOnboardingWizard", () => {
       text: vi.fn(async () => ""),
       confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      setStepProgress: vi.fn(),
     };
 
     const runtime: RuntimeEnv = {
@@ -140,6 +141,7 @@ describe("runOnboardingWizard", () => {
       text: vi.fn(async () => ""),
       confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      setStepProgress: vi.fn(),
     };
     const runtime: RuntimeEnv = {
       log: vi.fn(),
@@ -191,6 +193,7 @@ describe("runOnboardingWizard", () => {
       text: vi.fn(async () => ""),
       confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      setStepProgress: vi.fn(),
     };
 
     const runtime: RuntimeEnv = {
@@ -246,6 +249,7 @@ describe("runOnboardingWizard", () => {
       text: vi.fn(async () => ""),
       confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      setStepProgress: vi.fn(),
     };
 
     const runtime: RuntimeEnv = {
@@ -297,6 +301,7 @@ describe("runOnboardingWizard", () => {
         text: vi.fn(async () => ""),
         confirm: vi.fn(async () => false),
         progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        setStepProgress: vi.fn(),
       };
 
       const runtime: RuntimeEnv = {

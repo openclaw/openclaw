@@ -33,6 +33,15 @@ export type WizardProgress = {
   stop: (message?: string) => void;
 };
 
+/**
+ * Tracks overall wizard progress (step X of Y).
+ */
+export type StepProgress = {
+  current: number;
+  total: number;
+  label: string;
+};
+
 export type WizardPrompter = {
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
@@ -42,6 +51,11 @@ export type WizardPrompter = {
   text: (params: WizardTextParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
+  /**
+   * Set the current step progress (displayed before major prompts).
+   * Pass null to clear the step indicator.
+   */
+  setStepProgress: (progress: StepProgress | null) => void;
 };
 
 export class WizardCancelledError extends Error {

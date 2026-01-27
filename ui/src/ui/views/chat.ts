@@ -15,6 +15,7 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render";
 import { renderMarkdownSidebar } from "./markdown-sidebar";
+import { isVoiceInputSupported } from "../voice-input";
 import "../components/resizable-divider";
 
 export type CompactionIndicatorStatus = {
@@ -56,6 +57,11 @@ export type ChatProps = {
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  // Voice input state
+  voiceRecording?: boolean;
+  voiceInterim?: string;
+  voiceError?: string | null;
+  onVoiceToggle?: () => void;
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
@@ -329,12 +335,17 @@ export function renderChat(props: ChatProps) {
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
+        ${props.voiceError
+          ? html`<div class="chat-voice-error">${props.voiceError}</div>`
+          : nothing}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
               ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-              .value=${props.draft}
+              .value=${props.voiceRecording && props.voiceInterim
+                ? props.draft + props.voiceInterim
+                : props.draft}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key !== "Enter") return;
@@ -350,9 +361,31 @@ export function renderChat(props: ChatProps) {
                 props.onDraftChange(target.value);
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-              placeholder=${composePlaceholder}
+              placeholder=${props.voiceRecording
+                ? "Listening..."
+                : composePlaceholder}
             ></textarea>
           </label>
+          ${isVoiceInputSupported() && props.onVoiceToggle
+            ? html`
+                <button
+                  class="btn chat-voice-btn ${props.voiceRecording
+                    ? "chat-voice-btn--recording"
+                    : ""}"
+                  type="button"
+                  ?disabled=${!props.connected}
+                  @click=${props.onVoiceToggle}
+                  aria-label=${props.voiceRecording
+                    ? "Stop recording"
+                    : "Start voice input"}
+                  title=${props.voiceRecording
+                    ? "Stop recording"
+                    : "Voice input"}
+                >
+                  ${props.voiceRecording ? icons.micOff : icons.mic}
+                </button>
+              `
+            : nothing}
           <div class="chat-compose__actions">
             <button
               class="btn"

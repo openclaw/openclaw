@@ -64,6 +64,10 @@ import {
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat";
 import {
+  startVoiceRecognition,
+  stopVoiceRecognition,
+} from "./voice-input";
+import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
   handleNostrProfileCancel as handleNostrProfileCancelInternal,
@@ -130,6 +134,11 @@ export class MoltbotApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  // Voice input state
+  @state() voiceRecording = false;
+  @state() voiceInterim = "";
+  @state() voiceError: string | null = null;
+  voiceStopFn: (() => void) | null = null;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -174,6 +183,8 @@ export class MoltbotApp extends LitElement {
   @state() configSearchQuery = "";
   @state() configActiveSection: string | null = null;
   @state() configActiveSubsection: string | null = null;
+  @state() configPresetPanelOpen = false;
+  @state() configViewLevel: "basic" | "standard" | "advanced" = "standard";
 
   @state() channelsLoading = false;
   @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
@@ -384,6 +395,48 @@ export class MoltbotApp extends LitElement {
       messageOverride,
       opts,
     );
+  }
+
+  handleVoiceToggle() {
+    if (this.voiceRecording) {
+      // Stop recording
+      stopVoiceRecognition();
+      this.voiceRecording = false;
+      this.voiceInterim = "";
+      this.voiceStopFn = null;
+    } else {
+      // Start recording
+      this.voiceError = null;
+      this.voiceInterim = "";
+      const stopFn = startVoiceRecognition({
+        onTranscript: (text, isFinal) => {
+          if (isFinal) {
+            // Append final transcript to draft
+            const separator = this.chatMessage && !this.chatMessage.endsWith(" ") ? " " : "";
+            this.chatMessage = this.chatMessage + separator + text;
+            this.voiceInterim = "";
+          } else {
+            // Show interim result
+            this.voiceInterim = text;
+          }
+        },
+        onError: (error) => {
+          this.voiceError = error;
+          this.voiceRecording = false;
+          this.voiceInterim = "";
+          this.voiceStopFn = null;
+        },
+        onStart: () => {
+          this.voiceRecording = true;
+        },
+        onEnd: () => {
+          this.voiceRecording = false;
+          this.voiceInterim = "";
+          this.voiceStopFn = null;
+        },
+      });
+      this.voiceStopFn = stopFn;
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {

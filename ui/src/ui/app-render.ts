@@ -50,7 +50,7 @@ import {
   rotateDeviceToken,
 } from "./controllers/devices";
 import { renderSkills } from "./views/skills";
-import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers";
+import { renderChatControls, renderSkillsQuickToggle, renderTab, renderThemeToggle } from "./app-render.helpers";
 import { loadChannels } from "./controllers/channels";
 import { loadPresence } from "./controllers/presence";
 import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
@@ -66,12 +66,14 @@ import { loadNodes } from "./controllers/nodes";
 import { loadChatHistory } from "./controllers/chat";
 import {
   applyConfig,
+  applyConfigPreset,
   loadConfig,
   runUpdate,
   saveConfig,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config";
+import { getPreset } from "./config-presets";
 import {
   loadExecApprovals,
   removeExecApprovalsFormValue,
@@ -143,6 +145,7 @@ export function renderApp(state: AppViewState) {
             <span>Health</span>
             <span class="mono">${state.connected ? "OK" : "Offline"}</span>
           </div>
+          ${renderSkillsQuickToggle(state)}
           ${renderThemeToggle(state)}
         </div>
       </header>
@@ -480,6 +483,11 @@ export function renderApp(state: AppViewState) {
               onDraftChange: (next) => (state.chatMessage = next),
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
+              // Voice input props
+              voiceRecording: state.voiceRecording,
+              voiceInterim: state.voiceInterim,
+              voiceError: state.voiceError,
+              onVoiceToggle: () => state.handleVoiceToggle(),
               onSend: () => state.handleSendChat(),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
@@ -530,10 +538,22 @@ export function renderApp(state: AppViewState) {
                 state.configActiveSubsection = null;
               },
               onSubsectionChange: (section) => (state.configActiveSubsection = section),
+              presetPanelOpen: state.configPresetPanelOpen,
               onReload: () => loadConfig(state),
               onSave: () => saveConfig(state),
               onApply: () => applyConfig(state),
               onUpdate: () => runUpdate(state),
+              onApplyPreset: (presetId) => {
+                const preset = getPreset(presetId);
+                if (preset) {
+                  applyConfigPreset(state, preset.values);
+                }
+              },
+              onTogglePresetPanel: () => {
+                state.configPresetPanelOpen = !state.configPresetPanelOpen;
+              },
+              viewLevel: state.configViewLevel,
+              onViewLevelChange: (level) => (state.configViewLevel = level),
             })
           : nothing}
 
