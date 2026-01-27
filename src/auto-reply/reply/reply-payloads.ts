@@ -84,6 +84,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   originatingTo?: string;
   originatingThreadId?: string | number;
   accountId?: string;
+  replyToMode?: ReplyToMode;
 }): boolean {
   const provider = params.messageProvider?.trim().toLowerCase();
   if (!provider) return false;
@@ -99,6 +100,10 @@ export function shouldSuppressMessagingToolReplies(params: {
   };
   const originThreadId = normalizeThreadId(params.originatingThreadId);
   const originAccount = normalizeAccountId(params.accountId);
+  const shouldAssumeAutoThread =
+    provider === "slack" &&
+    (params.replyToMode === "all" || params.replyToMode === "first") &&
+    Boolean(originThreadId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) return false;
   return sentTargets.some((target) => {
@@ -110,7 +115,10 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }
-    const targetThreadId = normalizeThreadId(target.threadId);
+    let targetThreadId = normalizeThreadId(target.threadId);
+    if (!targetThreadId && shouldAssumeAutoThread) {
+      targetThreadId = originThreadId;
+    }
     if (originThreadId || targetThreadId) {
       return originThreadId === targetThreadId;
     }

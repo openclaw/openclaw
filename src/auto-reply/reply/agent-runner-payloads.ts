@@ -97,6 +97,7 @@ export function buildReplyPayloads(params: {
     originatingTo: params.originatingTo,
     originatingThreadId: params.originatingThreadId,
     accountId: params.accountId,
+    replyToMode: params.replyToMode,
   });
   const dedupedPayloads = filterMessagingToolDuplicates({
     payloads: replyTaggedPayloads,
