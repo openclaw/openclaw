@@ -7,6 +7,17 @@ Status: beta.
 
 ### Changes
 - Rebrand: rename the npm package/CLI to `moltbot`, add a `moltbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
+- Security: add prompt injection defense system with severity classification and sanitization.
+- Security: add command execution blocklist for dangerous shell commands.
+- Security: add cross-platform secrets manager (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+- Security: integrate secrets-manager with all token stores for secure credential storage.
+- Security: add gateway rate limiting and security warnings for suspicious patterns.
+- Security: add pairing hardening with exec approval nonces.
+- Security: add doctor credential security check for plaintext secrets.
+- Refactor: split session-utils.ts into focused modules (avatar, agents, store, fs).
+- Refactor: add centralized error utilities with MoltbotError base class.
+- Refactor: extract EmbeddingService from memory manager (reduces manager.ts by 25%).
+- Docs: add large file analysis for refactoring opportunities.
 - Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
 - macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
 - macOS: finish Moltbot app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.
