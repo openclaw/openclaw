@@ -1,4 +1,4 @@
-import type { LocationMessageEventContent, MatrixClient } from "matrix-bot-sdk";
+import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 
 import {
   createReplyPrefixContext,
@@ -110,7 +110,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
-        // Encrypted messages are decrypted automatically by matrix-bot-sdk with crypto enabled
+        // Encrypted messages are decrypted automatically by @vector-im/matrix-bot-sdk with crypto enabled
         return;
       }
 
@@ -252,12 +252,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   await sendMessageMatrix(
                     `room:${roomId}`,
                     [
-                      "Clawdbot: access not configured.",
+                      "Moltbot: access not configured.",
                       "",
                       `Pairing code: ${code}`,
                       "",
                       "Ask the bot owner to approve with:",
-                      "clawdbot pairing approve matrix <code>",
+                      "moltbot pairing approve matrix <code>",
                     ].join("\n"),
                     { client },
                   );
@@ -329,16 +329,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
-      const contentType =
-        "info" in content && content.info && "mimetype" in content.info
-          ? (content.info as { mimetype?: string }).mimetype
+      const contentInfo =
+        "info" in content && content.info && typeof content.info === "object"
+          ? (content.info as { mimetype?: string; size?: number })
           : undefined;
+      const contentType = contentInfo?.mimetype;
+      const contentSize =
+        typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
       if (mediaUrl?.startsWith("mxc://")) {
         try {
           media = await downloadMatrixMedia({
             client,
             mxcUrl: mediaUrl,
             contentType,
+            sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: contentFile,
           });
@@ -432,7 +436,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         threadReplies,
         messageId,
         threadRootId,
-        isThreadRoot: false, // matrix-bot-sdk doesn't have this info readily available
+        isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
       });
 
       const route = core.channel.routing.resolveAgentRoute({

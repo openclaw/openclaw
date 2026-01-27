@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createIMessageTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
@@ -26,7 +26,7 @@ const slackConfig = {
       appToken: "xapp-test",
     },
   },
-} as ClawdbotConfig;
+} as MoltbotConfig;
 
 const whatsappConfig = {
   channels: {
@@ -34,7 +34,7 @@ const whatsappConfig = {
       allowFrom: ["*"],
     },
   },
-} as ClawdbotConfig;
+} as MoltbotConfig;
 
 describe("runMessageAction context isolation", () => {
   beforeEach(async () => {
@@ -263,7 +263,7 @@ describe("runMessageAction context isolation", () => {
           token: "tg-test",
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = await runMessageAction({
       cfg: multiConfig,
@@ -305,7 +305,7 @@ describe("runMessageAction context isolation", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     await expect(
       runMessageAction({
@@ -320,6 +320,44 @@ describe("runMessageAction context isolation", () => {
         dryRun: true,
       }),
     ).rejects.toThrow(/Cross-context messaging denied/);
+  });
+
+  it("aborts send when abortSignal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "hi",
+        },
+        dryRun: true,
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("aborts broadcast when abortSignal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "broadcast",
+        params: {
+          targets: ["channel:C12345678"],
+          channel: "slack",
+          message: "hi",
+        },
+        dryRun: true,
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 
@@ -385,7 +423,7 @@ describe("runMessageAction sendAttachment hydration", () => {
           password: "test-password",
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = await runMessageAction({
       cfg,
@@ -453,7 +491,7 @@ describe("runMessageAction accountId defaults", () => {
 
   it("propagates defaultAccountId into params", async () => {
     await runMessageAction({
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
       action: "send",
       params: {
         channel: "discord",

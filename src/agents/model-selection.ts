@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
 import { resolveAgentModelPrimary } from "./agent-scope.js";
@@ -32,7 +32,7 @@ export function normalizeProviderId(provider: string): string {
   return normalized;
 }
 
-export function isCliProvider(provider: string, cfg?: ClawdbotConfig): boolean {
+export function isCliProvider(provider: string, cfg?: MoltbotConfig): boolean {
   const normalized = normalizeProviderId(provider);
   if (normalized === "claude-cli") return true;
   if (normalized === "codex-cli") return true;
@@ -73,7 +73,7 @@ export function parseModelRef(raw: string, defaultProvider: string): ModelRef | 
 }
 
 export function buildModelAliasIndex(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   defaultProvider: string;
 }): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
@@ -116,7 +116,7 @@ export function resolveModelRefFromString(params: {
 }
 
 export function resolveConfiguredModelRef(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   defaultProvider: string;
   defaultModel: string;
 }): ModelRef {
@@ -131,20 +131,30 @@ export function resolveConfiguredModelRef(params: {
       cfg: params.cfg,
       defaultProvider: params.defaultProvider,
     });
+    if (!trimmed.includes("/")) {
+      const aliasKey = normalizeAliasKey(trimmed);
+      const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+      if (aliasMatch) return aliasMatch.ref;
+
+      // Default to anthropic if no provider is specified, but warn as this is deprecated.
+      console.warn(
+        `[moltbot] Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
+      );
+      return { provider: "anthropic", model: trimmed };
+    }
+
     const resolved = resolveModelRefFromString({
       raw: trimmed,
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
     if (resolved) return resolved.ref;
-    // TODO(steipete): drop this fallback once provider-less agents.defaults.model is fully deprecated.
-    return { provider: "anthropic", model: trimmed };
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
 export function resolveDefaultModelForAgent(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentId?: string;
 }): ModelRef {
   const agentModelOverride = params.agentId
@@ -176,7 +186,7 @@ export function resolveDefaultModelForAgent(params: {
 }
 
 export function buildAllowedModelSet(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
   defaultModel?: string;
@@ -252,7 +262,7 @@ export type ModelRefStatus = {
 };
 
 export function getModelRefStatus(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   catalog: ModelCatalogEntry[];
   ref: ModelRef;
   defaultProvider: string;
@@ -274,7 +284,7 @@ export function getModelRefStatus(params: {
 }
 
 export function resolveAllowedModelRef(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   catalog: ModelCatalogEntry[];
   raw: string;
   defaultProvider: string;
@@ -313,7 +323,7 @@ export function resolveAllowedModelRef(params: {
 }
 
 export function resolveThinkingDefault(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   provider: string;
   model: string;
   catalog?: ModelCatalogEntry[];
@@ -332,7 +342,7 @@ export function resolveThinkingDefault(params: {
  * Returns null if hooks.gmail.model is not set.
  */
 export function resolveHooksGmailModel(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   defaultProvider: string;
 }): ModelRef | null {
   const hooksModel = params.cfg.hooks?.gmail?.model;

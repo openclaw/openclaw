@@ -9,13 +9,14 @@ const createEmptyRegistry = (): PluginRegistry => ({
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
+  httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
   diagnostics: [],
 });
 
-const REGISTRY_STATE = Symbol.for("clawdbot.pluginRegistryState");
+const REGISTRY_STATE = Symbol.for("moltbot.pluginRegistryState");
 
 type RegistryState = {
   registry: PluginRegistry | null;

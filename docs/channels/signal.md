@@ -13,8 +13,8 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-R
 1) Use a **separate Signal number** for the bot (recommended).
 2) Install `signal-cli` (Java required).
 3) Link the bot device and start the daemon:
-   - `signal-cli link -n "Clawdbot"`
-4) Configure Clawdbot and start the gateway.
+   - `signal-cli link -n "Moltbot"`
+4) Configure Moltbot and start the gateway.
 
 Minimal config:
 ```json5
@@ -54,7 +54,7 @@ Disable with:
 ## Setup (fast path)
 1) Install `signal-cli` (Java required).
 2) Link a bot account:
-   - `signal-cli link -n "Clawdbot"` then scan the QR in Signal.
+   - `signal-cli link -n "Moltbot"` then scan the QR in Signal.
 3) Configure Signal and start the gateway.
 
 Example:
@@ -74,13 +74,29 @@ Example:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
+## External daemon mode (httpUrl)
+If you want to manage `signal-cli` yourself (slow JVM cold starts, container init, or shared CPUs), run the daemon separately and point Moltbot at it:
+
+```json5
+{
+  channels: {
+    signal: {
+      httpUrl: "http://127.0.0.1:8080",
+      autoStart: false
+    }
+  }
+}
+```
+
+This skips auto-spawn and the startup wait inside Moltbot. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
+
 ## Access control (DMs + groups)
 DMs:
 - Default: `channels.signal.dmPolicy = "pairing"`.
 - Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `clawdbot pairing list signal`
-  - `clawdbot pairing approve signal <CODE>`
+  - `moltbot pairing list signal`
+  - `moltbot pairing approve signal <CODE>`
 - Pairing is the default token exchange for Signal DMs. Details: [Pairing](/start/pairing)
 - UUID-only senders (from `sourceUuid`) are stored as `uuid:<id>` in `channels.signal.allowFrom`.
 
@@ -95,15 +111,15 @@ Groups:
 
 ## Media + limits
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
-- Optional newline chunking: set `channels.signal.chunkMode="newline"` to split on each line before length chunking.
+- Optional newline chunking: set `channels.signal.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Attachments supported (base64 fetched from `signal-cli`).
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
 - Use `channels.signal.ignoreAttachments` to skip downloading media.
 - Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Typing + read receipts
-- **Typing indicators**: Clawdbot sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
-- **Read receipts**: when `channels.signal.sendReadReceipts` is true, Clawdbot forwards read receipts for allowed DMs.
+- **Typing indicators**: Moltbot sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
+- **Read receipts**: when `channels.signal.sendReadReceipts` is true, Moltbot forwards read receipts for allowed DMs.
 - Signal-cli does not expose read receipts for groups.
 
 ## Reactions (message tool)
@@ -142,6 +158,7 @@ Provider options:
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
 - `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default 127.0.0.1:8080).
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
+- `channels.signal.startupTimeoutMs`: startup wait timeout in ms (cap 120000).
 - `channels.signal.receiveMode`: `on-start | manual`.
 - `channels.signal.ignoreAttachments`: skip attachment downloads.
 - `channels.signal.ignoreStories`: ignore stories from the daemon.
@@ -153,7 +170,7 @@ Provider options:
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).
-- `channels.signal.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
+- `channels.signal.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap (MB).
 
 Related global options:

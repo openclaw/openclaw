@@ -23,7 +23,7 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval";
-import type { ClawdbotApp } from "./app";
+import type { MoltbotApp } from "./app";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import { loadAssistantIdentity } from "./controllers/assistant-identity";
 
@@ -120,21 +120,31 @@ export function connectGateway(host: GatewayHost) {
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
-    clientName: "clawdbot-control-ui",
+    clientName: "moltbot-control-ui",
     mode: "webchat",
     onHello: (hello) => {
       host.connected = true;
+      host.lastError = null;
       host.hello = hello;
       applySnapshot(host, hello);
-      void loadAssistantIdentity(host as unknown as ClawdbotApp);
-      void loadAgents(host as unknown as ClawdbotApp);
-      void loadNodes(host as unknown as ClawdbotApp, { quiet: true });
-      void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
+      // Reset orphaned chat run state from before disconnect.
+      // Any in-flight run's final event was lost during the disconnect window.
+      host.chatRunId = null;
+      (host as unknown as { chatStream: string | null }).chatStream = null;
+      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      void loadAssistantIdentity(host as unknown as MoltbotApp);
+      void loadAgents(host as unknown as MoltbotApp);
+      void loadNodes(host as unknown as MoltbotApp, { quiet: true });
+      void loadDevices(host as unknown as MoltbotApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason }) => {
       host.connected = false;
-      host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+      // Code 1012 = Service Restart (expected during config saves, don't show as error)
+      if (code !== 1012) {
+        host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+      }
     },
     onEvent: (evt) => handleGatewayEvent(host, evt),
     onGap: ({ expected, received }) => {
@@ -178,14 +188,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         payload.sessionKey,
       );
     }
-    const state = handleChatEvent(host as unknown as ClawdbotApp, payload);
+    const state = handleChatEvent(host as unknown as MoltbotApp, payload);
     if (state === "final" || state === "error" || state === "aborted") {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void flushChatQueueForEvent(
         host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
       );
     }
-    if (state === "final") void loadChatHistory(host as unknown as ClawdbotApp);
+    if (state === "final") void loadChatHistory(host as unknown as MoltbotApp);
     return;
   }
 
@@ -204,7 +214,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
-    void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
+    void loadDevices(host as unknown as MoltbotApp, { quiet: true });
   }
 
   if (evt.event === "exec.approval.requested") {

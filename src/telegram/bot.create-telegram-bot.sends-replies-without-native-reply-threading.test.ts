@@ -7,7 +7,7 @@ let createTelegramBot: typeof import("./bot.js").createTelegramBot;
 let resetInboundDedupe: typeof import("../auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
 
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/clawdbot-telegram-reply-threading-${Math.random()
+  sessionStorePath: `/tmp/moltbot-telegram-reply-threading-${Math.random()
     .toString(16)
     .slice(2)}.json`,
 }));
@@ -93,6 +93,7 @@ vi.mock("grammy", () => ({
     on = onSpy;
     stop = stopSpy;
     command = commandSpy;
+    catch = vi.fn();
     constructor(
       public token: string,
       public options?: { client?: { fetch?: typeof fetch } },
@@ -178,7 +179,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "moltbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -206,7 +207,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "moltbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -217,15 +218,12 @@ describe("createTelegramBot", () => {
       expect(call[2]?.reply_to_message_id).toBeUndefined();
     }
   });
-  it("prefixes tool and final replies with responsePrefix", async () => {
+  it("prefixes final replies with responsePrefix", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
-    replySpy.mockImplementation(async (_ctx, opts) => {
-      await opts?.onToolResult?.({ text: "tool result" });
-      return { text: "final reply" };
-    });
+    replySpy.mockResolvedValue({ text: "final reply" });
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
@@ -241,13 +239,12 @@ describe("createTelegramBot", () => {
         text: "hi",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "moltbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
-    expect(sendMessageSpy.mock.calls[0][1]).toBe("PFX tool result");
-    expect(sendMessageSpy.mock.calls[1][1]).toBe("PFX final reply");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0][1]).toBe("PFX final reply");
   });
   it("honors replyToMode=all for threaded replies", async () => {
     onSpy.mockReset();
@@ -268,7 +265,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "moltbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -297,10 +294,10 @@ describe("createTelegramBot", () => {
     await handler({
       message: {
         chat: { id: 456, type: "group", title: "Ops" },
-        text: "@clawdbot_bot hello",
+        text: "@moltbot_bot hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "moltbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -325,7 +322,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "moltbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -335,7 +332,7 @@ describe("createTelegramBot", () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
-    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-telegram-"));
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-telegram-"));
     const storePath = path.join(storeDir, "sessions.json");
     fs.writeFileSync(
       storePath,
@@ -372,7 +369,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "moltbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 

@@ -1,7 +1,7 @@
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -40,9 +40,10 @@ export type MonitorSignalOpts = {
   abortSignal?: AbortSignal;
   account?: string;
   accountId?: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   baseUrl?: string;
   autoStart?: boolean;
+  startupTimeoutMs?: number;
   cliPath?: string;
   httpHost?: string;
   httpPort?: number;
@@ -285,6 +286,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
+  const startupTimeoutMs = Math.min(
+    120_000,
+    Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
+  );
   const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
   let daemonHandle: ReturnType<typeof spawnSignalDaemon> | null = null;
 
@@ -315,7 +320,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await waitForSignalDaemonReady({
         baseUrl,
         abortSignal: opts.abortSignal,
-        timeoutMs: 30_000,
+        timeoutMs: startupTimeoutMs,
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,

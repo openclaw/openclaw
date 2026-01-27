@@ -49,6 +49,7 @@ const registryState = vi.hoisted(() => ({
     providers: [],
     gatewayHandlers: {},
     httpHandlers: [],
+    httpRoutes: [],
     cliRegistrars: [],
     services: [],
     diagnostics: [],
@@ -78,6 +79,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
+  httpRoutes: [],
   cliRegistrars: [],
   services: [],
   diagnostics: [],
@@ -135,7 +137,7 @@ describe("gateway server agent", () => {
     ]);
     registryState.registry = registry;
     setActivePluginRegistry(registry);
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {
@@ -175,7 +177,7 @@ describe("gateway server agent", () => {
     ]);
     registryState.registry = registry;
     setActivePluginRegistry(registry);
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {
@@ -229,7 +231,7 @@ describe("gateway server agent", () => {
 
   test("agent ignores webchat last-channel for routing", async () => {
     testState.allowFrom = ["+1555"];
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {
@@ -260,7 +262,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {
@@ -393,7 +395,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent events stream to webchat clients when run context is registered", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {

@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="clawdbot-gateway-network-e2e"
+IMAGE_NAME="moltbot-gateway-network-e2e"
 
 PORT="18789"
 TOKEN="e2e-$(date +%s)-$$"
-NET_NAME="clawdbot-net-e2e-$$"
-GW_NAME="clawdbot-gateway-e2e-$$"
+NET_NAME="moltbot-net-e2e-$$"
+GW_NAME="moltbot-gateway-e2e-$$"
 
 cleanup() {
   docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
@@ -102,12 +102,12 @@ ws.send(
 	);
 	const connectRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"c1\");
 	if (!connectRes.ok) throw new Error(\"connect failed: \" + (connectRes.error?.message ?? \"unknown\"));
-	
+
 	ws.send(JSON.stringify({ type: \"req\", id: \"h1\", method: \"health\" }));
 	const healthRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"h1\", 10000);
 	if (!healthRes.ok) throw new Error(\"health failed: \" + (healthRes.error?.message ?? \"unknown\"));
 	if (healthRes.payload?.ok !== true) throw new Error(\"unexpected health payload\");
-	
+
 	ws.close();
 	console.log(\"ok\");
 NODE"

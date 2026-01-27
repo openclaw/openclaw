@@ -2,10 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import type { VoiceCallTtsConfig } from "./config.js";
+
 export type CoreConfig = {
   session?: {
     store?: string;
   };
+  messages?: {
+    tts?: VoiceCallTtsConfig;
+  };
+  [key: string]: unknown;
 };
 
 type CoreAgentDeps = {
@@ -80,9 +86,9 @@ function findPackageRoot(startDir: string, name: string): string | null {
   }
 }
 
-function resolveClawdbotRoot(): string {
+function resolveMoltbotRoot(): string {
   if (coreRootCache) return coreRootCache;
-  const override = process.env.CLAWDBOT_ROOT?.trim();
+  const override = process.env.MOLTBOT_ROOT?.trim() || process.env.CLAWDBOT_ROOT?.trim();
   if (override) {
     coreRootCache = override;
     return override;
@@ -101,20 +107,22 @@ function resolveClawdbotRoot(): string {
   }
 
   for (const start of candidates) {
-    const found = findPackageRoot(start, "clawdbot");
-    if (found) {
-      coreRootCache = found;
-      return found;
+    for (const name of ["moltbot", "moltbot"]) {
+      const found = findPackageRoot(start, name);
+      if (found) {
+        coreRootCache = found;
+        return found;
+      }
     }
   }
 
   throw new Error(
-    "Unable to resolve Clawdbot root. Set CLAWDBOT_ROOT to the package root.",
+    "Unable to resolve core root. Set MOLTBOT_ROOT (or legacy CLAWDBOT_ROOT) to the package root.",
   );
 }
 
 async function importCoreModule<T>(relativePath: string): Promise<T> {
-  const root = resolveClawdbotRoot();
+  const root = resolveMoltbotRoot();
   const distPath = path.join(root, "dist", relativePath);
   if (!fs.existsSync(distPath)) {
     throw new Error(

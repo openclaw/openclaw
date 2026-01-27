@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -28,6 +28,14 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
 const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   command: "claude",
   args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
+  resumeArgs: [
+    "-p",
+    "--output-format",
+    "json",
+    "--dangerously-skip-permissions",
+    "--resume",
+    "{sessionId}",
+  ],
   output: "json",
   input: "arg",
   modelArg: "--model",
@@ -95,7 +103,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   };
 }
 
-export function resolveCliBackendIds(cfg?: ClawdbotConfig): Set<string> {
+export function resolveCliBackendIds(cfg?: MoltbotConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
@@ -109,7 +117,7 @@ export function resolveCliBackendIds(cfg?: ClawdbotConfig): Set<string> {
 
 export function resolveCliBackendConfig(
   provider: string,
-  cfg?: ClawdbotConfig,
+  cfg?: MoltbotConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};

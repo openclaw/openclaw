@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -18,7 +18,7 @@ export type OutboundGatewayContext = {
 };
 
 export type OutboundSendContext = {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
   accountId?: string | null;
@@ -32,6 +32,7 @@ export type OutboundSendContext = {
     text?: string;
     mediaUrls?: string[];
   };
+  abortSignal?: AbortSignal;
 };
 
 function extractToolPayload(result: AgentToolResult<unknown>): unknown {
@@ -56,6 +57,14 @@ function extractToolPayload(result: AgentToolResult<unknown>): unknown {
   return result.content ?? result;
 }
 
+function throwIfAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    const err = new Error("Message send aborted");
+    err.name = "AbortError";
+    throw err;
+  }
+}
+
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
   to: string;
@@ -70,6 +79,7 @@ export async function executeSendAction(params: {
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
+  throwIfAborted(params.ctx.abortSignal);
   if (!params.ctx.dryRun) {
     const handled = await dispatchChannelMessageAction({
       channel: params.ctx.channel,
@@ -103,6 +113,7 @@ export async function executeSendAction(params: {
     }
   }
 
+  throwIfAborted(params.ctx.abortSignal);
   const result: MessageSendResult = await sendMessage({
     cfg: params.ctx.cfg,
     to: params.to,
@@ -117,6 +128,7 @@ export async function executeSendAction(params: {
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
     mirror: params.ctx.mirror,
+    abortSignal: params.ctx.abortSignal,
   });
 
   return {

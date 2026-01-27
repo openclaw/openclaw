@@ -78,6 +78,11 @@ export class VoiceCallWebhookServer {
           `[voice-call] Transcript for ${providerCallId}: ${transcript}`,
         );
 
+        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
+        if (this.provider.name === "twilio") {
+          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
+        }
+
         // Look up our internal call ID from the provider call ID
         const call = this.manager.getCallByProviderCallId(providerCallId);
         if (!call) {
@@ -107,6 +112,11 @@ export class VoiceCallWebhookServer {
           this.handleInboundResponse(call.callId, transcript).catch((err) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
           });
+        }
+      },
+      onSpeechStart: (providerCallId) => {
+        if (this.provider.name === "twilio") {
+          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
         }
       },
       onPartialTranscript: (callId, partial) => {
@@ -242,6 +252,7 @@ export class VoiceCallWebhookServer {
       url: `http://${req.headers.host}${req.url}`,
       method: "POST",
       query: Object.fromEntries(url.searchParams),
+      remoteAddress: req.socket.remoteAddress ?? undefined,
     };
 
     // Verify signature

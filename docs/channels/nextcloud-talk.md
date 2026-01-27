@@ -12,16 +12,16 @@ Nextcloud Talk ships as a plugin and is not bundled with the core install.
 
 Install via CLI (npm registry):
 ```bash
-clawdbot plugins install @clawdbot/nextcloud-talk
+moltbot plugins install @moltbot/nextcloud-talk
 ```
 
 Local checkout (when running from a git repo):
 ```bash
-clawdbot plugins install ./extensions/nextcloud-talk
+moltbot plugins install ./extensions/nextcloud-talk
 ```
 
 If you choose Nextcloud Talk during configure/onboarding and a git checkout is detected,
-Clawdbot will offer the local install path automatically.
+Moltbot will offer the local install path automatically.
 
 Details: [Plugins](/plugin)
 
@@ -29,10 +29,10 @@ Details: [Plugins](/plugin)
 1) Install the Nextcloud Talk plugin.
 2) On your Nextcloud server, create a bot:
    ```bash
-   ./occ talk:bot:install "Clawdbot" "<shared-secret>" "<webhook-url>" --feature reaction
+   ./occ talk:bot:install "Moltbot" "<shared-secret>" "<webhook-url>" --feature reaction
    ```
 3) Enable the bot in the target room settings.
-4) Configure Clawdbot:
+4) Configure Moltbot:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Or env: `NEXTCLOUD_TALK_BOT_SECRET` (default account only)
 5) Restart the gateway (or finish onboarding).
@@ -60,8 +60,8 @@ Minimal config:
 ## Access control (DMs)
 - Default: `channels.nextcloud-talk.dmPolicy = "pairing"`. Unknown senders get a pairing code.
 - Approve via:
-  - `clawdbot pairing list nextcloud-talk`
-  - `clawdbot pairing approve nextcloud-talk <CODE>`
+  - `moltbot pairing list nextcloud-talk`
+  - `moltbot pairing approve nextcloud-talk <CODE>`
 - Public DMs: `channels.nextcloud-talk.dmPolicy="open"` plus `channels.nextcloud-talk.allowFrom=["*"]`.
 
 ## Rooms (groups)
@@ -114,7 +114,7 @@ Provider options:
 - `channels.nextcloud-talk.dmHistoryLimit`: DM history limit (0 disables).
 - `channels.nextcloud-talk.dms`: per-DM overrides (historyLimit).
 - `channels.nextcloud-talk.textChunkLimit`: outbound text chunk size (chars).
-- `channels.nextcloud-talk.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
+- `channels.nextcloud-talk.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.nextcloud-talk.blockStreaming`: disable block streaming for this channel.
 - `channels.nextcloud-talk.blockStreamingCoalesce`: block streaming coalesce tuning.
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).

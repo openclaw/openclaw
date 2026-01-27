@@ -82,31 +82,82 @@ export const SttConfigSchema = z
   .default({ provider: "openai", model: "whisper-1" });
 export type SttConfig = z.infer<typeof SttConfigSchema>;
 
+export const TtsProviderSchema = z.enum(["openai", "elevenlabs", "edge"]);
+export const TtsModeSchema = z.enum(["final", "all"]);
+export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
+
 export const TtsConfigSchema = z
   .object({
-    /** TTS provider (currently only OpenAI supported) */
-    provider: z.literal("openai").default("openai"),
-    /**
-     * TTS model to use:
-     * - gpt-4o-mini-tts: newest, supports instructions for tone/style control (recommended)
-     * - tts-1: lower latency
-     * - tts-1-hd: higher quality
-     */
-    model: z.string().min(1).default("gpt-4o-mini-tts"),
-    /**
-     * Voice ID. For best quality, use marin or cedar.
-     * All voices: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar
-     */
-    voice: z.string().min(1).default("coral"),
-    /**
-     * Instructions for speech style (only works with gpt-4o-mini-tts).
-     * Examples: "Speak in a cheerful tone", "Talk like a sympathetic customer service agent"
-     */
-    instructions: z.string().optional(),
+    auto: TtsAutoSchema.optional(),
+    enabled: z.boolean().optional(),
+    mode: TtsModeSchema.optional(),
+    provider: TtsProviderSchema.optional(),
+    summaryModel: z.string().optional(),
+    modelOverrides: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowText: z.boolean().optional(),
+        allowProvider: z.boolean().optional(),
+        allowVoice: z.boolean().optional(),
+        allowModelId: z.boolean().optional(),
+        allowVoiceSettings: z.boolean().optional(),
+        allowNormalization: z.boolean().optional(),
+        allowSeed: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    elevenlabs: z
+      .object({
+        apiKey: z.string().optional(),
+        baseUrl: z.string().optional(),
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+        seed: z.number().int().min(0).max(4294967295).optional(),
+        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
+        languageCode: z.string().optional(),
+        voiceSettings: z
+          .object({
+            stability: z.number().min(0).max(1).optional(),
+            similarityBoost: z.number().min(0).max(1).optional(),
+            style: z.number().min(0).max(1).optional(),
+            useSpeakerBoost: z.boolean().optional(),
+            speed: z.number().min(0.5).max(2).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    openai: z
+      .object({
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    edge: z
+      .object({
+        enabled: z.boolean().optional(),
+        voice: z.string().optional(),
+        lang: z.string().optional(),
+        outputFormat: z.string().optional(),
+        pitch: z.string().optional(),
+        rate: z.string().optional(),
+        volume: z.string().optional(),
+        saveSubtitles: z.boolean().optional(),
+        proxy: z.string().optional(),
+        timeoutMs: z.number().int().min(1000).max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
   })
   .strict()
-  .default({ provider: "openai", model: "gpt-4o-mini-tts", voice: "coral" });
-export type TtsConfig = z.infer<typeof TtsConfigSchema>;
+  .optional();
+export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
@@ -166,13 +217,17 @@ export const VoiceCallTunnelConfigSchema = z
     /**
      * Allow ngrok free tier compatibility mode.
      * When true, signature verification failures on ngrok-free.app URLs
-     * will be logged but allowed through. Less secure, but necessary
-     * for ngrok free tier which may modify URLs.
+     * will be allowed only for loopback requests (ngrok local agent).
      */
-    allowNgrokFreeTier: z.boolean().default(true),
+    allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
+    /**
+     * Legacy ngrok free tier compatibility mode (deprecated).
+     * Use allowNgrokFreeTierLoopbackBypass instead.
+     */
+    allowNgrokFreeTier: z.boolean().optional(),
   })
   .strict()
-  .default({ provider: "none", allowNgrokFreeTier: true });
+  .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
 export type VoiceCallTunnelConfig = z.infer<typeof VoiceCallTunnelConfigSchema>;
 
 // -----------------------------------------------------------------------------
@@ -307,7 +362,7 @@ export const VoiceCallConfigSchema = z
   /** STT configuration */
   stt: SttConfigSchema,
 
-  /** TTS configuration */
+  /** TTS override (deep-merges with core messages.tts) */
   tts: TtsConfigSchema,
 
   /** Store path for call logs */
@@ -329,6 +384,59 @@ export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
 // -----------------------------------------------------------------------------
 // Configuration Helpers
 // -----------------------------------------------------------------------------
+
+/**
+ * Resolves the configuration by merging environment variables into missing fields.
+ * Returns a new configuration object with environment variables applied.
+ */
+export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
+  const resolved = JSON.parse(JSON.stringify(config)) as VoiceCallConfig;
+
+  // Telnyx
+  if (resolved.provider === "telnyx") {
+    resolved.telnyx = resolved.telnyx ?? {};
+    resolved.telnyx.apiKey =
+      resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
+    resolved.telnyx.connectionId =
+      resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
+    resolved.telnyx.publicKey =
+      resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+  }
+
+  // Twilio
+  if (resolved.provider === "twilio") {
+    resolved.twilio = resolved.twilio ?? {};
+    resolved.twilio.accountSid =
+      resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
+    resolved.twilio.authToken =
+      resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+  }
+
+  // Plivo
+  if (resolved.provider === "plivo") {
+    resolved.plivo = resolved.plivo ?? {};
+    resolved.plivo.authId =
+      resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
+    resolved.plivo.authToken =
+      resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
+  }
+
+  // Tunnel Config
+  resolved.tunnel = resolved.tunnel ?? {
+    provider: "none",
+    allowNgrokFreeTierLoopbackBypass: false,
+  };
+  resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
+    resolved.tunnel.allowNgrokFreeTierLoopbackBypass ||
+    resolved.tunnel.allowNgrokFreeTier ||
+    false;
+  resolved.tunnel.ngrokAuthToken =
+    resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
+  resolved.tunnel.ngrokDomain =
+    resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+
+  return resolved;
+}
 
 /**
  * Validate that the configuration has all required fields for the selected provider.

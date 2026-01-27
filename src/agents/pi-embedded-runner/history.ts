@@ -1,6 +1,13 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
+
+const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
+
+function stripThreadSuffix(value: string): string {
+  const match = value.match(THREAD_SUFFIX_REGEX);
+  return match?.[1] ?? value;
+}
 
 /**
  * Limits conversation history to the last N user turns (and their associated
@@ -33,7 +40,7 @@ export function limitHistoryTurns(
  */
 export function getDmHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
-  config: ClawdbotConfig | undefined,
+  config: MoltbotConfig | undefined,
 ): number | undefined {
   if (!sessionKey || !config) return undefined;
 
@@ -44,7 +51,8 @@ export function getDmHistoryLimitFromSessionKey(
   if (!provider) return undefined;
 
   const kind = providerParts[1]?.toLowerCase();
-  const userId = providerParts.slice(2).join(":");
+  const userIdRaw = providerParts.slice(2).join(":");
+  const userId = stripThreadSuffix(userIdRaw);
   if (kind !== "dm") return undefined;
 
   const getLimit = (
@@ -63,7 +71,7 @@ export function getDmHistoryLimitFromSessionKey(
   };
 
   const resolveProviderConfig = (
-    cfg: ClawdbotConfig | undefined,
+    cfg: MoltbotConfig | undefined,
     providerId: string,
   ): { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> } | undefined => {
     const channels = cfg?.channels;

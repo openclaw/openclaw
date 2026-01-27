@@ -1,13 +1,13 @@
 ---
 summary: "Voice Call plugin: outbound + inbound calls via Twilio/Telnyx/Plivo (plugin install + config + CLI)"
 read_when:
-  - You want to place an outbound voice call from Clawdbot
+  - You want to place an outbound voice call from Moltbot
   - You are configuring or developing the voice-call plugin
 ---
 
 # Voice Call (plugin)
 
-Voice calls for Clawdbot via a plugin. Supports outbound notifications and
+Voice calls for Moltbot via a plugin. Supports outbound notifications and
 multi-turn conversations with inbound policies.
 
 Current providers:
@@ -20,7 +20,7 @@ Quick mental model:
 - Install plugin
 - Restart Gateway
 - Configure under `plugins.entries.voice-call.config`
-- Use `clawdbot voicecall ...` or the `voice_call` tool
+- Use `moltbot voicecall ...` or the `voice_call` tool
 
 ## Where it runs (local vs remote)
 
@@ -33,7 +33,7 @@ If you use a remote Gateway, install/configure the plugin on the **machine runni
 ### Option A: install from npm (recommended)
 
 ```bash
-clawdbot plugins install @clawdbot/voice-call
+moltbot plugins install @moltbot/voice-call
 ```
 
 Restart the Gateway afterwards.
@@ -41,7 +41,7 @@ Restart the Gateway afterwards.
 ### Option B: install from a local folder (dev, no copying)
 
 ```bash
-clawdbot plugins install ./extensions/voice-call
+moltbot plugins install ./extensions/voice-call
 cd ./extensions/voice-call && pnpm install
 ```
 
@@ -103,6 +103,90 @@ Notes:
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 - `skipSignatureVerification` is for local testing only.
+- If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
+- Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
+
+## TTS for calls
+
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+streaming speech on calls. You can override it under the plugin config with the
+**same shape** — it deep‑merges with `messages.tts`.
+
+```json5
+{
+  tts: {
+    provider: "elevenlabs",
+    elevenlabs: {
+      voiceId: "pMsXgVXv3BLzUgSXRplE",
+      modelId: "eleven_multilingual_v2"
+    }
+  }
+}
+```
+
+Notes:
+- **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
+- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+
+### More examples
+
+Use core TTS only (no override):
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "openai",
+      openai: { voice: "alloy" }
+    }
+  }
+}
+```
+
+Override to ElevenLabs just for calls (keep core default elsewhere):
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tts: {
+            provider: "elevenlabs",
+            elevenlabs: {
+              apiKey: "elevenlabs_key",
+              voiceId: "pMsXgVXv3BLzUgSXRplE",
+              modelId: "eleven_multilingual_v2"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Override only the OpenAI model for calls (deep‑merge example):
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tts: {
+            openai: {
+              model: "gpt-4o-mini-tts",
+              voice: "marin"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 ## Inbound calls
 
@@ -124,13 +208,13 @@ Auto-responses use the agent system. Tune with:
 ## CLI
 
 ```bash
-clawdbot voicecall call --to "+15555550123" --message "Hello from Clawdbot"
-clawdbot voicecall continue --call-id <id> --message "Any questions?"
-clawdbot voicecall speak --call-id <id> --message "One moment"
-clawdbot voicecall end --call-id <id>
-clawdbot voicecall status --call-id <id>
-clawdbot voicecall tail
-clawdbot voicecall expose --mode funnel
+moltbot voicecall call --to "+15555550123" --message "Hello from Moltbot"
+moltbot voicecall continue --call-id <id> --message "Any questions?"
+moltbot voicecall speak --call-id <id> --message "One moment"
+moltbot voicecall end --call-id <id>
+moltbot voicecall status --call-id <id>
+moltbot voicecall tail
+moltbot voicecall expose --mode funnel
 ```
 
 ## Agent tool

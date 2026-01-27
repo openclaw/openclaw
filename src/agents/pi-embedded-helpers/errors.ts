@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import type { FailoverReason } from "./types.js";
 
@@ -75,6 +75,29 @@ const HTTP_ERROR_HINTS = [
 function stripFinalTagsFromText(text: string): string {
   if (!text) return text;
   return text.replace(FINAL_TAG_RE, "");
+}
+
+function collapseConsecutiveDuplicateBlocks(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+  const blocks = trimmed.split(/\n{2,}/);
+  if (blocks.length < 2) return text;
+
+  const normalizeBlock = (value: string) => value.trim().replace(/\s+/g, " ");
+  const result: string[] = [];
+  let lastNormalized: string | null = null;
+
+  for (const block of blocks) {
+    const normalized = normalizeBlock(block);
+    if (lastNormalized && normalized === lastNormalized) {
+      continue;
+    }
+    result.push(block.trim());
+    lastNormalized = normalized;
+  }
+
+  if (result.length === blocks.length) return text;
+  return result.join("\n\n");
 }
 
 function isLikelyHttpErrorText(raw: string): boolean {
@@ -229,7 +252,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: ClawdbotConfig; sessionKey?: string },
+  opts?: { cfg?: MoltbotConfig; sessionKey?: string },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -321,7 +344,7 @@ export function sanitizeUserFacingText(text: string): string {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
-  return stripped;
+  return collapseConsecutiveDuplicateBlocks(stripped);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {

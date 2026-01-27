@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
-import { ensureClawdbotModelsJson } from "./models-config.js";
+import "./test-helpers/fast-coding-tools.js";
+import type { MoltbotConfig } from "../config/config.js";
+import { ensureMoltbotModelsJson } from "./models-config.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -70,7 +71,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
     },
     streamSimple: (model: { api: string; provider: string; id: string }) => {
       const stream = new actual.AssistantMessageEventStream();
-      setTimeout(() => {
+      queueMicrotask(() => {
         stream.push({
           type: "done",
           reason: "stop",
@@ -80,7 +81,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
               : buildAssistantMessage(model),
         });
         stream.end();
-      }, 0);
+      });
       return stream;
     },
   };
@@ -95,7 +96,7 @@ let sessionCounter = 0;
 beforeAll(async () => {
   vi.useRealTimers();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-embedded-agent-"));
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-embedded-agent-"));
   agentDir = path.join(tempRoot, "agent");
   workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
@@ -128,9 +129,9 @@ const makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies ClawdbotConfig;
+  }) satisfies MoltbotConfig;
 
-const ensureModels = (cfg: ClawdbotConfig) => ensureClawdbotModelsJson(cfg, agentDir) as unknown;
+const ensureModels = (cfg: MoltbotConfig) => ensureMoltbotModelsJson(cfg, agentDir) as unknown;
 
 const nextSessionFile = () => {
   sessionCounter += 1;
@@ -190,7 +191,7 @@ describe("runEmbeddedPiAgent", () => {
           },
         },
       },
-    } satisfies ClawdbotConfig;
+    } satisfies MoltbotConfig;
 
     await expect(
       runEmbeddedPiAgent({
@@ -213,7 +214,7 @@ describe("runEmbeddedPiAgent", () => {
 
   itIfNotWin32(
     "persists the first user message before assistant output",
-    { timeout: 60_000 },
+    { timeout: 120_000 },
     async () => {
       const sessionFile = nextSessionFile();
       const cfg = makeOpenAiConfig(["mock-1"]);

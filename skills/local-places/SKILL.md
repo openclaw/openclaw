@@ -2,7 +2,7 @@
 name: local-places
 description: Search for places (restaurants, cafes, etc.) via Google Places API proxy on localhost.
 homepage: https://github.com/Hyaxia/local_places
-metadata: {"clawdbot":{"emoji":"📍","requires":{"bins":["uv"],"env":["GOOGLE_PLACES_API_KEY"]},"primaryEnv":"GOOGLE_PLACES_API_KEY"}}
+metadata: {"moltbot":{"emoji":"📍","requires":{"bins":["uv"],"env":["GOOGLE_PLACES_API_KEY"]},"primaryEnv":"GOOGLE_PLACES_API_KEY"}}
 ---
 
 # 📍 Local Places
@@ -84,7 +84,7 @@ curl http://127.0.0.1:8000/places/{place_id}
       "open_now": true
     }
   ],
-  "next_page_token": "..." 
+  "next_page_token": "..."
 }
 ```
 

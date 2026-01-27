@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -29,6 +29,8 @@ const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
+const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 
 const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
@@ -55,9 +57,15 @@ const WebSearchSchema = Type.Object({
       description: "ISO language code for UI elements.",
     }),
   ),
+  freshness: Type.Optional(
+    Type.String({
+      description:
+        "Filter results by discovery time (Brave only). Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
+    }),
+  ),
 });
 
-type WebSearchConfig = NonNullable<ClawdbotConfig["tools"]>["web"] extends infer Web
+type WebSearchConfig = NonNullable<MoltbotConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
     ? Search
     : undefined
@@ -95,7 +103,7 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
-function resolveSearchConfig(cfg?: ClawdbotConfig): WebSearchConfig {
+function resolveSearchConfig(cfg?: MoltbotConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") return undefined;
   return search as WebSearchConfig;
@@ -120,13 +128,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_perplexity_api_key",
       message:
         "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
-      docs: "https://docs.clawd.bot/tools/web",
+      docs: "https://docs.molt.bot/tools/web",
     };
   }
   return {
     error: "missing_brave_api_key",
-    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("clawdbot configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
-    docs: "https://docs.clawd.bot/tools/web",
+    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("moltbot configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
+    docs: "https://docs.molt.bot/tools/web",
   };
 }
 
@@ -219,6 +227,35 @@ function resolveSearchCount(value: unknown, fallback: number): number {
   return clamped;
 }
 
+function normalizeFreshness(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const lower = trimmed.toLowerCase();
+  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) return lower;
+
+  const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
+  if (!match) return undefined;
+
+  const [, start, end] = match;
+  if (!isValidIsoDate(start) || !isValidIsoDate(end)) return undefined;
+  if (start > end) return undefined;
+
+  return `${start}to${end}`;
+}
+
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return false;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
 function resolveSiteName(url: string | undefined): string | undefined {
   if (!url) return undefined;
   try {
@@ -242,8 +279,8 @@ async function runPerplexitySearch(params: {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${params.apiKey}`,
-      "HTTP-Referer": "https://clawdbot.com",
-      "X-Title": "Clawdbot Web Search",
+      "HTTP-Referer": "https://molt.bot",
+      "X-Title": "Moltbot Web Search",
     },
     body: JSON.stringify({
       model: params.model,
@@ -279,11 +316,14 @@ async function runWebSearch(params: {
   country?: string;
   search_lang?: string;
   ui_lang?: string;
+  freshness?: string;
   perplexityBaseUrl?: string;
   perplexityModel?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
+    params.provider === "brave"
+      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
+      : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) return { ...cached.value, cached: true };
@@ -327,6 +367,9 @@ async function runWebSearch(params: {
   if (params.ui_lang) {
     url.searchParams.set("ui_lang", params.ui_lang);
   }
+  if (params.freshness) {
+    url.searchParams.set("freshness", params.freshness);
+  }
 
   const res = await fetch(url.toString(), {
     method: "GET",
@@ -364,7 +407,7 @@ async function runWebSearch(params: {
 }
 
 export function createWebSearchTool(options?: {
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
@@ -399,6 +442,23 @@ export function createWebSearchTool(options?: {
       const country = readStringParam(params, "country");
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
+      const rawFreshness = readStringParam(params, "freshness");
+      if (rawFreshness && provider !== "brave") {
+        return jsonResult({
+          error: "unsupported_freshness",
+          message: "freshness is only supported by the Brave web_search provider.",
+          docs: "https://docs.molt.bot/tools/web",
+        });
+      }
+      const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
+      if (rawFreshness && !freshness) {
+        return jsonResult({
+          error: "invalid_freshness",
+          message:
+            "freshness must be one of pd, pw, pm, py, or a range like YYYY-MM-DDtoYYYY-MM-DD.",
+          docs: "https://docs.molt.bot/tools/web",
+        });
+      }
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -409,6 +469,7 @@ export function createWebSearchTool(options?: {
         country,
         search_lang,
         ui_lang,
+        freshness,
         perplexityBaseUrl: resolvePerplexityBaseUrl(
           perplexityConfig,
           perplexityAuth?.source,
@@ -424,4 +485,5 @@ export function createWebSearchTool(options?: {
 export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  normalizeFreshness,
 } as const;

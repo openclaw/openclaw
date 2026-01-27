@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -76,7 +76,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 }
 
 export async function maybeRepairGatewayDaemon(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   options: DoctorOptions;
@@ -161,6 +161,7 @@ export async function maybeRepairGatewayDaemon(params: {
           token: params.cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
+          config: params.cfg,
         });
         try {
           await service.install({
@@ -208,7 +209,7 @@ export async function maybeRepairGatewayDaemon(params: {
   if (process.platform === "darwin") {
     const label = resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE);
     note(
-      `LaunchAgent loaded; stopping requires "${formatCliCommand("clawdbot gateway stop")}" or launchctl bootout gui/$UID/${label}.`,
+      `LaunchAgent loaded; stopping requires "${formatCliCommand("moltbot gateway stop")}" or launchctl bootout gui/$UID/${label}.`,
       "Gateway",
     );
   }

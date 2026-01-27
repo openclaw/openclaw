@@ -6,7 +6,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { createDefaultDeps } from "../cli/deps.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  CONFIG_PATH_CLAWDBOT,
+  CONFIG_PATH,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
@@ -14,12 +14,13 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
+import { logAcceptedEnvOption } from "../infra/env.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
+import { ensureMoltbotCliOnPath } from "../infra/path-env.js";
 import {
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
@@ -72,7 +73,7 @@ import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
-ensureClawdbotCliOnPath();
+ensureMoltbotCliOnPath();
 
 const log = createSubsystemLogger("gateway");
 const logCanvas = log.child("canvas");
@@ -149,6 +150,14 @@ export async function startGatewayServer(
 ): Promise<GatewayServer> {
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.CLAWDBOT_GATEWAY_PORT = String(port);
+  logAcceptedEnvOption({
+    key: "CLAWDBOT_RAW_STREAM",
+    description: "raw stream logging enabled",
+  });
+  logAcceptedEnvOption({
+    key: "CLAWDBOT_RAW_STREAM_PATH",
+    description: "raw stream log path override",
+  });
 
   let configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.legacyIssues.length > 0) {
@@ -160,7 +169,7 @@ export async function startGatewayServer(
     const { config: migrated, changes } = migrateLegacyConfig(configSnapshot.parsed);
     if (!migrated) {
       throw new Error(
-        `Legacy config entries detected but auto-migration failed. Run "${formatCliCommand("clawdbot doctor")}" to migrate.`,
+        `Legacy config entries detected but auto-migration failed. Run "${formatCliCommand("moltbot doctor")}" to migrate.`,
       );
     }
     await writeConfigFile(migrated);
@@ -182,7 +191,7 @@ export async function startGatewayServer(
             .join("\n")
         : "Unknown validation issue.";
     throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("clawdbot doctor")}" to repair, then retry.`,
+      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("moltbot doctor")}" to repair, then retry.`,
     );
   }
 
@@ -263,6 +272,8 @@ export async function startGatewayServer(
   const {
     canvasHost,
     httpServer,
+    httpServers,
+    httpBindHosts,
     wss,
     clients,
     broadcast,
@@ -292,6 +303,7 @@ export async function startGatewayServer(
     canvasHostEnabled,
     allowCanvasHostInTests: opts.allowCanvasHostInTests,
     logCanvas,
+    log,
     logHooks,
     logPlugins,
   });
@@ -340,6 +352,7 @@ export async function startGatewayServer(
       : undefined,
     wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
     tailscaleMode,
+    mdnsMode: cfgAtStart.discovery?.mdns?.mode,
     logDiscovery,
   });
   bonjourStop = discovery.bonjourStop;
@@ -464,6 +477,7 @@ export async function startGatewayServer(
   logGatewayStartup({
     cfg: cfgAtStart,
     bindHost,
+    bindHosts: httpBindHosts,
     port,
     tlsEnabled: gatewayTls.enabled,
     log,
@@ -527,7 +541,7 @@ export async function startGatewayServer(
       warn: (msg) => logReload.warn(msg),
       error: (msg) => logReload.error(msg),
     },
-    watchPath: CONFIG_PATH_CLAWDBOT,
+    watchPath: CONFIG_PATH,
   });
 
   const close = createGatewayCloseHandler({
@@ -552,6 +566,7 @@ export async function startGatewayServer(
     browserControl,
     wss,
     httpServer,
+    httpServers,
   });
 
   return {

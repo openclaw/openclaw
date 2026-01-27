@@ -7,7 +7,7 @@ read_when:
 ---
 # Streaming + chunking
 
-Clawdbot has two separate “streaming” layers:
+Moltbot has two separate “streaming” layers:
 - **Block streaming (channels):** emit completed **blocks** as the assistant writes. These are normal channel messages (not token deltas).
 - **Token-ish streaming (Telegram only):** update a **draft bubble** with partial text while generating; final message is sent at the end.
 
@@ -38,7 +38,7 @@ Legend:
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
 - `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (merge streamed blocks before send).
 - Channel hard cap: `*.textChunkLimit` (e.g., `channels.whatsapp.textChunkLimit`).
-- Channel chunk mode: `*.chunkMode` (`length` default, `newline` splits on each line before length chunking).
+- Channel chunk mode: `*.chunkMode` (`length` default, `newline` splits on blank lines (paragraph boundaries) before length chunking).
 - Discord soft cap: `channels.discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
 
 **Boundary semantics:**
@@ -59,7 +59,7 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
 
 ## Coalescing (merge streamed blocks)
 
-When block streaming is enabled, Clawdbot can **merge consecutive block chunks**
+When block streaming is enabled, Moltbot can **merge consecutive block chunks**
 before sending them out. This reduces “single-line spam” while still providing
 progressive output.
 
@@ -109,7 +109,7 @@ Telegram is the only channel with draft streaming:
 - Final reply is still a normal message.
 - `/reasoning stream` writes reasoning into the draft bubble (Telegram only).
 
-When draft streaming is active, Clawdbot disables block streaming for that reply to avoid double-streaming.
+When draft streaming is active, Moltbot disables block streaming for that reply to avoid double-streaming.
 
 ```
 Telegram (private + topics)

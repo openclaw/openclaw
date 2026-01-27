@@ -8,8 +8,8 @@ Providers:
 - **Plivo** (Voice API + XML transfer + GetInput speech)
 - **Mock** (dev/no network)
 
-Docs: `https://docs.clawd.bot/plugins/voice-call`
-Plugin system: `https://docs.clawd.bot/plugin`
+Docs: `https://docs.molt.bot/plugins/voice-call`
+Plugin system: `https://docs.molt.bot/plugin`
 
 ## Install (local dev)
 
@@ -74,6 +74,28 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
+
+## TTS for calls
+
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+streaming speech on calls. You can override it under the plugin config with the
+same shape — overrides deep-merge with `messages.tts`.
+
+```json5
+{
+  tts: {
+    provider: "openai",
+    openai: {
+      voice: "alloy"
+    }
+  }
+}
+```
+
+Notes:
+- Edge TTS is ignored for voice calls (telephony audio needs PCM; Edge output is unreliable).
+- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 
 ## CLI
 

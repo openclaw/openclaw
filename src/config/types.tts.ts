@@ -2,6 +2,8 @@ export type TtsProvider = "elevenlabs" | "openai" | "edge";
 
 export type TtsMode = "final" | "all";
 
+export type TtsAutoMode = "off" | "always" | "inbound" | "tagged";
+
 export type TtsModelOverrideConfig = {
   /** Enable model-provided overrides for TTS. */
   enabled?: boolean;
@@ -22,7 +24,9 @@ export type TtsModelOverrideConfig = {
 };
 
 export type TtsConfig = {
-  /** Enable auto-TTS (can be overridden by local prefs). */
+  /** Auto-TTS mode (preferred). */
+  auto?: TtsAutoMode;
+  /** Legacy: enable auto-TTS when `auto` is not set. */
   enabled?: boolean;
   /** Apply TTS to final replies only or to all replies (tool/block/final). */
   mode?: TtsMode;

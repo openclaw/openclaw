@@ -9,6 +9,10 @@ import {
   resolveDefaultAgentIdFromRaw,
 } from "./legacy.shared.js";
 
+// NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
+
+// tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
     id: "auth.anthropic-claude-cli-mode-oauth",
@@ -24,6 +28,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       changes.push('Updated auth.profiles["anthropic:claude-cli"].mode → "oauth".');
     },
   },
+  // tools.alsoAllow migration removed (field not shipped in prod; enforce via schema instead).
   {
     id: "tools.bash->tools.exec",
     describe: "Move tools.bash to tools.exec",
@@ -38,6 +43,26 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         changes.push("Removed tools.bash (tools.exec already set).");
       }
       delete tools.bash;
+    },
+  },
+  {
+    id: "messages.tts.enabled->auto",
+    describe: "Move messages.tts.enabled to messages.tts.auto",
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      const tts = getRecord(messages?.tts);
+      if (!tts) return;
+      if (tts.auto !== undefined) {
+        if ("enabled" in tts) {
+          delete tts.enabled;
+          changes.push("Removed messages.tts.enabled (messages.tts.auto already set).");
+        }
+        return;
+      }
+      if (typeof tts.enabled !== "boolean") return;
+      tts.auto = tts.enabled ? "always" : "off";
+      delete tts.enabled;
+      changes.push(`Moved messages.tts.enabled → messages.tts.auto (${String(tts.auto)}).`);
     },
   },
   {

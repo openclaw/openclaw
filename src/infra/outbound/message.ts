@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import type { PollInput } from "../../polls.js";
@@ -41,7 +41,7 @@ type MessageSendParams = {
   dryRun?: boolean;
   bestEffort?: boolean;
   deps?: OutboundSendDeps;
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
   mirror?: {
@@ -50,6 +50,7 @@ type MessageSendParams = {
     text?: string;
     mediaUrls?: string[];
   };
+  abortSignal?: AbortSignal;
 };
 
 export type MessageSendResult = {
@@ -70,7 +71,7 @@ type MessagePollParams = {
   durationHours?: number;
   channel?: string;
   dryRun?: boolean;
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
 };
@@ -167,6 +168,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       gifPlayback: params.gifPlayback,
       deps: params.deps,
       bestEffort: params.bestEffort,
+      abortSignal: params.abortSignal,
       mirror: params.mirror
         ? {
             ...params.mirror,
