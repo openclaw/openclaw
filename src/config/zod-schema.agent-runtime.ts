@@ -536,6 +536,19 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    qveris: z
+      .object({
+        enabled: z.boolean().optional(),
+        apiKey: z.string().optional(),
+        baseUrl: z.string().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+        maxResponseSize: z.number().int().positive().optional(),
+        searchLimit: z.number().int().positive().optional(),
+        preSearchEnabled: z.boolean().optional(),
+        preSearchByteThreshold: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

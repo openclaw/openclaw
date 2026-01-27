@@ -18,6 +18,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import { createQverisTools } from "./tools/qveris-tools.js";
 
 export function createClawdbotTools(options?: {
   browserControlUrl?: string;
@@ -72,6 +73,11 @@ export function createClawdbotTools(options?: {
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+  });
+  const qverisTools = createQverisTools({
+    config: options?.config,
+    sandboxed: options?.sandboxed,
+    agentSessionKey: options?.agentSessionKey,
   });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
@@ -143,6 +149,7 @@ export function createClawdbotTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    ...qverisTools,
   ];
 
   const pluginTools = resolvePluginTools({

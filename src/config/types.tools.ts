@@ -443,4 +443,23 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /** QVeris dynamic tool discovery and execution. */
+  qveris?: {
+    /** Enable QVeris tools (default: true when API key is present). */
+    enabled?: boolean;
+    /** QVeris API key (optional; defaults to QVERIS_API_KEY env var). */
+    apiKey?: string;
+    /** QVeris API base URL (default: https://qveris.ai/api/v1). */
+    baseUrl?: string;
+    /** Timeout in seconds for QVeris requests (default: 60). */
+    timeoutSeconds?: number;
+    /** Max response size in bytes (default: 20480). */
+    maxResponseSize?: number;
+    /** Default search result limit (default: 10). */
+    searchLimit?: number;
+    /** Enable pre-search optimization for short queries (default: true). */
+    preSearchEnabled?: boolean;
+    /** Byte threshold for pre-search (default: 100). */
+    preSearchByteThreshold?: number;
+  };
 };
