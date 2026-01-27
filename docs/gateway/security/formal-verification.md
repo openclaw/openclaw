@@ -100,10 +100,49 @@ See also: `docs/gateway-exposure-matrix.md` in the models repo.
 - Red (expected):
   - `make routing-isolation-negative`
 
-## Roadmap
 
-Next models to deepen fidelity:
-- Pairing store concurrency/locking/idempotency
-- Provider-specific ingress preflight modeling
-- Routing identity-links + dmScope variants + binding precedence
-- Gateway auth conformance (proxy/tailscale specifics)
+## v1++: additional bounded models (concurrency, retries, trace correctness)
+
+These are follow-on models that tighten fidelity around real-world failure modes (non-atomic updates, retries, and message fan-out).
+
+### Pairing store (concurrency / idempotency)
+
+- Cap-check race:
+  - `make pairing-race` (green: atomic/locked)
+  - `make pairing-race-negative` (red: non-atomic begin/commit)
+
+- Idempotency (avoid duplicates for repeated requests):
+  - `make pairing-idempotency`
+  - `make pairing-idempotency-negative`
+
+- Refresh semantics (refresh should stay enabled + be safe under interleavings):
+  - `make pairing-refresh`
+  - `make pairing-refresh-negative`
+  - `make pairing-refresh-race`
+  - `make pairing-refresh-race-negative`
+
+### Ingress (trace correlation / idempotency)
+
+- Trace correlation across multi-part message fan-out:
+  - `make ingress-trace`
+  - `make ingress-trace-negative`
+  - `make ingress-trace2`
+  - `make ingress-trace2-negative`
+
+- Provider retry/idempotency:
+  - `make ingress-idempotency`
+  - `make ingress-idempotency-negative`
+
+- Dedupe-key fallback when provider event IDs are missing:
+  - `make ingress-dedupe-fallback`
+  - `make ingress-dedupe-fallback-negative`
+
+### Routing (dmScope precedence + identityLinks)
+
+- dmScope precedence (channel override wins):
+  - `make routing-precedence`
+  - `make routing-precedence-negative`
+
+- identityLinks (collapse only within explicit link groups):
+  - `make routing-identitylinks`
+  - `make routing-identitylinks-negative`
