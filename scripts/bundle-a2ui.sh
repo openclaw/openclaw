@@ -32,9 +32,16 @@ collect_files() {
 compute_hash() {
   collect_files \
     | LC_ALL=C sort -z \
-    | xargs -0 shasum -a 256 \
-    | shasum -a 256 \
-    | awk '{print $1}'
+    | xargs -0 node -e "
+      const crypto = require('crypto');
+      const files = process.argv.slice(1);
+      const hashes = files.map(file => {
+        const content = require('fs').readFileSync(file);
+        return crypto.createHash('sha256').update(content).digest('hex');
+      });
+      const combined = hashes.join('');
+      console.log(crypto.createHash('sha256').update(combined).digest('hex'));
+    "
 }
 
 current_hash="$(compute_hash)"
