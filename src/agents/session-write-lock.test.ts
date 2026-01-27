@@ -31,4 +31,94 @@ describe("acquireSessionWriteLock", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps the lock file until the last release", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+
+      const lockA = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      await lockA.release();
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      await lockB.release();
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reclaims stale lock files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 123456, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+        "utf8",
+      );
+
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { pid: number };
+
+      expect(payload.pid).toBe(process.pid);
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up locks on SIGINT without removing other handlers", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lock-"));
+    const originalKill = process.kill;
+    const killCalls: Array<NodeJS.Signals | undefined> = [];
+    let otherHandlerCalled = false;
+
+    process.kill = ((pid: number, signal?: NodeJS.Signals) => {
+      killCalls.push(signal);
+      return true;
+    }) as typeof process.kill;
+
+    const otherHandler = () => {
+      otherHandlerCalled = true;
+    };
+
+    process.on("SIGINT", otherHandler);
+
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      process.emit("SIGINT");
+
+      await expect(fs.access(lockPath)).rejects.toThrow();
+      expect(otherHandlerCalled).toBe(true);
+      expect(killCalls).toEqual(["SIGINT"]);
+    } finally {
+      process.off("SIGINT", otherHandler);
+      process.kill = originalKill;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up locks on exit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      process.emit("exit", 0);
+
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

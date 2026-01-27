@@ -125,6 +125,11 @@ export async function acquireSessionWriteLock(params: {
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
     try {
+      fsSync.closeSync(held.handle.fd);
+    } catch {
+      // Ignore close errors during cleanup - best effort
+    }
+    try {
       fsSync.rmSync(held.lockPath, { force: true });
     } catch {
       // Ignore errors during cleanup - best effort
@@ -147,13 +152,17 @@ function registerCleanupHandlers(): void {
   // Handle SIGINT (Ctrl+C) and SIGTERM
   const handleSignal = (signal: NodeJS.Signals) => {
     releaseAllLocksSync();
-    // Remove our handler and re-raise signal for proper exit code
-    process.removeAllListeners(signal);
+    // Remove only our handlers and re-raise signal for proper exit code.
+    process.off("SIGINT", onSigInt);
+    process.off("SIGTERM", onSigTerm);
     process.kill(process.pid, signal);
   };
 
-  process.on("SIGINT", () => handleSignal("SIGINT"));
-  process.on("SIGTERM", () => handleSignal("SIGTERM"));
+  const onSigInt = () => handleSignal("SIGINT");
+  const onSigTerm = () => handleSignal("SIGTERM");
+
+  process.on("SIGINT", onSigInt);
+  process.on("SIGTERM", onSigTerm);
 }
 
 // Register cleanup handlers when module loads
