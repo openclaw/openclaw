@@ -36,7 +36,10 @@ describe("buildPairingReply", () => {
       const text = buildPairingReply(testCase);
       expect(text).toContain(testCase.idLine);
       expect(text).toContain(`Pairing code: ${testCase.code}`);
-      expect(text).toContain(`clawdbot pairing approve ${testCase.channel} <code>`);
+      // CLI commands should respect CLAWDBOT_PROFILE when set (most tests run with isolated profile)
+      expect(text).toContain(
+        `clawdbot --profile isolated pairing approve ${testCase.channel} <code>`,
+      );
     });
   }
 });
