@@ -8,6 +8,7 @@ Status: unreleased.
 ### Changes
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
+- Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.
 - Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.
 - Docs: add migration guide for moving to a new machine. (#2381)
 - Docs: add Northflank one-click deployment guide. (#2167) Thanks @AdeboyeDN.
