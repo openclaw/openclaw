@@ -20,7 +20,7 @@ misconfiguration safety), under explicit assumptions.
 
 ## Where the models live
 
-Models are maintained in a separate repo: `vignesh07/clawdbot-formal-models`.
+Models are maintained in a separate repo: <https://github.com/vignesh07/clawdbot-formal-models>.
 
 ## Important caveats
 
@@ -34,16 +34,21 @@ Today, results are reproduced by cloning the models repo locally and running TLC
 - CI-run models with public artifacts (counterexample traces, run logs)
 - a hosted “run this model” workflow for small, bounded checks
 
-From the models repo:
+Getting started:
 
 ```bash
-export PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH"  # or any Java 11+
+git clone https://github.com/vignesh07/clawdbot-formal-models
+cd clawdbot-formal-models
+
+# Java 11+ required (TLC runs on the JVM).
+# The repo vendors a pinned `tla2tools.jar` (TLA+ tools) and provides `bin/tlc` + Make targets.
+
 make <target>
 ```
 
 ### Gateway exposure and open gateway misconfiguration
 
-**Claim:** binding beyond loopback without auth makes remote compromise reachable; token/password blocks unauth attackers (per the model assumptions).
+**Claim:** binding beyond loopback without auth can make remote compromise possible / increases exposure; token/password blocks unauth attackers (per the model assumptions).
 
 - Green runs:
   - `make gateway-exposure-v2`
