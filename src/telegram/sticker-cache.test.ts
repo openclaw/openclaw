@@ -11,10 +11,10 @@ import {
 
 // Mock the state directory to use a temp location
 vi.mock("../config/paths.js", () => ({
-  STATE_DIR_CLAWDBOT: "/tmp/clawdbot-test-sticker-cache",
+  STATE_DIR: "/tmp/moltbot-test-sticker-cache",
 }));
 
-const TEST_CACHE_DIR = "/tmp/clawdbot-test-sticker-cache/telegram";
+const TEST_CACHE_DIR = "/tmp/moltbot-test-sticker-cache/telegram";
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
 
 describe("sticker-cache", () => {

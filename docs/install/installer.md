@@ -8,7 +8,7 @@ read_when:
 
 # Installer internals
 
-Clawdbot ships two installer scripts (served from `molt.bot`):
+Moltbot ships two installer scripts (served from `molt.bot`):
 
 - `https://molt.bot/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
 - `https://molt.bot/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
@@ -26,7 +26,7 @@ Windows (PowerShell) help:
 & ([scriptblock]::Create((iwr -useb https://molt.bot/install.ps1))) -?
 ```
 
-If the installer completes but `clawdbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
+If the installer completes but `moltbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
 
 ## install.sh (recommended)
 
@@ -35,11 +35,11 @@ What it does (high level):
 - Detect OS (macOS / Linux / WSL).
 - Ensure Node.js **22+** (macOS via Homebrew; Linux via NodeSource).
 - Choose install method:
-  - `npm` (default): `npm install -g clawdbot@latest`
+  - `npm` (default): `npm install -g moltbot@latest`
   - `git`: clone/build a source checkout and install a wrapper script
 - On Linux: avoid global npm permission errors by switching npm’s prefix to `~/.npm-global` when needed.
-- If upgrading an existing install: runs `clawdbot doctor --non-interactive` (best effort).
-- For git installs: runs `clawdbot doctor --non-interactive` after install/update (best effort).
+- If upgrading an existing install: runs `moltbot doctor --non-interactive` (best effort).
+- For git installs: runs `moltbot doctor --non-interactive` after install/update (best effort).
 - Mitigates `sharp` native install gotchas by defaulting `SHARP_IGNORE_GLOBAL_LIBVIPS=1` (avoids building against system libvips).
 
 If you *want* `sharp` to link against a globally-installed libvips (or you’re debugging), set:
@@ -50,7 +50,7 @@ SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://molt.bot/install.sh | bash
 
 ### Discoverability / “git install” prompt
 
-If you run the installer while **already inside a Clawdbot source checkout** (detected via `package.json` + `pnpm-workspace.yaml`), it prompts:
+If you run the installer while **already inside a Moltbot source checkout** (detected via `package.json` + `pnpm-workspace.yaml`), it prompts:
 
 - update and use this checkout (`git`)
 - or migrate to the global npm install (`npm`)
@@ -73,7 +73,7 @@ On some Linux setups (especially after installing Node via the system package ma
 
 ## install-cli.sh (non-root CLI installer)
 
-This script installs `clawdbot` into a prefix (default: `~/.clawdbot`) and also installs a dedicated Node runtime under that prefix, so it can work on machines where you don’t want to touch the system Node/npm.
+This script installs `moltbot` into a prefix (default: `~/.clawdbot`) and also installs a dedicated Node runtime under that prefix, so it can work on machines where you don’t want to touch the system Node/npm.
 
 Help:
 
@@ -87,9 +87,9 @@ What it does (high level):
 
 - Ensure Node.js **22+** (winget/Chocolatey/Scoop or manual).
 - Choose install method:
-  - `npm` (default): `npm install -g clawdbot@latest`
+  - `npm` (default): `npm install -g moltbot@latest`
   - `git`: clone/build a source checkout and install a wrapper script
-- Runs `clawdbot doctor --non-interactive` on upgrades and git installs (best effort).
+- Runs `moltbot doctor --non-interactive` on upgrades and git installs (best effort).
 
 Examples:
 
@@ -102,7 +102,7 @@ iwr -useb https://molt.bot/install.ps1 | iex -InstallMethod git
 ```
 
 ```powershell
-iwr -useb https://molt.bot/install.ps1 | iex -InstallMethod git -GitDir "C:\\clawdbot"
+iwr -useb https://molt.bot/install.ps1 | iex -InstallMethod git -GitDir "C:\\moltbot"
 ```
 
 Environment variables:
@@ -118,5 +118,5 @@ Git for Windows link (`https://git-scm.com/download/win`) and exit.
 Common Windows issues:
 
 - **npm error spawn git / ENOENT**: install Git for Windows and reopen PowerShell, then rerun the installer.
-- **"clawdbot" is not recognized**: your npm global bin folder is not on PATH. Most systems use
+- **"moltbot" is not recognized**: your npm global bin folder is not on PATH. Most systems use
   `%AppData%\\npm`. You can also run `npm config get prefix` and add `\\bin` to PATH, then reopen PowerShell.

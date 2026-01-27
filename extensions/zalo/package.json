@@ -2,8 +2,8 @@
   "name": "@moltbot/zalo",
   "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot Zalo channel plugin",
-  "clawdbot": {
+  "description": "Moltbot Zalo channel plugin",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ],
@@ -27,7 +27,7 @@
     }
   },
   "dependencies": {
-    "clawdbot": "workspace:*",
+    "moltbot": "workspace:*",
     "undici": "7.19.0"
   }
 }

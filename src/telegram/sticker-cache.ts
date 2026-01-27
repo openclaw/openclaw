@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ClawdbotConfig } from "../config/config.js";
-import { STATE_DIR_CLAWDBOT } from "../config/paths.js";
+import type { MoltbotConfig } from "../config/config.js";
+import { STATE_DIR } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { logVerbose } from "../globals.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -14,7 +14,7 @@ import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAutoImageModel } from "../media-understanding/runner.js";
 
-const CACHE_FILE = path.join(STATE_DIR_CLAWDBOT, "telegram", "sticker-cache.json");
+const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
 
 export interface CachedSticker {
@@ -146,7 +146,7 @@ const VISION_PROVIDERS = ["openai", "anthropic", "google", "minimax"] as const;
 
 export interface DescribeStickerParams {
   imagePath: string;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentDir?: string;
   agentId?: string;
 }

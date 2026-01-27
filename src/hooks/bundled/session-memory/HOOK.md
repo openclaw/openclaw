@@ -4,12 +4,12 @@ description: "Save session context to memory when /new command is issued"
 homepage: https://docs.molt.bot/hooks#session-memory
 metadata:
   {
-    "clawdbot":
+    "moltbot":
       {
         "emoji": "💾",
         "events": ["command:new"],
         "requires": { "config": ["workspace.dir"] },
-        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Clawdbot" }],
+        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Moltbot" }],
       },
   }
 ---
@@ -68,7 +68,7 @@ No additional configuration required. The hook automatically:
 To disable this hook:
 
 ```bash
-clawdbot hooks disable session-memory
+moltbot hooks disable session-memory
 ```
 
 Or remove it from your config:

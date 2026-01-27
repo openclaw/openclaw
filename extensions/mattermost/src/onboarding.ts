@@ -1,4 +1,4 @@
-import type { ChannelOnboardingAdapter, ClawdbotConfig, WizardPrompter } from "clawdbot/plugin-sdk";
+import type { ChannelOnboardingAdapter, MoltbotConfig, WizardPrompter } from "clawdbot/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 
 import {
@@ -177,7 +177,7 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
 
     return { cfg: next, accountId };
   },
-  disable: (cfg: ClawdbotConfig) => ({
+  disable: (cfg: MoltbotConfig) => ({
     ...cfg,
     channels: {
       ...cfg.channels,

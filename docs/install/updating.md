@@ -27,14 +27,14 @@ Notes:
   ```
   The installer will `git pull --rebase` **only** if the repo is clean.
 - For **global installs**, the script uses `npm install -g moltbot@latest` under the hood.
-- Legacy note: `clawdbot` remains available as a compatibility shim.
+- Legacy note: `moltbot` remains available as a compatibility shim.
 
 ## Before you update
 
 - Know how you installed: **global** (npm/pnpm) vs **from source** (git clone).
 - Know how your Gateway is running: **foreground terminal** vs **supervised service** (launchd/systemd).
 - Snapshot your tailoring:
-  - Config: `~/.clawdbot/clawdbot.json`
+  - Config: `~/.clawdbot/moltbot.json`
   - Credentials: `~/.clawdbot/credentials/`
   - Workspace: `~/clawd`
 
@@ -125,7 +125,7 @@ moltbot health
 ```
 
 Notes:
-- `pnpm build` matters when you run the packaged `moltbot` binary ([`dist/entry.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/entry.js)) or use Node to run `dist/`.
+- `pnpm build` matters when you run the packaged `moltbot` binary ([`dist/entry.js`](https://github.com/moltbot/moltbot/blob/main/dist/entry.js)) or use Node to run `dist/`.
 - If you run from a repo checkout without a global install, use `pnpm moltbot ...` for CLI commands.
 - If you run directly from TypeScript (`pnpm moltbot ...`), a rebuild is usually unnecessary, but **config migrations still apply** → run doctor.
 - Switching between global and git installs is easy: install the other flavor, then run `moltbot doctor` so the gateway service entrypoint is rewritten to the current install.
@@ -140,7 +140,7 @@ Typical things it does:
 - Migrate deprecated config keys / legacy config file locations.
 - Audit DM policies and warn on risky “open” settings.
 - Check Gateway health and can offer to restart.
-- Detect and migrate older gateway services (launchd/systemd; legacy schtasks) to current Clawdbot services.
+- Detect and migrate older gateway services (launchd/systemd; legacy schtasks) to current Moltbot services.
 - On Linux, ensure systemd user lingering (so the Gateway survives logout).
 
 Details: [Doctor](/gateway/doctor)
@@ -159,8 +159,8 @@ moltbot logs --follow
 
 If you’re supervised:
 - macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/com.clawdbot.gateway` (use `com.clawdbot.<profile>` if set)
-- Linux systemd user service: `systemctl --user restart clawdbot-gateway[-<profile>].service`
-- Windows (WSL2): `systemctl --user restart clawdbot-gateway[-<profile>].service`
+- Linux systemd user service: `systemctl --user restart moltbot-gateway[-<profile>].service`
+- Windows (WSL2): `systemctl --user restart moltbot-gateway[-<profile>].service`
   - `launchctl`/`systemctl` only work if the service is installed; otherwise run `moltbot gateway install`.
 
 Runbook + exact service labels: [Gateway runbook](/gateway)

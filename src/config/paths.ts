@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import type { ClawdbotConfig } from "./types.js";
+import type { MoltbotConfig } from "./types.js";
 
 /**
  * Nix mode detection: When CLAWDBOT_NIX_MODE=1, the gateway is running under Nix.
@@ -39,12 +39,12 @@ function resolveUserPath(input: string): string {
   return path.resolve(trimmed);
 }
 
-export const STATE_DIR_CLAWDBOT = resolveStateDir();
+export const STATE_DIR = resolveStateDir();
 
 /**
  * Config file path (JSON5).
  * Can be overridden via CLAWDBOT_CONFIG_PATH environment variable.
- * Default: ~/.clawdbot/clawdbot.json (or $CLAWDBOT_STATE_DIR/clawdbot.json)
+ * Default: ~/.clawdbot/moltbot.json (or $CLAWDBOT_STATE_DIR/moltbot.json)
  */
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
@@ -52,21 +52,21 @@ export function resolveConfigPath(
 ): string {
   const override = env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) return resolveUserPath(override);
-  return path.join(stateDir, "clawdbot.json");
+  return path.join(stateDir, "moltbot.json");
 }
 
-export const CONFIG_PATH_CLAWDBOT = resolveConfigPath();
+export const CONFIG_PATH = resolveConfigPath();
 
 export const DEFAULT_GATEWAY_PORT = 18789;
 
 /**
  * Gateway lock directory (ephemeral).
- * Default: os.tmpdir()/clawdbot-<uid> (uid suffix when available).
+ * Default: os.tmpdir()/moltbot-<uid> (uid suffix when available).
  */
 export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
   const base = tmpdir();
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const suffix = uid != null ? `clawdbot-${uid}` : "clawdbot";
+  const suffix = uid != null ? `moltbot-${uid}` : "moltbot";
   return path.join(base, suffix);
 }
 
@@ -97,7 +97,7 @@ export function resolveOAuthPath(
 }
 
 export function resolveGatewayPort(
-  cfg?: ClawdbotConfig,
+  cfg?: MoltbotConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
   const envRaw = env.CLAWDBOT_GATEWAY_PORT?.trim();

@@ -69,7 +69,7 @@ export type MsgContext = {
   Sticker?: StickerMetadata;
   OutputDir?: string;
   OutputBase?: string;
-  /** Remote host for SCP when media lives on a different machine (e.g., clawdbot@192.168.64.3). */
+  /** Remote host for SCP when media lives on a different machine (e.g., moltbot@192.168.64.3). */
   MediaRemoteHost?: string;
   Transcript?: string;
   MediaUnderstanding?: MediaUnderstandingOutput[];

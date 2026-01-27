@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -10,10 +10,10 @@ import { guardCancel, randomToken } from "./onboard-helpers.js";
 type GatewayAuthChoice = "token" | "password";
 
 export async function promptGatewayConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   runtime: RuntimeEnv,
 ): Promise<{
-  config: ClawdbotConfig;
+  config: MoltbotConfig;
   port: number;
   token?: string;
 }> {

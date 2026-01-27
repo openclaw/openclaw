@@ -22,7 +22,7 @@ describe("sandbox explain command", () => {
         sandbox: { tools: { deny: ["browser"] } },
         elevated: { enabled: true, allowFrom: { whatsapp: ["*"] } },
       },
-      session: { store: "/tmp/clawdbot-test-sessions-{agentId}.json" },
+      session: { store: "/tmp/moltbot-test-sessions-{agentId}.json" },
     };
 
     const { sandboxExplainCommand } = await import("./sandbox-explain.js");

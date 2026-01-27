@@ -21,7 +21,7 @@ import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { recordInboundSession } from "../channels/session.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -96,7 +96,7 @@ type BuildTelegramMessageContextParams = {
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   account: { accountId: string };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
@@ -111,7 +111,7 @@ type BuildTelegramMessageContextParams = {
 };
 
 async function resolveStickerVisionSupport(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentId?: string;
 }): Promise<boolean> {
   try {
@@ -271,14 +271,14 @@ export const buildTelegramMessageContext = async ({
                   bot.api.sendMessage(
                     chatId,
                     [
-                      "Clawdbot: access not configured.",
+                      "Moltbot: access not configured.",
                       "",
                       `Your Telegram user id: ${telegramUserId}`,
                       "",
                       `Pairing code: ${code}`,
                       "",
                       "Ask the bot owner to approve with:",
-                      formatCliCommand("clawdbot pairing approve telegram <code>"),
+                      formatCliCommand("moltbot pairing approve telegram <code>"),
                     ].join("\n"),
                   ),
               });

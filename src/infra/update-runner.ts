@@ -67,7 +67,7 @@ const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
 const DEFAULT_PACKAGE_NAME = "moltbot";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, "clawdbot"]);
+const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, "moltbot"]);
 
 function normalizeDir(value?: string | null) {
   if (!value) return null;
@@ -291,7 +291,7 @@ function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
 function normalizeTag(tag?: string) {
   const trimmed = tag?.trim();
   if (!trimmed) return "latest";
-  if (trimmed.startsWith("clawdbot@")) return trimmed.slice("clawdbot@".length);
+  if (trimmed.startsWith("moltbot@")) return trimmed.slice("moltbot@".length);
   if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
     return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
   }
@@ -347,7 +347,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       status: "error",
       mode: "unknown",
       root: gitRoot,
-      reason: "not-clawdbot-root",
+      reason: "not-moltbot-root",
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -502,7 +502,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       const manager = await detectPackageManager(gitRoot);
-      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-preflight-"));
+      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-update-preflight-"));
       const worktreeDir = path.join(preflightRoot, "worktree");
       const worktreeStep = await runStep(
         step(
@@ -689,8 +689,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     const doctorStep = await runStep(
       step(
-        "clawdbot doctor",
-        managerScriptArgs(manager, "clawdbot", ["doctor", "--non-interactive"]),
+        "moltbot doctor",
+        managerScriptArgs(manager, "moltbot", ["doctor", "--non-interactive"]),
         gitRoot,
         { CLAWDBOT_UPDATE_IN_PROGRESS: "1" },
       ),

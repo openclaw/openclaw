@@ -2,8 +2,8 @@
   "name": "@moltbot/tlon",
   "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot Tlon/Urbit channel plugin",
-  "clawdbot": {
+  "description": "Moltbot Tlon/Urbit channel plugin",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ],

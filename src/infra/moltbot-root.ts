@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CORE_PACKAGE_NAMES = new Set(["moltbot", "clawdbot"]);
+const CORE_PACKAGE_NAMES = new Set(["moltbot", "moltbot"]);
 
 async function readPackageName(dir: string): Promise<string | null> {
   try {
@@ -39,7 +39,7 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   return candidates;
 }
 
-export async function resolveClawdbotPackageRoot(opts: {
+export async function resolveMoltbotPackageRoot(opts: {
   cwd?: string;
   argv1?: string;
   moduleUrl?: string;

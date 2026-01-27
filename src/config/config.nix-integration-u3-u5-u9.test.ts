@@ -35,57 +35,55 @@ describe("Nix integration (U3, U5, U9)", () => {
   });
 
   describe("U5: CONFIG_PATH and STATE_DIR env var overrides", () => {
-    it("STATE_DIR_CLAWDBOT defaults to ~/.clawdbot when env not set", async () => {
+    it("STATE_DIR defaults to ~/.clawdbot when env not set", async () => {
       await withEnvOverride({ CLAWDBOT_STATE_DIR: undefined }, async () => {
-        const { STATE_DIR_CLAWDBOT } = await import("./config.js");
-        expect(STATE_DIR_CLAWDBOT).toMatch(/\.clawdbot$/);
+        const { STATE_DIR } = await import("./config.js");
+        expect(STATE_DIR).toMatch(/\.clawdbot$/);
       });
     });
 
-    it("STATE_DIR_CLAWDBOT respects CLAWDBOT_STATE_DIR override", async () => {
+    it("STATE_DIR respects CLAWDBOT_STATE_DIR override", async () => {
       await withEnvOverride({ CLAWDBOT_STATE_DIR: "/custom/state/dir" }, async () => {
-        const { STATE_DIR_CLAWDBOT } = await import("./config.js");
-        expect(STATE_DIR_CLAWDBOT).toBe(path.resolve("/custom/state/dir"));
+        const { STATE_DIR } = await import("./config.js");
+        expect(STATE_DIR).toBe(path.resolve("/custom/state/dir"));
       });
     });
 
-    it("CONFIG_PATH_CLAWDBOT defaults to ~/.clawdbot/clawdbot.json when env not set", async () => {
+    it("CONFIG_PATH defaults to ~/.clawdbot/moltbot.json when env not set", async () => {
       await withEnvOverride(
         { CLAWDBOT_CONFIG_PATH: undefined, CLAWDBOT_STATE_DIR: undefined },
         async () => {
-          const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-          expect(CONFIG_PATH_CLAWDBOT).toMatch(/\.clawdbot[\\/]clawdbot\.json$/);
+          const { CONFIG_PATH } = await import("./config.js");
+          expect(CONFIG_PATH).toMatch(/\.clawdbot[\\/]moltbot\.json$/);
         },
       );
     });
 
-    it("CONFIG_PATH_CLAWDBOT respects CLAWDBOT_CONFIG_PATH override", async () => {
-      await withEnvOverride({ CLAWDBOT_CONFIG_PATH: "/nix/store/abc/clawdbot.json" }, async () => {
-        const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-        expect(CONFIG_PATH_CLAWDBOT).toBe(path.resolve("/nix/store/abc/clawdbot.json"));
+    it("CONFIG_PATH respects CLAWDBOT_CONFIG_PATH override", async () => {
+      await withEnvOverride({ CLAWDBOT_CONFIG_PATH: "/nix/store/abc/moltbot.json" }, async () => {
+        const { CONFIG_PATH } = await import("./config.js");
+        expect(CONFIG_PATH).toBe(path.resolve("/nix/store/abc/moltbot.json"));
       });
     });
 
-    it("CONFIG_PATH_CLAWDBOT expands ~ in CLAWDBOT_CONFIG_PATH override", async () => {
+    it("CONFIG_PATH expands ~ in CLAWDBOT_CONFIG_PATH override", async () => {
       await withTempHome(async (home) => {
         await withEnvOverride({ CLAWDBOT_CONFIG_PATH: "~/.clawdbot/custom.json" }, async () => {
-          const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-          expect(CONFIG_PATH_CLAWDBOT).toBe(path.join(home, ".clawdbot", "custom.json"));
+          const { CONFIG_PATH } = await import("./config.js");
+          expect(CONFIG_PATH).toBe(path.join(home, ".clawdbot", "custom.json"));
         });
       });
     });
 
-    it("CONFIG_PATH_CLAWDBOT uses STATE_DIR_CLAWDBOT when only state dir is overridden", async () => {
+    it("CONFIG_PATH uses STATE_DIR when only state dir is overridden", async () => {
       await withEnvOverride(
         {
           CLAWDBOT_CONFIG_PATH: undefined,
           CLAWDBOT_STATE_DIR: "/custom/state",
         },
         async () => {
-          const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-          expect(CONFIG_PATH_CLAWDBOT).toBe(
-            path.join(path.resolve("/custom/state"), "clawdbot.json"),
-          );
+          const { CONFIG_PATH } = await import("./config.js");
+          expect(CONFIG_PATH).toBe(path.join(path.resolve("/custom/state"), "moltbot.json"));
         },
       );
     });
@@ -104,7 +102,7 @@ describe("Nix integration (U3, U5, U9)", () => {
           "utf-8",
         );
         await fs.writeFile(
-          path.join(pluginDir, "clawdbot.plugin.json"),
+          path.join(pluginDir, "moltbot.plugin.json"),
           JSON.stringify(
             {
               id: "demo-plugin",
@@ -116,7 +114,7 @@ describe("Nix integration (U3, U5, U9)", () => {
           "utf-8",
         );
         await fs.writeFile(
-          path.join(configDir, "clawdbot.json"),
+          path.join(configDir, "moltbot.json"),
           JSON.stringify(
             {
               plugins: {
@@ -198,7 +196,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         const configDir = path.join(home, ".clawdbot");
         await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(
-          path.join(configDir, "clawdbot.json"),
+          path.join(configDir, "moltbot.json"),
           JSON.stringify({
             channels: { telegram: { botToken: "123:ABC" } },
           }),
@@ -218,7 +216,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         const configDir = path.join(home, ".clawdbot");
         await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(
-          path.join(configDir, "clawdbot.json"),
+          path.join(configDir, "moltbot.json"),
           JSON.stringify({
             channels: { telegram: { tokenFile: "/run/agenix/telegram-token" } },
           }),
@@ -238,7 +236,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         const configDir = path.join(home, ".clawdbot");
         await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(
-          path.join(configDir, "clawdbot.json"),
+          path.join(configDir, "moltbot.json"),
           JSON.stringify({
             channels: {
               telegram: {
