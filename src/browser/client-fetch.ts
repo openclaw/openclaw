@@ -19,7 +19,8 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("timed out") ||
     msgLower.includes("timeout") ||
     msgLower.includes("aborted") ||
-    msgLower.includes("abort");
+    msgLower.includes("abort") ||
+    msgLower.includes("aborterror");
   if (looksLikeTimeout) {
     return new Error(
       `Can't reach the clawd browser control service (timed out after ${timeoutMs}ms). ${hint}`,

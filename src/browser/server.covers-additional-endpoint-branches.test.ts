@@ -311,6 +311,9 @@ describe("backward compatibility (profile parameter)", () => {
     prevGatewayPort = process.env.CLAWDBOT_GATEWAY_PORT;
     process.env.CLAWDBOT_GATEWAY_PORT = String(testPort - 2);
 
+    prevGatewayPort = process.env.CLAWDBOT_GATEWAY_PORT;
+    process.env.CLAWDBOT_GATEWAY_PORT = String(testPort - 2);
+
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
