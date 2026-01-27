@@ -1,6 +1,6 @@
 import process from "node:process";
 
-import { formatUncaughtError } from "./errors.js";
+import { formatErrorMessage, formatUncaughtError } from "./errors.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -25,7 +25,7 @@ function isRecoverableError(reason: unknown): boolean {
     return true;
   }
 
-  const message = reason instanceof Error ? reason.message : String(reason);
+  const message = reason instanceof Error ? reason.message : formatErrorMessage(reason);
   const lowerMessage = message.toLowerCase();
   return (
     lowerMessage.includes("fetch failed") ||
