@@ -132,6 +132,14 @@ public struct ClawdbotChatView: View {
             self.hasPerformedInitialScroll = false
             self.isPinnedToBottom = true
         }
+        .onChange(of: self.viewModel.isSending) { _, isSending in
+            // Scroll to bottom when user sends a message, even if scrolled up.
+            guard isSending, self.hasPerformedInitialScroll else { return }
+            self.isPinnedToBottom = true
+            withAnimation(.snappy(duration: 0.22)) {
+                self.scrollPosition = self.scrollerBottomID
+            }
+        }
         .onChange(of: self.viewModel.messages.count) { _, _ in
             guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
             withAnimation(.snappy(duration: 0.22)) {
