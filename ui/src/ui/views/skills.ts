@@ -142,8 +142,17 @@ export function renderSkills(props: SkillsProps) {
               <div class="data-table__empty-icon">${icon("zap", { size: 32 })}</div>
               <div class="data-table__empty-title">No skills found</div>
               <div class="data-table__empty-desc">
-                ${filter ? "Try adjusting your search filter" : "No skills are currently available"}
+                ${filter ? "Try adjusting your search filter" : "Skills extend what your gateway can do. Install skills via the CLI to get started."}
               </div>
+              ${filter
+                ? html`<button class="btn btn--sm" style="margin-top: 12px;" @click=${() => props.onFilterChange("")}>
+                    ${icon("x", { size: 14 })}
+                    <span>Clear filter</span>
+                  </button>`
+                : html`<button class="btn btn--sm" style="margin-top: 12px;" ?disabled=${props.loading} @click=${props.onRefresh}>
+                    ${icon("refresh-cw", { size: 14 })}
+                    <span>Refresh</span>
+                  </button>`}
             </div>
           `
           : html`

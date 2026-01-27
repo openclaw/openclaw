@@ -5,7 +5,7 @@ import { createContextCommands, createDefaultCommands } from "./command-palette"
 describe("createContextCommands", () => {
   const noop = () => {};
 
-  it("returns empty array for tabs without context commands", () => {
+  it("returns empty array for tabs without context commands when no callbacks provided", () => {
     expect(createContextCommands("landing", {})).toEqual([]);
     expect(createContextCommands("overview", {})).toEqual([]);
     expect(createContextCommands("agents", {})).toEqual([]);
@@ -74,6 +74,54 @@ describe("createContextCommands", () => {
     expect(cmds[0].id).toBe("ctx-clear-logs");
   });
 
+  it("returns all logs commands when all callbacks provided", () => {
+    const cmds = createContextCommands("logs", {
+      clearLogs: noop,
+      refreshLogs: noop,
+      exportLogs: noop,
+      toggleAutoFollow: noop,
+      jumpToLogsBottom: noop,
+    });
+    expect(cmds).toHaveLength(5);
+    expect(cmds.map((c) => c.id)).toEqual([
+      "ctx-clear-logs",
+      "ctx-refresh-logs",
+      "ctx-export-logs",
+      "ctx-toggle-follow",
+      "ctx-jump-bottom",
+    ]);
+  });
+
+  it("returns skills commands for skills tab", () => {
+    const cmds = createContextCommands("skills", { refreshSkills: noop });
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].id).toBe("ctx-refresh-skills");
+  });
+
+  it("returns debug commands for debug tab", () => {
+    const cmds = createContextCommands("debug", { refreshDebug: noop });
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].id).toBe("ctx-refresh-debug");
+  });
+
+  it("returns instances commands for instances tab", () => {
+    const cmds = createContextCommands("instances", { refreshInstances: noop });
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].id).toBe("ctx-refresh-instances");
+  });
+
+  it("returns overview commands for overview tab", () => {
+    const cmds = createContextCommands("overview", { refreshOverview: noop });
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].id).toBe("ctx-refresh-overview");
+  });
+
+  it("returns agents commands for agents tab", () => {
+    const cmds = createContextCommands("agents", { refreshAgents: noop });
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].id).toBe("ctx-refresh-agents");
+  });
+
   it("returns channels commands for channels tab", () => {
     const cmds = createContextCommands("channels", { refreshChannels: noop });
     expect(cmds).toHaveLength(1);
@@ -123,5 +171,43 @@ describe("createDefaultCommands", () => {
     expect(refreshCmd).toBeTruthy();
     refreshCmd!.action();
     expect(refresh).toHaveBeenCalled();
+  });
+
+  it("includes system commands when extras are provided", () => {
+    const setTab = vi.fn();
+    const refresh = vi.fn();
+    const newSession = vi.fn();
+    const toggleTheme = vi.fn();
+    const openShortcuts = vi.fn();
+    const openDocs = vi.fn();
+    const copyUrl = vi.fn();
+
+    const cmds = createDefaultCommands(setTab, refresh, newSession, toggleTheme, {
+      openKeyboardShortcuts: openShortcuts,
+      openDocumentation: openDocs,
+      copyGatewayUrl: copyUrl,
+    });
+
+    const sysCmds = cmds.filter((c) => c.category === "System");
+    expect(sysCmds).toHaveLength(3);
+    expect(sysCmds.map((c) => c.id)).toEqual([
+      "sys-keyboard-shortcuts",
+      "sys-open-docs",
+      "sys-copy-url",
+    ]);
+
+    // Test system commands call the right actions
+    sysCmds[0].action();
+    expect(openShortcuts).toHaveBeenCalledOnce();
+    sysCmds[1].action();
+    expect(openDocs).toHaveBeenCalledOnce();
+    sysCmds[2].action();
+    expect(copyUrl).toHaveBeenCalledOnce();
+  });
+
+  it("omits system commands when extras not provided", () => {
+    const cmds = createDefaultCommands(vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const sysCmds = cmds.filter((c) => c.category === "System");
+    expect(sysCmds).toHaveLength(0);
   });
 });

@@ -81,9 +81,10 @@ Reference: `dgarson/IMPROVEMENT-IDEAS.md` (198 incomplete items across 14 catego
 - [x] Implement fuzzy search (replace `string.includes()`)
 - [~] Add command history and recents (persisted to localStorage) — PR #21
 - [~] Add favorites system — PR #26
-- [~] Add context-aware commands based on current view — PR #24
+- [x] Add context-aware commands based on current view — PR #24 + expanded with domain-specific commands for all tabs (skills, debug, instances, overview, agents, logs)
 - [ ] Add nested/sub-command menus
 - [~] Add category filtering in search
+- [x] Add system commands (Keyboard Shortcuts, Open Documentation, Copy Gateway URL)
 - [ ] See `dgarson/COMMAND-PALETTE.md` for full design doc
 
 ### Loading States
@@ -92,8 +93,8 @@ Reference: `dgarson/IMPROVEMENT-IDEAS.md` (198 incomplete items across 14 catego
 - [ ] Implement optimistic UI updates
 
 ### Empty States
-- [ ] Design and implement empty state illustrations/messages for all views
-- [ ] Add helpful CTAs in empty states
+- [x] Design and implement empty state illustrations/messages for all views — enhanced instances, skills, sessions, nodes, logs, debug
+- [x] Add helpful CTAs in empty states — contextual action buttons (refresh, clear filters, clear search) in all empty states
 
 ### Accessibility
 - [ ] ARIA compliance audit across all components
@@ -153,6 +154,8 @@ _Items move here when done._
 - [x] Sessions view responsive filtering/sorting
 - [x] Agent status Slack command
 - [x] Decision store unit tests (PR #16)
+- [x] Empty states with contextual CTAs across all views (instances, skills, sessions, nodes, logs, debug)
+- [x] Command palette domain-specific commands for all tabs + system commands (keyboard shortcuts, docs, copy URL)
 
 ---
 

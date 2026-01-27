@@ -580,6 +580,15 @@ export function renderLogs(props: LogsProps) {
                           ? "No entries match your current filters. Try adjusting your search or level filters."
                           : "Gateway logs will appear here when the gateway is running."}
                       </div>
+                      ${props.entries.length > 0
+                        ? html`<button class="btn btn--sm" style="margin-top: 12px;" @click=${() => props.onFilterTextChange("")}>
+                            ${icon("x", { size: 14 })}
+                            <span>Clear filters</span>
+                          </button>`
+                        : html`<button class="btn btn--sm" style="margin-top: 12px;" ?disabled=${props.loading} @click=${props.onRefresh}>
+                            ${icon("refresh-cw", { size: 14 })}
+                            <span>Refresh</span>
+                          </button>`}
                     </div>
                   `
               : html`

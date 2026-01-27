@@ -234,7 +234,7 @@ function renderModelsTab(props: DebugProps) {
       <div class="models-empty">
         <div class="models-empty__icon">${icon("brain", { size: 32 })}</div>
         <div class="models-empty__text">No models available</div>
-        <div class="models-empty__sub">Run models.list to fetch available models</div>
+        <div class="models-empty__sub">Configure an AI provider in your gateway settings to see available models</div>
       </div>
     `;
   }

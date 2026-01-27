@@ -135,11 +135,11 @@ Replace `window.confirm()` calls:
 
 ## 3. Command Palette
 
-**Status**: Basic implementation with navigation only
+**Status**: Full implementation with navigation, context-aware commands, domain-specific commands, and system commands
 
 **File**: `ui/src/ui/components/command-palette.ts`
 
-### Current Commands (14 total)
+### Current Commands (14 base + context-aware per tab + 3 system)
 
 Navigation (11):
 - Go to Chat, Overview, Channels, Sessions, Instances, Cron, Skills, Nodes, Config, Debug, Logs
@@ -148,6 +148,26 @@ Actions (3):
 - Refresh Current View
 - New Chat Session
 - Toggle Theme
+
+System (3):
+- Keyboard Shortcuts
+- Open Documentation
+- Copy Gateway URL
+
+Context-Aware (per tab):
+- Chat: New Session, Clear History, Abort Response
+- Sessions: Refresh Sessions
+- Channels: Refresh Channels
+- Cron: Add Job, Refresh Jobs
+- Overseer: Create Goal, Refresh Overseer
+- Config: Save Configuration
+- Nodes: Refresh Nodes
+- Skills: Refresh Skills
+- Debug: Refresh Debug
+- Instances: Refresh Instances
+- Overview: Refresh Overview
+- Agents: Refresh Agents
+- Logs: Clear Logs, Refresh Logs, Export Logs, Toggle Auto-Follow, Jump to Bottom
 
 ### Improvement: Add Domain-Specific Commands
 
@@ -166,20 +186,22 @@ Actions (3):
 - [ ] `Import config` - Upload JSON
 
 **Logs Commands**:
-- [ ] `Clear logs` - With confirmation
-- [ ] `Export logs` - Download as file
-- [ ] `Toggle auto-follow` - Toggle scroll lock
+- [x] `Clear logs` - With confirmation
+- [x] `Export logs` - Download as file
+- [x] `Toggle auto-follow` - Toggle scroll lock
 - [ ] `Filter by level` - Quick filter to error/warn/info
-- [ ] `Jump to bottom` - Scroll to latest
+- [x] `Jump to bottom` - Scroll to latest
+- [x] `Refresh logs` - Reload logs
 
 **Sessions Commands**:
-- [ ] `New session` - Already exists
+- [x] `New session` - Already exists
 - [ ] `Delete current session` - With confirmation
 - [ ] `Duplicate session` - Clone current
 - [ ] `Switch session` - Quick session picker
+- [x] `Refresh sessions` - Reload sessions list
 
 **Skills Commands**:
-- [ ] `Refresh skills` - Reload skills list
+- [x] `Refresh skills` - Reload skills list
 - [ ] `Install skill` - Open install dialog
 - [ ] `Toggle skill` - Enable/disable
 
@@ -189,24 +211,23 @@ Actions (3):
 - [ ] `Configure channel...` - Quick config access
 
 **Debug Commands**:
+- [x] `Refresh debug` - Reload debug info
 - [ ] `Clear RPC result` - Clear output
 - [ ] `Copy RPC result` - Copy to clipboard
 - [ ] `Run last RPC` - Re-execute
 
 **System Commands**:
-- [ ] `Show keyboard shortcuts` - ? key
-- [ ] `Open documentation` - External link
+- [x] `Show keyboard shortcuts` - ? key
+- [x] `Open documentation` - External link
+- [x] `Copy gateway URL` - Copy to clipboard
 - [ ] `Report issue` - GitHub link
 
 ### Improvement: Search Enhancements
 
-Current search: Simple `string.includes()` match
-
-Suggested improvements:
-- [ ] Fuzzy search (typo-tolerant)
-- [ ] Command history / recents section
+- [x] Fuzzy search (typo-tolerant) — implemented with fuzzy-search.ts
+- [x] Command history / recents section — persisted to localStorage
 - [ ] Weighted results (frequently used first)
-- [ ] Category-based filtering (type "nav:" for navigation only)
+- [x] Category-based filtering (Tab/Shift+Tab to cycle categories)
 
 ### ✅ COMPLETED: Visual Enhancements
 
@@ -429,7 +450,7 @@ prefersReducedMotion(): boolean
 
 ## 7. Empty States
 
-**Status**: Well implemented, minor improvements possible
+**Status**: Contextual action buttons added to all empty states; illustrations and animations still pending
 
 ### Current Pattern
 
@@ -457,10 +478,14 @@ emptyState({ icon, title, description, action }): TemplateResult
 
 ### Improvement: Contextual Actions
 
-- [ ] "Create your first session" button in Sessions
-- [ ] "Install a skill" button in Skills
+- [x] Refresh / Clear search buttons in Sessions empty state (both list and table views)
+- [x] Refresh / Clear filter buttons in Skills empty state
+- [x] Refresh button in Instances empty state with descriptive text
+- [x] Refresh button in Nodes empty state with CLI hint
+- [x] Refresh devices button in Nodes devices empty state
+- [x] Refresh / Clear filters buttons in Logs empty state
+- [x] Improved description text in Debug models empty state
 - [ ] "Configure a channel" button in Channels
-- [ ] "Add a cron job" button in Cron
 
 ### Improvement: Helpful Links
 

@@ -203,16 +203,8 @@ export async function authorizeGatewayConnect(params: {
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
 }): Promise<GatewayAuthResult> {
-  const { auth, connectAuth, req, trustedProxies } = params;
+  const { auth, connectAuth, req } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const localDirect = isLocalDirectRequest(req, trustedProxies);
-
-  // Local direct requests (localhost without forwarding headers) are treated
-  // as trusted *only* when auth is disabled. When auth is enabled (token or
-  // password), local callers must still present credentials.
-  if (localDirect && auth.mode === "none") {
-    return { ok: true, method: "none" };
-  }
 
   if (auth.allowTailscale) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({

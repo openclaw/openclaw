@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 
 import { formatPresenceAge, formatPresenceSummary } from "../presenter";
+import { icon } from "../icons";
 import type { PresenceEntry } from "../types";
 
 export type InstancesProps = {
@@ -35,7 +36,17 @@ export function renderInstances(props: InstancesProps) {
         : nothing}
       <div class="list" style="margin-top: 16px;">
         ${props.entries.length === 0
-          ? html`<div class="muted">No instances reported yet.</div>`
+          ? html`
+              <div class="data-table__empty">
+                <div class="data-table__empty-icon">${icon("radio", { size: 32 })}</div>
+                <div class="data-table__empty-title">No instances reported yet</div>
+                <div class="data-table__empty-desc">Connected gateways and clients will appear here as they send presence beacons</div>
+                <button class="btn btn--sm" style="margin-top: 12px;" ?disabled=${props.loading} @click=${props.onRefresh}>
+                  ${icon("refresh-cw", { size: 14 })}
+                  <span>Refresh</span>
+                </button>
+              </div>
+            `
           : props.entries.map((entry) => renderEntry(entry))}
       </div>
     </section>

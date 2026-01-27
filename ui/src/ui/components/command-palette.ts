@@ -311,12 +311,17 @@ export function createDefaultCommands(
   setTab: (tab: Tab) => void,
   refresh: () => void,
   newSession: () => void,
-  toggleTheme: () => void
+  toggleTheme: () => void,
+  extras?: {
+    openKeyboardShortcuts?: () => void;
+    openDocumentation?: () => void;
+    copyGatewayUrl?: () => void;
+  }
 ): Command[] {
   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
   const mod = isMac ? "⌘" : "Ctrl+";
 
-  return [
+  const cmds: Command[] = [
     // Navigation
     { id: "nav-chat", label: "Go to Chat", icon: "message-square", shortcut: `${mod}1`, category: "Navigation", action: () => setTab("chat") },
     { id: "nav-overview", label: "Go to Overview", icon: "layout-dashboard", shortcut: `${mod}2`, category: "Navigation", action: () => setTab("overview") },
@@ -334,6 +339,13 @@ export function createDefaultCommands(
     { id: "action-new-session", label: "New Chat Session", icon: "plus", shortcut: `${mod}N`, category: "Actions", action: newSession },
     { id: "theme-toggle", label: "Toggle Theme", icon: "sun", shortcut: `${mod}T`, category: "Actions", action: toggleTheme },
   ];
+
+  // System commands
+  if (extras?.openKeyboardShortcuts) cmds.push({ id: "sys-keyboard-shortcuts", label: "Keyboard Shortcuts", icon: "keyboard", shortcut: `${mod}?`, category: "System", action: extras.openKeyboardShortcuts });
+  if (extras?.openDocumentation) cmds.push({ id: "sys-open-docs", label: "Open Documentation", icon: "book-open", category: "System", action: extras.openDocumentation });
+  if (extras?.copyGatewayUrl) cmds.push({ id: "sys-copy-url", label: "Copy Gateway URL", icon: "copy", category: "System", action: extras.copyGatewayUrl });
+
+  return cmds;
 }
 
 /** Callbacks available for context-aware commands. Provide only what applies. */
@@ -350,6 +362,16 @@ export type ContextActions = {
   saveConfig?: () => void;
   refreshNodes?: () => void;
   clearLogs?: () => void;
+  refreshSkills?: () => void;
+  refreshDebug?: () => void;
+  refreshInstances?: () => void;
+  refreshOverview?: () => void;
+  refreshAgents?: () => void;
+  refreshLogs?: () => void;
+  exportLogs?: () => void;
+  toggleAutoFollow?: () => void;
+  jumpToLogsBottom?: () => void;
+  openKeyboardShortcuts?: () => void;
 };
 
 /**
@@ -388,6 +410,25 @@ export function createContextCommands(tab: Tab, actions: ContextActions): Comman
       break;
     case "logs":
       if (actions.clearLogs) cmds.push({ id: "ctx-clear-logs", label: "Clear Log View", icon: "trash-2", category: cat, action: actions.clearLogs });
+      if (actions.refreshLogs) cmds.push({ id: "ctx-refresh-logs", label: "Refresh Logs", icon: "refresh-cw", category: cat, action: actions.refreshLogs });
+      if (actions.exportLogs) cmds.push({ id: "ctx-export-logs", label: "Export Logs", icon: "download", category: cat, action: actions.exportLogs });
+      if (actions.toggleAutoFollow) cmds.push({ id: "ctx-toggle-follow", label: "Toggle Auto-Follow", icon: "arrow-down-to-line", category: cat, action: actions.toggleAutoFollow });
+      if (actions.jumpToLogsBottom) cmds.push({ id: "ctx-jump-bottom", label: "Jump to Bottom", icon: "chevrons-down", category: cat, action: actions.jumpToLogsBottom });
+      break;
+    case "skills":
+      if (actions.refreshSkills) cmds.push({ id: "ctx-refresh-skills", label: "Refresh Skills", icon: "refresh-cw", category: cat, action: actions.refreshSkills });
+      break;
+    case "debug":
+      if (actions.refreshDebug) cmds.push({ id: "ctx-refresh-debug", label: "Refresh Debug", icon: "refresh-cw", category: cat, action: actions.refreshDebug });
+      break;
+    case "instances":
+      if (actions.refreshInstances) cmds.push({ id: "ctx-refresh-instances", label: "Refresh Instances", icon: "refresh-cw", category: cat, action: actions.refreshInstances });
+      break;
+    case "overview":
+      if (actions.refreshOverview) cmds.push({ id: "ctx-refresh-overview", label: "Refresh Overview", icon: "refresh-cw", category: cat, action: actions.refreshOverview });
+      break;
+    case "agents":
+      if (actions.refreshAgents) cmds.push({ id: "ctx-refresh-agents", label: "Refresh Agents", icon: "refresh-cw", category: cat, action: actions.refreshAgents });
       break;
   }
 

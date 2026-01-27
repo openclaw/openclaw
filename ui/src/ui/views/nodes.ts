@@ -156,7 +156,11 @@ function renderNodesTab(props: NodesProps) {
                   ${icon("server", { size: 32 })}
                 </div>
                 <div class="nodes-empty__title">No nodes connected</div>
-                <div class="nodes-empty__desc">Nodes will appear here when they connect to the gateway</div>
+                <div class="nodes-empty__desc">Nodes will appear here when they connect to the gateway. Run <code>clawdbot node start</code> to connect a node.</div>
+                <button class="btn btn--sm" style="margin-top: 12px;" ?disabled=${props.loading} @click=${props.onRefresh}>
+                  ${icon("refresh-cw", { size: 14 })}
+                  <span>Refresh</span>
+                </button>
               </div>
             `
         : html`
@@ -353,7 +357,11 @@ function renderDevicesTab(props: NodesProps) {
                   ${icon("monitor", { size: 32 })}
                 </div>
                 <div class="nodes-empty__title">No devices</div>
-                <div class="nodes-empty__desc">Paired devices will appear here</div>
+                <div class="nodes-empty__desc">Paired devices will appear here when they request access to the gateway</div>
+                <button class="btn btn--sm" style="margin-top: 12px;" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
+                  ${icon("refresh-cw", { size: 14 })}
+                  <span>Refresh</span>
+                </button>
               </div>
             `
           : nothing}

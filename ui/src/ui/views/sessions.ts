@@ -1254,6 +1254,15 @@ export function renderSessions(props: SessionsProps) {
                                 ? "Try adjusting your search or filter criteria"
                                 : "Sessions will appear here when users start conversations"}
                             </div>
+                            ${hasFilters
+                              ? html`<button class="btn btn--sm" style="margin-top: 12px;" @click=${() => props.onSearchChange("")}>
+                                  ${icon("x", { size: 14 })}
+                                  <span>Clear search</span>
+                                </button>`
+                              : html`<button class="btn btn--sm" style="margin-top: 12px;" ?disabled=${props.loading} @click=${props.onRefresh}>
+                                  ${icon("refresh-cw", { size: 14 })}
+                                  <span>Refresh</span>
+                                </button>`}
                           </div>
                         `
                         : rows.map((row) =>
@@ -1321,6 +1330,15 @@ export function renderSessions(props: SessionsProps) {
                                   ? "Try adjusting your search or filter criteria"
                                   : "Sessions will appear here when users start conversations"}
                               </div>
+                              ${hasFilters
+                                ? html`<button class="btn btn--sm" style="margin-top: 12px;" @click=${() => props.onSearchChange("")}>
+                                    ${icon("x", { size: 14 })}
+                                    <span>Clear search</span>
+                                  </button>`
+                                : html`<button class="btn btn--sm" style="margin-top: 12px;" ?disabled=${props.loading} @click=${props.onRefresh}>
+                                    ${icon("refresh-cw", { size: 14 })}
+                                    <span>Refresh</span>
+                                  </button>`}
                             </div>
                           `
                           : rows.map((row) =>
