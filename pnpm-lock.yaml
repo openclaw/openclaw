@@ -314,17 +314,17 @@ importers:
         specifier: ^10.5.0
         version: 10.5.0
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/imessage: {}
 
   extensions/line:
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/llm-task: {}
 
@@ -348,17 +348,17 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/mattermost: {}
 
   extensions/memory-core:
     dependencies:
-      clawdbot:
-        specifier: '>=2026.1.24-3'
-        version: 2026.1.24-3(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
+      moltbot:
+        specifier: '>=2026.1.26'
+        version: link:../..
 
   extensions/memory-lancedb:
     dependencies:
@@ -383,9 +383,9 @@ importers:
       '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.2.2
         version: 1.2.2
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -397,9 +397,9 @@ importers:
 
   extensions/nostr:
     dependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
       nostr-tools:
         specifier: ^2.20.0
         version: 2.20.0(typescript@5.9.3)
@@ -439,9 +439,9 @@ importers:
         specifier: ^4.3.5
         version: 4.3.6
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/voice-call:
     dependencies:
@@ -459,9 +459,9 @@ importers:
 
   extensions/zalo:
     dependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
       undici:
         specifier: 7.19.0
         version: 7.19.0
@@ -471,9 +471,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   packages/clawdbot:
     dependencies:
