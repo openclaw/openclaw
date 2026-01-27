@@ -100,7 +100,7 @@ describe("gateway server chat", () => {
       const sessionCall = spy.mock.calls.at(-1)?.[0] as { SessionKey?: string } | undefined;
       expect(sessionCall?.SessionKey).toBe("agent:main:subagent:abc");
 
-      const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+      const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
       tempDirs.push(sendPolicyDir);
       testState.sessionStorePath = path.join(sendPolicyDir, "sessions.json");
       testState.sessionConfig = {
@@ -139,7 +139,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
 
-      const agentBlockedDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+      const agentBlockedDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
       tempDirs.push(agentBlockedDir);
       testState.sessionStorePath = path.join(agentBlockedDir, "sessions.json");
       testState.sessionConfig = {
@@ -208,7 +208,40 @@ describe("gateway server chat", () => {
         | undefined;
       expect(imgOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
 
-      const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+      const callsBeforeImageOnly = spy.mock.calls.length;
+      const reqIdOnly = "chat-img-only";
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: reqIdOnly,
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "",
+            idempotencyKey: "idem-img-only",
+            attachments: [
+              {
+                type: "image",
+                mimeType: "image/png",
+                fileName: "dot.png",
+                content: `data:image/png;base64,${pngB64}`,
+              },
+            ],
+          },
+        }),
+      );
+
+      const imgOnlyRes = await onceMessage(ws, (o) => o.type === "res" && o.id === reqIdOnly, 8000);
+      expect(imgOnlyRes.ok).toBe(true);
+      expect(imgOnlyRes.payload?.runId).toBeDefined();
+
+      await waitFor(() => spy.mock.calls.length > callsBeforeImageOnly, 8000);
+      const imgOnlyOpts = spy.mock.calls.at(-1)?.[1] as
+        | { images?: Array<{ type: string; data: string; mimeType: string }> }
+        | undefined;
+      expect(imgOnlyOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
+
+      const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
       tempDirs.push(historyDir);
       testState.sessionStorePath = path.join(historyDir, "sessions.json");
       await writeSessionStore({
@@ -260,7 +293,7 @@ describe("gateway server chat", () => {
   });
 
   test("routes chat.send slash commands without agent runs", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
     try {
       testState.sessionStorePath = path.join(dir, "sessions.json");
       await writeSessionStore({
@@ -299,7 +332,7 @@ describe("gateway server chat", () => {
   });
 
   test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {
