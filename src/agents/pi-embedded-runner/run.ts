@@ -34,6 +34,7 @@ import {
   isContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
@@ -437,6 +438,29 @@ export async function runEmbeddedPiAgent(
                   },
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
+                },
+              };
+            }
+            // Handle image size errors with a user-friendly message (no retry needed)
+            if (isImageSizeError(errorText)) {
+              return {
+                payloads: [
+                  {
+                    text:
+                      "Image too large for the model (max 5MB). " +
+                      "Please compress or resize the image and try again.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "image_size", message: errorText },
                 },
               };
             }
