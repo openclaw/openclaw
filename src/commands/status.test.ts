@@ -1,4 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+let previousProfile: string | undefined;
+
+beforeAll(() => {
+  previousProfile = process.env.CLAWDBOT_PROFILE;
+  process.env.CLAWDBOT_PROFILE = "isolated";
+});
+
+afterAll(() => {
+  if (previousProfile === undefined) {
+    delete process.env.CLAWDBOT_PROFILE;
+  } else {
+    process.env.CLAWDBOT_PROFILE = previousProfile;
+  }
+});
 
 const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn().mockReturnValue({

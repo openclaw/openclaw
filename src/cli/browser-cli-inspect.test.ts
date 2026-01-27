@@ -1,17 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 
-const clientMocks = vi.hoisted(() => ({
-  browserSnapshot: vi.fn(async () => ({
+const gatewayMocks = vi.hoisted(() => ({
+  callGatewayFromCli: vi.fn(async () => ({
     ok: true,
     format: "ai",
     targetId: "t1",
     url: "https://example.com",
     snapshot: "ok",
   })),
-  resolveBrowserControlUrl: vi.fn(() => "http://127.0.0.1:18791"),
 }));
-vi.mock("../browser/client.js", () => clientMocks);
+
+vi.mock("./gateway-rpc.js", () => ({
+  callGatewayFromCli: gatewayMocks.callGatewayFromCli,
+}));
 
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ browser: {} })),
@@ -64,6 +66,7 @@ describe("browser cli snapshot defaults", () => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
+
     const { registerBrowserInspectCommands } = await import("./browser-cli-inspect.js");
     const program = new Command();
     const browser = program.command("browser").option("--json", false);
@@ -84,13 +87,15 @@ describe("browser cli snapshot defaults", () => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-    clientMocks.browserSnapshot.mockResolvedValueOnce({
+
+    gatewayMocks.callGatewayFromCli.mockResolvedValueOnce({
       ok: true,
       format: "aria",
       targetId: "t1",
       url: "https://example.com",
       nodes: [],
     });
+
     const { registerBrowserInspectCommands } = await import("./browser-cli-inspect.js");
     const program = new Command();
     const browser = program.command("browser").option("--json", false);
