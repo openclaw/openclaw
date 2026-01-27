@@ -5,7 +5,12 @@ import {
   type MessagingTarget,
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
+  type DirectoryConfigParams,
+  type ChannelDirectoryEntry,
 } from "../channels/targets.js";
+
+import { listDiscordDirectoryPeersLive } from "./directory-live.js";
+import { resolveDiscordAccount } from "./accounts.js";
 
 export type DiscordTargetKind = MessagingTargetKind;
 
@@ -59,4 +64,61 @@ export function parseDiscordTarget(
 export function resolveDiscordChannelId(raw: string): string {
   const target = parseDiscordTarget(raw, { defaultKind: "channel" });
   return requireTargetKind({ platform: "Discord", target, kind: "channel" });
+}
+
+/**
+ * Resolve a Discord username to user ID using the directory lookup.
+ * This enables sending DMs by username instead of requiring explicit user IDs.
+ *
+ * @param raw - The username or raw target string (e.g., "john.doe")
+ * @param options - Directory configuration params (cfg, accountId, limit)
+ * @returns Parsed MessagingTarget with user ID, or undefined if not found
+ */
+export async function resolveDiscordTarget(
+  raw: string,
+  options: DirectoryConfigParams,
+): Promise<MessagingTarget | undefined> {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+
+  // If already a known format, parse directly
+  const directParse = parseDiscordTarget(trimmed, options);
+  if (directParse && directParse.kind !== "channel" && !isLikelyUsername(trimmed)) {
+    return directParse;
+  }
+
+  // Try to resolve as a username via directory lookup
+  try {
+    const directoryEntries = await listDiscordDirectoryPeersLive({
+      ...options,
+      query: trimmed,
+      limit: 1,
+    });
+
+    const match = directoryEntries[0];
+    if (match && match.kind === "user") {
+      // Extract user ID from the directory entry (format: "user:<id>")
+      const userId = match.id.replace(/^user:/, "");
+      return buildMessagingTarget("user", userId, trimmed);
+    }
+  } catch (error) {
+    // Directory lookup failed - fall through to parse as-is
+    // This preserves existing behavior for channel names
+  }
+
+  // Fallback to original parsing (for channels, etc.)
+  return parseDiscordTarget(trimmed, options);
+}
+
+/**
+ * Check if a string looks like a Discord username (not a mention, prefix, or ID).
+ * Usernames typically don't start with special characters except underscore.
+ */
+function isLikelyUsername(input: string): boolean {
+  // Skip if it's already a known format
+  if (/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(input)) {
+    return false;
+  }
+  // Likely a username if it doesn't match known patterns
+  return true;
 }
