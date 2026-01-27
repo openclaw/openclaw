@@ -2,10 +2,12 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.25
+## 2026.1.26
 Status: unreleased.
 
 ### Changes
+- Rebrand: rename the npm package/CLI to `moltbot`, add a `clawdbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
+- Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
 - macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
 - Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
 - Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
@@ -53,6 +55,8 @@ Status: unreleased.
 - Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
 - Telegram: add optional silent send flag (disable notifications). (#2382) Thanks @Suksham-sharma.
 - Telegram: support editing sent messages via message(action="edit"). (#2394) Thanks @marcelomar21.
+- Telegram: add sticker receive/send with vision caching. (#2629) Thanks @longjos.
+- Telegram: send sticker pixels to vision models. (#2650)
 - Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
 - Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
