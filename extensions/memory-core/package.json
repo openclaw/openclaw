@@ -9,6 +9,6 @@
     ]
   },
   "peerDependencies": {
-    "moltbot": ">=2026.1.26"
+    "moltbot": "^0.1.0"
   }
 }
