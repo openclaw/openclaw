@@ -11,7 +11,7 @@ settings:
 
 packages:
   MoltbotKit:
-    path: ../shared/ClawdbotKit
+    path: ../shared/MoltbotKit
   Swabble:
     path: ../../Swabble
 
