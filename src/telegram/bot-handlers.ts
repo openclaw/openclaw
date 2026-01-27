@@ -4,6 +4,9 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
+import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
+import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { danger, logVerbose, warn } from "../globals.js";
@@ -17,6 +20,7 @@ import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
+import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -198,6 +202,47 @@ export const registerTelegramHandlers = ({
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
       if (!data || !callbackMessage) return;
+
+      // Handle commands pagination callback
+      const paginationMatch = data.match(/^commands_page_(\d+|noop)$/);
+      if (paginationMatch) {
+        const pageValue = paginationMatch[1];
+        if (pageValue === "noop") return; // Page number button - no action
+
+        const page = parseInt(pageValue, 10);
+        if (isNaN(page) || page < 1) return;
+
+        const skillCommands = listSkillCommandsForAgents({ cfg });
+        const result = buildCommandsMessagePaginated(cfg, skillCommands, {
+          page,
+          surface: "telegram",
+        });
+
+        const messageId = callbackMessage.message_id;
+        const chatId = callbackMessage.chat.id;
+        const keyboard =
+          result.totalPages > 1
+            ? buildInlineKeyboard(
+                buildCommandsPaginationKeyboard(result.currentPage, result.totalPages),
+              )
+            : undefined;
+
+        try {
+          await bot.api.editMessageText(
+            chatId,
+            messageId,
+            result.text,
+            keyboard ? { reply_markup: keyboard } : undefined,
+          );
+        } catch (editErr) {
+          // Ignore "message is not modified" errors (user clicked same page)
+          const errStr = String(editErr);
+          if (!errStr.includes("message is not modified")) {
+            throw editErr;
+          }
+        }
+        return;
+      }
 
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
