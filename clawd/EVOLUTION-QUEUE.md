@@ -31,12 +31,19 @@ Add items under "## Pending" using this format:
 - **Status:** RESOLVED (2026-01-27)
 - **Resolution:**
   - **Created two separate agents:**
-    - `liam-telegram`: Cloud model (zai/glm-4.7), primary for cron jobs delivering to Telegram
-    - `liam-discord`: Local model (ollama/glm-4.7-flash), default agent for interactive sessions
-  - **Fixed GOG tool blockage:** Removed restrictive `tools.allow: ["llm-task"]` whitelist from agent config
-  - **Updated all cron jobs:** Changed `agentId: "main"` → `agentId: "liam-telegram"` for Telegram delivery
-  - **Limitation:** Per-agent channel binding not supported in clawdbot v2026.1.25 (tried `agent.channels` and `channel.agentId`, both rejected by schema)
-  - **Verified:** GOG now works: `gog gmail messages search` returns results successfully
+    - `liam-telegram`: Cloud model (zai/glm-4.7), for Telegram channel
+    - `liam-discord`: Local model (ollama/glm-4.7-flash), for Discord channel
+  - **Added `bindings` config for TRUE channel-to-agent routing:**
+    ```json
+    "bindings": [
+      { "agentId": "liam-telegram", "match": { "channel": "telegram" } },
+      { "agentId": "liam-discord", "match": { "channel": "discord" } }
+    ]
+    ```
+  - **Session isolation achieved:** Each agent has separate session store (`~/.clawdbot/agents/<agentId>/sessions/`)
+  - **Fixed GOG tool blockage:** Removed restrictive `tools.allow: ["llm-task"]` whitelist
+  - **Updated all cron jobs:** Changed `agentId: "main"` → `agentId: "liam-telegram"`
+  - **Verified:** GOG works, bindings applied, crons routing to liam-telegram
 
 ### [2026-01-26-028] APEX v5.1 Compliance - Subagent Behavior Rule [RESOLVED]
 - **Proposed by:** Liam (per user feedback)
