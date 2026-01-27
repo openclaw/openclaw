@@ -5,6 +5,24 @@ import os from "node:os";
 import path from "node:path";
 
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  evaluateBlocklist,
+  formatBlocklistReason,
+  isOnBlocklist,
+  getBlocklistPatterns,
+  type BlocklistConfig,
+  type BlocklistResult,
+} from "./exec-blocklist.js";
+
+// Re-export blocklist utilities for consumers
+export {
+  evaluateBlocklist,
+  formatBlocklistReason,
+  isOnBlocklist,
+  getBlocklistPatterns,
+  type BlocklistConfig,
+  type BlocklistResult,
+} from "./exec-blocklist.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
@@ -1045,12 +1063,55 @@ export type ExecAllowlistAnalysis = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
+  /** Blocklist evaluation result (if blocklist check was performed) */
+  blocklistResult?: BlocklistResult;
 };
 
 /**
  * Evaluates allowlist for shell commands (including &&, ||, ;) and returns analysis metadata.
+ * Also checks the security blocklist FIRST to reject dangerous commands.
  */
 export function evaluateShellAllowlist(params: {
+  command: string;
+  allowlist: ExecAllowlistEntry[];
+  safeBins: Set<string>;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  skillBins?: Set<string>;
+  autoAllowSkills?: boolean;
+  /** Configuration for blocklist evaluation (optional) */
+  blocklistConfig?: Partial<BlocklistConfig>;
+  /** Skip blocklist check (use with extreme caution, only for sandbox environments) */
+  skipBlocklist?: boolean;
+}): ExecAllowlistAnalysis {
+  // SECURITY: Check blocklist FIRST before any other evaluation
+  // This ensures dangerous commands are blocked regardless of allowlist
+  if (!params.skipBlocklist) {
+    const blocklistResult = evaluateBlocklist(params.command, params.blocklistConfig);
+    if (blocklistResult.blocked) {
+      return {
+        analysisOk: false, // Treat blocked commands as analysis failure
+        allowlistSatisfied: false,
+        allowlistMatches: [],
+        segments: [],
+        blocklistResult,
+      };
+    }
+    // Even if not blocked, include the result for logging/audit
+    if (blocklistResult.matchedPatterns.length > 0) {
+      // Continue with allowlist evaluation but include blocklist result
+      const result = evaluateShellAllowlistInternal(params);
+      return { ...result, blocklistResult };
+    }
+  }
+
+  return evaluateShellAllowlistInternal(params);
+}
+
+/**
+ * Internal allowlist evaluation (called after blocklist check).
+ */
+function evaluateShellAllowlistInternal(params: {
   command: string;
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;

@@ -154,14 +154,30 @@ describe("exec approvals shell allowlist (chained commands)", () => {
 
   it("rejects chained commands when any part is not allowlisted", () => {
     const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/obsidian-cli" }];
+    // Use a non-blocklisted command to test allowlist rejection
     const result = evaluateShellAllowlist({
-      command: "/usr/bin/obsidian-cli print-default && /usr/bin/rm -rf /",
+      command: "/usr/bin/obsidian-cli print-default && /usr/bin/unknown-cmd",
       allowlist,
       safeBins: new Set(),
       cwd: "/tmp",
     });
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects blocklisted commands before checking allowlist", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "rm" }];
+    // Even with 'rm' on allowlist, 'rm -rf /' should be blocked by blocklist
+    const result = evaluateShellAllowlist({
+      command: "rm -rf /",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    // Blocklist rejection sets analysisOk to false
+    expect(result.analysisOk).toBe(false);
+    expect(result.blocklistResult?.blocked).toBe(true);
+    expect(result.blocklistResult?.severity).toBe("critical");
   });
 
   it("returns analysisOk=false for malformed chains", () => {
