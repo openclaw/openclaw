@@ -27,7 +27,7 @@ export function registerBrowserElementCommands(
             .filter(Boolean)
         : undefined;
       try {
-        const result = await callBrowserAct({
+        const result = await callBrowserAct<{ url?: string }>({
           parent,
           profile,
           body: {
