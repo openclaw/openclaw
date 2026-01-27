@@ -13,7 +13,7 @@ Scripts are synced to `~/.clawd/scripts/` by the `sync-skills` cron job.
 
 2. **Credentials**:
    - Never hardcode API keys or secrets
-   - Use clawdbot.json `skills.entries.*.env` variables
+   - Use moltbot.json `skills.entries.*.env` variables
    - For missing credentials, agent uses 1Password via `op-safe` session
 
 3. **Media attachments**: Use `MEDIA:/path/to/file.ext` format

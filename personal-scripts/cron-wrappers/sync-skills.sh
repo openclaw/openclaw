@@ -7,18 +7,18 @@ source /Users/steve/clawd/personal-scripts/cron-wrappers/ensure-gateway.sh
 ensure_gateway
 
 SCRIPT="/Users/steve/clawd/personal-scripts/sync-skills.sh"
-CLAWDBOT="/Users/steve/Library/pnpm/clawdbot"
+MOLTBOT="/Users/steve/Library/pnpm/moltbot"
 
 # Run the actual script
 OUTPUT=$("$SCRIPT" 2>&1) || true
 
 # Send via agent using message tool
 if [ -n "$OUTPUT" ]; then
-    "$CLAWDBOT" agent --agent main --message "Use the message tool to send this to Telegram chat 1191367022 via account steve:
+    "$MOLTBOT" agent --agent main --message "Use the message tool to send this to Telegram chat 1191367022 via account steve:
 
 $OUTPUT" 2>&1
 else
-    "$CLAWDBOT" agent --agent main --message "Use the message tool to send this to Telegram chat 1191367022 via account steve:
+    "$MOLTBOT" agent --agent main --message "Use the message tool to send this to Telegram chat 1191367022 via account steve:
 
 ✅ sync-skills completed (no output)" 2>&1
 fi

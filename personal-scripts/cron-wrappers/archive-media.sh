@@ -7,14 +7,14 @@ source /Users/steve/clawd/personal-scripts/cron-wrappers/ensure-gateway.sh
 ensure_gateway
 
 SCRIPT="/Users/steve/clawd/personal-scripts/archive-media.sh"
-CLAWDBOT="/Users/steve/Library/pnpm/clawdbot"
+MOLTBOT="/Users/steve/Library/pnpm/moltbot"
 
 # Run the actual script
 OUTPUT=$("$SCRIPT" 2>&1) || true
 
 # Only notify if files were archived (script outputs nothing if no files)
 if [ -n "$OUTPUT" ]; then
-    "$CLAWDBOT" agent --agent main --message "Use the message tool to send this to Telegram chat 1191367022 via account steve:
+    "$MOLTBOT" agent --agent main --message "Use the message tool to send this to Telegram chat 1191367022 via account steve:
 
 $OUTPUT" 2>&1
 fi

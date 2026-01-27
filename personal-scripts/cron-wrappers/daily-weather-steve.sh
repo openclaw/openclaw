@@ -7,7 +7,7 @@ source /Users/steve/clawd/personal-scripts/cron-wrappers/ensure-gateway.sh
 ensure_gateway
 
 SCRIPT="/Users/steve/clawd/personal-scripts/daily-weather-steve.sh"
-CLAWDBOT="/Users/steve/Library/pnpm/clawdbot"
+MOLTBOT="/Users/steve/Library/pnpm/moltbot"
 
 # Run the actual script
 OUTPUT=$("$SCRIPT" 2>&1) || true
@@ -26,8 +26,8 @@ done <<< "$OUTPUT"
 # Send directly via message send
 if [ -n "$TEXT_OUTPUT" ]; then
     if [ -n "$MEDIA_PATH" ] && [ -f "$MEDIA_PATH" ]; then
-        "$CLAWDBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" --media "$MEDIA_PATH" 2>&1
+        "$MOLTBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" --media "$MEDIA_PATH" 2>&1
     else
-        "$CLAWDBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" 2>&1
+        "$MOLTBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" 2>&1
     fi
 fi

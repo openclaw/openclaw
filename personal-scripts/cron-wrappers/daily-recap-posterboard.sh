@@ -7,7 +7,7 @@ source /Users/steve/clawd/personal-scripts/cron-wrappers/ensure-gateway.sh
 ensure_gateway
 
 SCRIPT="/Users/steve/clawd/personal-scripts/daily-recap-steve.sh"
-CLAWDBOT="/Users/steve/Library/pnpm/clawdbot"
+MOLTBOT="/Users/steve/Library/pnpm/moltbot"
 
 # Run the actual script
 OUTPUT=$("$SCRIPT" 2>&1) || true
@@ -27,9 +27,9 @@ done <<< "$OUTPUT"
 TEXT_OUTPUT=$(echo "$TEXT_OUTPUT" | sed '/^$/d')  # Remove empty lines
 if [ -n "$TEXT_OUTPUT" ] && [ ${#TEXT_OUTPUT} -gt 1 ]; then
     if [ -n "$MEDIA_PATH" ] && [ -f "$MEDIA_PATH" ]; then
-        "$CLAWDBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" --media "$MEDIA_PATH" 2>&1
+        "$MOLTBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" --media "$MEDIA_PATH" 2>&1
     else
-        "$CLAWDBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" 2>&1
+        "$MOLTBOT" message send --channel telegram --account steve --target 1191367022 --message "$TEXT_OUTPUT" 2>&1
     fi
 else
     echo "⚠️ daily-recap produced no output (quiet day or no memory file)"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Daily recap with Steve posterboard image - reads memory and generates visual recap
 
-# GEMINI_API_KEY from clawdbot.json skills.entries.nano-banana-pro.apiKey
+# GEMINI_API_KEY from moltbot.json skills.entries.nano-banana-pro.apiKey
 # The agent passes this when running the script
 
 MEMORY_FILE="/Users/steve/clawd/memory/$(date +%Y-%m-%d).md"

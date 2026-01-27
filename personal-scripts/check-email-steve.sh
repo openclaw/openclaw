@@ -5,13 +5,13 @@
 # Must be run from ~/clawd directory (cron job does: cd ~/clawd && ./personal-scripts/check-email-steve.sh)
 cd /Users/steve/clawd
 
-# Email credentials - try env vars first, fall back to reading from clawdbot.json
+# Email credentials - try env vars first, fall back to reading from moltbot.json
 EMAIL="${STEVE_EMAIL:-steve@withagency.ai}"
 PASSWORD="${STEVE_EMAIL_PASSWORD}"
 
-# If no password in env, try to read from clawdbot.json
+# If no password in env, try to read from moltbot.json
 if [ -z "$PASSWORD" ]; then
-    PASSWORD=$(python3 -c "import json; print(json.load(open('$HOME/.clawdbot/clawdbot.json'))['skills']['entries']['steve-email']['env']['STEVE_EMAIL_PASSWORD'])" 2>/dev/null)
+    PASSWORD=$(python3 -c "import json; print(json.load(open('$HOME/.clawdbot/moltbot.json'))['skills']['entries']['steve-email']['env']['STEVE_EMAIL_PASSWORD'])" 2>/dev/null)
 fi
 
 if [ -z "$PASSWORD" ]; then
