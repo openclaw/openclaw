@@ -91,6 +91,7 @@ export const AgentDefaultsSchema = z
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
+        keepLastMessages: z.number().int().nonnegative().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

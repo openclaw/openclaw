@@ -1833,6 +1833,11 @@ See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 `agents.defaults.compaction.reserveTokensFloor` enforces a minimum `reserveTokens`
 value for Pi compaction (default: `20000`). Set it to `0` to disable the floor.
 
+`agents.defaults.compaction.keepLastMessages` preserves the last N user/assistant
+message pairs from being summarized during compaction (default: `0`). This ensures
+recent conversational context remains intact even if summarization fails or is incomplete.
+Only applies when `mode: "safeguard"`.
+
 `agents.defaults.compaction.memoryFlush` runs a **silent** agentic turn before
 auto-compaction, instructing the model to store durable memories on disk (e.g.
 `memory/YYYY-MM-DD.md`). It triggers when the session token estimate crosses a
@@ -1853,6 +1858,7 @@ Example (tuned):
       compaction: {
         mode: "safeguard",
         reserveTokensFloor: 24000,
+        keepLastMessages: 3,  // Preserve last 3 user/assistant pairs
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,

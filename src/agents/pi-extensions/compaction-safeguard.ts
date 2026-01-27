@@ -9,6 +9,7 @@ import {
   isOversizedForSummary,
   pruneHistoryForContextShare,
   resolveContextWindowTokens,
+  splitMessagesForPreservation,
   summarizeInStages,
 } from "../compaction.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
@@ -177,6 +178,26 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
+      const keepLastMessages =
+        typeof runtime?.keepLastMessages === "number" && runtime.keepLastMessages >= 0
+          ? Math.floor(runtime.keepLastMessages)
+          : 0;
+
+      // Split messages: preserve last N pairs, summarize the rest
+      const preservation = splitMessagesForPreservation({
+        messages: messagesToSummarize,
+        keepLastMessages,
+      });
+
+      if (preservation.preservedPairs > 0) {
+        console.log(
+          `Compaction: preserving last ${preservation.preservedPairs} user/assistant pair(s) ` +
+            `(${preservation.toPreserve.length} messages) from summarization.`,
+        );
+      }
+
+      // Only summarize messages that aren't preserved
+      messagesToSummarize = preservation.toSummarize;
 
       const tokensBefore =
         typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)

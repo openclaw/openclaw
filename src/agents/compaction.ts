@@ -340,6 +340,86 @@ export function pruneHistoryForContextShare(params: {
   };
 }
 
+/**
+ * Split messages into two groups: messages to summarize and recent pairs to preserve.
+ * Preserves the last N user/assistant message pairs in their entirety.
+ */
+export function splitMessagesForPreservation(params: {
+  messages: AgentMessage[];
+  keepLastMessages: number;
+}): {
+  toSummarize: AgentMessage[];
+  toPreserve: AgentMessage[];
+  preservedPairs: number;
+} {
+  const { messages, keepLastMessages } = params;
+  
+  if (keepLastMessages <= 0 || messages.length === 0) {
+    return {
+      toSummarize: messages,
+      toPreserve: [],
+      preservedPairs: 0,
+    };
+  }
+
+  // Walk backwards to find complete user/assistant pairs
+  let pairsFound = 0;
+  let splitIndex = messages.length;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+
+    const role = (msg as { role?: unknown }).role;
+
+    // When we find an assistant message, look for its preceding user message
+    if (role === "assistant") {
+      // Search backwards from current position for the matching user message
+      let userIndex = -1;
+      for (let j = i - 1; j >= 0; j--) {
+        const prevMsg = messages[j];
+        if (prevMsg && typeof prevMsg === "object") {
+          const prevRole = (prevMsg as { role?: unknown }).role;
+          if (prevRole === "user") {
+            userIndex = j;
+            break;
+          }
+        }
+      }
+
+      // If we found a user message, we have a complete pair
+      if (userIndex !== -1) {
+        pairsFound++;
+        splitIndex = userIndex; // Update split index to start of this pair
+        
+        if (pairsFound >= keepLastMessages) {
+          // We've found enough pairs
+          break;
+        }
+        
+        // Continue from before the user message
+        i = userIndex;
+      }
+    }
+  }
+
+  // If we found pairs, split at the boundary
+  if (pairsFound > 0) {
+    return {
+      toSummarize: messages.slice(0, splitIndex),
+      toPreserve: messages.slice(splitIndex),
+      preservedPairs: pairsFound,
+    };
+  }
+
+  // No complete pairs found, summarize everything
+  return {
+    toSummarize: messages,
+    toPreserve: [],
+    preservedPairs: 0,
+  };
+}
+
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
   return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
 }
