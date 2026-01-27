@@ -25,6 +25,7 @@ const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Win
 const isWindowsCi = isCI && isWindows;
 const shardOverride = Number.parseInt(process.env.CLAWDBOT_TEST_SHARDS ?? "", 10);
 const shardCount = isWindowsCi ? (Number.isFinite(shardOverride) && shardOverride > 1 ? shardOverride : 2) : 1;
+const windowsCiArgs = isWindowsCi ? ["--pool", "threads", "--no-file-parallelism"] : [];
 const overrideWorkers = Number.parseInt(process.env.CLAWDBOT_TEST_WORKERS ?? "", 10);
 const resolvedOverride = Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
 const parallelRuns = isWindowsCi ? [] : runs.filter((entry) => entry.name !== "gateway");
@@ -46,8 +47,8 @@ const WARNING_SUPPRESSION_FLAGS = [
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
     const args = maxWorkers
-      ? [...entry.args, "--maxWorkers", String(maxWorkers), ...extraArgs]
-      : [...entry.args, ...extraArgs];
+      ? [...entry.args, "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...extraArgs]
+      : [...entry.args, ...windowsCiArgs, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
