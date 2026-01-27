@@ -3,11 +3,13 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationMs } from "../infra/format-duration.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
@@ -40,9 +42,8 @@ export function createTelegramRunnerOptions(cfg: ClawdbotConfig): RunOptions<unk
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
-      // Retry failed getUpdates calls for up to 5 minutes before giving up
+      // Retry transient failures for a limited window before surfacing errors.
       maxRetryTime: 5 * 60 * 1000,
-      // Use exponential backoff for retries
       retryInterval: "exponential",
     },
   };
@@ -71,23 +72,6 @@ const isGetUpdatesConflict = (err: unknown) => {
     .join(" ")
     .toLowerCase();
   return haystack.includes("getupdates");
-};
-
-const isRecoverableNetworkError = (err: unknown): boolean => {
-  if (!err) return false;
-  const message = err instanceof Error ? err.message : String(err);
-  const lowerMessage = message.toLowerCase();
-  // Recoverable network errors that should trigger retry, not crash
-  return (
-    lowerMessage.includes("fetch failed") ||
-    lowerMessage.includes("network request") ||
-    lowerMessage.includes("econnrefused") ||
-    lowerMessage.includes("econnreset") ||
-    lowerMessage.includes("etimedout") ||
-    lowerMessage.includes("socket hang up") ||
-    lowerMessage.includes("enotfound") ||
-    lowerMessage.includes("abort")
-  );
 };
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
@@ -154,7 +138,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   }
 
   // Use grammyjs/runner for concurrent update processing
-  const log = opts.runtime?.log ?? console.log;
   let restartAttempts = 0;
 
   while (!opts.abortSignal?.aborted) {
@@ -174,14 +157,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         throw err;
       }
       const isConflict = isGetUpdatesConflict(err);
-      const isNetworkError = isRecoverableNetworkError(err);
-      if (!isConflict && !isNetworkError) {
+      const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
+      if (!isConflict && !isRecoverable) {
         throw err;
       }
       restartAttempts += 1;
       const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
       const reason = isConflict ? "getUpdates conflict" : "network error";
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = formatErrorMessage(err);
       (opts.runtime?.error ?? console.error)(
         `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`,
       );

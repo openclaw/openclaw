@@ -1029,6 +1029,9 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
         maxDelayMs: 30000,
         jitter: 0.1
       },
+      network: {                           // transport overrides
+        autoSelectFamily: false
+      },
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
       webhookSecret: "secret",
