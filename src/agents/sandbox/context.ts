@@ -87,9 +87,6 @@ export async function resolveSandboxContext(params: {
     docker: cfg.docker,
     tools: cfg.tools,
     browserAllowHostControl: cfg.browser.allowHostControl,
-    browserAllowedControlUrls: cfg.browser.allowedControlUrls,
-    browserAllowedControlHosts: cfg.browser.allowedControlHosts,
-    browserAllowedControlPorts: cfg.browser.allowedControlPorts,
     browser: browser ?? undefined,
   };
 }

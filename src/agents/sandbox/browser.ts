@@ -40,13 +40,9 @@ function buildSandboxBrowserResolvedConfig(params: {
   cdpPort: number;
   headless: boolean;
 }): ResolvedBrowserConfig {
-  const controlHost = "127.0.0.1";
-  const controlUrl = `http://${controlHost}:${params.controlPort}`;
   const cdpHost = "127.0.0.1";
   return {
     enabled: true,
-    controlUrl,
-    controlHost,
     controlPort: params.controlPort,
     cdpProtocol: "http",
     cdpHost,
@@ -204,7 +200,7 @@ export async function ensureSandboxBrowser(params: {
       : undefined;
 
   return {
-    controlUrl: resolvedBridge.baseUrl,
+    bridgeUrl: resolvedBridge.baseUrl,
     noVncUrl,
     containerName,
   };
