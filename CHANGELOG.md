@@ -55,6 +55,8 @@ Status: unreleased.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Gateway: suppress AbortError and transient network errors in unhandled rejections. (#2451) Thanks @Glucksberg.
+- TTS: keep /tts status replies on text-only commands and avoid duplicate block-stream audio. (#2451) Thanks @Glucksberg.
 - Security: pin npm overrides to keep tar@7.5.4 for install toolchains.
 - Security: properly test Windows ACL audit for config includes. (#2403) Thanks @dominicnunez.
 - CLI: recognize versioned Node executables when parsing argv. (#2490) Thanks @David-Marsh-Photo.
@@ -62,6 +64,7 @@ Status: unreleased.
 - Cron: allow payloads containing "heartbeat" in event filter. (#2219) Thanks @dwfinkelstein.
 - CLI: avoid loading config for global help/version while registering plugin commands. (#2212) Thanks @dial481.
 - Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
+- Agents: release session locks on process termination. (#2483) Thanks @janeexai.
 - Telegram: harden polling + retry behavior for transient network errors and Node 22 transport issues. (#2420) Thanks @techboss.
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
 - Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
