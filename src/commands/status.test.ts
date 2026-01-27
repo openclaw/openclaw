@@ -312,7 +312,13 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
     expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
     expect(logs.some((l) => l.includes("Next steps:"))).toBe(true);
-    expect(logs.some((l) => l.includes("clawdbot status --all"))).toBe(true);
+    expect(
+      logs.some(
+        (l) =>
+          l.includes("clawdbot status --all") ||
+          l.includes("clawdbot --profile isolated status --all"),
+      ),
+    ).toBe(true);
   });
 
   it("shows gateway auth when reachable", async () => {
