@@ -23,6 +23,12 @@ import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import type { SkillMessage } from "./controllers/skills";
 import type {
+  MarketplaceInstalledSkill,
+  MarketplaceMessageMap,
+  MarketplaceSearchResult,
+  MarketplaceUpdateCheck,
+} from "./controllers/marketplace";
+import type {
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
 } from "./controllers/exec-approvals";
@@ -128,6 +134,16 @@ export type AppViewState = {
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
   skillsBusyKey: string | null;
+  marketplaceLoading: boolean;
+  marketplaceSearching: boolean;
+  marketplaceQuery: string;
+  marketplaceResults: MarketplaceSearchResult[];
+  marketplaceInstalled: MarketplaceInstalledSkill[];
+  marketplaceUpdates: MarketplaceUpdateCheck[];
+  marketplaceError: string | null;
+  marketplaceBusySlug: string | null;
+  marketplaceMessages: MarketplaceMessageMap;
+  marketplaceTab: "browse" | "installed";
   debugLoading: boolean;
   debugStatus: StatusSummary | null;
   debugHealth: HealthSnapshot | null;

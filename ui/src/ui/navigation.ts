@@ -6,7 +6,7 @@ export const TAB_GROUPS = [
     label: "Control",
     tabs: ["overview", "channels", "instances", "sessions", "cron"],
   },
-  { label: "Agent", tabs: ["skills", "nodes"] },
+  { label: "Agent", tabs: ["skills", "marketplace", "nodes"] },
   { label: "Settings", tabs: ["config", "debug", "logs"] },
 ] as const;
 
@@ -17,6 +17,7 @@ export type Tab =
   | "sessions"
   | "cron"
   | "skills"
+  | "marketplace"
   | "nodes"
   | "chat"
   | "config"
@@ -30,6 +31,7 @@ const TAB_PATHS: Record<Tab, string> = {
   sessions: "/sessions",
   cron: "/cron",
   skills: "/skills",
+  marketplace: "/marketplace",
   nodes: "/nodes",
   chat: "/chat",
   config: "/config",
@@ -116,6 +118,8 @@ export function iconForTab(tab: Tab): IconName {
       return "loader";
     case "skills":
       return "zap";
+    case "marketplace":
+      return "puzzle";
     case "nodes":
       return "monitor";
     case "config":
@@ -143,6 +147,8 @@ export function titleForTab(tab: Tab) {
       return "Cron Jobs";
     case "skills":
       return "Skills";
+    case "marketplace":
+      return "Marketplace";
     case "nodes":
       return "Nodes";
     case "chat":
@@ -172,6 +178,8 @@ export function subtitleForTab(tab: Tab) {
       return "Schedule wakeups and recurring agent runs.";
     case "skills":
       return "Manage skill availability and API key injection.";
+    case "marketplace":
+      return "Browse and install skills from ClawdHub.";
     case "nodes":
       return "Paired devices, capabilities, and command exposure.";
     case "chat":

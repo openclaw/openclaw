@@ -1137,6 +1137,7 @@
         "pages": [
           "testing",
           "scripts",
+          "reference/feature-maturity",
           "reference/session-management-compaction",
           "reference/rpc",
           "reference/device-models",
@@ -1151,6 +1152,13 @@
           "reference/templates/SOUL",
           "reference/templates/TOOLS",
           "reference/templates/USER"
+        ]
+      },
+      {
+        "group": "Contributing",
+        "pages": [
+          "contributing/skills",
+          "contributing/plugins"
         ]
       }
     ]

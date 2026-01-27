@@ -41,6 +41,14 @@ Please include in your PR:
 
 AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
 
+## Contribution Guides
+
+Detailed guides for extending Clawdbot:
+
+- **[Skills Guide](https://docs.clawd.bot/contributing/skills)** - Create and publish skills to ClawdHub
+- **[Plugins Guide](https://docs.clawd.bot/contributing/plugins)** - Build plugins for channels, tools, and more
+- **[Feature Maturity](https://docs.clawd.bot/reference/feature-maturity)** - Understand feature stability levels
+
 ## Current Focus & Roadmap 🗺
 
 We are currently prioritizing:

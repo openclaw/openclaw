@@ -231,6 +231,17 @@ export class MoltbotApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
 
+  @state() marketplaceLoading = false;
+  @state() marketplaceSearching = false;
+  @state() marketplaceQuery = "";
+  @state() marketplaceResults: import("./controllers/marketplace").MarketplaceSearchResult[] = [];
+  @state() marketplaceInstalled: import("./controllers/marketplace").MarketplaceInstalledSkill[] = [];
+  @state() marketplaceUpdates: import("./controllers/marketplace").MarketplaceUpdateCheck[] = [];
+  @state() marketplaceError: string | null = null;
+  @state() marketplaceBusySlug: string | null = null;
+  @state() marketplaceMessages: import("./controllers/marketplace").MarketplaceMessageMap = {};
+  @state() marketplaceTab: "browse" | "installed" = "browse";
+
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
   @state() debugHealth: HealthSnapshot | null = null;

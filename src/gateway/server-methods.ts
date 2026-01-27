@@ -3,6 +3,7 @@ import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { browserHandlers } from "./server-methods/browser.js";
 import { channelsHandlers } from "./server-methods/channels.js";
+import { clawdhubHandlers } from "./server-methods/clawdhub.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
@@ -72,6 +73,10 @@ const READ_METHODS = new Set([
   "node.list",
   "node.describe",
   "chat.history",
+  "clawdhub.search",
+  "clawdhub.details",
+  "clawdhub.installed",
+  "clawdhub.checkUpdates",
 ]);
 const WRITE_METHODS = new Set([
   "send",
@@ -131,6 +136,7 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
     method === "channels.logout" ||
     method === "skills.install" ||
     method === "skills.update" ||
+    method === "clawdhub.install" ||
     method === "cron.add" ||
     method === "cron.update" ||
     method === "cron.remove" ||
@@ -152,6 +158,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...healthHandlers,
   ...channelsHandlers,
   ...chatHandlers,
+  ...clawdhubHandlers,
   ...cronHandlers,
   ...deviceHandlers,
   ...execApprovalsHandlers,

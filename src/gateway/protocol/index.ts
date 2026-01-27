@@ -189,6 +189,30 @@ import {
   WizardStatusResultSchema,
   type WizardStep,
   WizardStepSchema,
+  type ClawdHubSearchParams,
+  ClawdHubSearchParamsSchema,
+  type ClawdHubSearchResponse,
+  ClawdHubSearchResponseSchema,
+  type ClawdHubDetailsParams,
+  ClawdHubDetailsParamsSchema,
+  type ClawdHubDetailsResponse,
+  ClawdHubDetailsResponseSchema,
+  type ClawdHubInstallParams,
+  ClawdHubInstallParamsSchema,
+  type ClawdHubInstallResponse,
+  ClawdHubInstallResponseSchema,
+  type ClawdHubInstalledParams,
+  ClawdHubInstalledParamsSchema,
+  type ClawdHubInstalledResponse,
+  ClawdHubInstalledResponseSchema,
+  type ClawdHubInstalledSkill,
+  ClawdHubInstalledSkillSchema,
+  type ClawdHubCheckUpdatesParams,
+  ClawdHubCheckUpdatesParamsSchema,
+  type ClawdHubCheckUpdatesResponse,
+  ClawdHubCheckUpdatesResponseSchema,
+  type ClawdHubUpdateCheck,
+  ClawdHubUpdateCheckSchema,
 } from "./schema.js";
 
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
@@ -269,6 +293,21 @@ export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBins
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
+export const validateClawdHubSearchParams = ajv.compile<ClawdHubSearchParams>(
+  ClawdHubSearchParamsSchema,
+);
+export const validateClawdHubDetailsParams = ajv.compile<ClawdHubDetailsParams>(
+  ClawdHubDetailsParamsSchema,
+);
+export const validateClawdHubInstallParams = ajv.compile<ClawdHubInstallParams>(
+  ClawdHubInstallParamsSchema,
+);
+export const validateClawdHubInstalledParams = ajv.compile<ClawdHubInstalledParams>(
+  ClawdHubInstalledParamsSchema,
+);
+export const validateClawdHubCheckUpdatesParams = ajv.compile<ClawdHubCheckUpdatesParams>(
+  ClawdHubCheckUpdatesParamsSchema,
+);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
 export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);
@@ -412,6 +451,18 @@ export {
   SkillsStatusParamsSchema,
   SkillsInstallParamsSchema,
   SkillsUpdateParamsSchema,
+  ClawdHubSearchParamsSchema,
+  ClawdHubSearchResponseSchema,
+  ClawdHubDetailsParamsSchema,
+  ClawdHubDetailsResponseSchema,
+  ClawdHubInstallParamsSchema,
+  ClawdHubInstallResponseSchema,
+  ClawdHubInstalledParamsSchema,
+  ClawdHubInstalledResponseSchema,
+  ClawdHubInstalledSkillSchema,
+  ClawdHubCheckUpdatesParamsSchema,
+  ClawdHubCheckUpdatesResponseSchema,
+  ClawdHubUpdateCheckSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
@@ -517,4 +568,16 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
+  ClawdHubSearchParams,
+  ClawdHubSearchResponse,
+  ClawdHubDetailsParams,
+  ClawdHubDetailsResponse,
+  ClawdHubInstallParams,
+  ClawdHubInstallResponse,
+  ClawdHubInstalledParams,
+  ClawdHubInstalledResponse,
+  ClawdHubInstalledSkill,
+  ClawdHubCheckUpdatesParams,
+  ClawdHubCheckUpdatesResponse,
+  ClawdHubUpdateCheck,
 };

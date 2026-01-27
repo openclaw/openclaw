@@ -50,6 +50,7 @@ import {
   rotateDeviceToken,
 } from "./controllers/devices";
 import { renderSkills } from "./views/skills";
+import { renderMarketplace } from "./views/marketplace";
 import { renderChatControls, renderSkillsQuickToggle, renderTab, renderThemeToggle } from "./app-render.helpers";
 import { loadChannels } from "./controllers/channels";
 import { loadPresence } from "./controllers/presence";
@@ -62,6 +63,13 @@ import {
   updateSkillEnabled,
   type SkillMessage,
 } from "./controllers/skills";
+import {
+  checkMarketplaceUpdates,
+  installMarketplaceSkill,
+  loadMarketplaceInstalled,
+  searchMarketplace,
+  setMarketplaceTab,
+} from "./controllers/marketplace";
 import { loadNodes } from "./controllers/nodes";
 import { loadChatHistory } from "./controllers/chat";
 import {
@@ -348,6 +356,27 @@ export function renderApp(state: AppViewState) {
               onSaveKey: (key) => saveSkillApiKey(state, key),
               onInstall: (skillKey, name, installId) =>
                 installSkill(state, skillKey, name, installId),
+            })
+          : nothing}
+
+        ${state.tab === "marketplace"
+          ? renderMarketplace({
+              loading: state.marketplaceLoading,
+              searching: state.marketplaceSearching,
+              query: state.marketplaceQuery,
+              results: state.marketplaceResults,
+              installed: state.marketplaceInstalled,
+              updates: state.marketplaceUpdates,
+              error: state.marketplaceError,
+              busySlug: state.marketplaceBusySlug,
+              messages: state.marketplaceMessages,
+              tab: state.marketplaceTab,
+              onQueryChange: (query) => (state.marketplaceQuery = query),
+              onSearch: (query) => searchMarketplace(state, query),
+              onInstall: (slug, version) => installMarketplaceSkill(state, slug, version),
+              onCheckUpdates: () => checkMarketplaceUpdates(state),
+              onRefresh: () => loadMarketplaceInstalled(state),
+              onTabChange: (tab) => setMarketplaceTab(state, tab),
             })
           : nothing}
 
