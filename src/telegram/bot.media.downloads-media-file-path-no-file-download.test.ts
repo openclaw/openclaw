@@ -105,7 +105,8 @@ vi.mock("../auto-reply/reply.js", () => {
 });
 
 describe("telegram inbound media", () => {
-  const INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
+  // Parallel vitest shards can make this suite slower than the standalone run.
+  const INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
 
   it(
     "downloads media via file_path (no file.download)",

@@ -128,13 +128,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_perplexity_api_key",
       message:
         "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
-      docs: "https://docs.clawd.bot/tools/web",
+      docs: "https://docs.molt.bot/tools/web",
     };
   }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("clawdbot configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
-    docs: "https://docs.clawd.bot/tools/web",
+    docs: "https://docs.molt.bot/tools/web",
   };
 }
 
@@ -279,7 +279,7 @@ async function runPerplexitySearch(params: {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${params.apiKey}`,
-      "HTTP-Referer": "https://clawdbot.com",
+      "HTTP-Referer": "https://molt.bot",
       "X-Title": "Clawdbot Web Search",
     },
     body: JSON.stringify({
@@ -447,7 +447,7 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "unsupported_freshness",
           message: "freshness is only supported by the Brave web_search provider.",
-          docs: "https://docs.clawd.bot/tools/web",
+          docs: "https://docs.molt.bot/tools/web",
         });
       }
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
@@ -456,7 +456,7 @@ export function createWebSearchTool(options?: {
           error: "invalid_freshness",
           message:
             "freshness must be one of pd, pw, pm, py, or a range like YYYY-MM-DDtoYYYY-MM-DD.",
-          docs: "https://docs.clawd.bot/tools/web",
+          docs: "https://docs.molt.bot/tools/web",
         });
       }
       const result = await runWebSearch({
