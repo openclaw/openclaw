@@ -7,6 +7,7 @@ import {
 import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { danger, logVerbose, warn } from "../globals.js";
@@ -366,6 +367,47 @@ export const registerTelegramHandlers = ({
               }));
           if (!allowed) return;
         }
+      }
+
+      const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);
+      if (paginationMatch) {
+        const pageValue = paginationMatch[1];
+        if (pageValue === "noop") return;
+
+        const page = Number.parseInt(pageValue, 10);
+        if (Number.isNaN(page) || page < 1) return;
+
+        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg) || undefined;
+        const skillCommands = listSkillCommandsForAgents({
+          cfg,
+          agentIds: agentId ? [agentId] : undefined,
+        });
+        const result = buildCommandsMessagePaginated(cfg, skillCommands, {
+          page,
+          surface: "telegram",
+        });
+
+        const keyboard =
+          result.totalPages > 1
+            ? buildInlineKeyboard(
+                buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
+              )
+            : undefined;
+
+        try {
+          await bot.api.editMessageText(
+            callbackMessage.chat.id,
+            callbackMessage.message_id,
+            result.text,
+            keyboard ? { reply_markup: keyboard } : undefined,
+          );
+        } catch (editErr) {
+          const errStr = String(editErr);
+          if (!errStr.includes("message is not modified")) {
+            throw editErr;
+          }
+        }
+        return;
       }
 
       const syntheticMessage: TelegramMessage = {
