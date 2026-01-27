@@ -54,6 +54,7 @@ Status: unreleased.
 
 ### Fixes
 - Security: pin npm overrides to keep tar@7.5.4 for install toolchains.
+- Security: properly test Windows ACL audit for config includes. (#2403) Thanks @dominicnunez.
 - BlueBubbles: coalesce inbound URL link preview messages. (#1981) Thanks @tyler6204.
 - Cron: allow payloads containing "heartbeat" in event filter. (#2219) Thanks @dwfinkelstein.
 - Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
