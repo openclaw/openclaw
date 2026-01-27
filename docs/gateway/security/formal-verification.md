@@ -1,7 +1,7 @@
 ---
 title: Formal Verification (Security Models)
 summary: Machine-checked security models for Moltbot’s highest-risk paths.
-permalink: /security/formal-verification/
+permalink: /gateway/security/formal-verification/
 ---
 
 # Formal Verification (Security Models)
