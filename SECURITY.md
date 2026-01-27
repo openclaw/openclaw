@@ -11,7 +11,7 @@ If you believe you've found a security issue in Clawdbot, please report it priva
 
 For threat model + hardening guidance (including `clawdbot security audit --deep` and `--fix`), see:
 
-- `https://docs.clawd.bot/gateway/security`
+- `https://docs.molt.bot/gateway/security`
 
 ### Web Interface Safety
 

@@ -116,7 +116,7 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   return [
     "## Documentation",
     `Clawdbot docs: ${docsPath}`,
-    "Mirror: https://docs.clawd.bot",
+    "Mirror: https://docs.molt.bot",
     "Source: https://github.com/clawdbot/clawdbot",
     "Community: https://discord.com/invite/clawd",
     "Find new skills: https://clawdhub.com",

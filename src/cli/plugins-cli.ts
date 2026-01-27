@@ -98,7 +98,7 @@ export function registerPluginsCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/plugins", "docs.clawd.bot/cli/plugins")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/plugins", "docs.molt.bot/cli/plugins")}\n`,
     );
 
   plugins
@@ -521,7 +521,7 @@ export function registerPluginsCli(program: Command) {
           lines.push(`- ${target}${diag.message}`);
         }
       }
-      const docs = formatDocsLink("/plugin", "docs.clawd.bot/plugin");
+      const docs = formatDocsLink("/plugin", "docs.molt.bot/plugin");
       lines.push("");
       lines.push(`${theme.muted("Docs:")} ${docs}`);
       defaultRuntime.log(lines.join("\n"));

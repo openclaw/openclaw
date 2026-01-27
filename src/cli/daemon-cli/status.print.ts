@@ -322,5 +322,5 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("clawdbot status")}`);
-  defaultRuntime.log(`${label("Troubleshooting:")} https://docs.clawd.bot/troubleshooting`);
+  defaultRuntime.log(`${label("Troubleshooting:")} https://docs.molt.bot/troubleshooting`);
 }
