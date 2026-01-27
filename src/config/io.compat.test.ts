@@ -32,7 +32,6 @@ describe("config io compat (new + legacy folders)", () => {
         env: {} as NodeJS.ProcessEnv,
         homedir: () => home,
       });
-
       expect(io.configPath).toBe(newConfigPath);
       expect(io.loadConfig().gateway?.port).toBe(19001);
     });
