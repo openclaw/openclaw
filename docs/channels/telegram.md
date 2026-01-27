@@ -395,10 +395,13 @@ When a user sends a sticker, Clawdbot handles it based on the sticker type:
 - **Animated stickers (TGS):** Skipped (Lottie format not supported for processing).
 - **Video stickers (WEBM):** Skipped (video format not supported for processing).
 
-Template context fields available when receiving stickers:
-- `StickerEmoji` — the emoji associated with the sticker
-- `StickerSetName` — the name of the sticker set
-- `StickerFileId` — the Telegram file ID (used for sending the same sticker back)
+Template context field available when receiving stickers:
+- `Sticker` — object with:
+  - `emoji` — emoji associated with the sticker
+  - `setName` — name of the sticker set
+  - `fileId` — Telegram file ID (send the same sticker back)
+  - `fileUniqueId` — stable ID for cache lookup
+  - `cachedDescription` — cached vision description when available
 
 ### Sticker cache
 
@@ -416,10 +419,11 @@ Stickers are processed through the AI's vision capabilities to generate descript
 ```json
 {
   "fileId": "CAACAgIAAxkBAAI...",
+  "fileUniqueId": "AgADBAADb6cxG2Y",
   "emoji": "👋",
   "setName": "CoolCats",
   "description": "A cartoon cat waving enthusiastically",
-  "addedAt": "2026-01-15T10:30:00.000Z"
+  "cachedAt": "2026-01-15T10:30:00.000Z"
 }
 ```
 
@@ -458,7 +462,7 @@ The agent can send and search stickers using the `sticker` and `sticker-search` 
 ```
 
 Parameters:
-- `fileId` (required) — the Telegram file ID of the sticker. Obtain this from `StickerFileId` when receiving a sticker, or from a `sticker-search` result.
+- `fileId` (required) — the Telegram file ID of the sticker. Obtain this from `Sticker.fileId` when receiving a sticker, or from a `sticker-search` result.
 - `replyTo` (optional) — message ID to reply to.
 - `threadId` (optional) — message thread ID for forum topics.
 
@@ -543,7 +547,7 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
 - Tool: `telegram` with `deleteMessage` action (`chatId`, `messageId`).
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
-- Tool gating: `channels.telegram.actions.reactions`, `channels.telegram.actions.sendMessage`, `channels.telegram.actions.deleteMessage` (default: enabled).
+- Tool gating: `channels.telegram.actions.reactions`, `channels.telegram.actions.sendMessage`, `channels.telegram.actions.deleteMessage` (default: enabled), and `channels.telegram.actions.sticker` (default: disabled).
 
 ## Reaction notifications
 

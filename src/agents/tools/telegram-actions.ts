@@ -258,7 +258,7 @@ export async function handleTelegramAction(
   }
 
   if (action === "sendSticker") {
-    if (!isActionEnabled("sticker")) {
+    if (!isActionEnabled("sticker", false)) {
       throw new Error(
         "Telegram sticker actions are disabled. Set channels.telegram.actions.sticker to true.",
       );
@@ -291,7 +291,7 @@ export async function handleTelegramAction(
   }
 
   if (action === "searchSticker") {
-    if (!isActionEnabled("sticker")) {
+    if (!isActionEnabled("sticker", false)) {
       throw new Error(
         "Telegram sticker actions are disabled. Set channels.telegram.actions.sticker to true.",
       );
