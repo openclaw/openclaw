@@ -366,10 +366,10 @@ export const registerTelegramNativeCommands = ({
               rows.push(
                 slice.map((choice) => {
                   const args: CommandArgs = {
-                    values: { [menu.arg.name]: choice },
+                    values: { [menu.arg.name]: choice.value },
                   };
                   return {
-                    text: choice,
+                    text: choice.label,
                     callback_data: buildCommandTextFromArgs(commandDefinition, args),
                   };
                 }),
