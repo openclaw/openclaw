@@ -4,6 +4,7 @@ import {
   markdownToTelegramHtml,
   renderTelegramHtmlText,
 } from "../format.js";
+import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { splitTelegramCaption } from "../caption.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -24,24 +25,6 @@ import type { TelegramContext } from "./types.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
-
-/**
- * Wraps a Telegram API call with error logging. Ensures network failures are
- * logged with context before propagating, preventing silent unhandled rejections.
- */
-async function withMediaErrorHandler<T>(
-  operation: string,
-  runtime: RuntimeEnv,
-  fn: () => Promise<T>,
-): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    const errText = formatErrorMessage(err);
-    runtime.error?.(danger(`telegram ${operation} failed: ${errText}`));
-    throw err;
-  }
-}
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -164,17 +147,23 @@ export async function deliverReplies(params: {
         mediaParams.message_thread_id = threadParams.message_thread_id;
       }
       if (isGif) {
-        await withMediaErrorHandler("sendAnimation", runtime, () =>
-          bot.api.sendAnimation(chatId, file, { ...mediaParams }),
-        );
+        await withTelegramApiErrorLogging({
+          operation: "sendAnimation",
+          runtime,
+          fn: () => bot.api.sendAnimation(chatId, file, { ...mediaParams }),
+        });
       } else if (kind === "image") {
-        await withMediaErrorHandler("sendPhoto", runtime, () =>
-          bot.api.sendPhoto(chatId, file, { ...mediaParams }),
-        );
+        await withTelegramApiErrorLogging({
+          operation: "sendPhoto",
+          runtime,
+          fn: () => bot.api.sendPhoto(chatId, file, { ...mediaParams }),
+        });
       } else if (kind === "video") {
-        await withMediaErrorHandler("sendVideo", runtime, () =>
-          bot.api.sendVideo(chatId, file, { ...mediaParams }),
-        );
+        await withTelegramApiErrorLogging({
+          operation: "sendVideo",
+          runtime,
+          fn: () => bot.api.sendVideo(chatId, file, { ...mediaParams }),
+        });
       } else if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
           wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
@@ -187,9 +176,12 @@ export async function deliverReplies(params: {
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
           try {
-            await withMediaErrorHandler("sendVoice", runtime, () =>
-              bot.api.sendVoice(chatId, file, { ...mediaParams }),
-            );
+            await withTelegramApiErrorLogging({
+              operation: "sendVoice",
+              runtime,
+              shouldLog: (err) => !isVoiceMessagesForbidden(err),
+              fn: () => bot.api.sendVoice(chatId, file, { ...mediaParams }),
+            });
           } catch (voiceErr) {
             // Fall back to text if voice messages are forbidden in this chat.
             // This happens when the recipient has Telegram Premium privacy settings
@@ -222,14 +214,18 @@ export async function deliverReplies(params: {
           }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
-          await withMediaErrorHandler("sendAudio", runtime, () =>
-            bot.api.sendAudio(chatId, file, { ...mediaParams }),
-          );
+          await withTelegramApiErrorLogging({
+            operation: "sendAudio",
+            runtime,
+            fn: () => bot.api.sendAudio(chatId, file, { ...mediaParams }),
+          });
         }
       } else {
-        await withMediaErrorHandler("sendDocument", runtime, () =>
-          bot.api.sendDocument(chatId, file, { ...mediaParams }),
-        );
+        await withTelegramApiErrorLogging({
+          operation: "sendDocument",
+          runtime,
+          fn: () => bot.api.sendDocument(chatId, file, { ...mediaParams }),
+        });
       }
       if (replyToId && !hasReplied) {
         hasReplied = true;
@@ -371,11 +367,17 @@ async function sendTelegramText(
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   try {
-    const res = await bot.api.sendMessage(chatId, htmlText, {
-      parse_mode: "HTML",
-      ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-      ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-      ...baseParams,
+    const res = await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      shouldLog: (err) => !PARSE_ERR_RE.test(formatErrorMessage(err)),
+      fn: () =>
+        bot.api.sendMessage(chatId, htmlText, {
+          parse_mode: "HTML",
+          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...baseParams,
+        }),
     });
     return res.message_id;
   } catch (err) {
@@ -383,10 +385,15 @@ async function sendTelegramText(
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
       const fallbackText = opts?.plainText ?? text;
-      const res = await bot.api.sendMessage(chatId, fallbackText, {
-        ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-        ...baseParams,
+      const res = await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, fallbackText, {
+            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...baseParams,
+          }),
       });
       return res.message_id;
     }
