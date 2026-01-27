@@ -13,6 +13,7 @@ public struct ClawdbotChatView: View {
     @State private var showSessions = false
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
+    @State private var lastUserMessageID: UUID?
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
@@ -141,7 +142,19 @@ public struct ClawdbotChatView: View {
             }
         }
         .onChange(of: self.viewModel.messages.count) { _, _ in
-            guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
+            guard self.hasPerformedInitialScroll else { return }
+            if let lastMessage = self.viewModel.messages.last,
+               lastMessage.role.lowercased() == "user",
+               lastMessage.id != self.lastUserMessageID {
+                self.lastUserMessageID = lastMessage.id
+                self.isPinnedToBottom = true
+                withAnimation(.snappy(duration: 0.22)) {
+                    self.scrollPosition = self.scrollerBottomID
+                }
+                return
+            }
+
+            guard self.isPinnedToBottom else { return }
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
