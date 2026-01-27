@@ -118,6 +118,29 @@ public struct ClawdbotChatView: View {
             }
 
             self.messageListOverlay
+
+            if !self.isPinnedToBottom, self.hasPerformedInitialScroll {
+                VStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.snappy(duration: 0.22)) {
+                            self.scrollPosition = self.scrollerBottomID
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 8)
+                }
+                .frame(maxWidth: .infinity)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                .animation(.easeOut(duration: 0.15), value: self.isPinnedToBottom)
+            }
         }
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
