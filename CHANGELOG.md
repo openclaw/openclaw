@@ -2,10 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.25
+## 2026.1.26
 Status: unreleased.
 
 ### Changes
+- Rebrand: rename the npm package/CLI to `moltbot`, add a `clawdbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
 - Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
 - macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
 - Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
