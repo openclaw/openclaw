@@ -308,6 +308,80 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("wraps external hook content by default", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "Hello" }),
+        message: "Hello",
+        sessionKey: "hook:gmail:msg-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      expect(call?.prompt).toContain("EXTERNAL, UNTRUSTED");
+      expect(call?.prompt).toContain("Hello");
+    });
+  });
+
+  it("skips external content wrapping when hooks.gmail opts out", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          hooks: {
+            gmail: {
+              allowUnsafeExternalContent: true,
+            },
+          },
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "Hello" }),
+        message: "Hello",
+        sessionKey: "hook:gmail:msg-2",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      expect(call?.prompt).not.toContain("EXTERNAL, UNTRUSTED");
+      expect(call?.prompt).toContain("Hello");
+    });
+  });
+
   it("ignores hooks.gmail.model when not in the allowlist", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
