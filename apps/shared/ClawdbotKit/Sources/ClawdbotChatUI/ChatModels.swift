@@ -1,4 +1,5 @@
 import ClawdbotKit
+import CryptoKit
 import Foundation
 
 // NOTE: keep this file lightweight; decode must be resilient to varying transcript formats.
@@ -190,14 +191,12 @@ public struct ClawdbotChatMessage: Codable, Identifiable, Sendable {
         self.usage = try container.decodeIfPresent(ClawdbotChatUsage.self, forKey: .usage)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
 
+        // Decode content (supports array or plain string formats).
+        let decodedContent: [ClawdbotChatMessageContent]
         if let decoded = try? container.decode([ClawdbotChatMessageContent].self, forKey: .content) {
-            self.content = decoded
-            return
-        }
-
-        // Some session log formats store `content` as a plain string.
-        if let text = try? container.decode(String.self, forKey: .content) {
-            self.content = [
+            decodedContent = decoded
+        } else if let text = try? container.decode(String.self, forKey: .content) {
+            decodedContent = [
                 ClawdbotChatMessageContent(
                     type: "text",
                     text: text,
@@ -210,10 +209,32 @@ public struct ClawdbotChatMessage: Codable, Identifiable, Sendable {
                     name: nil,
                     arguments: nil),
             ]
-            return
+        } else {
+            decodedContent = []
         }
+        self.content = decodedContent
 
-        self.content = []
+        // Generate stable ID from content so SwiftUI can track identity across refreshes.
+        self.id = Self.stableId(role: self.role, timestamp: self.timestamp, content: decodedContent)
+    }
+
+    /// Generates a deterministic UUID from message content for stable SwiftUI identity.
+    private static func stableId(
+        role: String,
+        timestamp: Double?,
+        content: [ClawdbotChatMessageContent]) -> UUID
+    {
+        let contentText = content.compactMap(\.text).joined(separator: "\n")
+        let source = "\(role)|\(timestamp ?? 0)|\(contentText)"
+        let hash = SHA256.hash(data: Data(source.utf8))
+        let bytes = Array(hash.prefix(16))
+        return UUID(
+            uuid: (
+                bytes[0], bytes[1], bytes[2], bytes[3],
+                bytes[4], bytes[5], bytes[6], bytes[7],
+                bytes[8], bytes[9], bytes[10], bytes[11],
+                bytes[12], bytes[13], bytes[14], bytes[15]
+            ))
     }
 
     public func encode(to encoder: Encoder) throws {
