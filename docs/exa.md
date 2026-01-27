@@ -7,7 +7,7 @@ read_when:
 
 # Exa AI
 
-Clawdbot can use Exa AI for the `web_search` tool. Exa is a search API
+Moltbot can use Exa AI for the `web_search` tool. Exa is a search API
 built for AI agents.
 
 ## Get an API key
