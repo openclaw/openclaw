@@ -8,8 +8,13 @@
   inset: 0;
   z-index: 80;
   background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
-  animation: fadeIn var(--duration-fast) var(--ease-out);
+  backdrop-filter: blur(6px);
+  animation: taskBackdropIn 200ms ease-out;
+}
+
+@keyframes taskBackdropIn {
+  from { opacity: 0; backdrop-filter: blur(0); }
+  to { opacity: 1; backdrop-filter: blur(6px); }
 }
 
 .task-sidebar {
@@ -18,13 +23,43 @@
   right: 0;
   height: 100vh;
   width: min(400px, 92vw);
-  background: var(--panel-strong);
-  border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-elevated-lg);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--panel-rgb), 0.92),
+    rgba(var(--panel-rgb), 0.85)
+  );
+  backdrop-filter: blur(24px);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    -8px 0 32px rgba(0, 0, 0, 0.3),
+    inset 1px 0 0 rgba(255, 255, 255, 0.04);
   z-index: 81;
   display: flex;
   flex-direction: column;
-  animation: slideInRight var(--duration-normal) var(--ease-out);
+  animation: taskSlideIn 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root[data-theme="light"] .task-sidebar {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95),
+    rgba(255, 255, 255, 0.88)
+  );
+  border-left-color: rgba(0, 0, 0, 0.08);
+  box-shadow:
+    -8px 0 32px rgba(0, 0, 0, 0.1),
+    inset 1px 0 0 rgba(255, 255, 255, 0.5);
+}
+
+@keyframes taskSlideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0.5;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 .task-sidebar__header {
@@ -34,7 +69,19 @@
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.04),
+    transparent
+  );
+}
+
+:root[data-theme="light"] .task-sidebar__header {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.5),
+    transparent
+  );
 }
 
 .task-sidebar__header-content {

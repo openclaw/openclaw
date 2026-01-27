@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 
 import { toast } from "../components/toast";
+import { icon } from "../icons";
 import type { ConfigUiHints } from "../types";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form";
 import {

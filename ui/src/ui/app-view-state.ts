@@ -360,6 +360,8 @@ export type AppViewState = {
   chatTasks: ChatTask[];
   chatActivityLog: ChatActivityLog[];
   taskSidebarExpandedIds: Set<string>;
+  // Voice dropdown state (compose toolbar)
+  voiceDropdownOpen: boolean;
   client: GatewayBrowserClient | null;
   connect: () => void;
   setTab: (tab: Tab) => void;

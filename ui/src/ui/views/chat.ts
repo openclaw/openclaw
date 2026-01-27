@@ -93,6 +93,9 @@ export type ChatProps = {
   onOpenTaskSidebar?: () => void;
   onCloseTaskSidebar?: () => void;
   onToggleTaskExpanded?: (taskId: string) => void;
+  // Voice dropdown state
+  _voiceDropdownOpen?: boolean;
+  _onToggleVoiceDropdown?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -284,16 +287,6 @@ export function renderChat(props: ChatProps) {
   const readAloudText = resolveReadAloudText(props);
   const canReadAloud = props.readAloudSupported && Boolean(readAloudText);
   const canRecordAudio = props.audioInputSupported && props.connected;
-  const audioStatus = props.audioRecording
-    ? "Listening…"
-    : props.audioInputError
-      ? props.audioInputError
-      : null;
-  const audioStatusClass = props.audioRecording
-    ? "is-recording"
-    : props.audioInputError
-      ? "is-error"
-      : "";
   const recordTitle = !props.audioInputSupported
     ? "Audio input is not supported in this browser"
     : !props.connected
@@ -450,130 +443,162 @@ export function renderChat(props: ChatProps) {
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
-        <label class="field chat-compose__field">
-          <span>Message</span>
-          <textarea
-            .value=${props.draft}
-            ?disabled=${!props.connected}
-            @keydown=${(e: KeyboardEvent) => {
-              if (e.key !== "Enter") return;
-              if (e.isComposing || e.keyCode === 229) return;
-              if (e.shiftKey) return; // Allow Shift+Enter for line breaks
-              if (!props.connected) return;
-              if (props.audioRecording) return;
-              e.preventDefault();
-              if (canCompose) props.onSend();
-            }}
-            @input=${(e: Event) =>
-              props.onDraftChange((e.target as HTMLTextAreaElement).value)}
-            @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-            placeholder=${composePlaceholder}
-            ?readonly=${props.audioRecording}
-          ></textarea>
-        </label>
-        <div class="chat-compose__actions">
-          <div class="chat-compose__actions-group">
-            <button
-              class="chat-compose__record ${props.audioRecording ? "is-recording" : ""}"
-              type="button"
-              ?disabled=${!canRecordAudio}
-              @click=${props.onToggleAudioRecording}
-              title=${recordTitle}
-              aria-pressed=${props.audioRecording}
-            >
-              ${icon(props.audioRecording ? "stop" : "mic", { size: 16 })}
-              <span>${props.audioRecording ? "Stop" : "Record"}</span>
-            </button>
-            <button
-              class="chat-compose__play ${props.readAloudActive ? "is-playing" : ""}"
-              type="button"
-              ?disabled=${!canReadAloud}
-              @click=${() => props.onReadAloud(readAloudText)}
-              title=${playTitle}
-              aria-pressed=${props.readAloudActive}
-            >
-              ${icon(props.readAloudActive ? "pause" : "play", { size: 16 })}
-              <span>${props.readAloudActive ? "Pause" : "Play"}</span>
-            </button>
-            ${ttsProviders.length
-              ? html`
-                  <label class="chat-compose__tts-select" title=${ttsSelectTitle}>
-                    <span class="sr-only">TTS provider</span>
-                    <select
-                      .value=${ttsSelectValue}
-                      ?disabled=${ttsSelectDisabled}
-                      @change=${(e: Event) =>
-                        props.onTtsProviderChange(
-                          (e.target as HTMLSelectElement).value as TtsProviderId,
-                        )}
+        <div class="chat-compose-card">
+          <label class="chat-compose__field">
+            <span>Message</span>
+            <textarea
+              .value=${props.draft}
+              ?disabled=${!props.connected}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key !== "Enter") return;
+                if (e.isComposing || e.keyCode === 229) return;
+                if (e.shiftKey) return;
+                if (!props.connected) return;
+                if (props.audioRecording) return;
+                e.preventDefault();
+                if (canCompose) props.onSend();
+              }}
+              @input=${(e: Event) =>
+                props.onDraftChange((e.target as HTMLTextAreaElement).value)}
+              @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              placeholder=${composePlaceholder}
+              ?readonly=${props.audioRecording}
+            ></textarea>
+          </label>
+          ${isBusy
+            ? html`
+                <div class="chat-compose__streaming">
+                  <span class="chat-compose__streaming-dots">
+                    <span></span><span></span><span></span>
+                  </span>
+                  AI is responding...
+                </div>
+              `
+            : nothing}
+          <div class="chat-compose__divider"></div>
+          <div class="chat-compose__toolbar">
+            <div class="chat-compose__toolbar-left">
+              <button
+                class="icon-btn ${props.audioRecording ? "icon-btn--recording" : ""}"
+                type="button"
+                ?disabled=${!canRecordAudio}
+                @click=${props.onToggleAudioRecording}
+                data-tooltip=${recordTitle}
+                aria-pressed=${props.audioRecording}
+                aria-label=${recordTitle}
+              >
+                ${icon(props.audioRecording ? "stop" : "mic", { size: 18 })}
+              </button>
+              ${props.audioRecording
+                ? html`<span class="chat-compose__recording-label">Listening...</span>`
+                : nothing}
+              <button
+                class="icon-btn ${props.readAloudActive ? "icon-btn--active" : ""}"
+                type="button"
+                ?disabled=${!canReadAloud}
+                @click=${() => props.onReadAloud(readAloudText)}
+                data-tooltip=${playTitle}
+                aria-pressed=${props.readAloudActive}
+                aria-label=${playTitle}
+              >
+                ${icon(props.readAloudActive ? "pause" : "volume-2", { size: 18 })}
+              </button>
+              ${ttsProviders.length
+                ? html`
+                    <div class="voice-select ${props._voiceDropdownOpen ? "voice-select--open" : ""}"
+                      data-tooltip=${ttsSelectTitle}
                     >
-                      ${ttsProviders.map(
-                        (provider) => html`
-                          <option value=${provider.id}>
-                            ${formatTtsProviderLabel(provider)}
-                          </option>
-                        `,
-                      )}
-                    </select>
-                  </label>
-                `
-              : nothing}
-            ${audioStatus
-              ? html`<div class="chat-compose__recording-pill ${audioStatusClass}">
-                  ${audioStatus}
-                </div>`
-              : nothing}
-            ${audioError
-              ? html`<div class="chat-compose__audio-error">${audioError}</div>`
-              : nothing}
-          </div>
-          <div class="chat-compose__actions-group chat-compose__actions-group--right">
-            ${isBusy && canAbort
-              ? html`
-                  <button
-                    class="chat-compose__abort"
-                    type="button"
-                    @click=${props.onAbort}
-                  >
-                    ${icon("stop", { size: 16 })}
-                    <span>Stop</span>
-                  </button>
-                `
-              : html`
-                  <button
-                    class="chat-compose__send"
-                    type="button"
-                    ?disabled=${!canSend || !props.draft.trim()}
-                    @click=${props.onSend}
-                  >
-                    ${icon("send", { size: 16 })}
-                    <span>${isBusy ? "Queue" : "Send"}</span>
-                  </button>
-                `}
-            <button
-              class="btn btn--secondary"
-              type="button"
-              @click=${props.onNewSession}
-              title="New session"
-            >
-              ${icon("plus", { size: 16 })}
-              <span>New</span>
-            </button>
-            ${props.onOpenTaskSidebar
-              ? html`
-                  <button
-                    class="chat-task-toggle ${props.taskSidebarOpen ? "chat-task-toggle--active" : ""}"
-                    type="button"
-                    @click=${props.onOpenTaskSidebar}
-                    title="View task breakdown"
-                  >
-                    ${icon("layers", { size: 16 })}
-                    ${(props.taskCount ?? 0) > 0
-                      ? html`<span class="chat-task-toggle__count">${props.taskCount}</span>`
-                      : nothing}
-                  </button>
-                `
-              : nothing}
+                      <button
+                        class="voice-select__trigger"
+                        type="button"
+                        ?disabled=${ttsSelectDisabled}
+                        @click=${(e: Event) => {
+                          e.stopPropagation();
+                          props._onToggleVoiceDropdown?.();
+                        }}
+                      >
+                        <span>${ttsProviders.find((p) => p.id === ttsSelectValue)?.name ?? "Voice"}</span>
+                        ${icon("chevron-down", { size: 12 })}
+                      </button>
+                      ${props._voiceDropdownOpen
+                        ? html`
+                            <div class="voice-select__dropdown">
+                              ${ttsProviders.map(
+                                (provider) => html`
+                                  <button
+                                    class="voice-select__option ${provider.id === ttsSelectValue ? "voice-select__option--active" : ""} ${!provider.configured ? "voice-select__option--disabled" : ""}"
+                                    type="button"
+                                    @click=${() => {
+                                      props.onTtsProviderChange(provider.id);
+                                      props._onToggleVoiceDropdown?.();
+                                    }}
+                                  >
+                                    ${formatTtsProviderLabel(provider)}
+                                  </button>
+                                `,
+                              )}
+                            </div>
+                          `
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
+              ${audioError
+                ? html`<span class="chat-compose__audio-error">${audioError}</span>`
+                : nothing}
+              <div class="toolbar-separator"></div>
+              <button
+                class="icon-btn"
+                type="button"
+                @click=${props.onNewSession}
+                data-tooltip="New Session"
+                aria-label="New session"
+              >
+                ${icon("plus", { size: 18 })}
+              </button>
+              ${props.onOpenTaskSidebar
+                ? html`
+                    <button
+                      class="icon-btn ${props.taskSidebarOpen ? "icon-btn--active" : ""}"
+                      type="button"
+                      @click=${props.onOpenTaskSidebar}
+                      data-tooltip="Tasks"
+                      aria-label="View task breakdown"
+                    >
+                      ${icon("layers", { size: 18 })}
+                      ${(props.taskCount ?? 0) > 0
+                        ? html`<span class="icon-btn__badge">${props.taskCount}</span>`
+                        : nothing}
+                    </button>
+                  `
+                : nothing}
+            </div>
+            <div class="chat-compose__toolbar-right">
+              ${isBusy && canAbort
+                ? html`
+                    <button
+                      class="icon-btn icon-btn--abort"
+                      type="button"
+                      @click=${props.onAbort}
+                      data-tooltip="Stop Generation"
+                      aria-label="Stop generation"
+                    >
+                      ${icon("square", { size: 18 })}
+                    </button>
+                  `
+                : html`
+                    <button
+                      class="icon-btn icon-btn--send"
+                      type="button"
+                      ?disabled=${!canSend || !props.draft.trim()}
+                      @click=${props.onSend}
+                      data-tooltip=${isBusy ? "Queue Message" : "Send"}
+                      aria-label=${isBusy ? "Queue message" : "Send message"}
+                    >
+                      ${icon("send", { size: 18 })}
+                    </button>
+                  `}
+            </div>
           </div>
         </div>
       </div>

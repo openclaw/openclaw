@@ -1077,6 +1077,11 @@ export function renderApp(state: AppViewState) {
               onOpenTaskSidebar: () => state.handleOpenTaskSidebar(),
               onCloseTaskSidebar: () => state.handleCloseTaskSidebar(),
               onToggleTaskExpanded: (taskId: string) => state.handleToggleTaskExpanded(taskId),
+              // Voice dropdown state
+              _voiceDropdownOpen: state.voiceDropdownOpen,
+              _onToggleVoiceDropdown: () => {
+                state.voiceDropdownOpen = !state.voiceDropdownOpen;
+              },
             })
           : nothing}
 
