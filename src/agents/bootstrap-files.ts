@@ -1,4 +1,5 @@
 import type { MoltbotConfig } from "../config/config.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import {
   filterBootstrapFilesForSession,
@@ -24,7 +25,11 @@ export async function resolveBootstrapFilesForRun(params: {
   agentId?: string;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const extraFiles = params.config?.agents?.defaults?.extraWorkspaceFiles;
+  // Per-agent extraWorkspaceFiles takes precedence over global defaults
+  const agentConfig =
+    params.agentId && params.config ? resolveAgentConfig(params.config, params.agentId) : undefined;
+  const extraFiles =
+    agentConfig?.extraWorkspaceFiles ?? params.config?.agents?.defaults?.extraWorkspaceFiles;
   const bootstrapFiles = filterBootstrapFilesForSession(
     await loadWorkspaceBootstrapFiles(params.workspaceDir, { extraFiles }),
     sessionKey,
