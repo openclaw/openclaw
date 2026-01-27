@@ -34,7 +34,7 @@ import Testing
         let moltbotPath = tmp.appendingPathComponent("node_modules/.bin/moltbot")
         try self.makeExec(at: moltbotPath)
 
-        let cmd = CommandResolver.clawdbotCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
+        let cmd = CommandResolver.moltbotCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
         #expect(cmd.prefix(2).elementsEqual([moltbotPath.path, "gateway"]))
     }
 
@@ -52,7 +52,7 @@ import Testing
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try self.makeExec(at: scriptPath)
 
-        let cmd = CommandResolver.clawdbotCommand(
+        let cmd = CommandResolver.moltbotCommand(
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
@@ -76,7 +76,7 @@ import Testing
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
         try self.makeExec(at: pnpmPath)
 
-        let cmd = CommandResolver.clawdbotCommand(subcommand: "rpc", defaults: defaults, configRoot: [:])
+        let cmd = CommandResolver.moltbotCommand(subcommand: "rpc", defaults: defaults, configRoot: [:])
 
         #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "moltbot", "rpc"]))
     }
@@ -91,7 +91,7 @@ import Testing
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
         try self.makeExec(at: pnpmPath)
 
-        let cmd = CommandResolver.clawdbotCommand(
+        let cmd = CommandResolver.moltbotCommand(
             subcommand: "health",
             extraArgs: ["--json", "--timeout", "5"],
             defaults: defaults,
@@ -116,7 +116,7 @@ import Testing
         defaults.set("/tmp/id_ed25519", forKey: remoteIdentityKey)
         defaults.set("/srv/moltbot", forKey: remoteProjectRootKey)
 
-        let cmd = CommandResolver.clawdbotCommand(
+        let cmd = CommandResolver.moltbotCommand(
             subcommand: "status",
             extraArgs: ["--json"],
             defaults: defaults,
@@ -157,7 +157,7 @@ import Testing
         let moltbotPath = tmp.appendingPathComponent("node_modules/.bin/moltbot")
         try self.makeExec(at: moltbotPath)
 
-        let cmd = CommandResolver.clawdbotCommand(
+        let cmd = CommandResolver.moltbotCommand(
             subcommand: "daemon",
             defaults: defaults,
             configRoot: ["gateway": ["mode": "local"]])

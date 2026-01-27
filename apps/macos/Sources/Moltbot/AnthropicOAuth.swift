@@ -226,7 +226,7 @@ enum MoltbotOAuthStore {
     }
 
     static func oauthDir() -> URL {
-        if let override = ProcessInfo.processInfo.environment[self.clawdbotOAuthDirEnv]?
+        if let override = ProcessInfo.processInfo.environment[self.moltbotOAuthDirEnv]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !override.isEmpty
         {

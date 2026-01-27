@@ -87,7 +87,7 @@ enum CommandResolver {
         // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
         extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
         #endif
-        let moltbotPaths = self.clawdbotManagedPaths(home: home)
+        let moltbotPaths = self.moltbotManagedPaths(home: home)
         if !moltbotPaths.isEmpty {
             extras.insert(contentsOf: moltbotPaths, at: 1)
         }
@@ -207,7 +207,7 @@ enum CommandResolver {
     }
 
     static func hasAnyMoltbotInvoker(searchPaths: [String]? = nil) -> Bool {
-        if self.clawdbotExecutable(searchPaths: searchPaths) != nil { return true }
+        if self.moltbotExecutable(searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
            self.nodeCliPath() != nil
@@ -253,7 +253,7 @@ enum CommandResolver {
                 // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
                 return [pnpm, "--silent", "moltbot", subcommand] + extraArgs
             }
-            if let moltbotPath = self.clawdbotExecutable(searchPaths: searchPaths) {
+            if let moltbotPath = self.moltbotExecutable(searchPaths: searchPaths) {
                 return [moltbotPath, subcommand] + extraArgs
             }
 
@@ -275,7 +275,7 @@ enum CommandResolver {
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil) -> [String]
     {
-        self.clawdbotNodeCommand(
+        self.moltbotNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,
