@@ -15,17 +15,30 @@ graph.
 
 ### Technology Choice
 
-The UI uses Lit (web components) + Tailwind. For graph rendering:
+**Decision:** React Flow for knowledge graph visualization
 
-| Library | Size | Rendering | Pros | Cons |
-|---------|------|-----------|------|------|
-| **D3-force** | ~30KB | SVG/Canvas | Industry standard, flexible, works with Lit lifecycle | Lower-level API, more code for graph-specific features |
-| Cytoscape.js | ~100KB | Canvas | Rich graph-specific API, built-in layouts | Heavier, more opinionated |
-| Sigma.js | ~50KB | WebGL | Handles massive graphs (100K+ nodes) | Overkill for <10K nodes |
+**Rationale:**
+- **Native React Integration:** Clawdbot's web UI is React-based; React Flow provides seamless integration
+- **Interactive Features:** Built-in drag-and-drop, zoom, pan, mini-map navigation
+- **Developer Experience:** Excellent TypeScript support, comprehensive documentation, active community
+- **Performance:** Optimized for graphs with <1000 nodes (typical for knowledge graph visualization)
+- **Community:** 23K GitHub stars, 500K weekly NPM downloads, regular updates
 
-**Recommendation:** Start with D3-force. Its force simulation is well-suited for
-knowledge graphs under 10K nodes and integrates cleanly with Lit's rendering. Migrate
-to Cytoscape.js only if users need advanced layouts (hierarchical, circular, COSE).
+**Architecture Note:**
+The current UI uses Lit (web components) + Tailwind. React Flow components can be integrated into the existing Lit-based UI via web components or by migrating the knowledge graph section to React.
+
+**React Flow Features Used:**
+- Force-directed layout (built-in)
+- Custom node components (React components)
+- Interactive controls (zoom, fit view)
+- Mini-map for navigation
+- Background patterns
+- Edge types with animations
+
+**When to Reconsider:**
+- Graph grows to >2000 visible nodes (consider G6 for better performance)
+- Need 3D visualization capabilities
+- Need advanced graph algorithms (centrality, community detection)
 
 ### Features
 
@@ -221,12 +234,15 @@ computed fields:
 
 ## Dependencies (ui/)
 
-- `d3-force` -- force simulation layout (~8KB)
-- `d3-selection` -- DOM manipulation for SVG (~8KB)
-- `d3-zoom` -- zoom/pan behavior (~8KB)
-- `d3-drag` -- drag behavior (~4KB)
+```json5
+{
+  "dependencies": {
+    "reactflow": "^11.0.0"
+  }
+}
+```
 
-Total: ~28KB gzipped, no framework conflicts with Lit.
+**Note:** React Flow requires React as a peer dependency. The existing UI should already have React installed or can add it without conflicts.
 
 ---
 
