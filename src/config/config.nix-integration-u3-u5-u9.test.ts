@@ -36,22 +36,43 @@ describe("Nix integration (U3, U5, U9)", () => {
 
   describe("U5: CONFIG_PATH and STATE_DIR env var overrides", () => {
     it("STATE_DIR defaults to ~/.clawdbot when env not set", async () => {
-      await withEnvOverride({ CLAWDBOT_STATE_DIR: undefined }, async () => {
-        const { STATE_DIR } = await import("./config.js");
-        expect(STATE_DIR).toMatch(/\.clawdbot$/);
-      });
+      await withEnvOverride(
+        { MOLTBOT_STATE_DIR: undefined, CLAWDBOT_STATE_DIR: undefined },
+        async () => {
+          const { STATE_DIR } = await import("./config.js");
+          expect(STATE_DIR).toMatch(/\.clawdbot$/);
+        },
+      );
     });
 
     it("STATE_DIR respects CLAWDBOT_STATE_DIR override", async () => {
-      await withEnvOverride({ CLAWDBOT_STATE_DIR: "/custom/state/dir" }, async () => {
-        const { STATE_DIR } = await import("./config.js");
-        expect(STATE_DIR).toBe(path.resolve("/custom/state/dir"));
-      });
+      await withEnvOverride(
+        { MOLTBOT_STATE_DIR: undefined, CLAWDBOT_STATE_DIR: "/custom/state/dir" },
+        async () => {
+          const { STATE_DIR } = await import("./config.js");
+          expect(STATE_DIR).toBe(path.resolve("/custom/state/dir"));
+        },
+      );
+    });
+
+    it("STATE_DIR prefers MOLTBOT_STATE_DIR over legacy override", async () => {
+      await withEnvOverride(
+        { MOLTBOT_STATE_DIR: "/custom/new", CLAWDBOT_STATE_DIR: "/custom/legacy" },
+        async () => {
+          const { STATE_DIR } = await import("./config.js");
+          expect(STATE_DIR).toBe(path.resolve("/custom/new"));
+        },
+      );
     });
 
     it("CONFIG_PATH defaults to ~/.clawdbot/moltbot.json when env not set", async () => {
       await withEnvOverride(
-        { CLAWDBOT_CONFIG_PATH: undefined, CLAWDBOT_STATE_DIR: undefined },
+        {
+          MOLTBOT_CONFIG_PATH: undefined,
+          MOLTBOT_STATE_DIR: undefined,
+          CLAWDBOT_CONFIG_PATH: undefined,
+          CLAWDBOT_STATE_DIR: undefined,
+        },
         async () => {
           const { CONFIG_PATH } = await import("./config.js");
           expect(CONFIG_PATH).toMatch(/\.clawdbot[\\/]moltbot\.json$/);
@@ -60,24 +81,45 @@ describe("Nix integration (U3, U5, U9)", () => {
     });
 
     it("CONFIG_PATH respects CLAWDBOT_CONFIG_PATH override", async () => {
-      await withEnvOverride({ CLAWDBOT_CONFIG_PATH: "/nix/store/abc/moltbot.json" }, async () => {
-        const { CONFIG_PATH } = await import("./config.js");
-        expect(CONFIG_PATH).toBe(path.resolve("/nix/store/abc/moltbot.json"));
-      });
+      await withEnvOverride(
+        { MOLTBOT_CONFIG_PATH: undefined, CLAWDBOT_CONFIG_PATH: "/nix/store/abc/moltbot.json" },
+        async () => {
+          const { CONFIG_PATH } = await import("./config.js");
+          expect(CONFIG_PATH).toBe(path.resolve("/nix/store/abc/moltbot.json"));
+        },
+      );
+    });
+
+    it("CONFIG_PATH prefers MOLTBOT_CONFIG_PATH over legacy override", async () => {
+      await withEnvOverride(
+        {
+          MOLTBOT_CONFIG_PATH: "/nix/store/new/moltbot.json",
+          CLAWDBOT_CONFIG_PATH: "/nix/store/legacy/moltbot.json",
+        },
+        async () => {
+          const { CONFIG_PATH } = await import("./config.js");
+          expect(CONFIG_PATH).toBe(path.resolve("/nix/store/new/moltbot.json"));
+        },
+      );
     });
 
     it("CONFIG_PATH expands ~ in CLAWDBOT_CONFIG_PATH override", async () => {
       await withTempHome(async (home) => {
-        await withEnvOverride({ CLAWDBOT_CONFIG_PATH: "~/.clawdbot/custom.json" }, async () => {
-          const { CONFIG_PATH } = await import("./config.js");
-          expect(CONFIG_PATH).toBe(path.join(home, ".clawdbot", "custom.json"));
-        });
+        await withEnvOverride(
+          { MOLTBOT_CONFIG_PATH: undefined, CLAWDBOT_CONFIG_PATH: "~/.clawdbot/custom.json" },
+          async () => {
+            const { CONFIG_PATH } = await import("./config.js");
+            expect(CONFIG_PATH).toBe(path.join(home, ".clawdbot", "custom.json"));
+          },
+        );
       });
     });
 
     it("CONFIG_PATH uses STATE_DIR when only state dir is overridden", async () => {
       await withEnvOverride(
         {
+          MOLTBOT_CONFIG_PATH: undefined,
+          MOLTBOT_STATE_DIR: undefined,
           CLAWDBOT_CONFIG_PATH: undefined,
           CLAWDBOT_STATE_DIR: "/custom/state",
         },

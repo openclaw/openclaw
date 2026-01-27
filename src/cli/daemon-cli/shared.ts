@@ -51,6 +51,8 @@ export function pickProbeHostForBind(
 }
 
 const SAFE_DAEMON_ENV_KEYS = [
+  "MOLTBOT_STATE_DIR",
+  "MOLTBOT_CONFIG_PATH",
   "CLAWDBOT_PROFILE",
   "CLAWDBOT_STATE_DIR",
   "CLAWDBOT_CONFIG_PATH",

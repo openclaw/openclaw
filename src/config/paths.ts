@@ -15,18 +15,30 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export const isNixMode = resolveIsNixMode();
 
+const LEGACY_STATE_DIRNAME = ".clawdbot";
+const NEW_STATE_DIRNAME = ".moltbot";
+const CONFIG_FILENAME = "moltbot.json";
+
+function legacyStateDir(homedir: () => string = os.homedir): string {
+  return path.join(homedir(), LEGACY_STATE_DIRNAME);
+}
+
+function newStateDir(homedir: () => string = os.homedir): string {
+  return path.join(homedir(), NEW_STATE_DIRNAME);
+}
+
 /**
  * State directory for mutable data (sessions, logs, caches).
- * Can be overridden via CLAWDBOT_STATE_DIR environment variable.
- * Default: ~/.clawdbot
+ * Can be overridden via MOLTBOT_STATE_DIR (preferred) or CLAWDBOT_STATE_DIR (legacy).
+ * Default: ~/.clawdbot (legacy default for compatibility)
  */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.CLAWDBOT_STATE_DIR?.trim();
+  const override = env.MOLTBOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) return resolveUserPath(override);
-  return path.join(homedir(), ".clawdbot");
+  return legacyStateDir(homedir);
 }
 
 function resolveUserPath(input: string): string {
@@ -43,19 +55,45 @@ export const STATE_DIR = resolveStateDir();
 
 /**
  * Config file path (JSON5).
- * Can be overridden via CLAWDBOT_CONFIG_PATH environment variable.
- * Default: ~/.clawdbot/moltbot.json (or $CLAWDBOT_STATE_DIR/moltbot.json)
+ * Can be overridden via MOLTBOT_CONFIG_PATH (preferred) or CLAWDBOT_CONFIG_PATH (legacy).
+ * Default: ~/.clawdbot/moltbot.json (or $*_STATE_DIR/moltbot.json)
  */
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, os.homedir),
 ): string {
-  const override = env.CLAWDBOT_CONFIG_PATH?.trim();
+  const override = env.MOLTBOT_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) return resolveUserPath(override);
-  return path.join(stateDir, "moltbot.json");
+  return path.join(stateDir, CONFIG_FILENAME);
 }
 
 export const CONFIG_PATH = resolveConfigPath();
+
+/**
+ * Resolve default config path candidates across new + legacy locations.
+ * Order: explicit config path → state-dir-derived paths → new default → legacy default.
+ */
+export function resolveDefaultConfigCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string[] {
+  const explicit = env.MOLTBOT_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
+  if (explicit) return [resolveUserPath(explicit)];
+
+  const candidates: string[] = [];
+  const moltbotStateDir = env.MOLTBOT_STATE_DIR?.trim();
+  if (moltbotStateDir) {
+    candidates.push(path.join(resolveUserPath(moltbotStateDir), CONFIG_FILENAME));
+  }
+  const legacyStateDirOverride = env.CLAWDBOT_STATE_DIR?.trim();
+  if (legacyStateDirOverride) {
+    candidates.push(path.join(resolveUserPath(legacyStateDirOverride), CONFIG_FILENAME));
+  }
+
+  candidates.push(path.join(newStateDir(homedir), CONFIG_FILENAME));
+  candidates.push(path.join(legacyStateDir(homedir), CONFIG_FILENAME));
+  return candidates;
+}
 
 export const DEFAULT_GATEWAY_PORT = 18789;
 
@@ -77,7 +115,7 @@ const OAUTH_FILENAME = "oauth.json";
  *
  * Precedence:
  * - `CLAWDBOT_OAUTH_DIR` (explicit override)
- * - `CLAWDBOT_STATE_DIR/credentials` (canonical server/default)
+ * - `$*_STATE_DIR/credentials` (canonical server/default)
  * - `~/.clawdbot/credentials` (legacy default)
  */
 export function resolveOAuthDir(
