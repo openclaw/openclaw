@@ -9,6 +9,118 @@ type GogTokenEntry = {
 };
 
 const tokenCache = new Map<string, string>();
+const jwtPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+function resolveWildcardJsonFile(
+  dirs: string[],
+  baseName: string,
+  suffix = ".json",
+): string | null {
+  const matches: string[] = [];
+  for (const dir of dirs) {
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (
+          !entry.name.startsWith(`${baseName}-`) ||
+          !entry.name.endsWith(suffix)
+        )
+          continue;
+        matches.push(path.join(dir, entry.name));
+      }
+    } catch {
+      // Ignore missing/permission issues and fall back to other dirs.
+    }
+  }
+  if (matches.length === 1) return matches[0];
+  return null;
+}
+
+function resolveGogJsonFile(
+  params: { gogClient?: string | null; gogAccount?: string | null },
+  baseName: string,
+): string | null {
+  const client = params.gogClient?.trim();
+  const account = params.gogAccount?.trim();
+  const domain = extractDomain(account);
+  const dirs = resolveConfigDirs();
+  const candidates: string[] = [];
+
+  if (client) {
+    for (const dir of dirs) {
+      candidates.push(path.join(dir, `${baseName}-${client}.json`));
+    }
+  }
+  if (domain) {
+    for (const dir of dirs) {
+      candidates.push(path.join(dir, `${baseName}-${domain}.json`));
+    }
+  }
+  for (const dir of dirs) {
+    candidates.push(path.join(dir, `${baseName}.json`));
+  }
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return resolveWildcardJsonFile(dirs, baseName);
+}
+
+function readJsonFile(pathname: string): unknown | null {
+  try {
+    const raw = fs.readFileSync(pathname, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function tryParseJson(value: string): unknown | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function decodeBase64Payload(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes(".")) return null;
+  const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+  if (!/^[A-Za-z0-9+/=]+$/.test(normalized)) return null;
+  try {
+    const decoded = Buffer.from(normalized, "base64").toString("utf8");
+    return decoded.trim() ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveGogKeyringFiles(params: {
+  gogClient?: string | null;
+  gogAccount?: string | null;
+}): string[] {
+  const dirs = resolveConfigDirs().map((dir) => path.join(dir, "keyring"));
+  const files: string[] = [];
+  for (const dir of dirs) {
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        files.push(path.join(dir, entry.name));
+      }
+    } catch {
+      // Ignore missing/permission issues; we'll fall back to other sources.
+    }
+  }
+  const account = params.gogAccount?.trim();
+  if (account) {
+    const matches = files.filter((file) => file.includes(account));
+    if (matches.length > 0) return matches;
+  }
+  return files;
+}
 
 function resolveConfigDirs(): string[] {
   const dirs: string[] = [];
@@ -38,38 +150,33 @@ export function resolveGogCredentialsFile(params: {
   gogClient?: string | null;
   gogAccount?: string | null;
 }): string | null {
-  const client = params.gogClient?.trim();
-  const account = params.gogAccount?.trim();
-  const domain = extractDomain(account);
-  const dirs = resolveConfigDirs();
-  const candidates: string[] = [];
+  return resolveGogJsonFile(params, "credentials");
+}
 
-  if (client) {
-    for (const dir of dirs) {
-      candidates.push(path.join(dir, `credentials-${client}.json`));
-    }
-  }
-  if (domain) {
-    for (const dir of dirs) {
-      candidates.push(path.join(dir, `credentials-${domain}.json`));
-    }
-  }
-  for (const dir of dirs) {
-    candidates.push(path.join(dir, "credentials.json"));
-  }
+function resolveGogTokenFile(params: {
+  gogClient?: string | null;
+  gogAccount?: string | null;
+}): string | null {
+  return resolveGogJsonFile(params, "tokens");
+}
 
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
+function looksLikeJwt(token: string): boolean {
+  return jwtPattern.test(token.trim());
 }
 
 function looksLikeRefreshToken(token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith("ya29.")) return false;
+  if (looksLikeJwt(trimmed)) return false;
   if (trimmed.startsWith("1//")) return true;
   return trimmed.length > 30;
+}
+
+function collectTokensFromString(value: string, out: GogTokenEntry[]) {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  if (looksLikeRefreshToken(trimmed)) out.push({ refreshToken: trimmed });
 }
 
 function collectTokens(value: unknown, out: GogTokenEntry[]) {
@@ -101,6 +208,36 @@ function collectTokens(value: unknown, out: GogTokenEntry[]) {
   }
 }
 
+function collectTokensFromRaw(value: string, out: GogTokenEntry[]) {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+
+  const parsed = tryParseJson(trimmed);
+  if (parsed) {
+    if (typeof parsed === "string") {
+      collectTokensFromString(parsed, out);
+    } else {
+      collectTokens(parsed, out);
+    }
+    return;
+  }
+
+  const decoded = decodeBase64Payload(trimmed);
+  if (decoded) {
+    const decodedParsed = tryParseJson(decoded);
+    if (decodedParsed) {
+      if (typeof decodedParsed === "string") {
+        collectTokensFromString(decodedParsed, out);
+      } else {
+        collectTokens(decodedParsed, out);
+      }
+      return;
+    }
+  }
+
+  collectTokensFromString(trimmed, out);
+}
+
 export function readGogRefreshTokenSync(params: {
   gogAccount?: string | null;
   gogClient?: string | null;
@@ -109,10 +246,33 @@ export function readGogRefreshTokenSync(params: {
   const cached = tokenCache.get(cacheKey);
   if (cached) return cached;
 
+  const tokens: GogTokenEntry[] = [];
+  const tokenFile = resolveGogTokenFile(params);
+  if (tokenFile) {
+    const parsed = readJsonFile(tokenFile);
+    if (parsed) collectTokens(parsed, tokens);
+  }
+
+  if (tokens.length === 0) {
+    const keyringFiles = resolveGogKeyringFiles(params);
+    for (const file of keyringFiles) {
+      try {
+        const raw = fs.readFileSync(file, "utf8");
+        collectTokensFromRaw(raw, tokens);
+      } catch {
+        // Ignore keyring read errors and keep trying other entries.
+      }
+    }
+  }
+
   const env = {
     ...process.env,
-    ...(params.gogAccount?.trim() ? { GOG_ACCOUNT: params.gogAccount.trim() } : {}),
-    ...(params.gogClient?.trim() ? { GOG_CLIENT: params.gogClient.trim() } : {}),
+    ...(params.gogAccount?.trim()
+      ? { GOG_ACCOUNT: params.gogAccount.trim() }
+      : {}),
+    ...(params.gogClient?.trim()
+      ? { GOG_CLIENT: params.gogClient.trim() }
+      : {}),
   };
 
   const runGogJson = (args: string[]): unknown | null => {
@@ -129,16 +289,13 @@ export function readGogRefreshTokenSync(params: {
     }
   };
 
-  const parsed = runGogJson(["auth", "tokens", "list", "--json"]);
-  const tokens: GogTokenEntry[] = [];
-  if (parsed) {
-    collectTokens(parsed, tokens);
+  if (tokens.length === 0) {
+    const parsed = runGogJson(["auth", "tokens", "list", "--json"]);
+    if (parsed) collectTokens(parsed, tokens);
   }
   if (tokens.length === 0) {
     const exported = runGogJson(["auth", "tokens", "export", "--json"]);
-    if (exported) {
-      collectTokens(exported, tokens);
-    }
+    if (exported) collectTokens(exported, tokens);
   }
   if (tokens.length === 0) return null;
 
