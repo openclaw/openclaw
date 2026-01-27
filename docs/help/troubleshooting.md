@@ -38,13 +38,13 @@ Almost always a Node/npm PATH issue. Start here:
 Re-run the installer in verbose mode to see the full trace and npm output:
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash -s -- --verbose
+curl -fsSL https://molt.bot/install.sh | bash -s -- --verbose
 ```
 
 For beta installs:
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash -s -- --beta --verbose
+curl -fsSL https://molt.bot/install.sh | bash -s -- --beta --verbose
 ```
 
 You can also set `CLAWDBOT_VERBOSE=1` instead of the flag.
@@ -59,10 +59,10 @@ You can also set `CLAWDBOT_VERBOSE=1` instead of the flag.
 - [Gateway troubleshooting](/gateway/troubleshooting)
 - [Control UI](/web/control-ui#insecure-http)
 
-### `docs.clawd.bot` shows an SSL error (Comcast/Xfinity)
+### `docs.molt.bot` shows an SSL error (Comcast/Xfinity)
 
-Some Comcast/Xfinity connections block `docs.clawd.bot` via Xfinity Advanced Security.
-Disable Advanced Security or add `docs.clawd.bot` to the allowlist, then retry.
+Some Comcast/Xfinity connections block `docs.molt.bot` via Xfinity Advanced Security.
+Disable Advanced Security or add `docs.molt.bot` to the allowlist, then retry.
 
 - Xfinity Advanced Security help: https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security
 - Quick sanity checks: try a mobile hotspot or VPN to confirm it’s ISP-level filtering

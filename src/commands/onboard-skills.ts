@@ -156,7 +156,7 @@ export async function setupSkills(
         runtime.log(
           `Tip: run \`${formatCliCommand("clawdbot doctor")}\` to review skills + requirements.`,
         );
-        runtime.log("Docs: https://docs.clawd.bot/skills");
+        runtime.log("Docs: https://docs.molt.bot/skills");
       }
     }
   }

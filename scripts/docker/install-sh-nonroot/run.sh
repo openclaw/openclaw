@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
+INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://molt.bot/install.sh}"
 
 echo "==> Pre-flight: ensure git absent"
 if command -v git >/dev/null; then

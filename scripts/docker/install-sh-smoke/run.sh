@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
+INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://molt.bot/install.sh}"
 SMOKE_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_SMOKE_PREVIOUS:-}"
 SKIP_PREVIOUS="${CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
 

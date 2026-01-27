@@ -25,7 +25,7 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
 5) Create a Google Chat app in the [Google Cloud Console Chat Configuration](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat):
    - Fill in the **Application info**:
      - **App name**: (e.g. `Clawdbot`)
-     - **Avatar URL**: (e.g. `https://clawd.bot/logo.png`)
+     - **Avatar URL**: (e.g. `https://molt.bot/logo.png`)
      - **Description**: (e.g. `Personal AI Assistant`)
    - Enable **Interactive features**.
    - Under **Functionality**, check **Join spaces and group conversations**.

@@ -68,7 +68,7 @@ ${formatHelpExamples([
   ],
 ])}
 
-${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent")}`,
+${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.molt.bot/cli/agent")}`,
     )
     .action(async (opts) => {
       const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
@@ -86,7 +86,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agents", "docs.clawd.bot/cli/agents")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agents", "docs.molt.bot/cli/agents")}\n`,
     );
 
   agents

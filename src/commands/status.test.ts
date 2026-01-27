@@ -330,6 +330,8 @@ describe("statusCommand", () => {
     expect(
       logs.some(
         (l) =>
+          l.includes("moltbot status --all") ||
+          l.includes("moltbot --profile isolated status --all") ||
           l.includes("clawdbot status --all") ||
           l.includes("clawdbot --profile isolated status --all"),
       ),

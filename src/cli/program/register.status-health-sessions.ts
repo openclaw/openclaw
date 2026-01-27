@@ -53,7 +53,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.clawd.bot/cli/status")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.molt.bot/cli/status")}\n`,
     )
     .action(async (opts) => {
       const verbose = resolveVerbose(opts);
@@ -87,7 +87,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.clawd.bot/cli/health")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.molt.bot/cli/health")}\n`,
     )
     .action(async (opts) => {
       const verbose = resolveVerbose(opts);
@@ -130,7 +130,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.clawd.bot/cli/sessions")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.molt.bot/cli/sessions")}\n`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));

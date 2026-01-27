@@ -83,6 +83,26 @@ describe("lobster plugin tool", () => {
     expect(res.details).toMatchObject({ ok: true, status: "ok" });
   });
 
+  it("tolerates noisy stdout before the JSON envelope", async () => {
+    const payload = { ok: true, status: "ok", output: [], requiresApproval: null };
+    const { binPath } = await writeFakeLobsterScript(
+      `const payload = ${JSON.stringify(payload)};\n` +
+        `console.log("noise before json");\n` +
+        `process.stdout.write(JSON.stringify(payload));\n`,
+      "clawdbot-lobster-plugin-noisy-",
+    );
+
+    const tool = createLobsterTool(fakeApi());
+    const res = await tool.execute("call-noisy", {
+      action: "run",
+      pipeline: "noop",
+      lobsterPath: binPath,
+      timeoutMs: 1000,
+    });
+
+    expect(res.details).toMatchObject({ ok: true, status: "ok" });
+  });
+
   it("requires absolute lobsterPath when provided", async () => {
     const tool = createLobsterTool(fakeApi());
     await expect(
