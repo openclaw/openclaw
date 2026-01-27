@@ -20,7 +20,7 @@ misconfiguration safety), under explicit assumptions.
 
 ## Where the models live
 
-Models are maintained in a separate repo: <https://github.com/vignesh07/clawdbot-formal-models>.
+Models are maintained in a separate repo: [vignesh07/clawdbot-formal-models](https://github.com/vignesh07/clawdbot-formal-models).
 
 ## Important caveats
 
