@@ -13,8 +13,8 @@ intended security policy (authorization, session isolation, tool gating, and
 misconfiguration safety), under explicit assumptions.
 
 **What this is (today):** an executable, attacker-driven **security regression suite**:
-- Each claim has a runnable model-check.
-- Most claims have a paired **negative model** that produces a counterexample trace for a realistic bug class.
+- Each claim has a runnable model-check over a finite state space.
+- Many claims have a paired **negative model** that produces a counterexample trace for a realistic bug class.
 
 **What this is not (yet):** a proof that “Clawdbot is secure in all respects” or that the full TypeScript implementation is correct.
 
@@ -22,7 +22,17 @@ misconfiguration safety), under explicit assumptions.
 
 Models are maintained in a separate repo: `vignesh07/clawdbot-formal-models`.
 
+## Important caveats
+
+- These are **models**, not the full TypeScript implementation. Drift between model and code is possible.
+- Results are bounded by the state space explored by TLC; “green” does not imply security beyond the modeled assumptions and bounds.
+- Some claims rely on explicit environmental assumptions (e.g., correct deployment, correct configuration inputs).
+
 ## Reproducing results
+
+Today, results are reproduced by cloning the models repo locally and running TLC (see below). A future iteration could offer:
+- CI-run models with public artifacts (counterexample traces, run logs)
+- a hosted “run this model” workflow for small, bounded checks
 
 From the models repo:
 
@@ -31,9 +41,9 @@ export PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH"  # or any Java 11+
 make <target>
 ```
 
-### Gateway exposure / open gateway misconfig
+### Gateway exposure and open gateway misconfiguration
 
-**Claim:** binding beyond loopback without auth makes remote compromise reachable; token/password blocks unauth attackers.
+**Claim:** binding beyond loopback without auth makes remote compromise reachable; token/password blocks unauth attackers (per the model assumptions).
 
 - Green runs:
   - `make gateway-exposure-v2`
@@ -45,7 +55,7 @@ See also: `docs/gateway-exposure-matrix.md` in the models repo.
 
 ### Nodes.run pipeline (highest-risk capability)
 
-**Claim:** `nodes.run` requires (a) node command allowlist + declared commands and (b) live approval when configured; approvals are tokenized to prevent replay.
+**Claim:** `nodes.run` requires (a) node command allowlist plus declared commands and (b) live approval when configured; approvals are tokenized to prevent replay (in the model).
 
 - Green runs:
   - `make nodes-pipeline`
