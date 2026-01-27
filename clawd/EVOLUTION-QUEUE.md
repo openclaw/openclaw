@@ -18,6 +18,25 @@ Add items under "## Pending" using this format:
 
 ## Pending
 
+### [2026-01-27-030] Gmail-Poll Cron Job Failing in Isolated Session
+- **Proposed by:** Liam (auto-escalated)
+- **Date:** 2026-01-27
+- **Category:** tools | config
+- **Target file:** `~/.clawdbot/cron/jobs.json`
+- **Description:**
+  - **Problem:** Gmail-Poll cron job (ID: 9376a083-b31b-49d0-816c-eaa2e6aafaea) is running every 5 minutes in isolated session but failing
+  - **Error pattern:** Sub-agent cannot properly execute gog commands or use message tool (missing `action` parameter)
+  - **Impact:** Medium - Email monitoring is not working, but GOG is available in main session
+  - **Root cause:** Isolated sessions don't have full tool access; cron job is configured for `sessionTarget: "isolated"`
+  - **Affected job:** Gmail-Poll (every 5 min, payload: `gog gmail messages search "in:inbox is:unread"`)
+
+- **Proposed Solutions:**
+  1. **Disable Gmail-Poll temporarily** - Stop's failing cron job
+  2. **Move email checks to main session heartbeats** - Only check when Simon is active
+  3. **Fix cron job config** - Change `sessionTarget` from "isolated" to "main" for full tool access
+
+- **Status:** pending
+
 ### [2026-01-27-029] Channel Separation and GOG Tool Fix [RESOLVED]
 - **Proposed by:** Simon (via Cursor)
 - **Date:** 2026-01-27

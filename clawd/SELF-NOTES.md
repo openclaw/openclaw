@@ -78,6 +78,13 @@
 - Forbidden: Doubting user, re-suggesting tried solutions, editing without reading
 - This is my engineering moral code - not just a reference, it's internalized
 
+### Social Media Generation (2026-01-27)
+- ceramics-social skill exists at ~/skills/ceramics-social/
+- Used generate.sh template to create Instagram post for two-tone ceramic mug
+- Successful post: Aesthetic style, focused on material connection (ceramics + plants)
+- User feedback: "It's perfect" - saved to ~/clawd/examples/ as a best work sample
+- Pattern: Create evocative, authentic captions that connect materials and lifestyle
+
 ## Mistakes to Avoid
 
 - Don't write to `/mnt/c/Users/Simon/` — only my home directory
