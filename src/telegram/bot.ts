@@ -12,7 +12,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
+import type { MoltbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveChannelGroupPolicy,
@@ -24,6 +24,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -56,7 +57,7 @@ export type TelegramBotOptions = {
   mediaMaxMb?: number;
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
@@ -261,7 +262,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     if (typeof botHasTopicsEnabled === "boolean") return botHasTopicsEnabled;
     try {
-      const me = (await bot.api.getMe()) as { has_topics_enabled?: boolean };
+      const me = (await withTelegramApiErrorLogging({
+        operation: "getMe",
+        runtime,
+        fn: () => bot.api.getMe(),
+      })) as { has_topics_enabled?: boolean };
       botHasTopicsEnabled = Boolean(me?.has_topics_enabled);
     } catch (err) {
       logVerbose(`telegram getMe failed: ${String(err)}`);
