@@ -7,6 +7,7 @@ let testPort = 0;
 let cdpBaseUrl = "";
 let reachable = false;
 let cfgAttachOnly = false;
+let cfgEvaluateEnabled = true;
 let createTargetId: string | null = null;
 let prevGatewayPort: string | undefined;
 
@@ -89,6 +90,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: () => ({
       browser: {
         enabled: true,
+        evaluateEnabled: cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: cfgAttachOnly,
         headless: true,
@@ -185,6 +187,7 @@ describe("browser control server", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;
+    cfgEvaluateEnabled = true;
     createTargetId = null;
 
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
@@ -345,6 +348,30 @@ describe("browser control server", () => {
         fn: "() => 1",
         ref: undefined,
       });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "blocks act:evaluate when browser.evaluateEnabled=false",
+    async () => {
+      cfgEvaluateEnabled = false;
+      const base = await startServerAndBase();
+
+      const waitRes = (await postJson(`${base}/act`, {
+        kind: "wait",
+        fn: "() => window.ready === true",
+      })) as { error?: string };
+      expect(waitRes.error).toContain("browser.evaluateEnabled=false");
+      expect(pwMocks.waitForViaPlaywright).not.toHaveBeenCalled();
+
+      const res = (await postJson(`${base}/act`, {
+        kind: "evaluate",
+        fn: "() => 1",
+      })) as { error?: string };
+
+      expect(res.error).toContain("browser.evaluateEnabled=false");
+      expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );

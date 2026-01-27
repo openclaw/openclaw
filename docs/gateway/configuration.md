@@ -2768,6 +2768,7 @@ scheme/host for profiles that only set `cdpPort`.
 
 Defaults:
 - enabled: `true`
+- evaluateEnabled: `true` (set `false` to disable `act:evaluate` and `wait --fn`)
 - control service: loopback only (port derived from `gateway.port`, default `18791`)
 - CDP URL: `http://127.0.0.1:18792` (control service + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
@@ -2778,6 +2779,7 @@ Defaults:
 {
   browser: {
     enabled: true,
+    evaluateEnabled: true,
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     defaultProfile: "chrome",
     profiles: {

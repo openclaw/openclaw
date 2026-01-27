@@ -505,6 +505,9 @@ These are useful for “make the site behave like X” workflows:
 ## Security & privacy
 
 - The clawd browser profile may contain logged-in sessions; treat it as sensitive.
+- `browser act kind=evaluate` / `clawdbot browser evaluate` and `wait --fn`
+  execute arbitrary JavaScript in the page context. Prompt injection can steer
+  this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.

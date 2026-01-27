@@ -6,7 +6,9 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
+- Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
 - macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
+- Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
 - Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
@@ -52,6 +54,8 @@ Status: unreleased.
 - Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
 - Telegram: add optional silent send flag (disable notifications). (#2382) Thanks @Suksham-sharma.
 - Telegram: support editing sent messages via message(action="edit"). (#2394) Thanks @marcelomar21.
+- Telegram: add sticker receive/send with vision caching. (#2629) Thanks @longjos.
+- Telegram: send sticker pixels to vision models. (#2650)
 - Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
 - Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
@@ -60,6 +64,7 @@ Status: unreleased.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.
 - macOS: auto-scroll to bottom when sending a new message while scrolled up. (#2471) Thanks @kennyklee.
 - Gateway: suppress AbortError and transient network errors in unhandled rejections. (#2451) Thanks @Glucksberg.
 - TTS: keep /tts status replies on text-only commands and avoid duplicate block-stream audio. (#2451) Thanks @Glucksberg.
