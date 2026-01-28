@@ -12,6 +12,7 @@ import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
+import { applyAuthChoiceVolcengine } from "./auth-choice.apply.volcengine.js";
 
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;
@@ -24,6 +25,7 @@ export type ApplyAuthChoiceParams = {
   opts?: {
     tokenProvider?: string;
     token?: string;
+    volcengineApiKey?: string;
   };
 };
 
@@ -46,6 +48,7 @@ export async function applyAuthChoice(
     applyAuthChoiceGoogleGeminiCli,
     applyAuthChoiceCopilotProxy,
     applyAuthChoiceQwenPortal,
+    applyAuthChoiceVolcengine,
   ];
 
   for (const handler of handlers) {

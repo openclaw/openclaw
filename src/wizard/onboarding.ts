@@ -392,7 +392,7 @@ export async function runOnboardingWizard(
   });
   nextConfig = authResult.config;
 
-  if (authChoiceFromPrompt) {
+  if (authChoiceFromPrompt && !authResult.agentModelOverride) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,

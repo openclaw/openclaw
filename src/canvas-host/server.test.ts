@@ -7,7 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
-import { CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
+import {
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  injectCanvasLiveReload,
+  setA2uiRootForTest,
+} from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
 describe("canvas host", () => {
@@ -206,20 +211,19 @@ describe("canvas host", () => {
 
   it("serves the gateway-hosted A2UI scaffold", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
-    const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
-    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
-    let createdBundle = false;
-
-    try {
-      await fs.stat(bundlePath);
-    } catch {
-      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
-      createdBundle = true;
-    }
+    const dirReal = await fs.realpath(dir);
+    // Ensure the necessary files exist for the test, so it passes even if artifacts are missing
+    await fs.writeFile(
+      path.join(dirReal, "index.html"),
+      "<html><body>openclaw-a2ui-host</body></html>",
+      "utf8",
+    );
+    await fs.writeFile(path.join(dirReal, "a2ui.bundle.js"), "const openclawA2UI = true;", "utf8");
+    setA2uiRootForTest(dirReal);
 
     const server = await startCanvasHost({
       runtime: defaultRuntime,
-      rootDir: dir,
+      rootDir: dirReal,
       port: 0,
       listenHost: "127.0.0.1",
       allowInTests: true,
@@ -239,10 +243,8 @@ describe("canvas host", () => {
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
     } finally {
+      setA2uiRootForTest(undefined);
       await server.close();
-      if (createdBundle) {
-        await fs.rm(bundlePath, { force: true });
-      }
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

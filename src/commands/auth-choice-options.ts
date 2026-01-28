@@ -21,7 +21,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "volcengine";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -120,6 +121,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
   },
+  {
+    value: "volcengine",
+    label: "Volcano Engine",
+    hint: "ARK API key",
+    choices: ["volcengine-api-key"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -180,6 +187,7 @@ export function buildAuthChoiceOptions(params: {
     label: "MiniMax OAuth",
     hint: "Oauth plugin for MiniMax",
   });
+  options.push({ value: "volcengine-api-key", label: "Volcano Engine (ARK) API key" });
   options.push({ value: "qwen-portal", label: "Qwen OAuth" });
   options.push({
     value: "copilot-proxy",

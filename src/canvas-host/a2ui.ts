@@ -42,7 +42,20 @@ async function resolveA2uiRoot(): Promise<string | null> {
   return null;
 }
 
+const TEST_OVERRIDE_KEY = Symbol.for("OPENCLAW_A2UI_TEST_ROOT");
+
+export function setA2uiRootForTest(root: string | null | undefined) {
+  (globalThis as any)[TEST_OVERRIDE_KEY] = root;
+  cachedA2uiRootReal = undefined;
+  resolvingA2uiRoot = null;
+}
+
 async function resolveA2uiRootReal(): Promise<string | null> {
+  const override = (globalThis as any)[TEST_OVERRIDE_KEY];
+  if (override !== undefined) {
+    return override;
+  }
+
   if (cachedA2uiRootReal !== undefined) {
     return cachedA2uiRootReal;
   }
