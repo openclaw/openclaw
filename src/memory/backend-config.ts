@@ -42,7 +42,6 @@ export type ResolvedQmdSessionConfig = {
   enabled: boolean;
   exportDir?: string;
   retentionDays?: number;
-  redactToolOutputs: boolean;
 };
 
 export type ResolvedQmdConfig = {
@@ -147,12 +146,10 @@ function resolveSessionConfig(
   const exportDir = exportDirRaw ? resolvePath(exportDirRaw, workspaceDir) : undefined;
   const retentionDays =
     cfg?.retentionDays && cfg.retentionDays > 0 ? Math.floor(cfg.retentionDays) : undefined;
-  const redactToolOutputs = cfg?.redactToolOutputs !== false;
   return {
     enabled,
     exportDir,
     retentionDays,
-    redactToolOutputs,
   };
 }
 

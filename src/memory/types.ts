@@ -27,6 +27,7 @@ export type MemoryProviderStatus = {
   workspaceDir?: string;
   dbPath?: string;
   sources?: MemorySource[];
+  sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>;
   cache?: { enabled: boolean; entries?: number; maxEntries?: number };
   fts?: { enabled: boolean; available: boolean; error?: string };
   fallback?: { from: string; reason?: string };
