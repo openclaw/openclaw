@@ -1,0 +1,35 @@
+// Clawdbot Configuration Template
+// Copy this file to clawdbot.config.js and fill in the environment variables
+
+module.exports = {
+  // Gateway configuration - bind to loopback or Tailnet only
+  gateway: {
+    host: process.env.CLAWDBOT_GATEWAY_HOST || '127.0.0.1', // or Tailnet IP
+    port: parseInt(process.env.CLAWDBOT_GATEWAY_PORT) || 8080,
+    // Ensure not public - only accessible via Tailscale or SSH tunnel
+  },
+
+  // Authentication
+  auth: {
+    mode: 'password',
+    password: process.env.CLAWDBOT_PASSWORD, // Strong password from environment
+  },
+
+  // Access control
+  channels: {
+    allowlist: process.env.CLAWDBOT_CHANNEL_ALLOWLIST ? process.env.CLAWDBOT_CHANNEL_ALLOWLIST.split(',') : [], // Comma-separated channel IDs
+  },
+
+  dmPolicy: 'allowlist', // Not open - only allowlisted users
+
+  // Other configurations
+  // Add other Clawdbot specific settings here
+  discord: {
+    token: process.env.DISCORD_TOKEN, // Discord bot token
+  },
+
+  // Database or other services if needed
+  database: {
+    url: process.env.DATABASE_URL,
+  },
+};
