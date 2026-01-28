@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   resolveDefaultConfigCandidates,
+  resolveConfigPath,
   resolveOAuthDir,
   resolveOAuthPath,
   resolveStateDir,
@@ -104,6 +105,23 @@ describe("state + config path candidates", () => {
       else process.env.CLAWDBOT_STATE_DIR = previousClawdbotState;
       await fs.rm(root, { recursive: true, force: true });
       vi.resetModules();
+    }
+  });
+
+  it("respects state dir overrides when config is missing", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-config-override-"));
+    try {
+      const legacyDir = path.join(root, ".clawdbot");
+      await fs.mkdir(legacyDir, { recursive: true });
+      const legacyConfig = path.join(legacyDir, "moltbot.json");
+      await fs.writeFile(legacyConfig, "{}", "utf-8");
+
+      const overrideDir = path.join(root, "override");
+      const env = { MOLTBOT_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
+      const resolved = resolveConfigPath(env, overrideDir, () => root);
+      expect(resolved).toBe(path.join(overrideDir, "moltbot.json"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });
