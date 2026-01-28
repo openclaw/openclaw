@@ -113,6 +113,7 @@ export function resolveConfigPath(
 ): string {
   const override = env.MOLTBOT_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) return resolveUserPath(override);
+  const stateOverride = env.MOLTBOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   const candidates = [
     path.join(stateDir, CONFIG_FILENAME),
     path.join(stateDir, LEGACY_CONFIG_FILENAME),
@@ -125,6 +126,7 @@ export function resolveConfigPath(
     }
   });
   if (existing) return existing;
+  if (stateOverride) return path.join(stateDir, CONFIG_FILENAME);
   const defaultStateDir = resolveStateDir(env, homedir);
   if (path.resolve(stateDir) === path.resolve(defaultStateDir)) {
     return resolveConfigPathCandidate(env, homedir);
