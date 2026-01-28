@@ -27,6 +27,7 @@ type SyncManagerState = {
   lastSyncOk: boolean | null;
   syncCount: number;
   errorCount: number;
+  hasSuccessfulSync: boolean;
 };
 
 const state: SyncManagerState = {
@@ -35,6 +36,7 @@ const state: SyncManagerState = {
   lastSyncOk: null,
   syncCount: 0,
   errorCount: 0,
+  hasSuccessfulSync: false,
 };
 
 let currentConfig: MoltbotConfig | null = null;
@@ -79,20 +81,39 @@ async function runSync(): Promise<void> {
     );
 
     // Run bisync - pure file operation, no LLM involvement
-    const result = await runBisync({
+    // Auto-resync on first run if no prior sync state exists
+    const needsResync = !state.hasSuccessfulSync;
+
+    let result = await runBisync({
       configPath: resolved.configPath,
       remoteName: resolved.remoteName,
       remotePath: resolved.remotePath,
       localPath: resolved.localPath,
       conflictResolve: resolved.conflictResolve,
       exclude: resolved.exclude,
+      resync: needsResync,
     });
+
+    // If failed with resync error and we didn't already try resync, retry with resync
+    if (!result.ok && result.error?.includes("--resync") && !needsResync) {
+      logger.info("[workspace-sync] First-time sync detected, running with --resync");
+      result = await runBisync({
+        configPath: resolved.configPath,
+        remoteName: resolved.remoteName,
+        remotePath: resolved.remotePath,
+        localPath: resolved.localPath,
+        conflictResolve: resolved.conflictResolve,
+        exclude: resolved.exclude,
+        resync: true,
+      });
+    }
 
     state.lastSyncAt = new Date();
     state.syncCount++;
 
     if (result.ok) {
       state.lastSyncOk = true;
+      state.hasSuccessfulSync = true;
       logger.info("[workspace-sync] Periodic sync completed");
     } else {
       state.lastSyncOk = false;
