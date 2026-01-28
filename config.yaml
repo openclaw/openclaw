@@ -3,8 +3,8 @@ agents:
   defaults:
     model: "ollama/llama3.2:3b"
       fallbacks:
-        - "google/gemini-2.0-flash-001"
-        - "google/gemini-1.5-pro-latest"
+        - "google/gemini-2.0-flash"
+        - "google/gemini-1.5-pro"
 
     sandbox:
       mode: "all"  # Forces sandboxing for all sessions
