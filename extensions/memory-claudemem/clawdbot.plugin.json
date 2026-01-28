@@ -1,0 +1,27 @@
+{
+  "id": "memory-claudemem",
+  "name": "Memory (Claude-Mem)",
+  "description": "Real-time observation and memory via claude-mem worker",
+  "kind": "memory",
+  "version": "0.0.1",
+  "uiHints": {
+    "workerUrl": {
+      "label": "Worker URL",
+      "placeholder": "http://localhost:37777",
+      "help": "URL of the claude-mem worker"
+    },
+    "workerTimeout": {
+      "label": "Timeout (ms)",
+      "placeholder": "10000",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workerUrl": { "type": "string", "default": "http://localhost:37777" },
+      "workerTimeout": { "type": "number", "default": 10000 }
+    }
+  }
+}

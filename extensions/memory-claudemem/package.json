@@ -1,0 +1,13 @@
+{
+  "name": "@clawdbot/memory-claudemem",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {},
+  "devDependencies": {
+    "clawdbot": "workspace:*"
+  },
+  "peerDependencies": {
+    "clawdbot": "*"
+  }
+}
