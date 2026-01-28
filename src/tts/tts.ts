@@ -51,6 +51,10 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_AZURE_VOICE = "en-US-JennyNeural";
+const DEFAULT_AZURE_LANG = "en-US";
+const DEFAULT_AZURE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_AZURE_REGION = "eastus2";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -123,6 +127,13 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  azure: {
+    apiKey?: string;
+    region: string;
+    voice: string;
+    outputFormat: string;
+    lang: string;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -295,6 +306,16 @@ export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    azure: {
+      apiKey: raw.azure?.apiKey?.trim() || undefined,
+      region:
+        raw.azure?.region?.trim() ||
+        process.env.AZURE_SPEECH_REGION?.trim() ||
+        DEFAULT_AZURE_REGION,
+      voice: raw.azure?.voice?.trim() || DEFAULT_AZURE_VOICE,
+      outputFormat: raw.azure?.outputFormat?.trim() || DEFAULT_AZURE_OUTPUT_FORMAT,
+      lang: raw.azure?.lang?.trim() || DEFAULT_AZURE_LANG,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -474,10 +495,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "azure") {
+    return config.azure.apiKey || process.env.AZURE_SPEECH_API_KEY || process.env.AZURE_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "azure"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -485,6 +509,7 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") return config.edge.enabled;
+  if (provider === "azure") return Boolean(resolveTtsApiKey(config, provider));
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
@@ -1047,6 +1072,54 @@ function inferEdgeExtension(outputFormat: string): string {
   return ".mp3";
 }
 
+async function azureTTS(params: {
+  text: string;
+  apiKey: string;
+  region: string;
+  voice: string;
+  outputFormat: string;
+  lang: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, region, voice, outputFormat, lang, timeoutMs } = params;
+
+  // Construct SSML (Speech Synthesis Markup Language) request
+  const ssml = `<speak version='1.0' xml:lang='${lang}'>
+  <voice name='${voice}'>
+    ${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}
+  </voice>
+</speak>`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(
+      `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`,
+      {
+        method: "POST",
+        headers: {
+          "Ocp-Apim-Subscription-Key": apiKey,
+          "Content-Type": "application/ssml+xml",
+          "X-Microsoft-OutputFormat": outputFormat,
+          "User-Agent": "Moltbot",
+        },
+        body: ssml,
+        signal: controller.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Azure Speech TTS error (${response.status}): ${errorText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function edgeTTS(params: {
   text: string;
   outputPath: string;
@@ -1172,7 +1245,17 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
-      if (provider === "elevenlabs") {
+      if (provider === "azure") {
+        audioBuffer = await azureTTS({
+          text: params.text,
+          apiKey,
+          region: config.azure.region,
+          voice: config.azure.voice,
+          outputFormat: config.azure.outputFormat,
+          lang: config.azure.lang,
+          timeoutMs: config.timeoutMs,
+        });
+      } else if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
         const voiceSettings = {

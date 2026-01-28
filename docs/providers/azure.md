@@ -222,9 +222,76 @@ Check [Azure OpenAI API documentation](https://learn.microsoft.com/azure/ai-serv
 | Data residency | Regional | Global |
 | Enterprise features | Azure integration | OpenAI org settings |
 
+## Azure Speech Service (TTS)
+
+Azure Speech Service provides high-quality text-to-speech with neural voices in 100+ languages.
+
+### Configuration
+
+Add Azure TTS to your `moltbot.json`:
+
+```json
+{
+  "messages": {
+    "tts": {
+      "provider": "azure",
+      "azure": {
+        "apiKey": "your-speech-api-key",
+        "region": "eastus2",
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "lang": "zh-CN",
+        "outputFormat": "audio-24khz-48kbitrate-mono-mp3"
+      }
+    }
+  }
+}
+```
+
+### Environment Variables
+
+```bash
+export AZURE_SPEECH_API_KEY="your-speech-api-key"
+export AZURE_SPEECH_REGION="eastus2"
+```
+
+### Popular Voices
+
+**Chinese**:
+- `zh-CN-XiaoxiaoNeural` - Female, natural and friendly
+- `zh-CN-YunxiNeural` - Male, warm and steady
+- `zh-CN-YunyangNeural` - Male, professional news anchor
+
+**English**:
+- `en-US-JennyNeural` - Female, friendly assistant
+- `en-US-GuyNeural` - Male, professional
+- `en-US-AriaNeural` - Female, conversational
+
+**Japanese**:
+- `ja-JP-NanamiNeural` - Female, polite and clear
+- `ja-JP-KeitaNeural` - Male, friendly
+
+See [full voice list](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts).
+
+### Output Formats
+
+Common formats for Moltbot:
+- `audio-24khz-48kbitrate-mono-mp3` - Default, good quality
+- `audio-48khz-96kbitrate-mono-mp3` - High quality
+- `webm-24khz-16bit-mono-opus` - WebM for web
+- `ogg-24khz-16bit-mono-opus` - OGG for compatibility
+
+### Advantages over Edge TTS
+
+- **Higher quality**: Neural voices with better prosody
+- **More voices**: 400+ neural voices vs Edge's limited set
+- **Custom voices**: Create custom neural voices (preview)
+- **SSML control**: Fine-grained control over speech
+- **Unified billing**: Same Azure subscription as GPT models
+
 ## Additional Resources
 
 - [Azure AI Services Documentation](https://learn.microsoft.com/azure/ai-services/)
 - [Azure OpenAI Quickstart](https://learn.microsoft.com/azure/ai-services/openai/quickstart)
+- [Azure Speech Service](https://learn.microsoft.com/azure/ai-services/speech-service/)
+- [Speech TTS API Reference](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech)
 - [Model Deployments](https://learn.microsoft.com/azure/ai-services/openai/how-to/create-resource)
-- [API Reference](https://learn.microsoft.com/azure/ai-services/openai/reference)
