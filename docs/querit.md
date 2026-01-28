@@ -7,7 +7,7 @@ read_when:
 
 # Querit
 
-Clawdbot supports Querit as an alternative provider for `web_search`.
+Moltbot supports Querit as an alternative provider for `web_search`.
 
 ## Get an API key
 
