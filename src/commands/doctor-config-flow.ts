@@ -14,7 +14,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { note } from "../terminal/note.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
-import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
+import { autoMigrateLegacyStateDir, StateDirConflictError } from "./doctor-state-migrations.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -214,7 +214,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   }
 
-  const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
+  const autoEnable = applyPluginAutoEnable({
+    config: candidate,
+    env: process.env,
+  });
   if (autoEnable.changes.length > 0) {
     note(autoEnable.changes.join("\n"), "Doctor changes");
     candidate = autoEnable.config;
