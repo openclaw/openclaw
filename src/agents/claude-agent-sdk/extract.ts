@@ -28,6 +28,14 @@ function extractTextFromContent(value: unknown): string | undefined {
     const delta = value.delta;
     if (typeof delta === "string" && delta.trim()) return delta;
 
+    // Some SDKs nest deltas (e.g. Claude stream_event: { event: { delta: { text } } }).
+    const nestedDelta = extractTextFromContent(delta);
+    if (nestedDelta) return nestedDelta;
+
+    const event = value.event;
+    const nestedEvent = extractTextFromContent(event);
+    if (nestedEvent) return nestedEvent;
+
     const content = value.content;
     const nested = extractTextFromContent(content);
     if (nested) return nested;

@@ -13,9 +13,29 @@ vi.mock("../agents/pi-embedded.js", () => ({
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
+vi.mock("../agents/sandbox.js", () => ({
+  resolveSandboxContext: vi.fn(async () => null),
+}));
+vi.mock("../agents/pi-tools.js", () => ({
+  createClawdbrainCodingTools: vi.fn(() => []),
+}));
+vi.mock("../agents/claude-agent-sdk/sdk-session-history.js", () => ({
+  loadSessionHistoryForSdk: vi.fn(() => []),
+}));
+vi.mock("../agents/claude-agent-sdk/sdk-agent-runtime.js", () => ({
+  createSdkAgentRuntime: vi.fn(() => ({
+    kind: "sdk",
+    displayName: "Claude Agent SDK",
+    run: vi.fn(async () => ({
+      payloads: [{ text: "sdk-ok" }],
+      meta: { durationMs: 5, agentMeta: { sessionId: "s", provider: "sdk", model: "default" } },
+    })),
+  })),
+}));
 
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createSdkAgentRuntime } from "../agents/claude-agent-sdk/sdk-agent-runtime.js";
 import type { ClawdbrainConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -47,9 +67,11 @@ function mockConfig(
   agentOverrides?: Partial<NonNullable<NonNullable<ClawdbrainConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<ClawdbrainConfig["telegram"]>>,
   agentsList?: Array<{ id: string; default?: boolean }>,
+  agentsMainRuntime?: "pi" | "sdk",
 ) {
   configSpy.mockReturnValue({
     agents: {
+      main: agentsMainRuntime ? { runtime: agentsMainRuntime } : undefined,
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
         models: { "anthropic/claude-opus-4-5": {} },
@@ -110,6 +132,18 @@ describe("agentCommand", () => {
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.thinkLevel).toBe("high");
       expect(callArgs?.verboseLevel).toBe("on");
+    });
+  });
+
+  it("runs SDK main agent when agents.main.runtime is sdk", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, undefined, "sdk");
+
+      await agentCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(vi.mocked(createSdkAgentRuntime)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
     });
   });
 

@@ -69,16 +69,16 @@ describe("AgentRuntime interface conformance", () => {
 // ---------------------------------------------------------------------------
 
 describe("Runtime selection via isSdkRunnerEnabled", () => {
-  it("returns true when agents.defaults.runtime is sdk", () => {
+  it("returns true when agents.main.runtime is sdk", () => {
     const config = {
-      agents: { defaults: { runtime: "sdk" } },
+      agents: { main: { runtime: "sdk" } },
     } as ClawdbrainConfig;
     expect(isSdkRunnerEnabled(config)).toBe(true);
   });
 
-  it("returns false when agents.defaults.runtime is pi", () => {
+  it("returns false when agents.main.runtime is pi", () => {
     const config = {
-      agents: { defaults: { runtime: "pi" } },
+      agents: { main: { runtime: "pi" } },
     } as ClawdbrainConfig;
     expect(isSdkRunnerEnabled(config)).toBe(false);
   });
@@ -89,6 +89,20 @@ describe("Runtime selection via isSdkRunnerEnabled", () => {
 
   it("returns false when config is empty", () => {
     expect(isSdkRunnerEnabled({} as ClawdbrainConfig)).toBe(false);
+  });
+
+  it("falls back to agents.defaults.runtime when agents.main.runtime is unset", () => {
+    const config = {
+      agents: { defaults: { runtime: "sdk" } },
+    } as ClawdbrainConfig;
+    expect(isSdkRunnerEnabled(config)).toBe(true);
+  });
+
+  it("agents.main.runtime takes precedence over agents.defaults.runtime", () => {
+    const config = {
+      agents: { main: { runtime: "pi" }, defaults: { runtime: "sdk" } },
+    } as ClawdbrainConfig;
+    expect(isSdkRunnerEnabled(config)).toBe(false);
   });
 
   it("does not enable SDK runtime from tools.codingTask config", () => {
@@ -107,7 +121,7 @@ describe("Runtime selection via isSdkRunnerEnabled", () => {
 
   it("runtime sdk takes precedence over codingTask disabled", () => {
     const config = {
-      agents: { defaults: { runtime: "sdk" } },
+      agents: { main: { runtime: "sdk" } },
       tools: {
         codingTask: {
           enabled: false,

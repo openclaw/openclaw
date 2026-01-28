@@ -18,6 +18,7 @@ import {
   type SdkProviderEntry,
 } from "./sdk-runner.config.js";
 import { runSdkAgent } from "./sdk-runner.js";
+import { appendSdkTurnPairToSessionTranscript } from "./sdk-session-transcript.js";
 import type { SdkConversationTurn, SdkRunnerResult } from "./sdk-runner.types.js";
 
 // ---------------------------------------------------------------------------
@@ -87,7 +88,11 @@ async function tryAsyncOAuthResolution(
  * Convert an `SdkRunnerResult` into an `EmbeddedPiRunResult` so the
  * downstream reply pipeline can consume it without changes.
  */
-function adaptSdkResultToPiResult(result: SdkRunnerResult): EmbeddedPiRunResult {
+function adaptSdkResultToPiResult(params: {
+  result: SdkRunnerResult;
+  sessionId: string;
+}): EmbeddedPiRunResult {
+  const result = params.result;
   return {
     payloads: result.payloads.map((p) => ({
       text: p.text,
@@ -96,9 +101,15 @@ function adaptSdkResultToPiResult(result: SdkRunnerResult): EmbeddedPiRunResult 
     meta: {
       durationMs: result.meta.durationMs,
       aborted: result.meta.aborted,
-      error: result.meta.error
-        ? { kind: "compaction_failure" as const, message: result.meta.error.message }
-        : undefined,
+      agentMeta: {
+        sessionId: params.sessionId,
+        provider: result.meta.provider ?? "sdk",
+        model: result.meta.model ?? "default",
+      },
+      // SDK runner errors are rendered as text payloads with isError=true.
+      // Avoid mapping to Pi-specific error kinds (context/compaction) because
+      // downstream recovery logic would treat them incorrectly.
+      error: undefined,
     },
   };
 }
@@ -121,6 +132,8 @@ export type RunSdkAgentAdaptedParams = {
   runId: string;
   abortSignal?: AbortSignal;
   conversationHistory?: SdkConversationTurn[];
+  hooksEnabled?: boolean;
+  sdkOptions?: Record<string, unknown>;
 
   // Tools are lazily built to avoid import cycles.
   tools: AnyAgentTool[];
@@ -189,6 +202,8 @@ export async function runSdkAgentAdapted(
     timeoutMs: params.timeoutMs,
     abortSignal: params.abortSignal,
     conversationHistory: params.conversationHistory,
+    hooksEnabled: params.hooksEnabled,
+    sdkOptions: params.sdkOptions,
     onPartialReply: params.onPartialReply,
     onAssistantMessageStart: params.onAssistantMessageStart,
     onBlockReply: params.onBlockReply,
@@ -196,5 +211,15 @@ export async function runSdkAgentAdapted(
     onAgentEvent: params.onAgentEvent,
   });
 
-  return adaptSdkResultToPiResult(sdkResult);
+  // Persist a minimal user/assistant turn pair so SDK main-agent mode has multi-turn continuity.
+  // This intentionally records only text, not tool call structures.
+  appendSdkTurnPairToSessionTranscript({
+    sessionFile: params.sessionFile,
+    prompt: params.prompt,
+    assistantText: sdkResult.payloads.find(
+      (p) => !p.isError && typeof p.text === "string" && p.text.trim(),
+    )?.text,
+  });
+
+  return adaptSdkResultToPiResult({ result: sdkResult, sessionId: params.sessionId });
 }

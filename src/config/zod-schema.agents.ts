@@ -5,6 +5,19 @@ import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
 export const AgentsSchema = z
   .object({
+    main: z
+      .object({
+        runtime: z.enum(["pi", "sdk"]).optional(),
+        sdk: z
+          .object({
+            hooksEnabled: z.boolean().optional(),
+            options: z.record(z.string(), z.unknown()).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
   })

@@ -97,7 +97,7 @@ export type AgentDefaultsConfig = {
   /**
    * Agent runtime engine selection.
    * - "pi" (default): Pi Agent embedded runner (multi-turn, session history)
-   * - "sdk": Claude Agent SDK runner (stateless per turn, dual-provider support)
+   * - "sdk": Claude Agent SDK runner (stateless per query; multi-turn continuity via transcript injection)
    */
   runtime?: AgentRuntime;
   /** Primary model and fallbacks (provider/model). */

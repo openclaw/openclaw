@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { resolveMainAgentRuntimeKind } from "../../agents/main-agent-runtime-factory.js";
+import {
+  createPiAgentRuntime,
+  splitRunEmbeddedPiAgentParamsForRuntime,
+} from "../../agents/pi-agent-runtime.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { ClawdbrainConfig } from "../../config/config.js";
 import {
@@ -16,6 +20,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import { isCompactionEndWithoutRetry } from "../../agents/agent-event-checks.js";
 import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
@@ -38,6 +43,10 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
 }): Promise<SessionEntry | undefined> {
+  // Memory flush is a Pi-agent/session-context optimization; SDK main agent mode is an alternate
+  // operating mode and does not participate in the same compaction/memory-flush loop.
+  if (resolveMainAgentRuntimeKind(params.cfg) === "sdk") return params.sessionEntry;
+
   const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
   if (!memoryFlushSettings) return params.sessionEntry;
 
@@ -102,7 +111,7 @@ export async function runMemoryFlushIfNeeded(params: {
           provider === params.followupRun.run.provider
             ? params.followupRun.run.authProfileId
             : undefined;
-        return runEmbeddedPiAgent({
+        const piParams = {
           sessionId: params.followupRun.run.sessionId,
           sessionKey: params.sessionKey,
           messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
@@ -141,16 +150,15 @@ export async function runMemoryFlushIfNeeded(params: {
           bashElevated: params.followupRun.run.bashElevated,
           timeoutMs: params.followupRun.run.timeoutMs,
           runId: flushRunId,
-          onAgentEvent: (evt) => {
-            if (evt.stream === "compaction") {
-              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              const willRetry = Boolean(evt.data.willRetry);
-              if (phase === "end" && !willRetry) {
-                memoryCompactionCompleted = true;
-              }
+          onAgentEvent: (evt: { stream: string; data: Record<string, unknown> }) => {
+            if (evt.stream !== "compaction") return;
+            if (isCompactionEndWithoutRetry(evt.data.phase, evt.data.willRetry)) {
+              memoryCompactionCompleted = true;
             }
           },
-        });
+        };
+        const { context, run } = splitRunEmbeddedPiAgentParamsForRuntime(piParams);
+        return createPiAgentRuntime(context).run(run);
       },
     });
     let memoryFlushCompactionCount =

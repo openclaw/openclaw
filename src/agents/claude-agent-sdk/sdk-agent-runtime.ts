@@ -21,6 +21,10 @@ export type SdkRuntimeContext = {
   tools: AnyAgentTool[];
   /** Prior conversation history serialized for the SDK. */
   conversationHistory?: SdkConversationTurn[];
+  /** Enable Claude Code hook wiring for richer event parity. */
+  hooksEnabled?: boolean;
+  /** Additional `query({ options })` fields to pass through. */
+  sdkOptions?: Record<string, unknown>;
 };
 
 // ---------------------------------------------------------------------------

@@ -63,6 +63,34 @@ export type AgentConfig = {
 };
 
 export type AgentsConfig = {
+  /**
+   * Main agent loop configuration.
+   *
+   * This is the gateway-wide “main agent” operating mode (inbound auto-reply loop, etc.).
+   * It is intentionally separate from per-agent/session defaults so the main runtime can be
+   * swapped independently of configured agents.
+   */
+  main?: {
+    runtime?: AgentDefaultsConfig["runtime"];
+    /**
+     * Claude Agent SDK (TypeScript) runtime tuning for the main agent loop.
+     *
+     * This is intentionally runtime-specific and only applies when the main
+     * runtime is "sdk".
+     */
+    sdk?: {
+      /** Enable Claude Code hook wiring for richer lifecycle/tool parity. */
+      hooksEnabled?: boolean;
+      /**
+       * Additional SDK `query({ options })` fields to pass through.
+       *
+       * NOTE: Clawdbrain still controls tool bridging (`mcpServers`, `allowedTools`, etc.).
+       * Use this for options like `settingSources`, `additionalDirectories`,
+       * `includePartialMessages`, etc.
+       */
+      options?: Record<string, unknown>;
+    };
+  };
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
 };

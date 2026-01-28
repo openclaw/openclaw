@@ -53,14 +53,21 @@ describe("isSdkRunnerEnabled", () => {
     expect(isSdkRunnerEnabled({})).toBe(false);
   });
 
-  it("returns false when agents.defaults.runtime is pi", () => {
+  it("returns false when agents.main.runtime is pi", () => {
     const config: ClawdbrainConfig = {
-      agents: { defaults: { runtime: "pi" } },
+      agents: { main: { runtime: "pi" } },
     };
     expect(isSdkRunnerEnabled(config)).toBe(false);
   });
 
-  it("returns true when agents.defaults.runtime is sdk", () => {
+  it("returns true when agents.main.runtime is sdk", () => {
+    const config: ClawdbrainConfig = {
+      agents: { main: { runtime: "sdk" } },
+    };
+    expect(isSdkRunnerEnabled(config)).toBe(true);
+  });
+
+  it("falls back to agents.defaults.runtime when agents.main.runtime is unset", () => {
     const config: ClawdbrainConfig = {
       agents: { defaults: { runtime: "sdk" } },
     };

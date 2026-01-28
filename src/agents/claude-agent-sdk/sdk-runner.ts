@@ -20,6 +20,9 @@ import type { SdkRunnerQueryOptions } from "./tool-bridge.types.js";
 import { extractTextFromClaudeAgentSdkEvent } from "./extract.js";
 import { loadClaudeAgentSdk } from "./sdk.js";
 import { buildHistorySystemPromptSuffix } from "./sdk-history.js";
+import { isSdkTerminalToolEventType } from "./sdk-event-checks.js";
+import { buildClawdbrainSdkHooks } from "./sdk-hooks.js";
+import { normalizeToolName } from "../tool-policy.js";
 import type { SdkRunnerParams, SdkRunnerResult } from "./sdk-runner.types.js";
 
 // ---------------------------------------------------------------------------
@@ -95,6 +98,50 @@ function classifyEvent(event: unknown): { kind: EventKind; event: unknown } {
   return { kind: "unknown", event };
 }
 
+function normalizeSdkToolName(
+  raw: string,
+  mcpServerName: string,
+): { name: string; rawName: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { name: "tool", rawName: "" };
+  const parts = trimmed.split("__");
+  const withoutMcpPrefix =
+    parts.length >= 3 && parts[0] === "mcp" && parts[1] === mcpServerName
+      ? parts.slice(2).join("__")
+      : parts.length >= 3 && parts[0] === "mcp"
+        ? parts.slice(2).join("__")
+        : trimmed;
+  return { name: normalizeToolName(withoutMcpPrefix), rawName: trimmed };
+}
+
+function applySdkOptionsOverrides(
+  options: SdkRunnerQueryOptions,
+  overrides: unknown,
+): SdkRunnerQueryOptions {
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return options;
+
+  // Clawdbrain must keep these consistent with its own tool plumbing + prompt building.
+  const protectedKeys = new Set([
+    "cwd",
+    "mcpServers",
+    "allowedTools",
+    "disallowedTools",
+    "tools",
+    "env",
+    "systemPrompt",
+    "model",
+    "hooks",
+  ]);
+
+  const record = overrides as Record<string, unknown>;
+  const target = options as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(record)) {
+    if (protectedKeys.has(key)) continue;
+    target[key] = value;
+  }
+  return options;
+}
+
 // ---------------------------------------------------------------------------
 // Prompt building
 // ---------------------------------------------------------------------------
@@ -144,6 +191,7 @@ function buildSdkPrompt(params: {
 export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerResult> {
   const startedAt = Date.now();
   const mcpServerName = params.mcpServerName ?? DEFAULT_MCP_SERVER_NAME;
+  const hooksEnabled = params.hooksEnabled === true;
 
   const emitEvent = (stream: string, data: Record<string, unknown>) => {
     try {
@@ -155,6 +203,7 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     }
   };
 
+  emitEvent("lifecycle", { phase: "start", startedAt, runtime: "sdk" });
   emitEvent("sdk", { type: "sdk_runner_start", runId: params.runId });
 
   // -------------------------------------------------------------------------
@@ -167,6 +216,13 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logError(`[sdk-runner] Failed to load Claude Agent SDK: ${message}`);
+    emitEvent("lifecycle", {
+      phase: "error",
+      startedAt,
+      endedAt: Date.now(),
+      runtime: "sdk",
+      error: message,
+    });
     return {
       payloads: [
         {
@@ -203,6 +259,13 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logError(`[sdk-runner] Failed to bridge tools to MCP: ${message}`);
+    emitEvent("lifecycle", {
+      phase: "error",
+      startedAt,
+      endedAt: Date.now(),
+      runtime: "sdk",
+      error: message,
+    });
     return {
       payloads: [
         {
@@ -260,6 +323,9 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     sdkOptions.tools = [];
   }
 
+  // Apply optional pass-through options (e.g. settingSources/includePartialMessages).
+  applySdkOptionsOverrides(sdkOptions, params.sdkOptions);
+
   // Permission mode.
   if (params.permissionMode) {
     sdkOptions.permissionMode = params.permissionMode;
@@ -287,6 +353,15 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     sdkOptions.model = params.provider.model;
   }
 
+  // Hook callbacks (Claude Code hooks; richer tool + lifecycle signals).
+  if (hooksEnabled) {
+    sdkOptions.hooks = buildClawdbrainSdkHooks({
+      mcpServerName,
+      emitEvent,
+      onToolResult: params.onToolResult,
+    }) as unknown as Record<string, unknown>;
+  }
+
   // -------------------------------------------------------------------------
   // Step 4: Build the prompt
   // -------------------------------------------------------------------------
@@ -306,6 +381,8 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
   let resultText: string | undefined;
   let aborted = false;
   const chunks: string[] = [];
+  let assistantSoFar = "";
+  let didAssistantMessageStart = false;
 
   // Set up timeout if configured.
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -331,14 +408,6 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
       }),
     );
 
-    try {
-      void Promise.resolve(params.onAssistantMessageStart?.()).catch((err) => {
-        logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
-      });
-    } catch (err) {
-      logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
-    }
-
     for await (const event of stream) {
       // Check abort before processing each event.
       if (combinedAbort.aborted) {
@@ -349,15 +418,29 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
 
       eventCount += 1;
 
+      // Best-effort assistant message boundary detection.
+      // Some SDK versions emit `type: "message_start"`; otherwise, we fall back
+      // to calling this once when we see the first assistant text.
+      if (!didAssistantMessageStart && isRecord(event) && event.type === "message_start") {
+        didAssistantMessageStart = true;
+        try {
+          void Promise.resolve(params.onAssistantMessageStart?.()).catch((err) => {
+            logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
+          });
+        } catch (err) {
+          logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
+        }
+      }
+
       const { kind } = classifyEvent(event);
 
       // Emit tool results via callback.
-      if (kind === "tool") {
+      if (!hooksEnabled && kind === "tool") {
         const record = isRecord(event) ? (event as Record<string, unknown>) : undefined;
         const type = record && typeof record.type === "string" ? record.type : undefined;
         const phase = (() => {
           if (type === "tool_execution_start" || type === "tool_use") return "start";
-          if (type === "tool_execution_end" || type === "tool_result") return "end";
+          if (isSdkTerminalToolEventType(type)) return "result";
           return "update";
         })();
         const name =
@@ -366,6 +449,9 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
             : record && typeof record.tool_name === "string"
               ? record.tool_name
               : undefined;
+        const normalizedName = name
+          ? normalizeSdkToolName(name, mcpServerName)
+          : { name: "tool", rawName: "" };
         const toolCallId =
           record && typeof record.id === "string"
             ? record.id
@@ -375,20 +461,31 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
                 ? record.toolCallId
                 : undefined;
         const toolText = extractTextFromClaudeAgentSdkEvent(event);
+        const isError =
+          record && typeof record.is_error === "boolean"
+            ? record.is_error
+            : record && typeof record.isError === "boolean"
+              ? record.isError
+              : Boolean(record?.error);
         emitEvent("tool", {
           phase,
-          name: name ?? "tool",
+          name: normalizedName.name,
           toolCallId,
           sdkType: type,
+          ...(normalizedName.rawName ? { rawName: normalizedName.rawName } : {}),
+          isError,
           ...(toolText ? { resultText: toolText } : {}),
         });
       }
 
-      if (kind === "tool" && params.onToolResult) {
+      if (!hooksEnabled && kind === "tool" && params.onToolResult) {
         const toolText = extractTextFromClaudeAgentSdkEvent(event);
         if (toolText) {
           try {
-            await params.onToolResult({ text: toolText });
+            // Only emit tool results for terminal tool events to match Pi semantics more closely.
+            const record = isRecord(event) ? (event as Record<string, unknown>) : undefined;
+            const type = record && typeof record.type === "string" ? record.type : "";
+            if (isSdkTerminalToolEventType(type)) await params.onToolResult({ text: toolText });
           } catch {
             // Don't break the stream on callback errors.
           }
@@ -422,6 +519,17 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
         const trimmed = text.trimEnd();
         if (!trimmed) continue;
 
+        if (!didAssistantMessageStart) {
+          didAssistantMessageStart = true;
+          try {
+            void Promise.resolve(params.onAssistantMessageStart?.()).catch((err) => {
+              logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
+            });
+          } catch (err) {
+            logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
+          }
+        }
+
         // Dedup: skip if this chunk is identical to or a suffix of the last.
         const last = chunks.at(-1);
         if (last && (last === trimmed || last.endsWith(trimmed))) continue;
@@ -429,12 +537,16 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
         chunks.push(trimmed);
         extractedChars += trimmed.length;
 
-        emitEvent("assistant", { text: trimmed, delta: trimmed });
+        const prev = assistantSoFar;
+        assistantSoFar = chunks.join("\n\n");
+        const delta = assistantSoFar.startsWith(prev) ? assistantSoFar.slice(prev.length) : trimmed;
+
+        emitEvent("assistant", { text: assistantSoFar, delta });
 
         // Stream partial reply.
         if (params.onPartialReply) {
           try {
-            await params.onPartialReply({ text: trimmed });
+            await params.onPartialReply({ text: assistantSoFar });
           } catch {
             // Don't break the stream on callback errors.
           }
@@ -456,6 +568,14 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     // Check if this was a timeout.
     if (timeoutController.signal.aborted && !params.abortSignal?.aborted) {
       logWarn(`[sdk-runner] Timed out after ${params.timeoutMs}ms`);
+      emitEvent("lifecycle", {
+        phase: "error",
+        startedAt,
+        endedAt: Date.now(),
+        runtime: "sdk",
+        aborted: true,
+        error: message,
+      });
       return {
         payloads: [
           {
@@ -485,6 +605,13 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
       aborted = true;
     } else {
       logError(`[sdk-runner] Query failed: ${message}`);
+      emitEvent("lifecycle", {
+        phase: "error",
+        startedAt,
+        endedAt: Date.now(),
+        runtime: "sdk",
+        error: message,
+      });
       return {
         payloads: [
           {
@@ -518,6 +645,14 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
   const text = (resultText ?? chunks.join("\n\n")).trim();
 
   if (!text) {
+    emitEvent("lifecycle", {
+      phase: "error",
+      startedAt,
+      endedAt: Date.now(),
+      runtime: "sdk",
+      aborted,
+      error: "No text output",
+    });
     return {
       payloads: [
         {
@@ -561,6 +696,14 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     truncated,
     aborted,
     durationMs: Date.now() - startedAt,
+  });
+  emitEvent("lifecycle", {
+    phase: "end",
+    startedAt,
+    endedAt: Date.now(),
+    runtime: "sdk",
+    aborted,
+    truncated,
   });
 
   return {

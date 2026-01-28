@@ -89,6 +89,12 @@ export type SdkRunnerParams = {
   /** Permission mode for the SDK ("default", "acceptEdits", "bypassPermissions"). */
   permissionMode?: string;
 
+  /** Enable Claude Code hook wiring for richer lifecycle/tool parity. */
+  hooksEnabled?: boolean;
+
+  /** Additional `query({ options })` fields to pass through (excluding tool bridging). */
+  sdkOptions?: Record<string, unknown>;
+
   /** Max agent turns before the SDK stops. */
   maxTurns?: number;
 

@@ -62,3 +62,52 @@ export function createPiAgentRuntime(context: PiRuntimeContext): AgentRuntime {
     },
   };
 }
+
+export function splitRunEmbeddedPiAgentParamsForRuntime(params: RunEmbeddedPiAgentParams): {
+  context: PiRuntimeContext;
+  run: AgentRuntimeRunParams;
+} {
+  const {
+    sessionId,
+    sessionKey,
+    sessionFile,
+    workspaceDir,
+    agentDir,
+    config,
+    prompt,
+    extraSystemPrompt,
+    ownerNumbers,
+    timeoutMs,
+    runId,
+    abortSignal,
+    onPartialReply,
+    onAssistantMessageStart,
+    onBlockReply,
+    onToolResult,
+    onAgentEvent,
+    ...context
+  } = params;
+
+  return {
+    context: context as PiRuntimeContext,
+    run: {
+      sessionId,
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config,
+      prompt,
+      extraSystemPrompt,
+      ownerNumbers,
+      timeoutMs,
+      runId,
+      abortSignal,
+      onPartialReply,
+      onAssistantMessageStart,
+      onBlockReply,
+      onToolResult,
+      onAgentEvent,
+    },
+  };
+}

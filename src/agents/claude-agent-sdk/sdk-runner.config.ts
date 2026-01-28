@@ -10,6 +10,7 @@ import type { ClawdbrainConfig } from "../../config/config.js";
 import { logDebug } from "../../logger.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { SdkProviderConfig, SdkProviderEnv } from "./sdk-runner.types.js";
+import { resolveMainAgentRuntimeKind } from "../main-agent-runtime-factory.js";
 
 // ---------------------------------------------------------------------------
 // Well-known providers
@@ -134,13 +135,15 @@ function resolveEnvValue(value: string, env: NodeJS.ProcessEnv): string {
 /**
  * Check whether the Claude Agent SDK runner is enabled as the main agent runtime.
  *
- * The SDK runner is enabled only when `agents.defaults.runtime` is "sdk".
+ * The SDK runner is enabled when the main agent runtime is set to "sdk".
+ * Prefer `agents.main.runtime: "sdk"`. For backward compatibility, we also
+ * honor `agents.defaults.runtime: "sdk"` when `agents.main.runtime` is unset.
  *
  * IMPORTANT: `tools.codingTask.*` is tool-level configuration and must not
  * implicitly change the gateway-wide/main-agent runtime selection.
  */
 export function isSdkRunnerEnabled(config?: ClawdbrainConfig): boolean {
-  return config?.agents?.defaults?.runtime === "sdk";
+  return resolveMainAgentRuntimeKind(config) === "sdk";
 }
 
 /**

@@ -73,6 +73,14 @@ export type SdkRunnerQueryOptions = {
   model?: string;
   /** Additional directories the agent can access. */
   additionalDirectories?: string[];
+  /** Where to load Claude Code settings from ("project", etc.). */
+  settingSources?: string[];
+  /** Include partial message events in the SDK stream. */
+  includePartialMessages?: boolean;
+  /** Claude Code hook callbacks. */
+  hooks?: Record<string, unknown>;
+  /** Path to the Claude Code executable to run. */
+  pathToClaudeCodeExecutable?: string;
 };
 
 // ---------------------------------------------------------------------------

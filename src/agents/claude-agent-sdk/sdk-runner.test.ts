@@ -164,7 +164,7 @@ describe("runSdkAgent", () => {
 
       expect(onPartialReply).toHaveBeenCalledTimes(2);
       expect(onPartialReply).toHaveBeenCalledWith({ text: "chunk1" });
-      expect(onPartialReply).toHaveBeenCalledWith({ text: "chunk2" });
+      expect(onPartialReply).toHaveBeenCalledWith({ text: "chunk1\n\nchunk2" });
     });
 
     it("calls onBlockReply with final text", async () => {
@@ -197,7 +197,9 @@ describe("runSdkAgent", () => {
     });
 
     it("calls onAssistantMessageStart", async () => {
-      const queryFn = vi.fn().mockReturnValue(eventsFrom([{ type: "result", result: "ok" }]));
+      const queryFn = vi
+        .fn()
+        .mockReturnValue(eventsFrom([{ type: "message_start" }, { type: "result", result: "ok" }]));
       mockLoadSdk.mockResolvedValue({ query: queryFn });
 
       const onAssistantMessageStart = vi.fn();
@@ -213,16 +215,12 @@ describe("runSdkAgent", () => {
       const onAgentEvent = vi.fn();
       await runSdkAgent(baseParams({ onAgentEvent }));
 
-      // Should have sdk_runner_start, sdk_loaded, tools_bridged, query_start, sdk_runner_end
-      const types = onAgentEvent.mock.calls
-        .map((c) => c[0] as { stream?: string; data?: { type?: string } })
-        .filter((evt) => evt.stream === "sdk")
-        .map((evt) => evt.data?.type);
-      expect(types).toContain("sdk_runner_start");
-      expect(types).toContain("sdk_loaded");
-      expect(types).toContain("tools_bridged");
-      expect(types).toContain("query_start");
-      expect(types).toContain("sdk_runner_end");
+      const phases = onAgentEvent.mock.calls
+        .map((c) => c[0] as { stream?: string; data?: { phase?: string } })
+        .filter((evt) => evt.stream === "lifecycle")
+        .map((evt) => evt.data?.phase);
+      expect(phases).toContain("start");
+      expect(phases).toContain("end");
     });
 
     it("emits assistant events via onAgentEvent when text is extracted", async () => {
@@ -257,7 +255,7 @@ describe("runSdkAgent", () => {
         .filter((evt) => evt.stream === "tool");
       expect(toolEvents.length).toBeGreaterThan(0);
       expect(toolEvents.some((evt) => evt.data?.phase === "start")).toBe(true);
-      expect(toolEvents.some((evt) => evt.data?.phase === "end")).toBe(true);
+      expect(toolEvents.some((evt) => evt.data?.phase === "result")).toBe(true);
     });
 
     it("does not break when callback throws", async () => {
@@ -281,6 +279,57 @@ describe("runSdkAgent", () => {
       const result = await runSdkAgent(baseParams({ onAgentEvent }));
 
       expect(result.payloads[0].text).toBe("ok");
+    });
+  });
+
+  describe("Claude Code hooks", () => {
+    it("passes hook callbacks to the SDK when hooksEnabled is true and emits tool events from hooks", async () => {
+      const queryFn = vi.fn().mockImplementation(async (args: any) => {
+        const hooks = args?.options?.hooks as any;
+        const pre = hooks?.PreToolUse?.[0]?.hooks?.[0];
+        const post = hooks?.PostToolUse?.[0]?.hooks?.[0];
+
+        // Simulate a tool run via hooks (what Claude Code would do).
+        await pre?.(
+          { tool_name: "mcp__clawdbrain__exec", tool_input: { command: "echo hi" } },
+          "t1",
+          {},
+        );
+        await post?.(
+          {
+            tool_name: "mcp__clawdbrain__exec",
+            tool_response: { content: [{ type: "text", text: "ok" }] },
+          },
+          "t1",
+          {},
+        );
+
+        return eventsFrom([{ type: "result", result: "done" }]);
+      });
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const onAgentEvent = vi.fn();
+      const onToolResult = vi.fn();
+      await runSdkAgent(baseParams({ hooksEnabled: true, onAgentEvent, onToolResult }));
+
+      const toolEvents = onAgentEvent.mock.calls
+        .map((c) => c[0] as { stream?: string; data?: { phase?: string; name?: string } })
+        .filter((evt) => evt.stream === "tool");
+      expect(
+        toolEvents.some((evt) => evt.data?.phase === "start" && evt.data?.name === "exec"),
+      ).toBe(true);
+      expect(
+        toolEvents.some((evt) => evt.data?.phase === "result" && evt.data?.name === "exec"),
+      ).toBe(true);
+
+      expect(onToolResult).toHaveBeenCalledWith({ text: "ok" });
+
+      const hookEvents = onAgentEvent.mock.calls
+        .map((c) => c[0] as { stream?: string; data?: { hookEventName?: string } })
+        .filter((evt) => evt.stream === "hook")
+        .map((evt) => evt.data?.hookEventName);
+      expect(hookEvents).toContain("PreToolUse");
+      expect(hookEvents).toContain("PostToolUse");
     });
   });
 

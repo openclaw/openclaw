@@ -1,8 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import "../test-helpers/fast-core-tools.js";
-import { createClawdbrainTools } from "../clawdbrain-tools.js";
 import type { ClawdbrainConfig } from "../../config/config.js";
+
+vi.mock("../claude-agent-sdk/sdk.js", () => ({
+  loadClaudeAgentSdk: async () => {
+    throw new Error("mock: sdk unavailable");
+  },
+}));
+
+import { createClawdbrainTools } from "../clawdbrain-tools.js";
 
 describe("coding_task tool", () => {
   it("is not registered by default", () => {
