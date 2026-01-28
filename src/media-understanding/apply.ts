@@ -104,19 +104,25 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   return `${base}\n\n${suffix}`.trim();
 }
 
-function isLikelyUtf16(buffer?: Buffer): boolean {
-  if (!buffer || buffer.length < 2) return false;
+function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
+  if (!buffer || buffer.length < 2) return undefined;
   const b0 = buffer[0];
   const b1 = buffer[1];
-  if ((b0 === 0xff && b1 === 0xfe) || (b0 === 0xfe && b1 === 0xff)) {
-    return true;
+  if (b0 === 0xff && b1 === 0xfe) {
+    return "utf-16le";
+  }
+  if (b0 === 0xfe && b1 === 0xff) {
+    return "utf-16be";
   }
   const sampleLen = Math.min(buffer.length, 2048);
   let zeroCount = 0;
   for (let i = 0; i < sampleLen; i += 1) {
     if (buffer[i] === 0) zeroCount += 1;
   }
-  return zeroCount / sampleLen > 0.2;
+  if (zeroCount / sampleLen > 0.2) {
+    return "utf-16le";
+  }
+  return undefined;
 }
 
 function looksLikeUtf8Text(buffer?: Buffer): boolean {
@@ -144,16 +150,16 @@ function looksLikeUtf8Text(buffer?: Buffer): boolean {
 function decodeTextSample(buffer?: Buffer): string {
   if (!buffer || buffer.length === 0) return "";
   const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-  if (isLikelyUtf16(sample)) {
-    const isBigEndian = sample[0] === 0xfe && sample[1] === 0xff;
-    if (isBigEndian) {
-      const swapped = Buffer.alloc(sample.length);
-      for (let i = 0; i + 1 < sample.length; i += 2) {
-        swapped[i] = sample[i + 1];
-        swapped[i + 1] = sample[i];
-      }
-      return new TextDecoder("utf-16le").decode(swapped);
+  const utf16Charset = resolveUtf16Charset(sample);
+  if (utf16Charset === "utf-16be") {
+    const swapped = Buffer.alloc(sample.length);
+    for (let i = 0; i + 1 < sample.length; i += 2) {
+      swapped[i] = sample[i + 1];
+      swapped[i + 1] = sample[i];
     }
+    return new TextDecoder("utf-16le").decode(swapped);
+  }
+  if (utf16Charset === "utf-16le") {
     return new TextDecoder("utf-16le").decode(sample);
   }
   return new TextDecoder("utf-8").decode(sample);
@@ -219,13 +225,15 @@ async function extractFileBlocks(params: {
     }
     const nameHint = bufferResult?.fileName ?? attachment.path ?? attachment.url;
     const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
+    const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
-    const textLike = isLikelyUtf16(bufferResult?.buffer) || looksLikeUtf8Text(bufferResult?.buffer);
+    const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
     if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
       continue;
     }
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
-    const textHint = forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
+    const textHint =
+      forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
     const rawMime = bufferResult?.mime ?? attachment.mime;
     const mimeType = textHint ?? normalizeMimeType(rawMime);
     if (!mimeType) {
@@ -243,17 +251,20 @@ async function extractFileBlocks(params: {
     }
     if (!allowedMimes.has(mimeType)) {
       if (shouldLogVerbose()) {
-        logVerbose(`media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`);
+        logVerbose(
+          `media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`,
+        );
       }
       continue;
     }
     let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
     try {
+      const mediaType = utf16Charset ? `${mimeType}; charset=${utf16Charset}` : mimeType;
       extracted = await extractFileContentFromSource({
         source: {
           type: "base64",
           data: bufferResult.buffer.toString("base64"),
-          mediaType: mimeType,
+          mediaType,
           filename: bufferResult.fileName,
         },
         limits: {
