@@ -209,6 +209,10 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    qveris_search:
+      "Search for third-party API tools by capability description (e.g. 'weather forecast', 'stock prices'). Describe what you want to accomplish, not specific params. Returns tool_id, params, and examples.",
+    qveris_execute:
+      "Execute a discovered third-party tool. Requires tool_id and search_id from qveris_search. Pass params as JSON string in params_to_tool. Consider stats (success_rate, avg_execution_time) when selecting tools.",
   };
 
   const toolOrder = [
@@ -223,6 +227,8 @@ export function buildAgentSystemPrompt(params: {
     "process",
     "web_search",
     "web_fetch",
+    "qveris_search",
+    "qveris_execute",
     "browser",
     "canvas",
     "nodes",

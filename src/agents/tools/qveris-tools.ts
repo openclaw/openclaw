@@ -12,7 +12,6 @@ const DEFAULT_QVERIS_BASE_URL = "https://qveris.ai/api/v1";
 const DEFAULT_TIMEOUT_SECONDS = 60;
 const DEFAULT_MAX_RESPONSE_SIZE = 20480;
 const DEFAULT_SEARCH_LIMIT = 10;
-const DEFAULT_PRE_SEARCH_BYTE_THRESHOLD = 100;
 
 // ============================================================================
 // Types
@@ -72,13 +71,6 @@ interface QverisExecutionResponse {
   credits_used?: number;
 }
 
-/** Mapping from sanitized function name to original tool info */
-interface QverisToolMapping {
-  functionName: string;
-  toolId: string;
-  searchId: string;
-}
-
 // ============================================================================
 // Config Resolution
 // ============================================================================
@@ -114,14 +106,6 @@ function resolveMaxResponseSize(config?: QverisConfig): number {
 
 function resolveSearchLimit(config?: QverisConfig): number {
   return config?.searchLimit ?? DEFAULT_SEARCH_LIMIT;
-}
-
-function resolvePreSearchEnabled(config?: QverisConfig): boolean {
-  return config?.preSearchEnabled !== false;
-}
-
-function resolvePreSearchByteThreshold(config?: QverisConfig): number {
-  return config?.preSearchByteThreshold ?? DEFAULT_PRE_SEARCH_BYTE_THRESHOLD;
 }
 
 // ============================================================================
@@ -247,141 +231,6 @@ const QverisExecuteSchema = Type.Object({
 });
 
 // ============================================================================
-// Pre-Search Handler
-// ============================================================================
-
-/**
- * PreSearchToolHandler manages the pre-search flow:
- * 1. Determines if pre-search should be performed based on first query length
- * 2. Performs pre-search and stores results
- * 3. Provides tool mappings for execution
- */
-class PreSearchToolHandler {
-  private searchId: string = "";
-  private toolMappings = new Map<string, QverisToolMapping>();
-  private preSearchedTools: QverisSearchResultTool[] = [];
-  private preSearchPerformed: boolean = false;
-  private preSearchEnabled: boolean = false;
-  private byteThreshold: number;
-
-  constructor(byteThreshold: number = DEFAULT_PRE_SEARCH_BYTE_THRESHOLD) {
-    this.byteThreshold = byteThreshold;
-  }
-
-  /**
-   * Check if pre-search should be performed
-   * Conditions:
-   * 1. First query length in bytes <= threshold
-   */
-  shouldPreSearch(firstQuery: string): boolean {
-    const byteLength = new TextEncoder().encode(firstQuery).length;
-    return byteLength <= this.byteThreshold;
-  }
-
-  /**
-   * Perform pre-search using the query
-   */
-  async preSearch(params: {
-    query: string;
-    sessionId: string;
-    apiKey: string;
-    baseUrl: string;
-    timeoutSeconds: number;
-    searchLimit: number;
-  }): Promise<QverisSearchResponse | null> {
-    if (this.preSearchPerformed) {
-      return null;
-    }
-
-    try {
-      const result = await qverisSearch({
-        query: params.query,
-        sessionId: params.sessionId,
-        limit: params.searchLimit,
-        apiKey: params.apiKey,
-        baseUrl: params.baseUrl,
-        timeoutSeconds: params.timeoutSeconds,
-      });
-
-      if (result.results && result.results.length > 0) {
-        this.searchId = result.search_id;
-        this.preSearchedTools = result.results;
-
-        // Store mappings for execution
-        for (const tool of result.results) {
-          const functionName = sanitizeToolName(tool.tool_id);
-          this.toolMappings.set(functionName, {
-            functionName,
-            toolId: tool.tool_id,
-            searchId: result.search_id,
-          });
-        }
-
-        this.preSearchEnabled = true;
-      }
-
-      this.preSearchPerformed = true;
-      return result;
-    } catch (error) {
-      this.preSearchPerformed = true;
-      return null;
-    }
-  }
-
-  isPreSearchEnabled(): boolean {
-    return this.preSearchEnabled && this.preSearchedTools.length > 0;
-  }
-
-  getPreSearchedTools(): QverisSearchResultTool[] {
-    return this.preSearchedTools;
-  }
-
-  getSearchId(): string {
-    return this.searchId;
-  }
-
-  isPreSearchedTool(toolName: string): boolean {
-    return this.toolMappings.has(toolName);
-  }
-
-  getToolMapping(functionName: string): QverisToolMapping | undefined {
-    return this.toolMappings.get(functionName);
-  }
-}
-
-/**
- * Sanitize tool ID to create a valid function name
- */
-function sanitizeToolName(toolId: string): string {
-  if (!toolId || typeof toolId !== "string") {
-    toolId = "unknown_tool";
-  }
-
-  // Replace invalid characters with underscore
-  let sanitized = toolId.replace(/[^a-zA-Z0-9_-]/g, "_");
-
-  // Remove leading hyphens and numbers
-  sanitized = sanitized.replace(/^[-0-9]+/, "");
-
-  // If empty after sanitization, use a default name
-  if (!sanitized || sanitized === "_") {
-    sanitized = "tool_" + Date.now().toString(36);
-  }
-
-  // Ensure starts with letter or underscore
-  if (sanitized.startsWith("-")) {
-    sanitized = "_" + sanitized.substring(1);
-  }
-
-  // Truncate to 64 characters
-  if (sanitized.length > 64) {
-    sanitized = sanitized.substring(0, 64);
-  }
-
-  return sanitized;
-}
-
-// ============================================================================
 // Tool Creation
 // ============================================================================
 
@@ -408,7 +257,8 @@ export function createQverisTools(options?: {
   const searchLimit = resolveSearchLimit(config);
 
   // Generate a session ID tied to clawdbot session key
-  const sessionId = options?.agentSessionKey ?? `clawdbot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId =
+    options?.agentSessionKey ?? `clawdbot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const searchTool: AnyAgentTool = {
     label: "QVeris Search",
@@ -512,5 +362,8 @@ export function isQverisEnabled(options?: {
   sandboxed?: boolean;
 }): boolean {
   const config = resolveQverisConfig(options?.config);
-  return resolveQverisEnabled({ config, sandboxed: options?.sandboxed }) && Boolean(resolveQverisApiKey(config));
+  return (
+    resolveQverisEnabled({ config, sandboxed: options?.sandboxed }) &&
+    Boolean(resolveQverisApiKey(config))
+  );
 }
