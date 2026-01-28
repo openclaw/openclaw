@@ -126,6 +126,34 @@ out to QMD for retrieval. Key points:
 - Searches run via `qmd query --json`. If QMD fails or the binary is missing,
   Moltbot automatically falls back to the builtin SQLite manager so memory tools
   keep working.
+- **First search may be slow**: QMD may download local GGUF models (reranker/query
+  expansion) on the first `qmd query` run.
+  - Moltbot sets `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` automatically when it runs QMD.
+  - If you want to pre-download models manually (and warm the same index Moltbot
+    uses), run a one-off query with the agent’s XDG dirs.
+
+    Moltbot’s QMD state lives under your **state dir** (usually `~/.clawdbot`, or
+    `~/.moltbot` on newer installs). You can point `qmd` at the exact same index
+    by exporting the same XDG vars Moltbot uses:
+
+    ```bash
+    # Pick the same state dir Moltbot uses
+    STATE_DIR="${MOLTBOT_STATE_DIR:-${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}}"
+    if [ -d "$HOME/.moltbot" ] && [ ! -d "$HOME/.clawdbot" ] \
+      && [ -z "${MOLTBOT_STATE_DIR:-}" ] && [ -z "${CLAWDBOT_STATE_DIR:-}" ]; then
+      STATE_DIR="$HOME/.moltbot"
+    fi
+
+    export XDG_CONFIG_HOME="$STATE_DIR/agents/main/qmd/xdg-config"
+    export XDG_CACHE_HOME="$STATE_DIR/agents/main/qmd/xdg-cache"
+
+    # (Optional) force an index refresh + embeddings
+    qmd update
+    qmd embed
+
+    # Warm up / trigger first-time model downloads
+    qmd query "test" -c memory-root --json >/dev/null 2>&1
+    ```
 
 **Config surface (`memory.qmd.*`)**
 - `command` (default `qmd`): override the executable path.
