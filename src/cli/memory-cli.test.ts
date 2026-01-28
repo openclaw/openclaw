@@ -242,7 +242,7 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", "status", "--index"], { from: "user" });
 
     expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", progress: expect.any(Function) }),
+      expect.objectContaining({ reason: "cli", force: true, progress: expect.any(Function) }),
     );
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
@@ -267,7 +267,7 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", "index"], { from: "user" });
 
     expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+      expect.objectContaining({ reason: "cli", force: true, progress: expect.any(Function) }),
     );
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
@@ -294,7 +294,7 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", "index"], { from: "user" });
 
     expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+      expect.objectContaining({ reason: "cli", force: true, progress: expect.any(Function) }),
     );
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
