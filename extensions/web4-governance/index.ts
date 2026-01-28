@@ -11,14 +11,17 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { createSoftLCT } from "./src/soft-lct.js";
-import { createR6Request, hashOutput, classifyTool } from "./src/r6.js";
+import { createR6Request, hashOutput, classifyTool, extractTarget } from "./src/r6.js";
 import { AuditChain } from "./src/audit.js";
 import { SessionStore, type SessionState } from "./src/session-state.js";
+import { PolicyEngine } from "./src/policy.js";
+import type { PolicyConfig, PolicyEvaluation } from "./src/policy-types.js";
 
 type PluginConfig = {
   auditLevel?: string;
   showR6Status?: boolean;
   storagePath?: string;
+  policy?: Partial<PolicyConfig>;
 };
 
 const plugin = {
@@ -44,6 +47,17 @@ const plugin = {
     // Per-session state (keyed by sessionKey)
     const sessions = new Map<string, { state: SessionState; audit: AuditChain }>();
     const sessionStore = new SessionStore(storagePath);
+
+    // Policy engine
+    const policyEngine = new PolicyEngine(config.policy);
+    if (policyEngine.ruleCount > 0) {
+      logger.info(
+        `[web4] Policy engine: ${policyEngine.ruleCount} rules, enforce=${policyEngine.isEnforcing}`,
+      );
+    }
+
+    // Stash for passing policy evaluations from before_tool_call to after_tool_call
+    const policyStash = new Map<string, PolicyEvaluation>();
 
     function getOrCreateSession(sessionKey: string): { state: SessionState; audit: AuditChain } {
       let entry = sessions.get(sessionKey);
@@ -135,13 +149,48 @@ const plugin = {
 
     // --- Typed Tool Hooks (wired via pi-tools.hooks.ts) ---
 
+    // Pre-action policy gating
+    api.on("before_tool_call", (event, ctx) => {
+      if (policyEngine.ruleCount === 0) return;
+
+      const category = classifyTool(event.toolName);
+      const target = extractTarget(event.toolName, event.params);
+      const { blocked, evaluation } = policyEngine.shouldBlock(event.toolName, category, target);
+
+      // Stash evaluation for after_tool_call to pick up
+      const sid = ctx.sessionKey ?? ctx.agentId ?? "default";
+      policyStash.set(sid, evaluation);
+
+      if (evaluation.decision === "warn") {
+        logger.warn(
+          `[web4] Policy WARN: ${event.toolName} [${category}] → ${target ?? "(no target)"} — ${evaluation.reason}`,
+        );
+      }
+
+      if (blocked) {
+        logger.warn(
+          `[web4] Policy DENY: ${event.toolName} [${category}] → ${target ?? "(no target)"} — ${evaluation.reason}`,
+        );
+        return { block: true, blockReason: `[web4-policy] ${evaluation.reason}` };
+      }
+
+      if (evaluation.decision === "deny" && !evaluation.enforced) {
+        // Dry-run mode: log but don't block
+        logger.warn(
+          `[web4] Policy DENY (dry-run): ${event.toolName} [${category}] → ${target ?? "(no target)"} — ${evaluation.reason}`,
+        );
+      }
+    });
+
     api.on("after_tool_call", (event, ctx) => {
       const sid = ctx.sessionKey ?? ctx.agentId ?? "default";
       const entry = sessions.get(sid);
       if (!entry) return;
 
-      // Create R6 request directly (before_tool_call and after_tool_call
-      // receive separate event objects, so we can't pass data between them)
+      // Pick up stashed policy evaluation from before_tool_call
+      const policyEval = policyStash.get(sid);
+      policyStash.delete(sid);
+
       const r6 = createR6Request(
         entry.state.sessionId,
         ctx.agentId,
@@ -151,6 +200,12 @@ const plugin = {
         entry.state.lastR6Id,
         auditLevel,
       );
+
+      // Write policy constraints to R6
+      if (policyEval) {
+        r6.rules.constraints = policyEval.constraints;
+      }
+
       const result = {
         status: (event.error ? "error" : "success") as "success" | "error",
         outputHash: event.result ? hashOutput(event.result) : undefined,
@@ -227,6 +282,73 @@ const plugin = {
           });
       },
       { commands: ["audit"] },
+    );
+
+    // --- Policy Admin CLI ---
+
+    api.registerCli(
+      ({ program }) => {
+        const policy = program.command("policy").description("Web4 policy engine administration");
+
+        policy
+          .command("status")
+          .description("Show policy engine status")
+          .action(() => {
+            console.log(`Policy engine:`);
+            console.log(`  Rules:    ${policyEngine.ruleCount}`);
+            console.log(`  Default:  ${policyEngine.defaultDecision}`);
+            console.log(`  Enforce:  ${policyEngine.isEnforcing}`);
+          });
+
+        policy
+          .command("rules")
+          .description("List all policy rules in evaluation order")
+          .action(() => {
+            const rules = policyEngine.sortedRules;
+            if (rules.length === 0) {
+              console.log("No policy rules configured.");
+              return;
+            }
+            console.log(`${rules.length} rules (priority order):\n`);
+            for (const rule of rules) {
+              const match = rule.match;
+              const criteria: string[] = [];
+              if (match.tools) criteria.push(`tools=[${match.tools.join(", ")}]`);
+              if (match.categories) criteria.push(`categories=[${match.categories.join(", ")}]`);
+              if (match.targetPatterns) {
+                const kind = match.targetPatternsAreRegex ? "regex" : "glob";
+                criteria.push(`targets(${kind})=[${match.targetPatterns.join(", ")}]`);
+              }
+              console.log(`  [${rule.priority}] ${rule.id} → ${rule.decision}`);
+              console.log(`       ${rule.name}`);
+              if (criteria.length > 0) console.log(`       match: ${criteria.join(" AND ")}`);
+              if (rule.reason) console.log(`       reason: ${rule.reason}`);
+              console.log();
+            }
+            console.log(`Default: ${policyEngine.defaultDecision} | Enforce: ${policyEngine.isEnforcing}`);
+          });
+
+        policy
+          .command("test")
+          .description("Dry-run a tool call against the policy engine")
+          .argument("<toolName>", "Tool name (e.g. Bash, Read, WebFetch)")
+          .argument("[target]", "Target string (e.g. command, file path, URL)")
+          .action((toolName: string, target?: string) => {
+            const category = classifyTool(toolName);
+            const evaluation = policyEngine.evaluate(toolName, category, target);
+            console.log(`Tool:       ${toolName}`);
+            console.log(`Category:   ${category}`);
+            console.log(`Target:     ${target ?? "(none)"}`);
+            console.log(`Decision:   ${evaluation.decision}`);
+            console.log(`Enforced:   ${evaluation.enforced}`);
+            console.log(`Reason:     ${evaluation.reason}`);
+            if (evaluation.matchedRule) {
+              console.log(`Rule:       ${evaluation.matchedRule.id} (priority ${evaluation.matchedRule.priority})`);
+            }
+            console.log(`Constraints: ${evaluation.constraints.join(", ")}`);
+          });
+      },
+      { commands: ["policy"] },
     );
 
     logger.info(`[web4] Web4 Governance plugin loaded (audit: ${auditLevel})`);
