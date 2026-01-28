@@ -128,7 +128,7 @@ function moveLegacyConfigFile(legacyPath: string, canonicalPath: string) {
   fs.mkdirSync(path.dirname(canonicalPath), { recursive: true, mode: 0o700 });
   try {
     fs.renameSync(legacyPath, canonicalPath);
-  } catch (err) {
+  } catch {
     fs.copyFileSync(legacyPath, canonicalPath);
     fs.chmodSync(canonicalPath, 0o600);
     try {

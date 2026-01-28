@@ -10,7 +10,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   let originalExit: typeof process.exit;
 
   beforeAll(() => {
-    originalExit = process.exit;
+    originalExit = process.exit.bind(process);
     installUnhandledRejectionHandler();
   });
 
