@@ -5,6 +5,7 @@ import {
   estimateMessagesTokens,
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
+  truncateMessagesForSummary,
 } from "./compaction.js";
 
 function makeMessage(id: number, size: number): AgentMessage {
@@ -145,5 +146,69 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.droppedChunks).toBe(0);
     expect(pruned.droppedMessagesList).toEqual([]);
     expect(pruned.messages.length).toBe(1);
+  });
+});
+
+describe("truncateMessagesForSummary", () => {
+  it("truncates oversized user messages", () => {
+    const message: AgentMessage = {
+      role: "user",
+      content: "x".repeat(5000),
+      timestamp: Date.now(),
+    };
+
+    const [result] = truncateMessagesForSummary([message], 50);
+    expect(typeof (result as Extract<AgentMessage, { role: "user" }>).content).toBe("string");
+    const content = (result as Extract<AgentMessage, { role: "user" }>).content as string;
+    expect(content.length).toBeLessThan(message.content.length);
+  });
+
+  it("flattens oversized assistant messages to text", () => {
+    const message: AgentMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "exec",
+          arguments: { script: "x".repeat(5000) },
+        },
+        { type: "text", text: "Done." },
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-4.1",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const [result] = truncateMessagesForSummary([message], 50);
+    const content = (result as Extract<AgentMessage, { role: "assistant" }>).content;
+    expect(content[0]?.type).toBe("text");
+    expect((content[0] as { text?: string }).text).toContain("Tool call exec");
+  });
+
+  it("preserves small messages unchanged", () => {
+    const message: AgentMessage = {
+      role: "user",
+      content: "short message",
+      timestamp: Date.now(),
+    };
+
+    const [result] = truncateMessagesForSummary([message], 1000);
+    expect((result as Extract<AgentMessage, { role: "user" }>).content).toBe("short message");
+  });
+
+  it("returns empty array for empty input", () => {
+    const result = truncateMessagesForSummary([], 100);
+    expect(result).toEqual([]);
   });
 });

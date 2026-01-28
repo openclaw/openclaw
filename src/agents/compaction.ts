@@ -7,6 +7,8 @@ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
+const MIN_TRUNCATED_CHARS = 32;
+const TOOLCALL_ARGS_MAX_CHARS = 240;
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const DEFAULT_PARTS = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS =
@@ -127,6 +129,149 @@ export function isOversizedForSummary(msg: AgentMessage, contextWindow: number):
   return tokens > contextWindow * 0.5;
 }
 
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  if (maxChars <= 0) return "";
+  return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function stringifyToolCallArguments(args: unknown, maxChars: number): string | undefined {
+  if (args == null) return undefined;
+  try {
+    const serialized = JSON.stringify(args);
+    return truncateText(serialized, maxChars);
+  } catch {
+    return undefined;
+  }
+}
+
+function collectTextFromContentBlocks(blocks: unknown[]): string {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") continue;
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type === "text" && typeof rec.text === "string") {
+      parts.push(rec.text);
+      continue;
+    }
+    if (rec.type === "image") {
+      parts.push("[image omitted]");
+    }
+  }
+  return parts.join("\n");
+}
+
+function collectAssistantContentText(blocks: unknown[]): string {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") continue;
+    const rec = block as {
+      type?: unknown;
+      text?: unknown;
+      thinking?: unknown;
+      name?: unknown;
+      arguments?: unknown;
+    };
+    // Preserve readable content while compacting tool calls.
+    if (rec.type === "text" && typeof rec.text === "string") {
+      parts.push(rec.text);
+      continue;
+    }
+    if (rec.type === "thinking" && typeof rec.thinking === "string") {
+      parts.push(rec.thinking);
+      continue;
+    }
+    if (rec.type === "toolCall") {
+      const name = typeof rec.name === "string" && rec.name.trim() ? rec.name : "tool";
+      const args = stringifyToolCallArguments(rec.arguments, TOOLCALL_ARGS_MAX_CHARS);
+      parts.push(args ? `Tool call ${name}(${args})` : `Tool call ${name}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+function extractMessageText(msg: AgentMessage): string {
+  // Flatten message content so oversize messages can be safely summarized.
+  if (!msg || typeof msg !== "object") return "";
+  const role = (msg as { role?: unknown }).role;
+  if (role === "user") {
+    const user = msg as Extract<AgentMessage, { role: "user" }>;
+    if (typeof user.content === "string") return user.content;
+    if (Array.isArray(user.content)) return collectTextFromContentBlocks(user.content);
+    return "";
+  }
+  if (role === "assistant") {
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (Array.isArray(assistant.content)) {
+      return collectAssistantContentText(assistant.content);
+    }
+    return "";
+  }
+  if (role === "toolResult") {
+    const tool = msg as Extract<AgentMessage, { role: "toolResult" }>;
+    if (Array.isArray(tool.content)) return collectTextFromContentBlocks(tool.content);
+    return "";
+  }
+  return "";
+}
+
+function replaceMessageContentWithText(msg: AgentMessage, text: string): AgentMessage {
+  const role = (msg as { role?: unknown }).role;
+  if (role === "user") {
+    const user = msg as Extract<AgentMessage, { role: "user" }>;
+    const content = typeof user.content === "string" ? text : [{ type: "text", text }];
+    return { ...user, content };
+  }
+  if (role === "assistant") {
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    return { ...assistant, content: [{ type: "text", text }] };
+  }
+  if (role === "toolResult") {
+    const tool = msg as Extract<AgentMessage, { role: "toolResult" }>;
+    return { ...tool, content: [{ type: "text", text }] };
+  }
+  return msg;
+}
+
+function computeMaxCharsForTokens(
+  text: string,
+  estimatedTokens: number,
+  targetTokens: number,
+): number {
+  if (text.length === 0) return 0;
+  if (estimatedTokens <= 0) return Math.min(text.length, targetTokens * 4);
+  const ratio = targetTokens / estimatedTokens;
+  const scaled = Math.floor(text.length * ratio);
+  return Math.max(MIN_TRUNCATED_CHARS, Math.min(text.length, scaled));
+}
+
+function truncateMessageForSummary(msg: AgentMessage, maxTokens: number): AgentMessage {
+  // Keep each message within the chunk budget so summarization doesn't fail.
+  const estimatedTokens = estimateTokens(msg);
+  if (estimatedTokens <= maxTokens) return msg;
+
+  const targetTokens = Math.max(1, Math.floor(maxTokens / SAFETY_MARGIN));
+  const rawText = extractMessageText(msg).trim() || "[message omitted for summary]";
+  const maxChars = computeMaxCharsForTokens(rawText, estimatedTokens, targetTokens);
+  const truncatedText = truncateText(rawText, maxChars);
+  const truncatedMessage = replaceMessageContentWithText(msg, truncatedText);
+
+  // Fall back to a minimal marker if the trimmed message is still too large.
+  if (estimateTokens(truncatedMessage) <= maxTokens) {
+    return truncatedMessage;
+  }
+
+  return replaceMessageContentWithText(msg, "[message truncated for summary]");
+}
+
+export function truncateMessagesForSummary(
+  messages: AgentMessage[],
+  maxTokens: number,
+): AgentMessage[] {
+  if (messages.length === 0) return messages;
+  return messages.map((msg) => truncateMessageForSummary(msg, maxTokens));
+}
+
 async function summarizeChunks(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
@@ -141,7 +286,9 @@ async function summarizeChunks(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  const chunks = chunkMessagesByMaxTokens(params.messages, params.maxChunkTokens);
+  // Truncate oversized messages before chunking to avoid context limit failures
+  const truncatedMessages = truncateMessagesForSummary(params.messages, params.maxChunkTokens);
+  const chunks = chunkMessagesByMaxTokens(truncatedMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
 
   for (const chunk of chunks) {
