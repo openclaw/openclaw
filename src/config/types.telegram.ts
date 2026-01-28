@@ -20,6 +20,8 @@ export type TelegramActionConfig = {
   sticker?: boolean;
   /** Enable creating forum topics in supergroups. */
   createForumTopic?: boolean;
+  /** Enable editing forum topics in supergroups. */
+  editForumTopic?: boolean;
 };
 
 export type TelegramNetworkConfig = {

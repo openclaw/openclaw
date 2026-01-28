@@ -637,6 +637,80 @@ export type CreateForumTopicResult = {
   iconCustomEmojiId?: string;
 };
 
+type EditForumTopicOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  /** New name for the topic (1-128 characters). */
+  name?: string;
+  /** Custom emoji ID for the topic icon. */
+  iconCustomEmojiId?: string;
+};
+
+export type EditForumTopicResult = {
+  ok: boolean;
+};
+
+/**
+ * Edit an existing forum topic in a Telegram supergroup.
+ * @param chatIdInput - Chat ID of the supergroup
+ * @param messageThreadId - Thread ID of the topic to edit
+ * @param opts - Configuration including new name and/or icon
+ */
+export async function editForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadId: number,
+  opts: EditForumTopicOpts = {},
+): Promise<EditForumTopicResult> {
+  if (!opts.name && !opts.iconCustomEmojiId) {
+    throw new Error("At least one of name or iconCustomEmojiId is required to edit a forum topic");
+  }
+
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const params: Record<string, unknown> = {};
+  if (opts.name) {
+    params.name = opts.name;
+  }
+  if (opts.iconCustomEmojiId) {
+    params.icon_custom_emoji_id = opts.iconCustomEmojiId;
+  }
+
+  await requestWithDiag(
+    () => api.editForumTopic(chatId, messageThreadId, params),
+    "editForumTopic",
+  );
+
+  logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
+
+  return { ok: true };
+}
+
 /**
  * Create a new forum topic in a Telegram supergroup with topics enabled.
  * @param chatIdInput - Chat ID of the supergroup
