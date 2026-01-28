@@ -71,16 +71,17 @@ export function resolveDiscordChannelId(raw: string): string {
  *
  * @param raw - The username or raw target string (e.g., "john.doe")
  * @param options - Directory configuration params (cfg, accountId, limit)
+ * @param parseOptions - Messaging target parsing options (defaults, ambiguity message)
  * @returns Parsed MessagingTarget with user ID, or undefined if not found
  */
 export async function resolveDiscordTarget(
   raw: string,
   options: DirectoryConfigParams,
+  parseOptions: DiscordTargetParseOptions = {},
 ): Promise<MessagingTarget | undefined> {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
 
-  const parseOptions: DiscordTargetParseOptions = {};
   const likelyUsername = isLikelyUsername(trimmed);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
   const directParse = safeParseDiscordTarget(trimmed, parseOptions);
