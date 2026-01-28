@@ -81,6 +81,7 @@ Status: beta.
 - Web UI: auto-expand the chat compose textarea while typing (with sensible max height). (#2950) Thanks @shivamraut101.
 - Gateway: prevent crashes on transient network errors (fetch failures, timeouts, DNS). Added fatal error detection to only exit on truly critical errors. Fixes #2895, #2879, #2873. (#2980) Thanks @elliotsecops.
 - Agents: guard channel tool listActions to avoid plugin crashes. (#2859) Thanks @mbelinky.
+- Discord: stop resolveDiscordTarget from passing directory params into messaging target parsers. Fixes #3167. Thanks @thewilloftheshadow.
 - Discord: avoid resolving bare channel names to user DMs when a username matches. Thanks @thewilloftheshadow.
 - Discord: fix directory config type import for target resolution. Thanks @thewilloftheshadow.
 - Providers: update MiniMax API endpoint and compatibility mode. (#3064) Thanks @hlbbbbbbb.
