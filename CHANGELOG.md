@@ -66,6 +66,7 @@ Status: beta.
 - Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
 - CLI: use Node's module compile cache for faster startup. (#2808) Thanks @pi0.
+- Routing: add per-account DM session scope and document multi-account isolation. (#3095) Thanks @jarvis-sam.
 
 ### Breaking
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
