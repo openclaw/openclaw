@@ -6,8 +6,11 @@ import { join } from "node:path";
 import express, { type Request, type Response } from "express";
 
 const PORT = 18793;
-const GATEWAY_URL = "http://localhost:18789";
-const GATEWAY_TOKEN = "cos-webhook-secret-2026";
+// Increased timeout to 10 minutes (Anthropic API can take a while for complex tasks)
+const AGENT_TIMEOUT_MS = 600000;
+// Retry configuration for transient failures
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 3000;
 
 const app = express();
 app.use(express.json());
@@ -123,66 +126,92 @@ function sendChatMessage(spaceId: string, text: string): void {
   }
 }
 
-// Run clawdbot agent via gateway hooks API (more reliable than spawning processes)
-async function runAgent(
+// Helper to delay execution
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Run clawdbot agent with retry logic for transient failures
+function runAgent(
   message: string,
   sessionId: string,
   callback: (err: Error | null, response: string) => void,
-): Promise<void> {
-  try {
-    console.log(`[googlechat] Calling gateway hooks API for session ${sessionId}...`);
+  attempt = 1,
+): void {
+  console.log(
+    `[googlechat] Running agent (attempt ${attempt}/${MAX_RETRIES + 1}) for session ${sessionId}...`,
+  );
 
-    // Call the gateway hooks API instead of spawning a process
-    const response = await fetch(`${GATEWAY_URL}/webhook/agent`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${GATEWAY_TOKEN}`,
-      },
-      body: JSON.stringify({
-        message,
-        sessionKey: sessionId,
-      }),
-      // 10 minute timeout for long-running agent tasks
-      signal: AbortSignal.timeout(600000),
-    });
+  const proc = spawn(
+    "clawdbot",
+    ["agent", "--message", message, "--session-id", sessionId, "--local"],
+    {
+      timeout: AGENT_TIMEOUT_MS,
+      env: { ...process.env, PATH: `/opt/homebrew/bin:${process.env.PATH}` },
+    },
+  );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[googlechat] Gateway returned ${response.status}: ${errorText}`);
-      callback(new Error(`Gateway error ${response.status}: ${errorText}`), "");
-      return;
-    }
+  let stdout = "";
+  let stderr = "";
 
-    const result = (await response.json()) as {
-      ok: boolean;
-      runId?: string;
-      response?: string;
-      error?: string;
-    };
+  proc.stdout.on("data", (data) => {
+    stdout += data.toString();
+  });
 
-    if (!result.ok) {
-      console.error(`[googlechat] Gateway error:`, result.error);
-      callback(new Error(result.error || "Unknown gateway error"), "");
-      return;
-    }
+  proc.stderr.on("data", (data) => {
+    stderr += data.toString();
+  });
 
-    // The hooks API returns the agent's response directly
-    const agentResponse = result.response || "";
-    callback(null, agentResponse);
-  } catch (err) {
-    if (err instanceof Error) {
-      if (err.name === "TimeoutError") {
-        console.error(`[googlechat] Gateway request timed out after 10 minutes`);
-        callback(new Error("Request timed out - the AI took too long to respond"), "");
-      } else {
-        console.error(`[googlechat] Gateway request failed:`, err.message);
-        callback(err, "");
+  proc.on("close", (code) => {
+    // Filter out ANSI-coded log lines that leak from the agent
+    const filtered = stdout
+      .split("\n")
+      .filter((line) => !line.match(/^\x1b\[\d+m\[/))
+      .join("\n")
+      .trim();
+
+    // Check for retryable errors (rate limits, timeouts)
+    const isRetryable =
+      stderr.includes("rate_limit") ||
+      stderr.includes("overloaded") ||
+      stderr.includes("timeout") ||
+      stderr.includes("ETIMEDOUT");
+
+    if (filtered) {
+      // Got a response - success
+      if (code !== 0) {
+        console.log(`[googlechat] Agent exited with code ${code} but had response - using it`);
       }
+      callback(null, filtered);
+    } else if (code !== 0 && isRetryable && attempt <= MAX_RETRIES) {
+      // Retryable error - try again after delay
+      console.log(`[googlechat] Retryable error detected, retrying in ${RETRY_DELAY_MS}ms...`);
+      setTimeout(() => {
+        runAgent(message, sessionId, callback, attempt + 1);
+      }, RETRY_DELAY_MS);
+    } else if (code !== 0) {
+      // Non-retryable error or max retries exceeded
+      console.error(
+        `[googlechat] Agent failed after ${attempt} attempt(s): ${stderr.slice(0, 500)}`,
+      );
+      callback(new Error(`Agent failed: ${stderr.slice(0, 200)}`), "");
     } else {
-      callback(new Error("Unknown error"), "");
+      // Success but empty response
+      callback(null, "");
     }
-  }
+  });
+
+  proc.on("error", (err) => {
+    // Process spawn error - might be retryable
+    if (attempt <= MAX_RETRIES) {
+      console.log(`[googlechat] Spawn error: ${err.message}, retrying...`);
+      setTimeout(() => {
+        runAgent(message, sessionId, callback, attempt + 1);
+      }, RETRY_DELAY_MS);
+    } else {
+      callback(err, "");
+    }
+  });
 }
 
 // Health check
@@ -254,6 +283,7 @@ app.post("/webhook/googlechat", async (req: Request, res: Response) => {
 
 app.listen(PORT, () => {
   console.log(`[googlechat] Webhook server running on port ${PORT}`);
-  console.log(`[googlechat] Mode: Gateway hooks API (no process spawning)`);
-  console.log(`[googlechat] Gateway: ${GATEWAY_URL}`);
+  console.log(
+    `[googlechat] Mode: Spawn with retry (timeout: ${AGENT_TIMEOUT_MS / 1000}s, retries: ${MAX_RETRIES})`,
+  );
 });
