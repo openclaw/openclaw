@@ -78,17 +78,19 @@ describe("QmdMemoryManager", () => {
     expect(manager).toBeTruthy();
     if (!manager) throw new Error("manager missing");
 
+    const baselineCalls = spawnMock.mock.calls.length;
+
     await manager.sync({ reason: "manual" });
-    expect(spawnMock.mock.calls.length).toBe(2);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
 
     await manager.sync({ reason: "manual-again" });
-    expect(spawnMock.mock.calls.length).toBe(2);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
 
     (manager as unknown as { lastUpdateAt: number | null }).lastUpdateAt =
       Date.now() - (resolved.qmd?.update.debounceMs ?? 0) - 10;
 
     await manager.sync({ reason: "after-wait" });
-    expect(spawnMock.mock.calls.length).toBe(4);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 4);
 
     await manager.close();
   });
