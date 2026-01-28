@@ -32,10 +32,7 @@ import type {
 } from "./types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CcSdkModelTiers } from "../../config/types.agents.js";
-import {
-  isMessagingToolSendAction,
-  type MessagingToolSend,
-} from "../pi-embedded-messaging.js";
+import { isMessagingToolSendAction, type MessagingToolSend } from "../pi-embedded-messaging.js";
 import { extractMessagingToolSend } from "../pi-embedded-subscribe.tools.js";
 import { buildSystemPromptAdditionsFromParams } from "./system-prompt.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -507,7 +504,6 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     sdkOptions.permissionMode = params.permissionMode;
   }
 
-<<<<<<< Updated upstream
   // Native session resume (preferred) or history injection fallback.
   // When claudeSessionId is provided, use the SDK's native resume feature
   // instead of injecting history into the system prompt.
@@ -520,11 +516,6 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     log.debug(`Using native session resume with ID: ${params.claudeSessionId}`);
   }
 
-  // System prompt (with optional conversation history suffix for non-native resume).
-  const historySuffix = useNativeSessionResume
-    ? "" // Skip history injection when using native resume
-    : buildHistorySystemPromptSuffix(params.conversationHistory);
-=======
   // System prompt (with Moltbot-specific additions and conversation history suffix).
   const systemPromptAdditions = buildSystemPromptAdditionsFromParams({
     agentId: params.agentId,
@@ -535,8 +526,10 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     channelHints: params.channelHints,
     skills: params.skills,
   });
-  const historySuffix = buildHistorySystemPromptSuffix(params.conversationHistory);
->>>>>>> Stashed changes
+  // Skip history injection when using native session resume.
+  const historySuffix = useNativeSessionResume
+    ? ""
+    : buildHistorySystemPromptSuffix(params.conversationHistory);
   const baseSystemPrompt = params.systemPrompt ?? params.extraSystemPrompt;
   const combinedSystemPrompt = [systemPromptAdditions, baseSystemPrompt, historySuffix]
     .filter(Boolean)
