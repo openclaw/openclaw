@@ -126,7 +126,7 @@ out to QMD for retrieval. Key points:
 - `paths[]`: add extra directories/files (`path`, optional `pattern`, optional
   stable `name`).
 - `sessions`: opt into session JSONL indexing (`enabled`, `retentionDays`,
-  `exportDir`, `redactToolOutputs`—defaults to redacting tool payloads).
+  `exportDir`).
 - `update`: controls refresh cadence (`interval`, `debounceMs`, `onBoot`).
 - `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).

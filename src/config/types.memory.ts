@@ -29,7 +29,6 @@ export type MemoryQmdSessionConfig = {
   enabled?: boolean;
   exportDir?: string;
   retentionDays?: number;
-  redactToolOutputs?: boolean;
 };
 
 export type MemoryQmdUpdateConfig = {
