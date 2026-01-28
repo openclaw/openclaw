@@ -1,7 +1,6 @@
 import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
-import { sanitizeRenderableText } from "../tui-formatters.js";
 
 type ToolResultContent = {
   type?: string;
@@ -22,13 +21,13 @@ function formatArgs(toolName: string, args: unknown): string {
   const display = resolveToolDisplay({ name: toolName, args });
   const detail = formatToolDetail(display);
   if (detail) {
-    return sanitizeRenderableText(detail);
+    return detail;
   }
   if (!args || typeof args !== "object") {
     return "";
   }
   try {
-    return sanitizeRenderableText(JSON.stringify(args));
+    return JSON.stringify(args);
   } catch {
     return "";
   }
@@ -41,7 +40,7 @@ function extractText(result?: ToolResult): string {
   const lines: string[] = [];
   for (const entry of result.content) {
     if (entry.type === "text" && entry.text) {
-      lines.push(sanitizeRenderableText(entry.text));
+      lines.push(entry.text);
     } else if (entry.type === "image") {
       const mime = entry.mimeType ?? "image";
       const size = entry.bytes ? ` ${Math.round(entry.bytes / 1024)}kb` : "";

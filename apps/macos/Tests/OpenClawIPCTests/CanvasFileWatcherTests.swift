@@ -11,7 +11,7 @@ import Testing
         return dir
     }
 
-    @Test func `detects in place file writes`() async throws {
+    @Test func detectsInPlaceFileWrites() async throws {
         let dir = try self.makeTempDir()
         defer { try? FileManager().removeItem(at: dir) }
 

@@ -34,26 +34,6 @@ enum TestIsolation {
         defaults: [String: Any?] = [:],
         _ body: () async throws -> T) async rethrows -> T
     {
-        func restoreUserDefaults(_ values: [String: Any?], userDefaults: UserDefaults) {
-            for (key, value) in values {
-                if let value {
-                    userDefaults.set(value, forKey: key)
-                } else {
-                    userDefaults.removeObject(forKey: key)
-                }
-            }
-        }
-
-        func restoreEnv(_ values: [String: String?]) {
-            for (key, value) in values {
-                if let value {
-                    setenv(key, value, 1)
-                } else {
-                    unsetenv(key)
-                }
-            }
-        }
-
         await TestIsolationLock.shared.acquire()
         var previousEnv: [String: String?] = [:]
         for (key, value) in env {
@@ -78,13 +58,37 @@ enum TestIsolation {
 
         do {
             let result = try await body()
-            restoreUserDefaults(previousDefaults, userDefaults: userDefaults)
-            restoreEnv(previousEnv)
+            for (key, value) in previousDefaults {
+                if let value {
+                    userDefaults.set(value, forKey: key)
+                } else {
+                    userDefaults.removeObject(forKey: key)
+                }
+            }
+            for (key, value) in previousEnv {
+                if let value {
+                    setenv(key, value, 1)
+                } else {
+                    unsetenv(key)
+                }
+            }
             await TestIsolationLock.shared.release()
             return result
         } catch {
-            restoreUserDefaults(previousDefaults, userDefaults: userDefaults)
-            restoreEnv(previousEnv)
+            for (key, value) in previousDefaults {
+                if let value {
+                    userDefaults.set(value, forKey: key)
+                } else {
+                    userDefaults.removeObject(forKey: key)
+                }
+            }
+            for (key, value) in previousEnv {
+                if let value {
+                    setenv(key, value, 1)
+                } else {
+                    unsetenv(key)
+                }
+            }
             await TestIsolationLock.shared.release()
             throw error
         }

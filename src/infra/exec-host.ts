@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { requestJsonlSocket } from "./jsonl-socket.js";
+import net from "node:net";
 
 export type ExecHostRequest = {
   command: string[];
@@ -43,38 +43,79 @@ export async function requestExecHostViaSocket(params: {
     return null;
   }
   const timeoutMs = params.timeoutMs ?? 20_000;
-  const requestJson = JSON.stringify(request);
-  const nonce = crypto.randomBytes(16).toString("hex");
-  const ts = Date.now();
-  const hmac = crypto
-    .createHmac("sha256", token)
-    .update(`${nonce}:${ts}:${requestJson}`)
-    .digest("hex");
-  const payload = JSON.stringify({
-    type: "exec",
-    id: crypto.randomUUID(),
-    nonce,
-    ts,
-    hmac,
-    requestJson,
-  });
+  return await new Promise((resolve) => {
+    const client = new net.Socket();
+    let settled = false;
+    let buffer = "";
+    const finish = (value: ExecHostResponse | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        client.destroy();
+      } catch {
+        // ignore
+      }
+      resolve(value);
+    };
 
-  return await requestJsonlSocket({
-    socketPath,
-    payload,
-    timeoutMs,
-    accept: (value) => {
-      const msg = value as { type?: string; ok?: boolean; payload?: unknown; error?: unknown };
-      if (msg?.type !== "exec-res") {
-        return undefined;
+    const requestJson = JSON.stringify(request);
+    const nonce = crypto.randomBytes(16).toString("hex");
+    const ts = Date.now();
+    const hmac = crypto
+      .createHmac("sha256", token)
+      .update(`${nonce}:${ts}:${requestJson}`)
+      .digest("hex");
+    const payload = JSON.stringify({
+      type: "exec",
+      id: crypto.randomUUID(),
+      nonce,
+      ts,
+      hmac,
+      requestJson,
+    });
+
+    const timer = setTimeout(() => finish(null), timeoutMs);
+
+    client.on("error", () => finish(null));
+    client.connect(socketPath, () => {
+      client.write(`${payload}\n`);
+    });
+    client.on("data", (data) => {
+      buffer += data.toString("utf8");
+      let idx = buffer.indexOf("\n");
+      while (idx !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        idx = buffer.indexOf("\n");
+        if (!line) {
+          continue;
+        }
+        try {
+          const msg = JSON.parse(line) as {
+            type?: string;
+            ok?: boolean;
+            payload?: unknown;
+            error?: unknown;
+          };
+          if (msg?.type === "exec-res") {
+            clearTimeout(timer);
+            if (msg.ok === true && msg.payload) {
+              finish({ ok: true, payload: msg.payload as ExecHostRunResult });
+              return;
+            }
+            if (msg.ok === false && msg.error) {
+              finish({ ok: false, error: msg.error as ExecHostError });
+              return;
+            }
+            finish(null);
+            return;
+          }
+        } catch {
+          // ignore
+        }
       }
-      if (msg.ok === true && msg.payload) {
-        return { ok: true, payload: msg.payload as ExecHostRunResult };
-      }
-      if (msg.ok === false && msg.error) {
-        return { ok: false, error: msg.error as ExecHostError };
-      }
-      return null;
-    },
+    });
   });
 }

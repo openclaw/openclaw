@@ -1,14 +1,17 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { slackPlugin } from "./src/channel.js";
 import { setSlackRuntime } from "./src/runtime.js";
 
-export { slackPlugin } from "./src/channel.js";
-export { setSlackRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+const plugin = {
   id: "slack",
   name: "Slack",
   description: "Slack channel plugin",
-  plugin: slackPlugin,
-  setRuntime: setSlackRuntime,
-});
+  configSchema: emptyPluginConfigSchema(),
+  register(api: OpenClawPluginApi) {
+    setSlackRuntime(api.runtime);
+    api.registerChannel({ plugin: slackPlugin });
+  },
+};
+
+export default plugin;

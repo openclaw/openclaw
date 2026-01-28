@@ -1,5 +1,3 @@
-import type { SandboxBackendHandle, SandboxBackendId } from "./backend.js";
-import type { SandboxFsBridge } from "./fs-bridge.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
@@ -33,9 +31,7 @@ export type SandboxBrowserConfig = {
   enabled: boolean;
   image: string;
   containerPrefix: string;
-  network: string;
   cdpPort: number;
-  cdpSourceRange?: string;
   vncPort: number;
   noVncPort: number;
   headless: boolean;
@@ -43,7 +39,6 @@ export type SandboxBrowserConfig = {
   allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;
-  binds?: string[];
 };
 
 export type SandboxPruneConfig = {
@@ -51,30 +46,14 @@ export type SandboxPruneConfig = {
   maxAgeDays: number;
 };
 
-export type SandboxSshConfig = {
-  target?: string;
-  command: string;
-  workspaceRoot: string;
-  strictHostKeyChecking: boolean;
-  updateHostKeys: boolean;
-  identityFile?: string;
-  certificateFile?: string;
-  knownHostsFile?: string;
-  identityData?: string;
-  certificateData?: string;
-  knownHostsData?: string;
-};
-
 export type SandboxScope = "session" | "agent" | "shared";
 
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
-  backend: SandboxBackendId;
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
-  ssh: SandboxSshConfig;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
@@ -88,21 +67,16 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
-  backendId: SandboxBackendId;
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;
-  runtimeId: string;
-  runtimeLabel: string;
   containerName: string;
   containerWorkdir: string;
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
-  fsBridge?: SandboxFsBridge;
-  backend?: SandboxBackendHandle;
 };
 
 export type SandboxWorkspaceInfo = {

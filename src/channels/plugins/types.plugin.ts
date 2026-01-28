@@ -1,23 +1,19 @@
-import type { ChannelSetupWizard } from "./setup-wizard.js";
+import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
 import type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelDirectoryAdapter,
-  ChannelExecApprovalAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
   ChannelGroupAdapter,
   ChannelHeartbeatAdapter,
-  ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
-  ChannelAllowlistAdapter,
-  ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 import type {
   ChannelAgentTool,
@@ -37,7 +33,6 @@ import type {
 export type ChannelConfigUiHint = {
   label?: string;
   help?: string;
-  tags?: string[];
   advanced?: boolean;
   sensitive?: boolean;
   placeholder?: string;
@@ -50,7 +45,7 @@ export type ChannelConfigSchema = {
 };
 
 // oxlint-disable-next-line typescript/no-explicit-any
-export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
+export type ChannelPlugin<ResolvedAccount = any> = {
   id: ChannelId;
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;
@@ -60,7 +55,8 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     };
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
-  setupWizard?: ChannelSetupWizard;
+  // CLI onboarding wizard hooks for this channel.
+  onboarding?: ChannelOnboardingAdapter;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
@@ -69,16 +65,12 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   groups?: ChannelGroupAdapter;
   mentions?: ChannelMentionAdapter;
   outbound?: ChannelOutboundAdapter;
-  status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
+  status?: ChannelStatusAdapter<ResolvedAccount>;
   gatewayMethods?: string[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   auth?: ChannelAuthAdapter;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
-  lifecycle?: ChannelLifecycleAdapter;
-  execApprovals?: ChannelExecApprovalAdapter;
-  allowlist?: ChannelAllowlistAdapter;
-  bindings?: ChannelConfiguredBindingProvider;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+@Suite
 struct ModelCatalogLoaderTests {
     @Test
-    func `load parses models from type script and sorts`() async throws {
+    func loadParsesModelsFromTypeScriptAndSorts() async throws {
         let src = """
         export const MODELS = {
           openai: {
@@ -39,7 +40,7 @@ struct ModelCatalogLoaderTests {
     }
 
     @Test
-    func `load with no export returns empty choices`() async throws {
+    func loadWithNoExportReturnsEmptyChoices() async throws {
         let src = "const NOPE = 1;"
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("models-\(UUID().uuidString).ts")

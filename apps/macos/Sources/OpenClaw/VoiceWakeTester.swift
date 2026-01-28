@@ -89,14 +89,6 @@ final class VoiceWakeTester {
         self.logInputSelection(preferredMicID: micID)
         self.configureSession(preferredMicID: micID)
 
-        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-            self.audioEngine = nil
-            throw NSError(
-                domain: "VoiceWakeTester",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
-        }
-
         let engine = AVAudioEngine()
         self.audioEngine = engine
 
@@ -140,11 +132,10 @@ final class VoiceWakeTester {
             let gateConfig = WakeWordGateConfig(triggers: triggers)
             var match = WakeWordGate.match(transcript: text, segments: segments, config: gateConfig)
             if match == nil, isFinal {
-                match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+                match = self.textOnlyFallbackMatch(
                     transcript: text,
                     triggers: triggers,
-                    config: gateConfig,
-                    trimWake: WakeWordGate.stripWake)
+                    config: gateConfig)
             }
             self.maybeLogDebug(
                 transcript: text,
@@ -274,25 +265,28 @@ final class VoiceWakeTester {
         match: WakeWordGateMatch?,
         isFinal: Bool)
     {
-        guard VoiceWakeRecognitionDebugSupport.shouldLogTranscript(
-            transcript: transcript,
-            isFinal: isFinal,
-            loggerLevel: self.logger.logLevel,
-            lastLoggedText: &self.lastLoggedText,
-            lastLoggedAt: &self.lastLoggedAt)
-        else { return }
+        guard !transcript.isEmpty else { return }
+        let level = self.logger.logLevel
+        guard level == .debug || level == .trace else { return }
+        if transcript == self.lastLoggedText, !isFinal {
+            if let last = self.lastLoggedAt, Date().timeIntervalSince(last) < 0.25 {
+                return
+            }
+        }
+        self.lastLoggedText = transcript
+        self.lastLoggedAt = Date()
 
-        let summary = VoiceWakeRecognitionDebugSupport.transcriptSummary(
-            transcript: transcript,
-            triggers: triggers,
-            segments: segments)
+        let textOnly = WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers)
         let gaps = Self.debugCandidateGaps(triggers: triggers, segments: segments)
         let segmentSummary = Self.debugSegments(segments)
-        let matchSummary = VoiceWakeRecognitionDebugSupport.matchSummary(match)
+        let timingCount = segments.count(where: { $0.start > 0 || $0.duration > 0 })
+        let matchSummary = match.map {
+            "match=true gap=\(String(format: "%.2f", $0.postGap))s cmdLen=\($0.command.count)"
+        } ?? "match=false"
 
         self.logger.debug(
-            "voicewake test transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
-                "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
+            "voicewake test transcript='\(transcript, privacy: .private)' textOnly=\(textOnly) " +
+                "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
                 "\(matchSummary) gaps=[\(gaps, privacy: .private)] segments=[\(segmentSummary, privacy: .private)]")
     }
 
@@ -360,6 +354,20 @@ final class VoiceWakeTester {
         }
     }
 
+    private func textOnlyFallbackMatch(
+        transcript: String,
+        triggers: [String],
+        config: WakeWordGateConfig) -> WakeWordGateMatch?
+    {
+        guard let command = VoiceWakeTextUtils.textOnlyCommand(
+            transcript: transcript,
+            triggers: triggers,
+            minCommandLength: config.minCommandLength,
+            trimWake: { WakeWordGate.stripWake(text: $0, triggers: $1) })
+        else { return nil }
+        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
+    }
+
     private func holdUntilSilence(onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) {
         Task { [weak self] in
             guard let self else { return }
@@ -399,12 +407,10 @@ final class VoiceWakeTester {
             guard !self.isStopping, !self.holdingAfterDetect else { return }
             guard let lastSeenAt, let lastText else { return }
             guard self.lastTranscriptAt == lastSeenAt, self.lastTranscript == lastText else { return }
-            guard let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+            guard let match = self.textOnlyFallbackMatch(
                 transcript: lastText,
                 triggers: triggers,
-                config: WakeWordGateConfig(triggers: triggers),
-                trimWake: WakeWordGate.stripWake)
-            else { return }
+                config: WakeWordGateConfig(triggers: triggers)) else { return }
             self.holdingAfterDetect = true
             self.detectedText = match.command
             self.logger.info("voice wake detected (test, silence) (len=\(match.command.count))")

@@ -1,6 +1,6 @@
-import CoreLocation
 import OpenClawIPC
 import OpenClawKit
+import CoreLocation
 import SwiftUI
 
 struct PermissionsSettings: View {
@@ -9,28 +9,24 @@ struct PermissionsSettings: View {
     let showOnboarding: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                SystemRunSettingsView()
+        VStack(alignment: .leading, spacing: 14) {
+            SystemRunSettingsView()
 
-                Text("Allow these so OpenClaw can notify and capture when needed.")
-                    .padding(.top, 4)
-                    .fixedSize(horizontal: false, vertical: true)
+            Text("Allow these so OpenClaw can notify and capture when needed.")
+                .padding(.top, 4)
 
-                PermissionStatusList(status: self.status, refresh: self.refresh)
-                    .padding(.horizontal, 2)
-                    .padding(.vertical, 6)
+            PermissionStatusList(status: self.status, refresh: self.refresh)
+                .padding(.horizontal, 2)
+                .padding(.vertical, 6)
 
-                LocationAccessSettings()
+            LocationAccessSettings()
 
-                Button("Restart onboarding") { self.showOnboarding() }
-                    .buttonStyle(.bordered)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            Button("Restart onboarding") { self.showOnboarding() }
+                .buttonStyle(.bordered)
+            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
     }
 }
 
@@ -103,16 +99,11 @@ private struct LocationAccessSettings: View {
 struct PermissionStatusList: View {
     let status: [Capability: Bool]
     let refresh: () async -> Void
-    @State private var pendingCapability: Capability?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Capability.allCases, id: \.self) { cap in
-                PermissionRow(
-                    capability: cap,
-                    status: self.status[cap] ?? false,
-                    isPending: self.pendingCapability == cap)
-                {
+                PermissionRow(capability: cap, status: self.status[cap] ?? false) {
                     Task { await self.handle(cap) }
                 }
             }
@@ -131,43 +122,20 @@ struct PermissionStatusList: View {
 
     @MainActor
     private func handle(_ cap: Capability) async {
-        guard self.pendingCapability == nil else { return }
-        self.pendingCapability = cap
-        defer { self.pendingCapability = nil }
-
         _ = await PermissionManager.ensure([cap], interactive: true)
-        await self.refreshStatusTransitions()
-    }
-
-    @MainActor
-    private func refreshStatusTransitions() async {
         await self.refresh()
-
-        // TCC and notification settings can settle after the prompt closes or when the app regains focus.
-        for delay in [300_000_000, 900_000_000, 1_800_000_000] {
-            try? await Task.sleep(nanoseconds: UInt64(delay))
-            await self.refresh()
-        }
     }
 }
 
 struct PermissionRow: View {
     let capability: Capability
     let status: Bool
-    let isPending: Bool
     let compact: Bool
     let action: () -> Void
 
-    init(
-        capability: Capability,
-        status: Bool,
-        isPending: Bool = false,
-        compact: Bool = false,
-        action: @escaping () -> Void)
-    {
+    init(capability: Capability, status: Bool, compact: Bool = false, action: @escaping () -> Void) {
         self.capability = capability
         self.status = status
-        self.isPending = isPending
         self.compact = compact
         self.action = action
     }
@@ -182,55 +150,21 @@ struct PermissionRow: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.title).font(.body.weight(.semibold))
-                Text(self.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(self.subtitle).font(.caption).foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(1)
-            VStack(alignment: .trailing, spacing: 4) {
-                if self.status {
-                    Label("Granted", systemImage: "checkmark.circle.fill")
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(.green)
-                        .font(.title3)
-                        .help("Granted")
-                } else if self.isPending {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 78)
-                } else {
-                    Button("Grant") { self.action() }
-                        .buttonStyle(.bordered)
-                        .controlSize(self.compact ? .small : .regular)
-                        .frame(minWidth: self.compact ? 68 : 78, alignment: .trailing)
-                }
-
-                if self.status {
-                    Text("Granted")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.green)
-                } else if self.isPending {
-                    Text("Checking…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Request access")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            Spacer()
+            if self.status {
+                Label("Granted", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
+                Button("Grant") { self.action() }
+                    .buttonStyle(.bordered)
             }
-            .frame(minWidth: self.compact ? 86 : 104, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
         .padding(.vertical, self.compact ? 4 : 6)
     }
 
-    private var iconSize: CGFloat {
-        self.compact ? 28 : 32
-    }
+    private var iconSize: CGFloat { self.compact ? 28 : 32 }
 
     private var title: String {
         switch self.capability {

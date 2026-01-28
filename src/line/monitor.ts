@@ -1,13 +1,14 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { LineChannelData, ResolvedLineAccount } from "./types.js";
+import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
-import { waitForAbortSignal } from "../infra/abort-signal.js";
-import { createChannelReplyPipeline } from "../plugin-sdk/channel-reply-pipeline.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -25,9 +26,8 @@ import {
   createImageMessage,
   createLocationMessage,
 } from "./send.js";
+import { validateLineSignature } from "./signature.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
-import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -85,6 +85,15 @@ export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
 }
 
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    req.on("error", reject);
+  });
+}
+
 function startLineLoadingKeepalive(params: {
   userId: string;
   accountId?: string;
@@ -130,15 +139,6 @@ export async function monitorLineProvider(
     webhookPath,
   } = opts;
   const resolvedAccountId = accountId ?? "default";
-  const token = channelAccessToken.trim();
-  const secret = channelSecret.trim();
-
-  if (!token) {
-    throw new Error("LINE webhook mode requires a non-empty channel access token.");
-  }
-  if (!secret) {
-    throw new Error("LINE webhook mode requires a non-empty channel secret.");
-  }
 
   // Record starting state
   recordChannelRuntimeState({
@@ -152,8 +152,8 @@ export async function monitorLineProvider(
 
   // Create the bot
   const bot = createLineBot({
-    channelAccessToken: token,
-    channelSecret: secret,
+    channelAccessToken,
+    channelSecret,
     accountId,
     runtime,
     config,
@@ -192,18 +192,12 @@ export async function monitorLineProvider(
       try {
         const textLimit = 5000; // LINE max message length
         let replyTokenUsed = false; // Track if we've used the one-time reply token
-        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-          cfg: config,
-          agentId: route.agentId,
-          channel: "line",
-          accountId: route.accountId,
-        });
 
         const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
           ctx: ctxPayload,
           cfg: config,
           dispatcherOptions: {
-            ...replyPipeline,
+            responsePrefix: resolveEffectiveMessagesConfig(config, route.agentId).responsePrefix,
             deliver: async (payload, _info) => {
               const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
@@ -255,9 +249,7 @@ export async function monitorLineProvider(
               runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
             },
           },
-          replyOptions: {
-            onModelSelected,
-          },
+          replyOptions: {},
         });
 
         if (!queuedFinal) {
@@ -288,23 +280,78 @@ export async function monitorLineProvider(
   const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
-    auth: "plugin",
-    replaceExisting: true,
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      // Handle GET requests for webhook verification
+      if (req.method === "GET") {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/plain");
+        res.end("OK");
+        return;
+      }
+
+      // Only accept POST requests
+      if (req.method !== "POST") {
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET, POST");
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Method Not Allowed" }));
+        return;
+      }
+
+      try {
+        const rawBody = await readRequestBody(req);
+        const signature = req.headers["x-line-signature"];
+
+        // Validate signature
+        if (!signature || typeof signature !== "string") {
+          logVerbose("line: webhook missing X-Line-Signature header");
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
+          return;
+        }
+
+        if (!validateLineSignature(rawBody, signature, channelSecret)) {
+          logVerbose("line: webhook signature validation failed");
+          res.statusCode = 401;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Invalid signature" }));
+          return;
+        }
+
+        // Parse and process the webhook body
+        const body = JSON.parse(rawBody) as WebhookRequestBody;
+
+        // Respond immediately with 200 to avoid LINE timeout
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ status: "ok" }));
+
+        // Process events asynchronously
+        if (body.events && body.events.length > 0) {
+          logVerbose(`line: received ${body.events.length} webhook events`);
+          await bot.handleWebhook(body).catch((err) => {
+            runtime.error?.(danger(`line webhook handler failed: ${String(err)}`));
+          });
+        }
+      } catch (err) {
+        runtime.error?.(danger(`line webhook error: ${String(err)}`));
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Internal server error" }));
+        }
+      }
+    },
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
   // Handle abort signal
-  let stopped = false;
   const stopHandler = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
     recordChannelRuntimeState({
@@ -317,12 +364,7 @@ export async function monitorLineProvider(
     });
   };
 
-  if (abortSignal?.aborted) {
-    stopHandler();
-  } else if (abortSignal) {
-    abortSignal.addEventListener("abort", stopHandler, { once: true });
-    await waitForAbortSignal(abortSignal);
-  }
+  abortSignal?.addEventListener("abort", stopHandler);
 
   return {
     account: bot.account,

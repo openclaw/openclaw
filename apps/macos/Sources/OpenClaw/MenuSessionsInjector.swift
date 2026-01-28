@@ -159,9 +159,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 extension MenuSessionsInjector {
     // MARK: - Injection
 
-    private var mainSessionKey: String {
-        WorkActivityStore.shared.mainSessionKey
-    }
+    private var mainSessionKey: String { WorkActivityStore.shared.mainSessionKey }
 
     private func inject(into menu: NSMenu) {
         self.cancelPreviewTasks()
@@ -446,8 +444,6 @@ extension MenuSessionsInjector {
 
     private func buildUsageOverflowMenu(rows: [UsageRow], width: CGFloat) -> NSMenu {
         let menu = NSMenu()
-        // Keep submenu delegate nil: reusing the status-menu delegate here causes
-        // recursive reinjection whenever this submenu is opened.
         for row in rows {
             let item = NSMenuItem()
             item.tag = self.tag
@@ -495,6 +491,7 @@ extension MenuSessionsInjector {
         guard !summary.daily.isEmpty else { return nil }
 
         let menu = NSMenu()
+        menu.delegate = self
 
         let chartView = CostUsageHistoryMenuView(summary: summary, width: width)
         let hosting = NSHostingView(rootView: AnyView(chartView))
@@ -588,38 +585,34 @@ extension MenuSessionsInjector {
         let item = NSMenuItem()
         item.tag = self.tag
         item.isEnabled = false
-        let view = AnyView(
-            SessionMenuPreviewView(
-                width: width,
-                maxLines: maxLines,
-                title: title,
-                items: [],
-                status: .loading)
-                .environment(\.isEnabled, true))
-        let hosted = HighlightedMenuItemHostView(rootView: view, width: width)
-        item.view = hosted
+        let view = AnyView(SessionMenuPreviewView(
+            width: width,
+            maxLines: maxLines,
+            title: title,
+            items: [],
+            status: .loading))
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame.size.width = max(1, width)
+        let size = hosting.fittingSize
+        hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: size.height))
+        item.view = hosting
 
-        let task = Task { [weak hosted, weak item] in
+        let task = Task { [weak hosting] in
             let snapshot = await SessionMenuPreviewLoader.load(sessionKey: sessionKey, maxItems: 10)
             guard !Task.isCancelled else { return }
-
             await MainActor.run {
-                let nextView = AnyView(
-                    SessionMenuPreviewView(
-                        width: width,
-                        maxLines: maxLines,
-                        title: title,
-                        items: snapshot.items,
-                        status: snapshot.status)
-                        .environment(\.isEnabled, true))
-
-                if let item {
-                    item.view = HighlightedMenuItemHostView(rootView: nextView, width: width)
-                    return
-                }
-
-                guard let hosted else { return }
-                hosted.update(rootView: nextView, width: width)
+                guard let hosting else { return }
+                let nextView = AnyView(SessionMenuPreviewView(
+                    width: width,
+                    maxLines: maxLines,
+                    title: title,
+                    items: snapshot.items,
+                    status: snapshot.status))
+                hosting.rootView = nextView
+                hosting.invalidateIntrinsicContentSize()
+                hosting.frame.size.width = max(1, width)
+                let size = hosting.fittingSize
+                hosting.frame.size.height = size.height
             }
         }
         self.previewTasks.append(task)
@@ -1099,31 +1092,36 @@ extension MenuSessionsInjector {
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
-        self.findDynamicSectionInsertIndex(in: menu)
-    }
-
-    private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
-        self.findDynamicSectionInsertIndex(in: menu)
-    }
-
-    private func findDynamicSectionInsertIndex(in menu: NSMenu) -> Int? {
-        // Keep controls and action buttons visible by inserting dynamic rows at the
-        // built-in footer boundary, not by matching localized menu item titles.
-        if let footerSeparatorIndex = menu.items.lastIndex(where: { item in
-            item.isSeparatorItem && !self.isInjectedItem(item)
-        }) {
-            return footerSeparatorIndex
+        // Insert right before the separator above "Send Heartbeats".
+        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
+            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
+                return sepIdx
+            }
+            return idx
         }
 
-        if let firstBaseItemIndex = menu.items.firstIndex(where: { !self.isInjectedItem($0) }) {
-            return min(firstBaseItemIndex + 1, menu.items.count)
+        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
+            return sepIdx
         }
 
+        if menu.items.count >= 1 { return 1 }
         return menu.items.count
     }
 
-    private func isInjectedItem(_ item: NSMenuItem) -> Bool {
-        item.tag == self.tag || item.tag == self.nodesTag
+    private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
+        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
+            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
+                return sepIdx
+            }
+            return idx
+        }
+
+        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
+            return sepIdx
+        }
+
+        if menu.items.count >= 1 { return 1 }
+        return menu.items.count
     }
 
     private func initialWidth(for menu: NSMenu) -> CGFloat {
@@ -1173,7 +1171,8 @@ extension MenuSessionsInjector {
 
     private func makeHostedView(rootView: AnyView, width: CGFloat, highlighted: Bool) -> NSView {
         if highlighted {
-            return HighlightedMenuItemHostView(rootView: rootView, width: width)
+            let container = HighlightedMenuItemHostView(rootView: rootView, width: width)
+            return container
         }
 
         let hosting = NSHostingView(rootView: rootView)
@@ -1222,22 +1221,8 @@ extension MenuSessionsInjector {
         self.usageCacheUpdatedAt = Date()
     }
 
-    func setTestingCostUsageSummary(_ summary: GatewayCostUsageSummary?, errorText: String? = nil) {
-        self.cachedCostSummary = summary
-        self.cachedCostErrorText = errorText
-        self.costCacheUpdatedAt = Date()
-    }
-
     func injectForTesting(into menu: NSMenu) {
         self.inject(into: menu)
-    }
-
-    func testingFindInsertIndex(in menu: NSMenu) -> Int? {
-        self.findInsertIndex(in: menu)
-    }
-
-    func testingFindNodesInsertIndex(in menu: NSMenu) -> Int? {
-        self.findNodesInsertIndex(in: menu)
     }
 }
 #endif

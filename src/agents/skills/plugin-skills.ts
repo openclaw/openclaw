@@ -4,19 +4,18 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  resolveEnableState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
-import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
 const log = createSubsystemLogger("skills");
 
 export function resolvePluginSkillDirs(params: {
-  workspaceDir: string | undefined;
+  workspaceDir: string;
   config?: OpenClawConfig;
 }): string[] {
-  const workspaceDir = (params.workspaceDir ?? "").trim();
+  const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return [];
   }
@@ -28,7 +27,6 @@ export function resolvePluginSkillDirs(params: {
     return [];
   }
   const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
-  const acpEnabled = params.config?.acp?.enabled !== false;
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -38,17 +36,8 @@ export function resolvePluginSkillDirs(params: {
     if (!record.skills || record.skills.length === 0) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
-      id: record.id,
-      origin: record.origin,
-      config: normalizedPlugins,
-      rootConfig: params.config,
-    });
+    const enableState = resolveEnableState(record.id, record.origin, normalizedPlugins);
     if (!enableState.enabled) {
-      continue;
-    }
-    // ACP router skills should not be attached when ACP is explicitly disabled.
-    if (!acpEnabled && record.id === "acpx") {
       continue;
     }
     const memoryDecision = resolveMemorySlotDecision({
@@ -71,10 +60,6 @@ export function resolvePluginSkillDirs(params: {
       const candidate = path.resolve(record.rootDir, trimmed);
       if (!fs.existsSync(candidate)) {
         log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
-        continue;
-      }
-      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
-        log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
       if (seen.has(candidate)) {

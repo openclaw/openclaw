@@ -1,7 +1,6 @@
 import AVFAudio
 import Foundation
 import Observation
-import OpenClawKit
 import Speech
 import SwabbleKit
 
@@ -97,7 +96,6 @@ final class VoiceWakeManager: NSObject {
     private var lastDispatched: String?
     private var onCommand: (@Sendable (String) async -> Void)?
     private var userDefaultsObserver: NSObjectProtocol?
-    private var suppressedByTalk: Bool = false
 
     override init() {
         super.init()
@@ -143,28 +141,9 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    func setSuppressedByTalk(_ suppressed: Bool) {
-        self.suppressedByTalk = suppressed
-        if suppressed {
-            _ = self.suspendForExternalAudioCapture()
-            if self.isEnabled {
-                self.statusText = "Paused"
-            }
-        } else {
-            if self.isEnabled {
-                Task { await self.start() }
-            }
-        }
-    }
-
     func start() async {
         guard self.isEnabled else { return }
         if self.isListening { return }
-        guard !self.suppressedByTalk else {
-            self.isListening = false
-            self.statusText = "Paused"
-            return
-        }
 
         if ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] != nil ||
             ProcessInfo.processInfo.environment["SIMULATOR_UDID"] != nil
@@ -180,16 +159,14 @@ final class VoiceWakeManager: NSObject {
 
         let micOk = await Self.requestMicrophonePermission()
         guard micOk else {
-            self.statusText = Self.microphonePermissionMessage(kind: "Microphone")
+            self.statusText = "Microphone permission denied"
             self.isListening = false
             return
         }
 
         let speechOk = await Self.requestSpeechPermission()
         guard speechOk else {
-            self.statusText = Self.permissionMessage(
-                kind: "Speech recognition",
-                status: SFSpeechRecognizer.authorizationStatus())
+            self.statusText = "Speech recognition permission denied"
             self.isListening = false
             return
         }
@@ -216,7 +193,22 @@ final class VoiceWakeManager: NSObject {
         self.isEnabled = false
         self.isListening = false
         self.statusText = "Off"
-        self.tearDownRecognitionPipeline()
+
+        self.tapDrainTask?.cancel()
+        self.tapDrainTask = nil
+        self.tapQueue?.clear()
+        self.tapQueue = nil
+
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+        self.recognitionRequest = nil
+
+        if self.audioEngine.isRunning {
+            self.audioEngine.stop()
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+        }
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     /// Temporarily releases the microphone so other subsystems (e.g. camera video capture) can record audio.
@@ -226,7 +218,22 @@ final class VoiceWakeManager: NSObject {
 
         self.isListening = false
         self.statusText = "Paused"
-        self.tearDownRecognitionPipeline()
+
+        self.tapDrainTask?.cancel()
+        self.tapDrainTask = nil
+        self.tapQueue?.clear()
+        self.tapQueue = nil
+
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+        self.recognitionRequest = nil
+
+        if self.audioEngine.isRunning {
+            self.audioEngine.stop()
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+        }
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         return true
     }
 
@@ -278,24 +285,6 @@ final class VoiceWakeManager: NSObject {
                 }
             }
         }
-    }
-
-    private func tearDownRecognitionPipeline() {
-        self.tapDrainTask?.cancel()
-        self.tapDrainTask = nil
-        self.tapQueue?.clear()
-        self.tapQueue = nil
-
-        self.recognitionTask?.cancel()
-        self.recognitionTask = nil
-        self.recognitionRequest = nil
-
-        if self.audioEngine.isRunning {
-            self.audioEngine.stop()
-            self.audioEngine.inputNode.removeTap(onBus: 0)
-        }
-
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private nonisolated func makeRecognitionResultHandler() -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
@@ -375,95 +364,19 @@ final class VoiceWakeManager: NSObject {
     }
 
     private nonisolated static func requestMicrophonePermission() async -> Bool {
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            break
-        @unknown default:
-            return false
-        }
-
-        return await self.requestPermissionWithTimeout { completion in
-            AVAudioApplication.requestRecordPermission(completionHandler: completion)
-        }
-    }
-
-    private nonisolated static func microphonePermissionMessage(kind: String) -> String {
-        let status = AVAudioApplication.shared.recordPermission
-        return self.deniedByDefaultPermissionMessage(
-            kind: kind,
-            isUndetermined: status == .undetermined)
-    }
-
-    private nonisolated static func requestSpeechPermission() async -> Bool {
-        let status = SFSpeechRecognizer.authorizationStatus()
-        switch status {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            break
-        @unknown default:
-            return false
-        }
-
-        return await self.requestPermissionWithTimeout { completion in
-            SFSpeechRecognizer.requestAuthorization { authStatus in
-                completion(authStatus == .authorized)
+        await withCheckedContinuation(isolation: nil) { cont in
+            AVAudioApplication.requestRecordPermission { ok in
+                cont.resume(returning: ok)
             }
         }
     }
 
-    private nonisolated static func requestPermissionWithTimeout(
-        _ operation: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
-    {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: 8,
-                onTimeout: { NSError(domain: "VoiceWake", code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: "permission request timed out",
-                ]) },
-                operation: {
-                    await withCheckedContinuation(isolation: nil) { cont in
-                        Task { @MainActor in
-                            operation { ok in
-                                cont.resume(returning: ok)
-                            }
-                        }
-                    }
-                })
-        } catch {
-            return false
+    private nonisolated static func requestSpeechPermission() async -> Bool {
+        await withCheckedContinuation(isolation: nil) { cont in
+            SFSpeechRecognizer.requestAuthorization { status in
+                cont.resume(returning: status == .authorized)
+            }
         }
-    }
-
-    private static func permissionMessage(
-        kind: String,
-        status: SFSpeechRecognizerAuthorizationStatus) -> String
-    {
-        switch status {
-        case .denied:
-            return "\(kind) permission denied"
-        case .restricted:
-            return "\(kind) permission restricted"
-        case .notDetermined:
-            return "\(kind) permission not granted"
-        case .authorized:
-            return "\(kind) permission denied"
-        @unknown default:
-            return "\(kind) permission denied"
-        }
-    }
-
-    private nonisolated static func deniedByDefaultPermissionMessage(kind: String, isUndetermined: Bool) -> String {
-        if isUndetermined {
-            return "\(kind) permission not granted"
-        }
-        return "\(kind) permission denied"
     }
 }
 

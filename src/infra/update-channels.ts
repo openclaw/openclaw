@@ -27,7 +27,7 @@ export function channelToNpmTag(channel: UpdateChannel): string {
 }
 
 export function isBetaTag(tag: string): boolean {
-  return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
+  return tag.toLowerCase().includes("-beta");
 }
 
 export function isStableTag(tag: string): boolean {
@@ -80,30 +80,4 @@ export function formatUpdateChannelLabel(params: {
       : `${params.channel} (branch)`;
   }
   return `${params.channel} (default)`;
-}
-
-export function resolveUpdateChannelDisplay(params: {
-  configChannel?: UpdateChannel | null;
-  installKind: "git" | "package" | "unknown";
-  gitTag?: string | null;
-  gitBranch?: string | null;
-}): { channel: UpdateChannel; source: UpdateChannelSource; label: string } {
-  const channelInfo = resolveEffectiveUpdateChannel({
-    configChannel: params.configChannel,
-    installKind: params.installKind,
-    git:
-      params.gitTag || params.gitBranch
-        ? { tag: params.gitTag ?? null, branch: params.gitBranch ?? null }
-        : undefined,
-  });
-  return {
-    channel: channelInfo.channel,
-    source: channelInfo.source,
-    label: formatUpdateChannelLabel({
-      channel: channelInfo.channel,
-      source: channelInfo.source,
-      gitTag: params.gitTag ?? null,
-      gitBranch: params.gitBranch ?? null,
-    }),
-  };
 }

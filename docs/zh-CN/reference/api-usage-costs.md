@@ -34,7 +34,7 @@ x-i18n:
 
 - `openclaw status --usage` 和 `openclaw channels list` 显示提供商**用量窗口**（配额快照，非每条消息的费用）。
 
-详情和示例请参阅 [Token 用量与费用](/reference/token-use)。
+详情和示例请参阅 [Token 用量与费用](/token-use)。
 
 ## 密钥的发现方式
 
@@ -51,7 +51,7 @@ OpenClaw 可以从以下来源获取凭据：
 
 每次回复或工具调用都使用**当前模型提供商**（OpenAI、Anthropic 等）。这是用量和费用的主要来源。
 
-定价配置请参阅[模型](/providers/models)，显示方式请参阅 [Token 用量与费用](/reference/token-use)。
+定价配置请参阅[模型](/providers/models)，显示方式请参阅 [Token 用量与费用](/token-use)。
 
 ### 2）媒体理解（音频/图像/视频）
 
@@ -79,13 +79,8 @@ OpenClaw 可以从以下来源获取凭据：
 
 `web_search` 使用 API 密钥，可能产生使用费用：
 
-- **Brave Search API**：`BRAVE_API_KEY` 或 `plugins.entries.brave.config.webSearch.apiKey`
-- **Gemini**：`GEMINI_API_KEY` 或 `plugins.entries.google.config.webSearch.apiKey`
-- **Grok**：`XAI_API_KEY` 或 `plugins.entries.xai.config.webSearch.apiKey`
-- **Kimi**：`KIMI_API_KEY`、`MOONSHOT_API_KEY` 或 `plugins.entries.moonshot.config.webSearch.apiKey`
-- **Perplexity**：`PERPLEXITY_API_KEY`、`OPENROUTER_API_KEY` 或 `plugins.entries.perplexity.config.webSearch.apiKey`
-
-旧的 `tools.web.search.*` 提供商路径仍会通过兼容层加载，但不再是推荐配置方式。
+- **Brave Search API**：`BRAVE_API_KEY` 或 `tools.web.search.apiKey`
+- **Perplexity**（通过 OpenRouter）：`PERPLEXITY_API_KEY` 或 `OPENROUTER_API_KEY`
 
 **Brave 免费套餐（额度充裕）：**
 

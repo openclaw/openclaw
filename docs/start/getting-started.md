@@ -1,116 +1,208 @@
 ---
-summary: "Get OpenClaw installed and run your first chat in minutes."
+summary: "Beginner guide: from zero to first message (wizard, auth, channels, pairing)"
 read_when:
   - First time setup from zero
-  - You want the fastest path to a working chat
+  - You want the fastest path from install → onboarding → first message
 title: "Getting Started"
 ---
 
 # Getting Started
 
-Install OpenClaw, run onboarding, and chat with your AI assistant — all in
-about 5 minutes. By the end you will have a running Gateway, configured auth,
-and a working chat session.
+Goal: go from **zero** → **first working chat** (with sane defaults) as quickly as possible.
 
-## What you need
+Fastest chat: open the Control UI (no channel setup needed). Run `openclaw dashboard`
+and chat in the browser, or open `http://127.0.0.1:18789/` on the gateway host.
+Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 
-- **Node.js** — Node 24 recommended (Node 22.16+ also supported)
-- **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
+Recommended path: use the **CLI onboarding wizard** (`openclaw onboard`). It sets up:
 
-<Tip>
-Check your Node version with `node --version`.
-**Windows users:** both native Windows and WSL2 are supported. WSL2 is more
-stable and recommended for the full experience. See [Windows](/platforms/windows).
-Need to install Node? See [Node setup](/install/node).
-</Tip>
+- model/auth (OAuth recommended)
+- gateway settings
+- channels (WhatsApp/Telegram/Discord/Mattermost (plugin)/...)
+- pairing defaults (secure DMs)
+- workspace bootstrap + skills
+- optional background service
 
-## Quick setup
+If you want the deeper reference pages, jump to: [Wizard](/start/wizard), [Setup](/start/setup), [Pairing](/start/pairing), [Security](/gateway/security).
 
-<Steps>
-  <Step title="Install OpenClaw">
-    <Tabs>
-      <Tab title="macOS / Linux">
-        ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
-        ```
-        <img
-  src="/assets/install-script.svg"
-  alt="Install Script Process"
-  className="rounded-lg"
-/>
-      </Tab>
-      <Tab title="Windows (PowerShell)">
-        ```powershell
-        iwr -useb https://openclaw.ai/install.ps1 | iex
-        ```
-      </Tab>
-    </Tabs>
+Sandboxing note: `agents.defaults.sandbox.mode: "non-main"` uses `session.mainKey` (default `"main"`),
+so group/channel sessions are sandboxed. If you want the main agent to always
+run on host, set an explicit per-agent override:
 
-    <Note>
-    Other install methods (Docker, Nix, npm): [Install](/install).
-    </Note>
+```json
+{
+  "routing": {
+    "agents": {
+      "main": {
+        "workspace": "~/.openclaw/workspace",
+        "sandbox": { "mode": "off" }
+      }
+    }
+  }
+}
+```
 
-  </Step>
-  <Step title="Run onboarding">
-    ```bash
-    openclaw onboard --install-daemon
-    ```
+## 0) Prereqs
 
-    The wizard walks you through choosing a model provider, setting an API key,
-    and configuring the Gateway. It takes about 2 minutes.
+- Node `>=22`
+- `pnpm` (optional; recommended if you build from source)
+- **Recommended:** Brave Search API key for web search. Easiest path:
+  `openclaw configure --section web` (stores `tools.web.search.apiKey`).
+  See [Web tools](/tools/web).
 
-    See [Onboarding (CLI)](/start/wizard) for the full reference.
+macOS: if you plan to build the apps, install Xcode / CLT. For the CLI + gateway only, Node is enough.
+Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native Windows is untested, more problematic, and has poorer tool compatibility. Install WSL2 first, then run the Linux steps inside WSL. See [Windows (WSL2)](/platforms/windows).
 
-  </Step>
-  <Step title="Verify the Gateway is running">
-    ```bash
-    openclaw gateway status
-    ```
+## 1) Install the CLI (recommended)
 
-    You should see the Gateway listening on port 18789.
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+```
 
-  </Step>
-  <Step title="Open the dashboard">
-    ```bash
-    openclaw dashboard
-    ```
+Installer options (install method, non-interactive, from GitHub): [Install](/install).
 
-    This opens the Control UI in your browser. If it loads, everything is working.
+Windows (PowerShell):
 
-  </Step>
-  <Step title="Send your first message">
-    Type a message in the Control UI chat and you should get an AI reply.
+```powershell
+iwr -useb https://openclaw.ai/install.ps1 | iex
+```
 
-    Want to chat from your phone instead? The fastest channel to set up is
-    [Telegram](/channels/telegram) (just a bot token). See [Channels](/channels)
-    for all options.
+Alternative (global install):
 
-  </Step>
-</Steps>
+```bash
+npm install -g openclaw@latest
+```
 
-## What to do next
+```bash
+pnpm add -g openclaw@latest
+```
 
-<Columns>
-  <Card title="Connect a channel" href="/channels" icon="message-square">
-    WhatsApp, Telegram, Discord, iMessage, and more.
-  </Card>
-  <Card title="Pairing and safety" href="/channels/pairing" icon="shield">
-    Control who can message your agent.
-  </Card>
-  <Card title="Configure the Gateway" href="/gateway/configuration" icon="settings">
-    Models, tools, sandbox, and advanced settings.
-  </Card>
-  <Card title="Browse tools" href="/tools" icon="wrench">
-    Browser, exec, web search, skills, and plugins.
-  </Card>
-</Columns>
+## 2) Run the onboarding wizard (and install the service)
 
-<Accordion title="Advanced: environment variables">
-  If you run OpenClaw as a service account or want custom paths:
+```bash
+openclaw onboard --install-daemon
+```
 
-- `OPENCLAW_HOME` — home directory for internal path resolution
-- `OPENCLAW_STATE_DIR` — override the state directory
-- `OPENCLAW_CONFIG_PATH` — override the config file path
+What you’ll choose:
 
-Full reference: [Environment variables](/help/environment).
-</Accordion>
+- **Local vs Remote** gateway
+- **Auth**: OpenAI Code (Codex) subscription (OAuth) or API keys. For Anthropic we recommend an API key; `claude setup-token` is also supported.
+- **Providers**: WhatsApp QR login, Telegram/Discord bot tokens, Mattermost plugin tokens, etc.
+- **Daemon**: background install (launchd/systemd; WSL2 uses systemd)
+  - **Runtime**: Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
+- **Gateway token**: the wizard generates one by default (even on loopback) and stores it in `gateway.auth.token`.
+
+Wizard doc: [Wizard](/start/wizard)
+
+### Auth: where it lives (important)
+
+- **Recommended Anthropic path:** set an API key (wizard can store it for service use). `claude setup-token` is also supported if you want to reuse Claude Code credentials.
+
+- OAuth credentials (legacy import): `~/.openclaw/credentials/oauth.json`
+- Auth profiles (OAuth + API keys): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+
+Headless/server tip: do OAuth on a normal machine first, then copy `oauth.json` to the gateway host.
+
+## 3) Start the Gateway
+
+If you installed the service during onboarding, the Gateway should already be running:
+
+```bash
+openclaw gateway status
+```
+
+Manual run (foreground):
+
+```bash
+openclaw gateway --port 18789 --verbose
+```
+
+Dashboard (local loopback): `http://127.0.0.1:18789/`
+If a token is configured, paste it into the Control UI settings (stored as `connect.params.auth.token`).
+
+⚠️ **Bun warning (WhatsApp + Telegram):** Bun has known issues with these
+channels. If you use WhatsApp or Telegram, run the Gateway with **Node**.
+
+## 3.5) Quick verify (2 min)
+
+```bash
+openclaw status
+openclaw health
+openclaw security audit --deep
+```
+
+## 4) Pair + connect your first chat surface
+
+### WhatsApp (QR login)
+
+```bash
+openclaw channels login
+```
+
+Scan via WhatsApp → Settings → Linked Devices.
+
+WhatsApp doc: [WhatsApp](/channels/whatsapp)
+
+### Telegram / Discord / others
+
+The wizard can write tokens/config for you. If you prefer manual config, start with:
+
+- Telegram: [Telegram](/channels/telegram)
+- Discord: [Discord](/channels/discord)
+- Mattermost (plugin): [Mattermost](/channels/mattermost)
+
+**Telegram DM tip:** your first DM returns a pairing code. Approve it (see next step) or the bot won’t respond.
+
+## 5) DM safety (pairing approvals)
+
+Default posture: unknown DMs get a short code and messages are not processed until approved.
+If your first DM gets no reply, approve the pairing:
+
+```bash
+openclaw pairing list whatsapp
+openclaw pairing approve whatsapp <code>
+```
+
+Pairing doc: [Pairing](/start/pairing)
+
+## From source (development)
+
+If you’re hacking on OpenClaw itself, run from source:
+
+```bash
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+pnpm install
+pnpm ui:build # auto-installs UI deps on first run
+pnpm build
+openclaw onboard --install-daemon
+```
+
+If you don’t have a global install yet, run the onboarding step via `pnpm openclaw ...` from the repo.
+`pnpm build` also bundles A2UI assets; if you need to run just that step, use `pnpm canvas:a2ui:bundle`.
+
+Gateway (from this repo):
+
+```bash
+node openclaw.mjs gateway --port 18789 --verbose
+```
+
+## 7) Verify end-to-end
+
+In a new terminal, send a test message:
+
+```bash
+openclaw message send --target +15555550123 --message "Hello from OpenClaw"
+```
+
+If `openclaw health` shows “no auth configured”, go back to the wizard and set OAuth/key auth — the agent won’t be able to respond without it.
+
+Tip: `openclaw status --all` is the best pasteable, read-only debug report.
+Health probes: `openclaw health` (or `openclaw status --deep`) asks the running gateway for a health snapshot.
+
+## Next steps (optional, but great)
+
+- macOS menu bar app + voice wake: [macOS app](/platforms/macos)
+- iOS/Android nodes (Canvas/camera/voice): [Nodes](/nodes)
+- Remote access (SSH tunnel / Tailscale Serve): [Remote access](/gateway/remote) and [Tailscale](/gateway/tailscale)
+- Always-on / VPN setups: [Remote access](/gateway/remote), [exe.dev](/platforms/exe-dev), [Hetzner](/platforms/hetzner), [macOS remote](/platforms/mac/remote)

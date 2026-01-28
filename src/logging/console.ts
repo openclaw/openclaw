@@ -1,14 +1,12 @@
+import { createRequire } from "node:module";
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
-import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
-import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
-import { formatLocalIsoWithOffset } from "./timestamps.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
 type ConsoleSettings = {
@@ -17,32 +15,11 @@ type ConsoleSettings = {
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
 
-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
-type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
-const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
-  try {
-    const loaded = requireConfig?.("../config/config.js") as
-      | {
-          loadConfig?: () => OpenClawConfig;
-        }
-      | undefined;
-    return loaded?.loadConfig?.().logging;
-  } catch {
-    return undefined;
-  }
-};
-let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
-
-export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {
-  loadConfigFallback = loader ?? loadConfigFallbackDefault;
-}
+const requireConfig = createRequire(import.meta.url);
 
 function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) {
     return "debug";
-  }
-  if (!level && process.env.VITEST === "true" && process.env.OPENCLAW_TEST_CONSOLE !== "1") {
-    return "silent";
   }
   return normalizeLogLevel(level, "info");
 }
@@ -58,19 +35,6 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
-  const envLevel = resolveEnvLogLevelOverride();
-  // Test runs default to silent console logging unless explicitly overridden.
-  // Skip config-file and full config fallback reads in this fast path.
-  if (
-    process.env.VITEST === "true" &&
-    process.env.OPENCLAW_TEST_CONSOLE !== "1" &&
-    !isVerbose() &&
-    !envLevel &&
-    !loggingState.overrideSettings
-  ) {
-    return { level: "silent", style: normalizeConsoleStyle(undefined) };
-  }
-
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
@@ -79,13 +43,18 @@ function resolveConsoleSettings(): ConsoleSettings {
     } else {
       loggingState.resolvingConsoleSettings = true;
       try {
-        cfg = loadConfigFallback();
+        const loaded = requireConfig("../config/config.js") as {
+          loadConfig?: () => OpenClawConfig;
+        };
+        cfg = loaded.loadConfig?.().logging;
+      } catch {
+        cfg = undefined;
       } finally {
         loggingState.resolvingConsoleSettings = false;
       }
     }
   }
-  const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
+  const level = normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
 }
@@ -145,12 +114,6 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
-const SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS = [
-  "DiscordMessageListener",
-  "DiscordReactionListener",
-  "DiscordReactionRemoveListener",
-] as const;
-
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
@@ -160,7 +123,7 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   }
   if (
     message.startsWith("[EventQueue] Slow listener detected") &&
-    SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS.some((listener) => message.includes(listener))
+    message.includes("DiscordMessageListener")
   ) {
     return true;
   }
@@ -172,21 +135,16 @@ function isEpipeError(err: unknown): boolean {
   return code === "EPIPE" || code === "EIO";
 }
 
-export function formatConsoleTimestamp(style: ConsoleStyle): string {
-  const now = new Date();
+function formatConsoleTimestamp(style: ConsoleStyle): string {
+  const now = new Date().toISOString();
   if (style === "pretty") {
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+    return now.slice(11, 19);
   }
-  return formatLocalIsoWithOffset(now);
+  return now;
 }
 
 function hasTimestampPrefix(value: string): boolean {
-  return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/.test(
-    value,
-  );
+  return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)/.test(value);
 }
 
 function isJsonPayload(value: string): boolean {
@@ -211,24 +169,6 @@ export function enableConsoleCapture(): void {
     return;
   }
   loggingState.consolePatched = true;
-
-  // Handle async EPIPE errors on stdout/stderr. The synchronous try/catch in
-  // the forward() wrapper below only covers errors thrown during write dispatch.
-  // When the receiving pipe closes (e.g. during shutdown), Node emits the error
-  // asynchronously on the stream. Without a listener this becomes an uncaught
-  // exception that crashes the gateway.
-  // Guard separately from consolePatched so test resets don't stack listeners.
-  if (!loggingState.streamErrorHandlersInstalled) {
-    loggingState.streamErrorHandlersInstalled = true;
-    for (const stream of [process.stdout, process.stderr]) {
-      stream.on("error", (err) => {
-        if (isEpipeError(err)) {
-          return;
-        }
-        throw err;
-      });
-    }
-  }
 
   let logger: ReturnType<typeof getLogger> | null = null;
   const getLoggerLazy = () => {

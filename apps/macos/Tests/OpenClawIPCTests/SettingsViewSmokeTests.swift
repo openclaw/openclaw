@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct SettingsViewSmokeTests {
-    @Test func `cron settings builds body`() {
+    @Test func cronSettingsBuildsBody() {
         let store = CronJobsStore(isPreview: true)
         store.schedulerEnabled = false
         store.schedulerStorePath = "/tmp/openclaw-cron-store.json"
@@ -23,7 +23,7 @@ struct SettingsViewSmokeTests {
             sessionTarget: .main,
             wakeMode: .now,
             payload: .systemEvent(text: "ping"),
-            delivery: nil,
+            isolation: nil,
             state: CronJobState(
                 nextRunAtMs: 1_700_000_200_000,
                 runningAtMs: nil,
@@ -48,11 +48,11 @@ struct SettingsViewSmokeTests {
                 message: "hello",
                 thinking: "low",
                 timeoutSeconds: 30,
-                deliver: nil,
-                channel: nil,
-                to: nil,
-                bestEffortDeliver: nil),
-            delivery: CronDelivery(mode: .announce, channel: "sms", to: "+15551234567", bestEffort: true),
+                deliver: true,
+                channel: "sms",
+                to: "+15551234567",
+                bestEffortDeliver: true),
+            isolation: CronIsolation(postToMainPrefix: "[cron] "),
             state: CronJobState(
                 nextRunAtMs: nil,
                 runningAtMs: nil,
@@ -80,36 +80,36 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
-    @Test func `cron settings exercises private views`() {
+    @Test func cronSettingsExercisesPrivateViews() {
         CronSettings.exerciseForTesting()
     }
 
-    @Test func `config settings builds body`() {
+    @Test func configSettingsBuildsBody() {
         let view = ConfigSettings()
         _ = view.body
     }
 
-    @Test func `debug settings builds body`() {
+    @Test func debugSettingsBuildsBody() {
         let view = DebugSettings()
         _ = view.body
     }
 
-    @Test func `general settings builds body`() {
+    @Test func generalSettingsBuildsBody() {
         let state = AppState(preview: true)
         let view = GeneralSettings(state: state)
         _ = view.body
     }
 
-    @Test func `general settings exercises branches`() {
+    @Test func generalSettingsExercisesBranches() {
         GeneralSettings.exerciseForTesting()
     }
 
-    @Test func `sessions settings builds body`() {
+    @Test func sessionsSettingsBuildsBody() {
         let view = SessionsSettings(rows: SessionRow.previewRows, isPreview: true)
         _ = view.body
     }
 
-    @Test func `instances settings builds body`() {
+    @Test func instancesSettingsBuildsBody() {
         let store = InstancesStore(isPreview: true)
         store.instances = [
             InstanceInfo(
@@ -130,7 +130,7 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
-    @Test func `permissions settings builds body`() {
+    @Test func permissionsSettingsBuildsBody() {
         let view = PermissionsSettings(
             status: [
                 .notifications: true,
@@ -141,24 +141,24 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
-    @Test func `settings root view builds body`() {
+    @Test func settingsRootViewBuildsBody() {
         let state = AppState(preview: true)
         let view = SettingsRootView(state: state, updater: nil, initialTab: .general)
         _ = view.body
     }
 
-    @Test func `about settings builds body`() {
+    @Test func aboutSettingsBuildsBody() {
         let view = AboutSettings(updater: nil)
         _ = view.body
     }
 
-    @Test func `voice wake settings builds body`() {
+    @Test func voiceWakeSettingsBuildsBody() {
         let state = AppState(preview: true)
         let view = VoiceWakeSettings(state: state, isActive: false)
         _ = view.body
     }
 
-    @Test func `skills settings builds body`() {
+    @Test func skillsSettingsBuildsBody() {
         let view = SkillsSettings(state: .preview)
         _ = view.body
     }

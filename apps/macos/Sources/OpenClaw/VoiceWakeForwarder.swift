@@ -32,12 +32,12 @@ enum VoiceWakeForwarder {
         }
     }
 
-    struct ForwardOptions {
+    struct ForwardOptions: Sendable {
         var sessionKey: String = "main"
         var thinking: String = "low"
         var deliver: Bool = true
         var to: String?
-        var channel: GatewayAgentChannel = .webchat
+        var channel: GatewayAgentChannel = .last
     }
 
     @discardableResult

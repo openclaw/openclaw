@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { resolveBrowserConfig } from "./config.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -12,12 +11,15 @@ import {
 } from "./profiles.js";
 
 describe("profile name validation", () => {
-  it.each(["openclaw", "work", "my-profile", "test123", "a", "a-b-c-1-2-3", "1test"])(
-    "accepts valid lowercase name: %s",
-    (name) => {
-      expect(isValidProfileName(name)).toBe(true);
-    },
-  );
+  it("accepts valid lowercase names", () => {
+    expect(isValidProfileName("openclaw")).toBe(true);
+    expect(isValidProfileName("work")).toBe(true);
+    expect(isValidProfileName("my-profile")).toBe(true);
+    expect(isValidProfileName("test123")).toBe(true);
+    expect(isValidProfileName("a")).toBe(true);
+    expect(isValidProfileName("a-b-c-1-2-3")).toBe(true);
+    expect(isValidProfileName("1test")).toBe(true);
+  });
 
   it("rejects empty or missing names", () => {
     expect(isValidProfileName("")).toBe(false);
@@ -35,23 +37,32 @@ describe("profile name validation", () => {
     expect(isValidProfileName(maxName)).toBe(true);
   });
 
-  it.each([
-    "MyProfile",
-    "PROFILE",
-    "Work",
-    "my profile",
-    "my_profile",
-    "my.profile",
-    "my/profile",
-    "my@profile",
-    "-invalid",
-    "--double",
-  ])("rejects invalid name: %s", (name) => {
-    expect(isValidProfileName(name)).toBe(false);
+  it("rejects uppercase letters", () => {
+    expect(isValidProfileName("MyProfile")).toBe(false);
+    expect(isValidProfileName("PROFILE")).toBe(false);
+    expect(isValidProfileName("Work")).toBe(false);
+  });
+
+  it("rejects spaces and special characters", () => {
+    expect(isValidProfileName("my profile")).toBe(false);
+    expect(isValidProfileName("my_profile")).toBe(false);
+    expect(isValidProfileName("my.profile")).toBe(false);
+    expect(isValidProfileName("my/profile")).toBe(false);
+    expect(isValidProfileName("my@profile")).toBe(false);
+  });
+
+  it("rejects names starting with hyphen", () => {
+    expect(isValidProfileName("-invalid")).toBe(false);
+    expect(isValidProfileName("--double")).toBe(false);
   });
 });
 
 describe("port allocation", () => {
+  it("allocates first port when none used", () => {
+    const usedPorts = new Set<number>();
+    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START);
+  });
+
   it("allocates within an explicit range", () => {
     const usedPorts = new Set<number>();
     expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20000);
@@ -59,29 +70,17 @@ describe("port allocation", () => {
     expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20001);
   });
 
-  it("allocates next available port from default range", () => {
-    const cases = [
-      { name: "none used", used: new Set<number>(), expected: CDP_PORT_RANGE_START },
-      {
-        name: "sequentially used start ports",
-        used: new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 1]),
-        expected: CDP_PORT_RANGE_START + 2,
-      },
-      {
-        name: "first gap wins",
-        used: new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 2]),
-        expected: CDP_PORT_RANGE_START + 1,
-      },
-      {
-        name: "ignores outside-range ports",
-        used: new Set([1, 2, 3, 50000]),
-        expected: CDP_PORT_RANGE_START,
-      },
-    ] as const;
+  it("skips used ports and returns next available", () => {
+    const usedPorts = new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 1]);
+    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START + 2);
+  });
 
-    for (const testCase of cases) {
-      expect(allocateCdpPort(testCase.used), testCase.name).toBe(testCase.expected);
-    }
+  it("finds first gap in used ports", () => {
+    const usedPorts = new Set([
+      CDP_PORT_RANGE_START,
+      CDP_PORT_RANGE_START + 2, // gap at +1
+    ]);
+    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START + 1);
   });
 
   it("returns null when all ports are exhausted", () => {
@@ -91,11 +90,20 @@ describe("port allocation", () => {
     }
     expect(allocateCdpPort(usedPorts)).toBeNull();
   });
+
+  it("handles ports outside range in used set", () => {
+    const usedPorts = new Set([1, 2, 3, 50000]); // ports outside range
+    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START);
+  });
 });
 
 describe("getUsedPorts", () => {
   it("returns empty set for undefined profiles", () => {
     expect(getUsedPorts(undefined)).toEqual(new Set());
+  });
+
+  it("returns empty set for empty profiles object", () => {
+    expect(getUsedPorts({})).toEqual(new Set());
   });
 
   it("extracts ports from profile configs", () => {
@@ -127,8 +135,9 @@ describe("getUsedPorts", () => {
 });
 
 describe("port collision prevention", () => {
-  it("raw config vs resolved config - shows the data source difference", () => {
+  it("raw config vs resolved config - shows the data source difference", async () => {
     // This demonstrates WHY the route handler must use resolved config
+    const { resolveBrowserConfig } = await import("./config.js");
 
     // Fresh config with no profiles defined (like a new install)
     const rawConfigProfiles = undefined;
@@ -143,13 +152,12 @@ describe("port collision prevention", () => {
     expect(usedFromResolved.has(CDP_PORT_RANGE_START)).toBe(true);
   });
 
-  it("create-profile must use resolved config to avoid port collision", () => {
+  it("create-profile must use resolved config to avoid port collision", async () => {
     // The route handler must use state.resolved.profiles, not raw config
+    const { resolveBrowserConfig } = await import("./config.js");
 
     // Simulate what happens with raw config (empty) vs resolved config
-    const rawConfig: { browser: { profiles?: Record<string, { cdpPort?: number }> } } = {
-      browser: {},
-    }; // Fresh config, no profiles
+    const rawConfig = { browser: {} }; // Fresh config, no profiles
     const buggyUsedPorts = getUsedPorts(rawConfig.browser?.profiles);
     const buggyAllocatedPort = allocateCdpPort(buggyUsedPorts);
 
@@ -157,9 +165,7 @@ describe("port collision prevention", () => {
     expect(buggyAllocatedPort).toBe(CDP_PORT_RANGE_START);
 
     // Resolved config: includes implicit openclaw at 18800
-    const resolved = resolveBrowserConfig(
-      rawConfig.browser as Parameters<typeof resolveBrowserConfig>[0],
-    );
+    const resolved = resolveBrowserConfig(rawConfig.browser);
     const fixedUsedPorts = getUsedPorts(resolved.profiles);
     const fixedAllocatedPort = allocateCdpPort(fixedUsedPorts);
 
@@ -169,27 +175,23 @@ describe("port collision prevention", () => {
 });
 
 describe("color allocation", () => {
+  it("allocates first color when none used", () => {
+    const usedColors = new Set<string>();
+    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[0]);
+  });
+
   it("allocates next unused color from palette", () => {
-    const cases = [
-      { name: "none used", used: new Set<string>(), expected: PROFILE_COLORS[0] },
-      {
-        name: "first color used",
-        used: new Set([PROFILE_COLORS[0].toUpperCase()]),
-        expected: PROFILE_COLORS[1],
-      },
-      {
-        name: "multiple used colors",
-        used: new Set([
-          PROFILE_COLORS[0].toUpperCase(),
-          PROFILE_COLORS[1].toUpperCase(),
-          PROFILE_COLORS[2].toUpperCase(),
-        ]),
-        expected: PROFILE_COLORS[3],
-      },
-    ] as const;
-    for (const testCase of cases) {
-      expect(allocateColor(testCase.used), testCase.name).toBe(testCase.expected);
-    }
+    const usedColors = new Set([PROFILE_COLORS[0].toUpperCase()]);
+    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[1]);
+  });
+
+  it("skips multiple used colors", () => {
+    const usedColors = new Set([
+      PROFILE_COLORS[0].toUpperCase(),
+      PROFILE_COLORS[1].toUpperCase(),
+      PROFILE_COLORS[2].toUpperCase(),
+    ]);
+    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[3]);
   });
 
   it("handles case-insensitive color matching", () => {
@@ -221,8 +223,12 @@ describe("color allocation", () => {
 });
 
 describe("getUsedColors", () => {
-  it("returns empty set when no color profiles are configured", () => {
+  it("returns empty set for undefined profiles", () => {
     expect(getUsedColors(undefined)).toEqual(new Set());
+  });
+
+  it("returns empty set for empty profiles object", () => {
+    expect(getUsedColors({})).toEqual(new Set());
   });
 
   it("extracts and uppercases colors from profile configs", () => {

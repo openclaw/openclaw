@@ -1,17 +1,5 @@
-import { splitArgsPreservingQuotes } from "./arg-split.js";
-import type { GatewayServiceRenderArgs } from "./service-types.js";
-
-const SYSTEMD_LINE_BREAKS = /[\r\n]/;
-
-function assertNoSystemdLineBreaks(value: string, label: string): void {
-  if (SYSTEMD_LINE_BREAKS.test(value)) {
-    throw new Error(`${label} cannot contain CR or LF characters.`);
-  }
-}
-
 function systemdEscapeArg(value: string): string {
-  assertNoSystemdLineBreaks(value, "Systemd unit values");
-  if (!/[\s"\\]/.test(value)) {
+  if (!/[\\s"\\\\]/.test(value)) {
     return value;
   }
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
@@ -27,12 +15,9 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (entries.length === 0) {
     return [];
   }
-  return entries.map(([key, value]) => {
-    const rawValue = value ?? "";
-    assertNoSystemdLineBreaks(key, "Systemd environment variable names");
-    assertNoSystemdLineBreaks(rawValue, "Systemd environment variable values");
-    return `Environment=${systemdEscapeArg(`${key}=${rawValue.trim()}`)}`;
-  });
+  return entries.map(
+    ([key, value]) => `Environment=${systemdEscapeArg(`${key}=${value?.trim() ?? ""}`)}`,
+  );
 }
 
 export function buildSystemdUnit({
@@ -40,11 +25,14 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
-}: GatewayServiceRenderArgs): string {
+}: {
+  description?: string;
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: Record<string, string | undefined>;
+}): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
-  const descriptionValue = description?.trim() || "OpenClaw Gateway";
-  assertNoSystemdLineBreaks(descriptionValue, "Systemd Description");
-  const descriptionLine = `Description=${descriptionValue}`;
+  const descriptionLine = `Description=${description?.trim() || "OpenClaw Gateway"}`;
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
@@ -59,12 +47,10 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    "TimeoutStopSec=30",
-    "TimeoutStartSec=30",
-    "SuccessExitStatus=0 143",
-    // Keep service children in the same lifecycle so restarts do not leave
-    // orphan ACP/runtime workers behind.
-    "KillMode=control-group",
+    // KillMode=process ensures systemd only waits for the main process to exit.
+    // Without this, podman's conmon (container monitor) processes block shutdown
+    // since they run as children of the gateway and stay in the same cgroup.
+    "KillMode=process",
     workingDirLine,
     ...envLines,
     "",
@@ -77,7 +63,38 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
+  const args: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  let escapeNext = false;
+
+  for (const char of value) {
+    if (escapeNext) {
+      current += char;
+      escapeNext = false;
+      continue;
+    }
+    if (char === "\\\\") {
+      escapeNext = true;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && /\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    args.push(current);
+  }
+  return args;
 }
 
 export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {

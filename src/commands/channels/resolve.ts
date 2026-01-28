@@ -1,12 +1,9 @@
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
-import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
-import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { loadConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
   channel?: string;
@@ -71,51 +68,19 @@ function formatResolveResult(result: ResolveResult): string {
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
-  const loadedRaw = loadConfig();
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-    config: loadedRaw,
-    commandName: "channels resolve",
-    targetIds: getChannelsCommandSecretTargetIds(),
-    mode: "read_only_operational",
-  });
-  let cfg = resolvedConfig;
-  for (const entry of diagnostics) {
-    runtime.log(`[secrets] ${entry}`);
-  }
+  const cfg = loadConfig();
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {
     throw new Error("At least one entry is required.");
   }
 
-  const explicitChannel = opts.channel?.trim();
-  const resolvedExplicit = explicitChannel
-    ? await resolveInstallableChannelPlugin({
-        cfg,
-        runtime,
-        rawChannel: explicitChannel,
-        allowInstall: true,
-        supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
-      })
-    : null;
-  if (resolvedExplicit?.configChanged) {
-    cfg = resolvedExplicit.cfg;
-    await writeConfigFile(cfg);
-  }
-
-  const selection = explicitChannel
-    ? {
-        channel: resolvedExplicit?.channelId,
-      }
-    : await resolveMessageChannelSelection({
-        cfg,
-        channel: opts.channel ?? null,
-      });
-  const plugin =
-    (explicitChannel ? resolvedExplicit?.plugin : undefined) ??
-    (selection.channel ? getChannelPlugin(selection.channel) : undefined);
+  const selection = await resolveMessageChannelSelection({
+    cfg,
+    channel: opts.channel ?? null,
+  });
+  const plugin = getChannelPlugin(selection.channel);
   if (!plugin?.resolver?.resolveTargets) {
-    const channelText = selection.channel ?? explicitChannel ?? "";
-    throw new Error(`Channel ${channelText} does not support resolve.`);
+    throw new Error(`Channel ${selection.channel} does not support resolve.`);
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 

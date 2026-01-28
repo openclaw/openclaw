@@ -1,5 +1,6 @@
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { escapeRegExp } from "../utils.js";
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 export function extractModelDirective(
   body?: string,
@@ -34,10 +35,10 @@ export function extractModelDirective(
 
   let rawModel = raw;
   let rawProfile: string | undefined;
-  if (raw) {
-    const split = splitTrailingAuthProfile(raw);
-    rawModel = split.model;
-    rawProfile = split.profile;
+  if (raw?.includes("@")) {
+    const parts = raw.split("@");
+    rawModel = parts[0]?.trim();
+    rawProfile = parts.slice(1).join("@").trim() || undefined;
   }
 
   const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();

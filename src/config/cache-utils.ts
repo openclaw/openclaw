@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
 export function resolveCacheTtlMs(params: {
   envValue: string | undefined;
@@ -7,8 +6,8 @@ export function resolveCacheTtlMs(params: {
 }): number {
   const { envValue, defaultTtlMs } = params;
   if (envValue) {
-    const parsed = parseStrictNonNegativeInteger(envValue);
-    if (parsed !== undefined) {
+    const parsed = Number.parseInt(envValue, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
       return parsed;
     }
   }
@@ -19,18 +18,9 @@ export function isCacheEnabled(ttlMs: number): boolean {
   return ttlMs > 0;
 }
 
-export type FileStatSnapshot = {
-  mtimeMs: number;
-  sizeBytes: number;
-};
-
-export function getFileStatSnapshot(filePath: string): FileStatSnapshot | undefined {
+export function getFileMtimeMs(filePath: string): number | undefined {
   try {
-    const stats = fs.statSync(filePath);
-    return {
-      mtimeMs: stats.mtimeMs,
-      sizeBytes: stats.size,
-    };
+    return fs.statSync(filePath).mtimeMs;
   } catch {
     return undefined;
   }

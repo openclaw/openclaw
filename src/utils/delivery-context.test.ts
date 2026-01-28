@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatConversationTarget,
   deliveryContextKey,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
 } from "./delivery-context.js";
 
 describe("delivery context helpers", () => {
@@ -26,45 +24,16 @@ describe("delivery context helpers", () => {
     expect(normalizeDeliveryContext({ channel: "  " })).toBeUndefined();
   });
 
-  it("does not inherit route fields from fallback when channels conflict", () => {
+  it("merges primary values over fallback", () => {
     const merged = mergeDeliveryContext(
-      { channel: "telegram" },
-      { channel: "discord", to: "channel:def", accountId: "acct", threadId: "99" },
+      { channel: "whatsapp", to: "channel:abc" },
+      { channel: "slack", to: "channel:def", accountId: "acct" },
     );
 
     expect(merged).toEqual({
-      channel: "telegram",
-      to: undefined,
-      accountId: undefined,
-    });
-    expect(merged?.threadId).toBeUndefined();
-  });
-
-  it("inherits missing route fields when channels match", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "telegram" },
-      { channel: "telegram", to: "123", accountId: "acct", threadId: "99" },
-    );
-
-    expect(merged).toEqual({
-      channel: "telegram",
-      to: "123",
+      channel: "whatsapp",
+      to: "channel:abc",
       accountId: "acct",
-      threadId: "99",
-    });
-  });
-
-  it("uses fallback route fields when fallback has no channel", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "telegram" },
-      { to: "123", accountId: "acct", threadId: "99" },
-    );
-
-    expect(merged).toEqual({
-      channel: "telegram",
-      to: "123",
-      accountId: "acct",
-      threadId: "99",
     });
   });
 
@@ -77,36 +46,6 @@ describe("delivery context helpers", () => {
     expect(deliveryContextKey({ channel: "slack", to: "channel:C1", threadId: "123.456" })).toBe(
       "slack|channel:C1||123.456",
     );
-  });
-
-  it("formats channel-aware conversation targets", () => {
-    expect(formatConversationTarget({ channel: "discord", conversationId: "123" })).toBe(
-      "channel:123",
-    );
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "!room:example" })).toBe(
-      "room:!room:example",
-    );
-    expect(
-      formatConversationTarget({
-        channel: "matrix",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toBe("room:!room:example");
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "  " })).toBeUndefined();
-  });
-
-  it("resolves delivery targets for Matrix child threads", () => {
-    expect(
-      resolveConversationDeliveryTarget({
-        channel: "matrix",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toEqual({
-      to: "room:!room:example",
-      threadId: "$thread",
-    });
   });
 
   it("derives delivery context from a session entry", () => {
@@ -164,7 +103,7 @@ describe("delivery context helpers", () => {
     });
   });
 
-  it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {
+  it("normalizes delivery fields and mirrors them on session entries", () => {
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {
         channel: " Slack ",
@@ -179,11 +118,12 @@ describe("delivery context helpers", () => {
     expect(normalized.deliveryContext).toEqual({
       channel: "whatsapp",
       to: "+1555",
-      accountId: undefined,
+      accountId: "acct-2",
+      threadId: "444",
     });
     expect(normalized.lastChannel).toBe("whatsapp");
     expect(normalized.lastTo).toBe("+1555");
-    expect(normalized.lastAccountId).toBeUndefined();
-    expect(normalized.lastThreadId).toBeUndefined();
+    expect(normalized.lastAccountId).toBe("acct-2");
+    expect(normalized.lastThreadId).toBe("444");
   });
 });

@@ -5,12 +5,11 @@
  * resolves agent routes, and handles replies.
  */
 
-import type { ReplyPayload, OpenClawConfig } from "../api.js";
-import { createChannelReplyPipeline } from "../api.js";
+import type { ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
+import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
-import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
 export type TwitchRuntimeEnv = {
@@ -69,7 +68,6 @@ async function processTwitchMessage(params: {
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: `twitch:user:${message.userId}`,
@@ -105,18 +103,11 @@ async function processTwitchMessage(params: {
     channel: "twitch",
     accountId,
   });
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg,
-    agentId: route.agentId,
-    channel: "twitch",
-    accountId,
-  });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      ...replyPipeline,
       deliver: async (payload) => {
         await deliverTwitchReply({
           payload,
@@ -129,9 +120,6 @@ async function processTwitchMessage(params: {
           statusSink,
         });
       },
-    },
-    replyOptions: {
-      onModelSelected,
     },
   });
 }

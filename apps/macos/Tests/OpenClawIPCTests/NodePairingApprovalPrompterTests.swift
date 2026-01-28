@@ -4,7 +4,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct NodePairingApprovalPrompterTests {
-    @Test func `node pairing approval prompter exercises`() async {
+    @Test func nodePairingApprovalPrompterExercises() async {
         await NodePairingApprovalPrompter.exerciseForTesting()
     }
 }

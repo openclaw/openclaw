@@ -1,19 +1,18 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
-import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type { QueueDropPolicy, QueueMode } from "./queue.js";
+import { extractModelDirective } from "../model.js";
 import {
   extractElevatedDirective,
   extractExecDirective,
-  extractFastDirective,
   extractReasoningDirective,
   extractStatusDirective,
   extractThinkDirective,
   extractVerboseDirective,
 } from "./directives.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import type { QueueDropPolicy, QueueMode } from "./queue.js";
 import { extractQueueDirective } from "./queue.js";
 
 export type InlineDirectives = {
@@ -24,9 +23,6 @@ export type InlineDirectives = {
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
-  hasFastDirective: boolean;
-  fastMode?: boolean;
-  rawFastMode?: string;
   hasReasoningDirective: boolean;
   reasoningLevel?: ReasoningLevel;
   rawReasoningLevel?: string;
@@ -85,17 +81,11 @@ export function parseInlineDirectives(
     hasDirective: hasVerboseDirective,
   } = extractVerboseDirective(thinkCleaned);
   const {
-    cleaned: fastCleaned,
-    fastMode,
-    rawLevel: rawFastMode,
-    hasDirective: hasFastDirective,
-  } = extractFastDirective(verboseCleaned);
-  const {
     cleaned: reasoningCleaned,
     reasoningLevel,
     rawLevel: rawReasoningLevel,
     hasDirective: hasReasoningDirective,
-  } = extractReasoningDirective(fastCleaned);
+  } = extractReasoningDirective(verboseCleaned);
   const {
     cleaned: elevatedCleaned,
     elevatedLevel,
@@ -161,9 +151,6 @@ export function parseInlineDirectives(
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
-    hasFastDirective,
-    fastMode,
-    rawFastMode,
     hasReasoningDirective,
     reasoningLevel,
     rawReasoningLevel,
@@ -214,7 +201,6 @@ export function isDirectiveOnly(params: {
   if (
     !directives.hasThinkDirective &&
     !directives.hasVerboseDirective &&
-    !directives.hasFastDirective &&
     !directives.hasReasoningDirective &&
     !directives.hasElevatedDirective &&
     !directives.hasExecDirective &&

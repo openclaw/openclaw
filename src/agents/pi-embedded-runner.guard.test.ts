@@ -14,10 +14,9 @@ function assistantToolCall(id: string): AgentMessage {
 describe("guardSessionManager integration", () => {
   it("persists synthetic toolResult before subsequent assistant message", () => {
     const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
-    appendMessage(assistantToolCall("call_1"));
-    appendMessage({
+    sm.appendMessage(assistantToolCall("call_1"));
+    sm.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "followup" }],
     } as AgentMessage);

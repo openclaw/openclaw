@@ -1,16 +1,18 @@
 import CoreLocation
 import Testing
+
 @testable import OpenClaw
 
+@Suite("PermissionManager Location")
 struct PermissionManagerLocationTests {
-    @Test
-    func `authorizedAlways counts for both modes`() {
+    @Test("authorizedAlways counts for both modes")
+    func authorizedAlwaysCountsForBothModes() {
         #expect(PermissionManager.isLocationAuthorized(status: .authorizedAlways, requireAlways: false))
         #expect(PermissionManager.isLocationAuthorized(status: .authorizedAlways, requireAlways: true))
     }
 
-    @Test
-    func `other statuses not authorized`() {
+    @Test("other statuses not authorized")
+    func otherStatusesNotAuthorized() {
         #expect(!PermissionManager.isLocationAuthorized(status: .notDetermined, requireAlways: false))
         #expect(!PermissionManager.isLocationAuthorized(status: .denied, requireAlways: false))
         #expect(!PermissionManager.isLocationAuthorized(status: .restricted, requireAlways: false))

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { getTailscaleDnsName } from "./webhook/tailscale.js";
+import { getTailscaleDnsName } from "./webhook.js";
 
 /**
  * Tunnel configuration for exposing the webhook server.

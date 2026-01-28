@@ -25,25 +25,23 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/nextcloud-talk
 ```
 
-If you choose Nextcloud Talk during setup and a git checkout is detected,
+If you choose Nextcloud Talk during configure/onboarding and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
-Details: [Plugins](/tools/plugin)
+Details: [Plugins](/plugin)
 
 ## Quick setup (beginner)
 
 1. Install the Nextcloud Talk plugin.
 2. On your Nextcloud server, create a bot:
-
    ```bash
    ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
    ```
-
 3. Enable the bot in the target room settings.
 4. Configure OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Or env: `NEXTCLOUD_TALK_BOT_SECRET` (default account only)
-5. Restart the gateway (or finish setup).
+5. Restart the gateway (or finish onboarding).
 
 Minimal config:
 
@@ -74,7 +72,6 @@ Minimal config:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
 - Public DMs: `channels.nextcloud-talk.dmPolicy="open"` plus `channels.nextcloud-talk.allowFrom=["*"]`.
-- `allowFrom` matches Nextcloud user IDs only; display names are ignored.
 
 ## Rooms (groups)
 
@@ -115,7 +112,7 @@ Provider options:
 - `channels.nextcloud-talk.enabled`: enable/disable channel startup.
 - `channels.nextcloud-talk.baseUrl`: Nextcloud instance URL.
 - `channels.nextcloud-talk.botSecret`: bot shared secret.
-- `channels.nextcloud-talk.botSecretFile`: regular-file secret path. Symlinks are rejected.
+- `channels.nextcloud-talk.botSecretFile`: secret file path.
 - `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection).
 - `channels.nextcloud-talk.apiPassword`: API/app password for room lookups.
 - `channels.nextcloud-talk.apiPasswordFile`: API password file path.

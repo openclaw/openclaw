@@ -44,8 +44,16 @@ struct SessionsSettings: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            SettingsRefreshButton(isLoading: self.loading) {
-                Task { await self.refresh() }
+            if self.loading {
+                ProgressView()
+            } else {
+                Button {
+                    Task { await self.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .help("Refresh")
             }
         }
     }
@@ -77,6 +85,7 @@ struct SessionsSettings: View {
         }
     }
 
+    @ViewBuilder
     private func sessionRow(_ row: SessionRow) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {

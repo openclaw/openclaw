@@ -5,27 +5,24 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CronJobEditorSmokeTests {
-    private func makeEditor(job: CronJob? = nil, channelsStore: ChannelsStore? = nil) -> CronJobEditor {
-        CronJobEditor(
-            job: job,
-            isSaving: .constant(false),
-            error: .constant(nil),
-            channelsStore: channelsStore ?? ChannelsStore(isPreview: true),
-            onCancel: {},
-            onSave: { _ in })
-    }
-
-    @Test func `status pill builds body`() {
+    @Test func statusPillBuildsBody() {
         _ = StatusPill(text: "ok", tint: .green).body
         _ = StatusPill(text: "disabled", tint: .secondary).body
     }
 
-    @Test func `cron job editor builds body for new job`() {
-        let view = self.makeEditor()
+    @Test func cronJobEditorBuildsBodyForNewJob() {
+        let channelsStore = ChannelsStore(isPreview: true)
+        let view = CronJobEditor(
+            job: nil,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
         _ = view.body
     }
 
-    @Test func `cron job editor builds body for existing job`() {
+    @Test func cronJobEditorBuildsBodyForExistingJob() {
         let channelsStore = ChannelsStore(isPreview: true)
         let job = CronJob(
             id: "job-1",
@@ -43,11 +40,11 @@ struct CronJobEditorSmokeTests {
                 message: "Summarize the last day",
                 thinking: "low",
                 timeoutSeconds: 120,
-                deliver: nil,
-                channel: nil,
-                to: nil,
-                bestEffortDeliver: nil),
-            delivery: CronDelivery(mode: .announce, channel: "whatsapp", to: "+15551234567", bestEffort: true),
+                deliver: true,
+                channel: "whatsapp",
+                to: "+15551234567",
+                bestEffortDeliver: true),
+            isolation: CronIsolation(postToMainPrefix: "Cron"),
             state: CronJobState(
                 nextRunAtMs: 1_700_000_100_000,
                 runningAtMs: nil,
@@ -56,17 +53,37 @@ struct CronJobEditorSmokeTests {
                 lastError: nil,
                 lastDurationMs: 1000))
 
-        let view = self.makeEditor(job: job, channelsStore: channelsStore)
+        let view = CronJobEditor(
+            job: job,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
         _ = view.body
     }
 
-    @Test func `cron job editor exercises builders`() {
-        var view = self.makeEditor()
+    @Test func cronJobEditorExercisesBuilders() {
+        let channelsStore = ChannelsStore(isPreview: true)
+        var view = CronJobEditor(
+            job: nil,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
         view.exerciseForTesting()
     }
 
-    @Test func `cron job editor includes delete after run for at schedule`() {
-        let view = self.makeEditor()
+    @Test func cronJobEditorIncludesDeleteAfterRunForAtSchedule() throws {
+        let channelsStore = ChannelsStore(isPreview: true)
+        let view = CronJobEditor(
+            job: nil,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
 
         var root: [String: Any] = [:]
         view.applyDeleteAfterRun(to: &root, scheduleKind: CronJobEditor.ScheduleKind.at, deleteAfterRun: true)

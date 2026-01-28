@@ -1,46 +1,57 @@
 import { describe, expect, it } from "vitest";
-import { type AuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
-
-function makeApiKeyStore(provider: string, profileIds: string[]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: Object.fromEntries(
-      profileIds.map((profileId) => [
-        profileId,
-        {
-          type: "api_key",
-          provider,
-          key: profileId.endsWith(":work") ? "sk-work" : "sk-default",
-        },
-      ]),
-    ),
-  };
-}
-
-function makeApiKeyProfilesByProviderProvider(
-  providerByProfileId: Record<string, string>,
-): Record<string, { provider: string; mode: "api_key" }> {
-  return Object.fromEntries(
-    Object.entries(providerByProfileId).map(([profileId, provider]) => [
-      profileId,
-      { provider, mode: "api_key" },
-    ]),
-  );
-}
+import { resolveAuthProfileOrder } from "./auth-profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
+  const _store: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-default",
+      },
+      "anthropic:work": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-work",
+      },
+    },
+  };
+  const _cfg = {
+    auth: {
+      profiles: {
+        "anthropic:default": { provider: "anthropic", mode: "api_key" },
+        "anthropic:work": { provider: "anthropic", mode: "api_key" },
+      },
+    },
+  };
+
   it("normalizes z.ai aliases in auth.order", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
           order: { "z.ai": ["zai:work", "zai:default"] },
-          profiles: makeApiKeyProfilesByProviderProvider({
-            "zai:default": "zai",
-            "zai:work": "zai",
-          }),
+          profiles: {
+            "zai:default": { provider: "zai", mode: "api_key" },
+            "zai:work": { provider: "zai", mode: "api_key" },
+          },
         },
       },
-      store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
+      store: {
+        version: 1,
+        profiles: {
+          "zai:default": {
+            type: "api_key",
+            provider: "zai",
+            key: "sk-default",
+          },
+          "zai:work": {
+            type: "api_key",
+            provider: "zai",
+            key: "sk-work",
+          },
+        },
+      },
       provider: "zai",
     });
     expect(order).toEqual(["zai:work", "zai:default"]);
@@ -50,13 +61,27 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { OpenAI: ["openai:work", "openai:default"] },
-          profiles: makeApiKeyProfilesByProviderProvider({
-            "openai:default": "openai",
-            "openai:work": "openai",
-          }),
+          profiles: {
+            "openai:default": { provider: "openai", mode: "api_key" },
+            "openai:work": { provider: "openai", mode: "api_key" },
+          },
         },
       },
-      store: makeApiKeyStore("openai", ["openai:default", "openai:work"]),
+      store: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-default",
+          },
+          "openai:work": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-work",
+          },
+        },
+      },
       provider: "openai",
     });
     expect(order).toEqual(["openai:work", "openai:default"]);
@@ -65,13 +90,27 @@ describe("resolveAuthProfileOrder", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
-          profiles: makeApiKeyProfilesByProviderProvider({
-            "zai:default": "z.ai",
-            "zai:work": "Z.AI",
-          }),
+          profiles: {
+            "zai:default": { provider: "z.ai", mode: "api_key" },
+            "zai:work": { provider: "Z.AI", mode: "api_key" },
+          },
         },
       },
-      store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
+      store: {
+        version: 1,
+        profiles: {
+          "zai:default": {
+            type: "api_key",
+            provider: "zai",
+            key: "sk-default",
+          },
+          "zai:work": {
+            type: "api_key",
+            provider: "zai",
+            key: "sk-work",
+          },
+        },
+      },
       provider: "zai",
     });
     expect(order).toEqual(["zai:default", "zai:work"]);

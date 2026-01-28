@@ -1,6 +1,6 @@
 {
   "name": "moltbot",
-  "version": "2026.2.12",
+  "version": "2026.1.27-beta.1",
   "description": "Compatibility shim that forwards to openclaw",
   "bin": {
     "moltbot": "./bin/moltbot.js"
@@ -9,6 +9,9 @@
   "exports": {
     ".": "./index.js",
     "./cli-entry": "./bin/moltbot.js"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.js"
   },
   "dependencies": {
     "openclaw": "workspace:*"

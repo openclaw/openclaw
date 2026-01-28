@@ -1,15 +1,11 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SecretRef } from "../../config/types.secrets.js";
 
 export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
-  key?: string;
-  keyRef?: SecretRef;
+  key: string;
   email?: string;
-  /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
-  metadata?: Record<string, string>;
 };
 
 export type TokenCredential = {
@@ -19,8 +15,7 @@ export type TokenCredential = {
    */
   type: "token";
   provider: string;
-  token?: string;
-  tokenRef?: SecretRef;
+  token: string;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
@@ -37,14 +32,10 @@ export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCr
 
 export type AuthProfileFailureReason =
   | "auth"
-  | "auth_permanent"
   | "format"
-  | "overloaded"
   | "rate_limit"
   | "billing"
   | "timeout"
-  | "model_not_found"
-  | "session_expired"
   | "unknown";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */

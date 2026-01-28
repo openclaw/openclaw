@@ -1,34 +1,28 @@
-import type { BaseProbeResult } from "../runtime-api.js";
 import type { ZcaUserInfo } from "./types.js";
-import { getZaloUserInfo } from "./zalo-js.js";
+import { runZca, parseJsonOutput } from "./zca.js";
 
-export type ZalouserProbeResult = BaseProbeResult<string> & {
+export interface ZalouserProbeResult {
+  ok: boolean;
   user?: ZcaUserInfo;
-};
+  error?: string;
+}
 
 export async function probeZalouser(
   profile: string,
   timeoutMs?: number,
 ): Promise<ZalouserProbeResult> {
-  try {
-    const user = timeoutMs
-      ? await Promise.race([
-          getZaloUserInfo(profile),
-          new Promise<null>((resolve) =>
-            setTimeout(() => resolve(null), Math.max(timeoutMs, 1000)),
-          ),
-        ])
-      : await getZaloUserInfo(profile);
+  const result = await runZca(["me", "info", "-j"], {
+    profile,
+    timeout: timeoutMs,
+  });
 
-    if (!user) {
-      return { ok: false, error: "Not authenticated" };
-    }
-
-    return { ok: true, user };
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
+  if (!result.ok) {
+    return { ok: false, error: result.stderr || "Failed to probe" };
   }
+
+  const user = parseJsonOutput<ZcaUserInfo>(result.stdout);
+  if (!user) {
+    return { ok: false, error: "Failed to parse user info" };
+  }
+  return { ok: true, user };
 }

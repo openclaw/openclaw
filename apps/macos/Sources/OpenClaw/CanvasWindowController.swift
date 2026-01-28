@@ -1,7 +1,7 @@
 import AppKit
-import Foundation
 import OpenClawIPC
 import OpenClawKit
+import Foundation
 import WebKit
 
 @MainActor
@@ -50,24 +50,21 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
         // Bridge A2UI "a2uiaction" DOM events back into the native agent loop.
         //
-        // Keep the bridge on the trusted in-app canvas scheme only, and do not
-        // expose unattended deep-link credentials to page JavaScript.
+        // Prefer WKScriptMessageHandler when WebKit exposes it, otherwise fall back to an unattended deep link
+        // (includes the app-generated key so it won't prompt).
         canvasWindowLogger.debug("CanvasWindowController init building A2UI bridge script")
+        let deepLinkKey = DeepLinkHandler.currentCanvasKey()
         let injectedSessionKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "main"
-        let allowedSchemesJSON = (
-            try? String(
-                data: JSONSerialization.data(withJSONObject: CanvasScheme.allSchemes),
-                encoding: .utf8)
-        ) ?? "[]"
         let bridgeScript = """
         (() => {
           try {
-            const allowedSchemes = \(allowedSchemesJSON);
+            const allowedSchemes = \(String(describing: CanvasScheme.allSchemes));
             const protocol = location.protocol.replace(':', '');
             if (!allowedSchemes.includes(protocol)) return;
             if (globalThis.__openclawA2UIBridgeInstalled) return;
             globalThis.__openclawA2UIBridgeInstalled = true;
 
+            const deepLinkKey = \(Self.jsStringLiteral(deepLinkKey));
             const sessionKey = \(Self.jsStringLiteral(injectedSessionKey));
             const machineName = \(Self.jsStringLiteral(InstanceIdentity.displayName));
             const instanceId = \(Self.jsStringLiteral(InstanceIdentity.instanceId));
@@ -107,8 +104,24 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
                   return;
                 }
 
-                // Without the native handler, fail closed instead of exposing an
-                // unattended deep-link credential to page JavaScript.
+                const ctx = userAction.context ? (' ctx=' + JSON.stringify(userAction.context)) : '';
+                const message =
+                  'CANVAS_A2UI action=' + userAction.name +
+                  ' session=' + sessionKey +
+                  ' surface=' + userAction.surfaceId +
+                  ' component=' + (userAction.sourceComponentId || '-') +
+                  ' host=' + machineName.replace(/\\s+/g, '_') +
+                  ' instance=' + instanceId +
+                  ctx +
+                  ' default=update_canvas';
+                const params = new URLSearchParams();
+                params.set('message', message);
+                params.set('sessionKey', sessionKey);
+                params.set('thinking', 'low');
+                params.set('deliver', 'false');
+                params.set('channel', 'last');
+                params.set('key', deepLinkKey);
+                location.href = 'openclaw://agent?' + params.toString();
               } catch {}
             }, true);
           } catch {}
@@ -170,9 +183,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) is not supported")
-    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     @MainActor deinit {
         for name in CanvasA2UIActionMessageHandler.allMessageNames {
@@ -261,11 +272,25 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     func applyDebugStatusIfNeeded() {
-        WebViewJavaScriptSupport.applyDebugStatus(
-            webView: self.webView,
-            enabled: self.debugStatusEnabled,
-            title: self.debugStatusTitle,
-            subtitle: self.debugStatusSubtitle)
+        let enabled = self.debugStatusEnabled
+        let title = Self.jsOptionalStringLiteral(self.debugStatusTitle)
+        let subtitle = Self.jsOptionalStringLiteral(self.debugStatusSubtitle)
+        let js = """
+        (() => {
+          try {
+            const api = globalThis.__openclaw;
+            if (!api) return;
+            if (typeof api.setDebugStatusEnabled === 'function') {
+              api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
+            }
+            if (!\(enabled ? "true" : "false")) return;
+            if (typeof api.setStatus === 'function') {
+              api.setStatus(\(title), \(subtitle));
+            }
+          } catch (_) {}
+        })();
+        """
+        self.webView.evaluateJavaScript(js) { _, _ in }
     }
 
     private func loadFile(_ url: URL) {
@@ -275,7 +300,19 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     func eval(javaScript: String) async throws -> String {
-        try await WebViewJavaScriptSupport.evaluateToString(webView: self.webView, javaScript: javaScript)
+        try await withCheckedThrowingContinuation { cont in
+            self.webView.evaluateJavaScript(javaScript) { result, error in
+                if let error {
+                    cont.resume(throwing: error)
+                    return
+                }
+                if let result {
+                    cont.resume(returning: String(describing: result))
+                } else {
+                    cont.resume(returning: "")
+                }
+            }
+        }
     }
 
     func snapshot(to outPath: String?) async throws -> String {

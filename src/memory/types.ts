@@ -31,7 +31,6 @@ export type MemoryProviderStatus = {
   dirty?: boolean;
   workspaceDir?: string;
   dbPath?: string;
-  extraPaths?: string[];
   sources?: MemorySource[];
   sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>;
   cache?: { enabled: boolean; entries?: number; maxEntries?: number };
@@ -72,7 +71,6 @@ export interface MemorySearchManager {
   sync?(params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;

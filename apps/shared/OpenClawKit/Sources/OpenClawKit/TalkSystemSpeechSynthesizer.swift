@@ -12,7 +12,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     private let synth = AVSpeechSynthesizer()
     private var speakContinuation: CheckedContinuation<Void, Error>?
     private var currentUtterance: AVSpeechUtterance?
-    private var didStartCallback: (() -> Void)?
     private var currentToken = UUID()
     private var watchdog: Task<Void, Never>?
 
@@ -27,23 +26,17 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         self.currentToken = UUID()
         self.watchdog?.cancel()
         self.watchdog = nil
-        self.didStartCallback = nil
         self.synth.stopSpeaking(at: .immediate)
         self.finishCurrent(with: SpeakError.canceled)
     }
 
-    public func speak(
-        text: String,
-        language: String? = nil,
-        onStart: (() -> Void)? = nil
-    ) async throws {
+    public func speak(text: String, language: String? = nil) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         self.stop()
         let token = UUID()
         self.currentToken = token
-        self.didStartCallback = onStart
 
         let utterance = AVSpeechUtterance(string: trimmed)
         if let language, let voice = AVSpeechSynthesisVoice(language: language) {
@@ -83,13 +76,8 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         }
     }
 
-    private func matchesCurrentUtterance(_ utteranceID: ObjectIdentifier) -> Bool {
-        guard let currentUtterance = self.currentUtterance else { return false }
-        return ObjectIdentifier(currentUtterance) == utteranceID
-    }
-
-    private func handleFinish(utteranceID: ObjectIdentifier, error: Error?) {
-        guard self.matchesCurrentUtterance(utteranceID) else { return }
+    private func handleFinish(error: Error?) {
+        guard self.currentUtterance != nil else { return }
         self.watchdog?.cancel()
         self.watchdog = nil
         self.finishCurrent(with: error)
@@ -97,7 +85,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
 
     private func finishCurrent(with error: Error?) {
         self.currentUtterance = nil
-        self.didStartCallback = nil
         let cont = self.speakContinuation
         self.speakContinuation = nil
         if let error {
@@ -111,24 +98,10 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
 extension TalkSystemSpeechSynthesizer: AVSpeechSynthesizerDelegate {
     public nonisolated func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer,
-        didStart utterance: AVSpeechUtterance)
-    {
-        let utteranceID = ObjectIdentifier(utterance)
-        Task { @MainActor in
-            guard self.matchesCurrentUtterance(utteranceID) else { return }
-            let callback = self.didStartCallback
-            self.didStartCallback = nil
-            callback?()
-        }
-    }
-
-    public nonisolated func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
         didFinish utterance: AVSpeechUtterance)
     {
-        let utteranceID = ObjectIdentifier(utterance)
         Task { @MainActor in
-            self.handleFinish(utteranceID: utteranceID, error: nil)
+            self.handleFinish(error: nil)
         }
     }
 
@@ -136,9 +109,8 @@ extension TalkSystemSpeechSynthesizer: AVSpeechSynthesizerDelegate {
         _ synthesizer: AVSpeechSynthesizer,
         didCancel utterance: AVSpeechUtterance)
     {
-        let utteranceID = ObjectIdentifier(utterance)
         Task { @MainActor in
-            self.handleFinish(utteranceID: utteranceID, error: SpeakError.canceled)
+            self.handleFinish(error: SpeakError.canceled)
         }
     }
 }

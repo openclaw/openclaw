@@ -1,40 +1,28 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
-import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { getChannelDock } from "../../channels/dock.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  listDeliverableMessageChannels,
+} from "../../utils/message-channel.js";
 import { resolveChunkMode, resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
+const getBlockChunkProviders = () =>
+  new Set<TextChunkProvider>([...listDeliverableMessageChannels(), INTERNAL_MESSAGE_CHANNEL]);
 
 function normalizeChunkProvider(provider?: string): TextChunkProvider | undefined {
   if (!provider) {
     return undefined;
   }
-  const normalized = normalizeMessageChannel(provider);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized as TextChunkProvider;
-}
-
-function resolveProviderChunkContext(
-  cfg: OpenClawConfig | undefined,
-  provider?: string,
-  accountId?: string | null,
-) {
-  const providerKey = normalizeChunkProvider(provider);
-  const providerId = providerKey ? normalizeChannelId(providerKey) : null;
-  const providerChunkLimit = providerId
-    ? getChannelPlugin(providerId)?.outbound?.textChunkLimit
+  const cleaned = provider.trim().toLowerCase();
+  return getBlockChunkProviders().has(cleaned as TextChunkProvider)
+    ? (cleaned as TextChunkProvider)
     : undefined;
-  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
-    fallbackLimit: providerChunkLimit,
-  });
-  return { providerKey, providerId, textLimit };
 }
 
 type ProviderBlockStreamingConfig = {
@@ -57,7 +45,7 @@ function resolveProviderBlockStreamingCoalesce(params: {
   }
   const normalizedAccountId = normalizeAccountId(accountId);
   const typed = providerCfg as ProviderBlockStreamingConfig;
-  const accountCfg = resolveAccountEntry(typed.accounts, normalizedAccountId);
+  const accountCfg = typed.accounts?.[normalizedAccountId];
   return accountCfg?.blockStreamingCoalesce ?? typed.blockStreamingCoalesce;
 }
 
@@ -66,105 +54,35 @@ export type BlockStreamingCoalescing = {
   maxChars: number;
   idleMs: number;
   joiner: string;
-  /** Internal escape hatch for transports that truly need per-enqueue flushing. */
+  /** When true, the coalescer flushes the buffer on each enqueue (paragraph-boundary flush). */
   flushOnEnqueue?: boolean;
 };
-
-export type BlockStreamingChunking = {
-  minChars: number;
-  maxChars: number;
-  breakPreference: "paragraph" | "newline" | "sentence";
-  flushOnParagraph?: boolean;
-};
-
-export function clampPositiveInteger(
-  value: unknown,
-  fallback: number,
-  bounds: { min: number; max: number },
-): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const rounded = Math.round(value);
-  if (rounded < bounds.min) {
-    return bounds.min;
-  }
-  if (rounded > bounds.max) {
-    return bounds.max;
-  }
-  return rounded;
-}
-
-export function resolveEffectiveBlockStreamingConfig(params: {
-  cfg: OpenClawConfig | undefined;
-  provider?: string;
-  accountId?: string | null;
-  chunking?: BlockStreamingChunking;
-  /** Optional upper bound for chunking/coalescing max chars. */
-  maxChunkChars?: number;
-  /** Optional coalescer idle flush override in milliseconds. */
-  coalesceIdleMs?: number;
-}): {
-  chunking: BlockStreamingChunking;
-  coalescing: BlockStreamingCoalescing;
-} {
-  const { textLimit } = resolveProviderChunkContext(params.cfg, params.provider, params.accountId);
-  const chunkingDefaults =
-    params.chunking ?? resolveBlockStreamingChunking(params.cfg, params.provider, params.accountId);
-  const chunkingMax = clampPositiveInteger(params.maxChunkChars, chunkingDefaults.maxChars, {
-    min: 1,
-    max: Math.max(1, textLimit),
-  });
-  const chunking: BlockStreamingChunking = {
-    ...chunkingDefaults,
-    minChars: Math.min(chunkingDefaults.minChars, chunkingMax),
-    maxChars: chunkingMax,
-  };
-  const coalescingDefaults = resolveBlockStreamingCoalescing(
-    params.cfg,
-    params.provider,
-    params.accountId,
-    chunking,
-  );
-  const coalescingMax = Math.max(
-    1,
-    Math.min(coalescingDefaults?.maxChars ?? chunking.maxChars, chunking.maxChars),
-  );
-  const coalescingMin = Math.min(coalescingDefaults?.minChars ?? chunking.minChars, coalescingMax);
-  const coalescingIdleMs = clampPositiveInteger(
-    params.coalesceIdleMs,
-    coalescingDefaults?.idleMs ?? DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS,
-    { min: 0, max: 5_000 },
-  );
-  const coalescing: BlockStreamingCoalescing = {
-    minChars: coalescingMin,
-    maxChars: coalescingMax,
-    idleMs: coalescingIdleMs,
-    joiner:
-      coalescingDefaults?.joiner ??
-      (chunking.breakPreference === "sentence"
-        ? " "
-        : chunking.breakPreference === "newline"
-          ? "\n"
-          : "\n\n"),
-    ...(coalescingDefaults?.flushOnEnqueue === true ? { flushOnEnqueue: true } : {}),
-  };
-
-  return { chunking, coalescing };
-}
 
 export function resolveBlockStreamingChunking(
   cfg: OpenClawConfig | undefined,
   provider?: string,
   accountId?: string | null,
-): BlockStreamingChunking {
-  const { providerKey, textLimit } = resolveProviderChunkContext(cfg, provider, accountId);
+): {
+  minChars: number;
+  maxChars: number;
+  breakPreference: "paragraph" | "newline" | "sentence";
+  flushOnParagraph?: boolean;
+} {
+  const providerKey = normalizeChunkProvider(provider);
+  const providerConfigKey = providerKey;
+  const providerId = providerKey ? normalizeChannelId(providerKey) : null;
+  const providerChunkLimit = providerId
+    ? getChannelDock(providerId)?.outbound?.textChunkLimit
+    : undefined;
+  const textLimit = resolveTextChunkLimit(cfg, providerConfigKey, accountId, {
+    fallbackLimit: providerChunkLimit,
+  });
   const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
 
-  // When chunkMode="newline", outbound delivery prefers paragraph boundaries.
-  // Keep the chunker paragraph-aware during streaming, but still let minChars
-  // control when a buffered paragraph is ready to flush.
-  const chunkMode = resolveChunkMode(cfg, providerKey, accountId);
+  // When chunkMode="newline", the outbound delivery splits on paragraph boundaries.
+  // The block chunker should flush eagerly on \n\n boundaries during streaming,
+  // regardless of minChars, so each paragraph is sent as its own message.
+  const chunkMode = resolveChunkMode(cfg, providerConfigKey, accountId);
 
   const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX));
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
@@ -192,15 +110,24 @@ export function resolveBlockStreamingCoalescing(
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
   },
+  opts?: { chunkMode?: "length" | "newline" },
 ): BlockStreamingCoalescing | undefined {
-  const { providerKey, providerId, textLimit } = resolveProviderChunkContext(
-    cfg,
-    provider,
-    accountId,
-  );
+  const providerKey = normalizeChunkProvider(provider);
+  const providerConfigKey = providerKey;
 
+  // Resolve the outbound chunkMode so the coalescer can flush on paragraph boundaries
+  // when chunkMode="newline", matching the delivery-time splitting behavior.
+  const chunkMode = opts?.chunkMode ?? resolveChunkMode(cfg, providerConfigKey, accountId);
+
+  const providerId = providerKey ? normalizeChannelId(providerKey) : null;
+  const providerChunkLimit = providerId
+    ? getChannelDock(providerId)?.outbound?.textChunkLimit
+    : undefined;
+  const textLimit = resolveTextChunkLimit(cfg, providerConfigKey, accountId, {
+    fallbackLimit: providerChunkLimit,
+  });
   const providerDefaults = providerId
-    ? getChannelPlugin(providerId)?.streaming?.blockStreamingCoalesceDefaults
+    ? getChannelDock(providerId)?.streaming?.blockStreamingCoalesceDefaults
     : undefined;
   const providerCfg = resolveProviderBlockStreamingCoalesce({
     cfg,
@@ -233,5 +160,6 @@ export function resolveBlockStreamingCoalescing(
     maxChars,
     idleMs,
     joiner,
+    flushOnEnqueue: chunkMode === "newline",
   };
 }

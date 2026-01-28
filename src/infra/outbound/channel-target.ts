@@ -6,17 +6,13 @@ export const CHANNEL_TARGET_DESCRIPTION =
 export const CHANNEL_TARGETS_DESCRIPTION =
   "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.";
 
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 export function applyTargetToParams(params: {
   action: string;
   args: Record<string, unknown>;
 }): void {
   const target = typeof params.args.target === "string" ? params.args.target.trim() : "";
-  const hasLegacyTo = hasNonEmptyString(params.args.to);
-  const hasLegacyChannelId = hasNonEmptyString(params.args.channelId);
+  const hasLegacyTo = typeof params.args.to === "string";
+  const hasLegacyChannelId = typeof params.args.channelId === "string";
   const mode =
     MESSAGE_ACTION_TARGET_MODE[params.action as keyof typeof MESSAGE_ACTION_TARGET_MODE] ?? "none";
 

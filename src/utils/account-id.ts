@@ -1,5 +1,7 @@
-import { normalizeOptionalAccountId } from "../routing/account-id.js";
-
 export function normalizeAccountId(value?: string): string | undefined {
-  return normalizeOptionalAccountId(value);
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
 }

@@ -98,10 +98,7 @@ describe("profile unicode attacks", () => {
     });
 
     it("handles excessive combining characters (Zalgo text)", () => {
-      // Keep the source small (faster transforms) while still exercising
-      // "lots of combining marks" behavior.
-      const marks = "\u0301\u0300\u0336\u034f\u035c\u0360";
-      const zalgo = `t${marks.repeat(256)}e${marks.repeat(256)}s${marks.repeat(256)}t`;
+      const zalgo = "t̷̢̧̨̡̛̛̛͎̩̝̪̲̲̞̠̹̗̩͓̬̱̪̦͙̬̲̤͙̱̫̝̪̱̫̯̬̭̠̖̲̥̖̫̫̤͇̪̣̫̪̖̱̯̣͎̯̲̱̤̪̣̖̲̪̯͓̖̤̫̫̲̱̲̫̲̖̫̪̯̱̱̪̖̯e̶̡̧̨̧̛̛̛̖̪̯̱̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪s̶̨̧̛̛̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯t";
       const profile: NostrProfile = {
         name: zalgo.slice(0, 256), // Truncate to fit limit
       };
@@ -456,7 +453,7 @@ describe("event creation edge cases", () => {
 
     // Create events in quick succession
     let lastTimestamp = 0;
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 100; i++) {
       const event = createProfileEvent(TEST_SK, profile, lastTimestamp);
       expect(event.created_at).toBeGreaterThan(lastTimestamp);
       lastTimestamp = event.created_at;

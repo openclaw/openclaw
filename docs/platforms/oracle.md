@@ -180,7 +180,7 @@ With the VCN locked down (only UDP 41641 open) and the Gateway bound to loopback
 
 This setup often removes the _need_ for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `openclaw security audit`, and verify you aren’t accidentally listening on public interfaces.
 
-### Already protected
+### What's Already Protected
 
 | Traditional Step   | Needed?     | Why                                                                          |
 | ------------------ | ----------- | ---------------------------------------------------------------------------- |
@@ -236,7 +236,7 @@ Free tier ARM instances are popular. Try:
 - Retry during off-peak hours (early morning)
 - Use the "Always Free" filter when selecting shape
 
-### Tailscale will not connect
+### Tailscale won't connect
 
 ```bash
 # Check status
@@ -246,7 +246,7 @@ sudo tailscale status
 sudo tailscale up --ssh --hostname=openclaw --reset
 ```
 
-### Gateway will not start
+### Gateway won't start
 
 ```bash
 openclaw gateway status
@@ -254,7 +254,7 @@ openclaw doctor --non-interactive
 journalctl --user -u openclaw-gateway -n 50
 ```
 
-### Cannot reach Control UI
+### Can't reach Control UI
 
 ```bash
 # Verify Tailscale Serve is running
@@ -300,4 +300,4 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 - [Tailscale integration](/gateway/tailscale) — full Tailscale docs
 - [Gateway configuration](/gateway/configuration) — all config options
 - [DigitalOcean guide](/platforms/digitalocean) — if you want paid + easier signup
-- [Hetzner guide](/install/hetzner) — Docker-based alternative
+- [Hetzner guide](/platforms/hetzner) — Docker-based alternative

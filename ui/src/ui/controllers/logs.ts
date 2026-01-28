@@ -1,5 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { LogEntry, LogLevel } from "../types.ts";
+import type { GatewayBrowserClient } from "../gateway";
+import type { LogEntry, LogLevel } from "../types";
 
 export type LogsState = {
   client: GatewayBrowserClient | null;
@@ -77,8 +77,6 @@ export function parseLogLine(line: string): LogEntry {
     let message: string | null = null;
     if (typeof obj["1"] === "string") {
       message = obj["1"];
-    } else if (typeof obj["2"] === "string") {
-      message = obj["2"];
     } else if (!contextObj && typeof obj["0"] === "string") {
       message = obj["0"];
     } else if (typeof obj.message === "string") {

@@ -13,28 +13,12 @@ final class PeekabooBridgeHostCoordinator {
 
     private var host: PeekabooBridgeHost?
     private var services: OpenClawPeekabooBridgeServices?
-
-    private static let legacySocketDirectoryNames = ["clawdbot", "clawdis", "moltbot"]
-
     private static var openclawSocketPath: String {
         let fileManager = FileManager.default
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return Self.makeSocketPath(for: "OpenClaw", in: base)
-    }
-
-    private static func makeSocketPath(for directoryName: String, in baseDirectory: URL) -> String {
-        baseDirectory
-            .appendingPathComponent(directoryName, isDirectory: true)
-            .appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false)
-            .path
-    }
-
-    private static var legacySocketPaths: [String] {
-        let fileManager = FileManager.default
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return Self.legacySocketDirectoryNames.map { Self.makeSocketPath(for: $0, in: base) }
+        let directory = base.appendingPathComponent("OpenClaw", isDirectory: true)
+        return directory.appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false).path
     }
 
     func setEnabled(_ enabled: Bool) async {
@@ -56,13 +40,11 @@ final class PeekabooBridgeHostCoordinator {
     private func startIfNeeded() async {
         guard self.host == nil else { return }
 
-        var allowlistedTeamIDs: Set = ["Y5PE65HELJ"]
+        var allowlistedTeamIDs: Set<String> = ["Y5PE65HELJ"]
         if let teamID = Self.currentTeamID() {
             allowlistedTeamIDs.insert(teamID)
         }
         let allowlistedBundles: Set<String> = []
-
-        self.ensureLegacySocketSymlinks()
 
         let services = OpenClawPeekabooBridgeServices()
         let server = PeekabooBridgeServer(
@@ -83,44 +65,6 @@ final class PeekabooBridgeHostCoordinator {
         await host.start()
         self.logger
             .info("PeekabooBridge host started at \(Self.openclawSocketPath, privacy: .public)")
-    }
-
-    private func ensureLegacySocketSymlinks() {
-        for legacyPath in Self.legacySocketPaths {
-            self.ensureLegacySocketSymlink(at: legacyPath)
-        }
-    }
-
-    private func ensureLegacySocketSymlink(at legacyPath: String) {
-        let fileManager = FileManager.default
-        let legacyDirectory = (legacyPath as NSString).deletingLastPathComponent
-        do {
-            let directoryAttributes: [FileAttributeKey: Any] = [
-                .posixPermissions: 0o700,
-            ]
-            try fileManager.createDirectory(
-                atPath: legacyDirectory,
-                withIntermediateDirectories: true,
-                attributes: directoryAttributes)
-            let linkURL = URL(fileURLWithPath: legacyPath)
-            let linkValues = try? linkURL.resourceValues(forKeys: [.isSymbolicLinkKey])
-            if linkValues?.isSymbolicLink == true {
-                let destination = try FileManager.default.destinationOfSymbolicLink(atPath: legacyPath)
-                let destinationURL = URL(fileURLWithPath: destination, relativeTo: linkURL.deletingLastPathComponent())
-                    .standardizedFileURL
-                if destinationURL.path == URL(fileURLWithPath: Self.openclawSocketPath).standardizedFileURL.path {
-                    return
-                }
-                try fileManager.removeItem(atPath: legacyPath)
-            } else if fileManager.fileExists(atPath: legacyPath) {
-                try fileManager.removeItem(atPath: legacyPath)
-            }
-            try fileManager.createSymbolicLink(atPath: legacyPath, withDestinationPath: Self.openclawSocketPath)
-        } catch {
-            let message = "Failed to create legacy PeekabooBridge socket symlink: \(error.localizedDescription)"
-            self.logger
-                .debug("\(message, privacy: .public)")
-        }
     }
 
     private static func currentTeamID() -> String? {

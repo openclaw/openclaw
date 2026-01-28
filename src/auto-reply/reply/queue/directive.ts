@@ -1,7 +1,6 @@
-import { parseDurationMs } from "../../../cli/parse-duration.js";
-import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
-import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
+import { parseDurationMs } from "../../../cli/parse-duration.js";
+import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 
 function parseQueueDebounce(raw?: string): number | undefined {
   if (!raw) {
@@ -46,8 +45,17 @@ function parseQueueDirectiveArgs(raw: string): {
   rawDrop?: string;
   hasOptions: boolean;
 } {
+  let i = 0;
   const len = raw.length;
-  let i = skipDirectiveArgPrefix(raw);
+  while (i < len && /\s/.test(raw[i])) {
+    i += 1;
+  }
+  if (raw[i] === ":") {
+    i += 1;
+    while (i < len && /\s/.test(raw[i])) {
+      i += 1;
+    }
+  }
   let consumed = i;
   let queueMode: QueueMode | undefined;
   let queueReset = false;
@@ -60,9 +68,21 @@ function parseQueueDirectiveArgs(raw: string): {
   let rawDrop: string | undefined;
   let hasOptions = false;
   const takeToken = (): string | null => {
-    const res = takeDirectiveToken(raw, i);
-    i = res.nextIndex;
-    return res.token;
+    if (i >= len) {
+      return null;
+    }
+    const start = i;
+    while (i < len && !/\s/.test(raw[i])) {
+      i += 1;
+    }
+    if (start === i) {
+      return null;
+    }
+    const token = raw.slice(start, i);
+    while (i < len && /\s/.test(raw[i])) {
+      i += 1;
+    }
+    return token;
   };
   while (i < len) {
     const token = takeToken();

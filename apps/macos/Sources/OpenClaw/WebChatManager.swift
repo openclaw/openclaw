@@ -3,13 +3,8 @@ import Foundation
 
 /// A borderless panel that can still accept key focus (needed for typing).
 final class WebChatPanel: NSPanel {
-    override var canBecomeKey: Bool {
-        true
-    }
-
-    override var canBecomeMain: Bool {
-        true
-    }
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }
 
 enum WebChatPresentation {
@@ -111,7 +106,13 @@ final class WebChatManager {
     }
 
     func close() {
-        self.resetTunnels()
+        self.windowController?.close()
+        self.windowController = nil
+        self.windowSessionKey = nil
+        self.panelController?.close()
+        self.panelController = nil
+        self.panelSessionKey = nil
+        self.cachedPreferredSessionKey = nil
     }
 
     private func panelHidden() {

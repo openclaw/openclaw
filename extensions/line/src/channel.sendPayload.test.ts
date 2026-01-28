@@ -1,5 +1,5 @@
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
@@ -105,9 +105,8 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound.sendPayload({
       to: "line:group:1",
-      text: payload.text,
       payload,
       accountId: "default",
       cfg,
@@ -117,7 +116,6 @@ describe("linePlugin outbound.sendPayload", () => {
     expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", {
       verbose: false,
       accountId: "default",
-      cfg,
     });
   });
 
@@ -142,9 +140,8 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound.sendPayload({
       to: "line:user:1",
-      text: payload.text,
       payload,
       accountId: "default",
       cfg,
@@ -155,7 +152,6 @@ describe("linePlugin outbound.sendPayload", () => {
     expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
       verbose: false,
       accountId: "default",
-      cfg,
     });
   });
 
@@ -176,9 +172,8 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound.sendPayload({
       to: "line:user:2",
-      text: "",
       payload,
       accountId: "default",
       cfg,
@@ -195,7 +190,7 @@ describe("linePlugin outbound.sendPayload", () => {
           quickReply: { items: ["One", "Two"] },
         },
       ],
-      { verbose: false, accountId: "default", cfg },
+      { verbose: false, accountId: "default" },
     );
     expect(mocks.createQuickReplyItems).toHaveBeenCalledWith(["One", "Two"]);
   });
@@ -215,9 +210,8 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound.sendPayload({
       to: "line:user:3",
-      text: payload.text,
       payload,
       accountId: "default",
       cfg,
@@ -227,13 +221,12 @@ describe("linePlugin outbound.sendPayload", () => {
       verbose: false,
       mediaUrl: "https://example.com/img.jpg",
       accountId: "default",
-      cfg,
     });
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
       ["One", "Two"],
-      { verbose: false, accountId: "default", cfg },
+      { verbose: false, accountId: "default" },
     );
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
     const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
@@ -257,9 +250,8 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound.sendPayload({
       to: "line:user:3",
-      text: payload.text,
       payload,
       accountId: "primary",
       cfg,
@@ -274,8 +266,7 @@ describe("linePlugin outbound.sendPayload", () => {
 
 describe("linePlugin config.formatAllowFrom", () => {
   it("strips line:user: prefixes without lowercasing", () => {
-    const formatted = linePlugin.config.formatAllowFrom!({
-      cfg: {} as OpenClawConfig,
+    const formatted = linePlugin.config.formatAllowFrom({
       allowFrom: ["line:user:UABC", "line:UDEF"],
     });
     expect(formatted).toEqual(["UABC", "UDEF"]);
@@ -304,7 +295,7 @@ describe("linePlugin groups.resolveRequireMention", () => {
       },
     } as OpenClawConfig;
 
-    const requireMention = linePlugin.groups!.resolveRequireMention!({
+    const requireMention = linePlugin.groups.resolveRequireMention({
       cfg,
       accountId: "primary",
       groupId: "group-1",

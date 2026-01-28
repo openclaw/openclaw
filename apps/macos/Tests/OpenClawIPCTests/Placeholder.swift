@@ -1,6 +1,6 @@
 import Testing
 
-struct PlaceholderTests {
+@Suite struct PlaceholderTests {
     @Test func placeholder() {
         #expect(true)
     }

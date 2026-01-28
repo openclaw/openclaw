@@ -29,9 +29,7 @@ struct VoiceWakeSettings: View {
     private struct AudioInputDevice: Identifiable, Equatable {
         let uid: String
         let name: String
-        var id: String {
-            self.uid
-        }
+        var id: String { self.uid }
     }
 
     private struct TriggerEntry: Identifiable {
@@ -40,7 +38,11 @@ struct VoiceWakeSettings: View {
     }
 
     private var voiceWakeBinding: Binding<Bool> {
-        MicRefreshSupport.voiceWakeBinding(for: self.state)
+        Binding(
+            get: { self.state.swabbleEnabled },
+            set: { newValue in
+                Task { await self.state.setVoiceWakeEnabled(newValue) }
+            })
     }
 
     var body: some View {
@@ -530,22 +532,30 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func updateSelectedMicName() {
-        self.state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
-            selectedID: self.state.voiceWakeMicID,
-            in: self.availableMics,
-            uid: \.uid,
-            name: \.name)
+        let selected = self.state.voiceWakeMicID
+        if selected.isEmpty {
+            self.state.voiceWakeMicName = ""
+            return
+        }
+        if let match = self.availableMics.first(where: { $0.uid == selected }) {
+            self.state.voiceWakeMicName = match.name
+        }
     }
 
     private func startMicObserver() {
-        MicRefreshSupport.startObserver(self.micObserver) {
-            self.scheduleMicRefresh()
+        self.micObserver.start {
+            Task { @MainActor in
+                self.scheduleMicRefresh()
+            }
         }
     }
 
     @MainActor
     private func scheduleMicRefresh() {
-        MicRefreshSupport.schedule(refreshTask: &self.micRefreshTask) {
+        self.micRefreshTask?.cancel()
+        self.micRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
             await self.loadMicsIfNeeded(force: true)
             await self.restartMeter()
         }

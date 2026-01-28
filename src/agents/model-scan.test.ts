@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
 function createFetchFixture(payload: unknown): typeof fetch {
-  return withFetchPreconnect(
-    async () =>
-      new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-  );
+  return async () =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
 }
 
 describe("scanOpenRouterModels", () => {
@@ -70,7 +66,9 @@ describe("scanOpenRouterModels", () => {
 
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
-    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
+    const previousKey = process.env.OPENROUTER_API_KEY;
+    try {
+      delete process.env.OPENROUTER_API_KEY;
       await expect(
         scanOpenRouterModels({
           fetchImpl,
@@ -78,6 +76,12 @@ describe("scanOpenRouterModels", () => {
           apiKey: "",
         }),
       ).rejects.toThrow(/Missing OpenRouter API key/);
-    });
+    } finally {
+      if (previousKey === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = previousKey;
+      }
+    }
   });
 });

@@ -1,9 +1,8 @@
 import type { messagingApi } from "@line/bot-sdk";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
-import type { SendLineReplyChunksParams } from "./reply-chunks.js";
+import type { LineReplyMessage, SendLineReplyChunksParams } from "./reply-chunks.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
 export type LineAutoReplyDeps = {
@@ -13,6 +12,19 @@ export type LineAutoReplyDeps = {
   processLineMessage: (text: string) => ProcessedLineMessage;
   chunkMarkdownText: (text: string, limit: number) => string[];
   sendLineReplyChunks: (params: SendLineReplyChunksParams) => Promise<{ replyTokenUsed: boolean }>;
+  replyMessageLine: (
+    replyToken: string,
+    messages: messagingApi.Message[],
+    opts?: { accountId?: string },
+  ) => Promise<unknown>;
+  pushMessageLine: (to: string, text: string, opts?: { accountId?: string }) => Promise<unknown>;
+  pushTextMessageWithQuickReplies: (
+    to: string,
+    text: string,
+    quickReplies: string[],
+    opts?: { accountId?: string },
+  ) => Promise<unknown>;
+  createTextMessageWithQuickReplies: (text: string, quickReplies: string[]) => LineReplyMessage;
   createQuickReplyItems: (labels: string[]) => messagingApi.QuickReply;
   pushMessagesLine: (
     to: string,
@@ -30,14 +42,8 @@ export type LineAutoReplyDeps = {
     latitude: number;
     longitude: number;
   }) => messagingApi.LocationMessage;
-} & Pick<
-  SendLineReplyChunksParams,
-  | "replyMessageLine"
-  | "pushMessageLine"
-  | "pushTextMessageWithQuickReplies"
-  | "createTextMessageWithQuickReplies"
-  | "onReplyError"
->;
+  onReplyError?: (err: unknown) => void;
+};
 
 export async function deliverLineAutoReply(params: {
   payload: ReplyPayload;
@@ -124,7 +130,7 @@ export async function deliverLineAutoReply(params: {
 
   const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
 
-  const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+  const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
   const mediaMessages = mediaUrls
     .map((url) => url?.trim())
     .filter((url): url is string => Boolean(url))

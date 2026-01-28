@@ -1,29 +1,26 @@
-import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
-import {
-  formatThinkingLevels,
-  normalizeUsageDisplay,
-  resolveResponseUsageMode,
-} from "../auto-reply/thinking.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
-import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import type { Component, TUI } from "@mariozechner/pi-tui";
 import type { ChatLog } from "./components/chat-log.js";
-import {
-  createFilterableSelectList,
-  createSearchableSelectList,
-  createSettingsList,
-} from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
-import { sanitizeRenderableText } from "./tui-formatters.js";
-import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
+import {
+  formatThinkingLevels,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../auto-reply/thinking.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { formatRelativeTime } from "../utils/time-format.js";
+import { helpText, parseCommand } from "./commands.js";
+import {
+  createFilterableSelectList,
+  createSearchableSelectList,
+  createSettingsList,
+} from "./components/selectors.js";
+import { formatStatusSummary } from "./tui-status-summary.js";
 
 type CommandHandlerContext = {
   client: GatewayChatClient;
@@ -41,17 +38,7 @@ type CommandHandlerContext = {
   abortActive: () => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
-  applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
-  noteLocalRunId: (runId: string) => void;
-  noteLocalBtwRunId?: (runId: string) => void;
-  forgetLocalRunId?: (runId: string) => void;
-  forgetLocalBtwRunId?: (runId: string) => void;
-  requestExit: () => void;
 };
-
-function isBtwCommand(text: string): boolean {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
-}
 
 export function createCommandHandlers(context: CommandHandlerContext) {
   const {
@@ -70,40 +57,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     abortActive,
     setActivityStatus,
     formatSessionKey,
-    applySessionInfoFromPatch,
-    noteLocalRunId,
-    noteLocalBtwRunId,
-    forgetLocalRunId,
-    forgetLocalBtwRunId,
-    requestExit,
   } = context;
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
-  };
-
-  const closeOverlayAndRender = () => {
-    closeOverlay();
-    tui.requestRender();
-  };
-
-  const openSelector = (
-    selector: {
-      onSelect?: (item: SelectItem) => void;
-      onCancel?: () => void;
-    },
-    onSelect: (value: string) => Promise<void>,
-  ) => {
-    selector.onSelect = (item) => {
-      void (async () => {
-        await onSelect(item.value);
-        closeOverlayAndRender();
-      })();
-    };
-    selector.onCancel = closeOverlayAndRender;
-    openOverlay(selector as Component);
-    tui.requestRender();
   };
 
   const openModelSelector = async () => {
@@ -120,19 +78,28 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         description: model.name && model.name !== model.id ? model.name : "",
       }));
       const selector = createSearchableSelectList(items, 9);
-      openSelector(selector, async (value) => {
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            model: value,
-          });
-          chatLog.addSystem(`model set to ${value}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`model set failed: ${String(err)}`);
-        }
-      });
+      selector.onSelect = (item) => {
+        void (async () => {
+          try {
+            await client.patchSession({
+              key: state.currentSessionKey,
+              model: item.value,
+            });
+            chatLog.addSystem(`model set to ${item.value}`);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`model set failed: ${String(err)}`);
+          }
+          closeOverlay();
+          tui.requestRender();
+        })();
+      };
+      selector.onCancel = () => {
+        closeOverlay();
+        tui.requestRender();
+      };
+      openOverlay(selector);
+      tui.requestRender();
     } catch (err) {
       chatLog.addSystem(`model list failed: ${String(err)}`);
       tui.requestRender();
@@ -152,9 +119,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       description: agent.id === state.agentDefaultId ? "default" : "",
     }));
     const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, async (value) => {
-      await setAgent(value);
-    });
+    selector.onSelect = (item) => {
+      void (async () => {
+        closeOverlay();
+        await setAgent(item.value);
+        tui.requestRender();
+      })();
+    };
+    selector.onCancel = () => {
+      closeOverlay();
+      tui.requestRender();
+    };
+    openOverlay(selector);
+    tui.requestRender();
   };
 
   const openSessionSelector = async () => {
@@ -172,9 +149,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         // Avoid redundant "title (key)" when title matches key
         const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
         // Build description: time + message preview
-        const timePart = session.updatedAt
-          ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
-          : "";
+        const timePart = session.updatedAt ? formatRelativeTime(session.updatedAt) : "";
         const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
         const description =
           timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
@@ -195,9 +170,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         };
       });
       const selector = createFilterableSelectList(items, 9);
-      openSelector(selector, async (value) => {
-        await setSession(value);
-      });
+      selector.onSelect = (item) => {
+        void (async () => {
+          closeOverlay();
+          await setSession(item.value);
+          tui.requestRender();
+        })();
+      };
+      selector.onCancel = () => {
+        closeOverlay();
+        tui.requestRender();
+      };
+      openOverlay(selector);
+      tui.requestRender();
     } catch (err) {
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
       tui.requestRender();
@@ -299,12 +284,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await openModelSelector();
         } else {
           try {
-            const result = await client.patchSession({
+            await client.patchSession({
               key: state.currentSessionKey,
               model: args,
             });
             chatLog.addSystem(`model set to ${args}`);
-            applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
             chatLog.addSystem(`model set failed: ${String(err)}`);
@@ -325,12 +309,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
+          await client.patchSession({
             key: state.currentSessionKey,
             thinkingLevel: args,
           });
           chatLog.addSystem(`thinking set to ${args}`);
-          applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`think failed: ${String(err)}`);
@@ -342,36 +325,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
+          await client.patchSession({
             key: state.currentSessionKey,
             verboseLevel: args,
           });
           chatLog.addSystem(`verbose set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await loadHistory();
-        } catch (err) {
-          chatLog.addSystem(`verbose failed: ${String(err)}`);
-        }
-        break;
-      case "fast":
-        if (!args || args === "status") {
-          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
-          break;
-        }
-        if (args !== "on" && args !== "off") {
-          chatLog.addSystem("usage: /fast <status|on|off>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            fastMode: args === "on",
-          });
-          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
-          applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
-          chatLog.addSystem(`fast failed: ${String(err)}`);
+          chatLog.addSystem(`verbose failed: ${String(err)}`);
         }
         break;
       case "reasoning":
@@ -380,12 +341,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
+          await client.patchSession({
             key: state.currentSessionKey,
             reasoningLevel: args,
           });
           chatLog.addSystem(`reasoning set to ${args}`);
-          applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`reasoning failed: ${String(err)}`);
@@ -402,12 +362,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const next =
           normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
-          const result = await client.patchSession({
+          await client.patchSession({
             key: state.currentSessionKey,
             responseUsage: next === "off" ? null : next,
           });
           chatLog.addSystem(`usage footer: ${next}`);
-          applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`usage failed: ${String(err)}`);
@@ -424,12 +383,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
+          await client.patchSession({
             key: state.currentSessionKey,
             elevatedLevel: args,
           });
           chatLog.addSystem(`elevated set to ${args}`);
-          applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`elevated failed: ${String(err)}`);
@@ -441,35 +399,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
+          await client.patchSession({
             key: state.currentSessionKey,
             groupActivation: args === "always" ? "always" : "mention",
           });
           chatLog.addSystem(`activation set to ${args}`);
-          applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`activation failed: ${String(err)}`);
         }
         break;
       case "new":
-        try {
-          // Clear token counts immediately to avoid stale display (#1523)
-          state.sessionInfo.inputTokens = null;
-          state.sessionInfo.outputTokens = null;
-          state.sessionInfo.totalTokens = null;
-          tui.requestRender();
-
-          // Generate unique session key to isolate this TUI client (#39217)
-          // This ensures /new creates a fresh session that doesn't broadcast
-          // to other connected TUI clients sharing the original session key.
-          const uniqueKey = `tui-${randomUUID()}`;
-          await setSession(uniqueKey);
-          chatLog.addSystem(`new session: ${uniqueKey}`);
-        } catch (err) {
-          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
-        }
-        break;
       case "reset":
         try {
           // Clear token counts immediately to avoid stale display (#1523)
@@ -478,11 +418,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
-          await client.resetSession(state.currentSessionKey, name);
+          await client.resetSession(state.currentSessionKey);
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {
-          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
+          chatLog.addSystem(`reset failed: ${String(err)}`);
         }
         break;
       case "abort":
@@ -493,7 +433,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "exit":
       case "quit":
-        requestExit();
+        client.stop();
+        tui.stop();
+        process.exit(0);
         break;
       default:
         await sendMessage(raw);
@@ -503,52 +445,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const sendMessage = async (text: string) => {
-    if (!state.isConnected) {
-      chatLog.addSystem("not connected to gateway — message not sent");
-      setActivityStatus("disconnected");
-      tui.requestRender();
-      return;
-    }
-    const isBtw = isBtwCommand(text);
-    const runId = randomUUID();
     try {
-      if (!isBtw) {
-        chatLog.addUser(text);
-        noteLocalRunId(runId);
-        state.activeChatRunId = runId;
-        setActivityStatus("sending");
-      } else {
-        noteLocalBtwRunId?.(runId);
-      }
+      chatLog.addUser(text);
       tui.requestRender();
-      await client.sendChat({
+      setActivityStatus("sending");
+      const { runId } = await client.sendChat({
         sessionKey: state.currentSessionKey,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,
-        runId,
       });
-      if (!isBtw) {
-        setActivityStatus("waiting");
-        tui.requestRender();
-      }
+      state.activeChatRunId = runId;
+      setActivityStatus("waiting");
     } catch (err) {
-      if (isBtw) {
-        forgetLocalBtwRunId?.(runId);
-      }
-      if (!isBtw && state.activeChatRunId) {
-        forgetLocalRunId?.(state.activeChatRunId);
-      }
-      if (!isBtw) {
-        state.activeChatRunId = null;
-      }
-      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
-      if (!isBtw) {
-        setActivityStatus("error");
-      }
-      tui.requestRender();
+      chatLog.addSystem(`send failed: ${String(err)}`);
+      setActivityStatus("error");
     }
+    tui.requestRender();
   };
 
   return {

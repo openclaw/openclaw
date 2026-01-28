@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */

@@ -1,13 +1,10 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, afterEach } from "vitest";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../plugins/hook-runner-global.js";
+import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
@@ -33,33 +30,6 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
   return file;
 }
 
-function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>) {
-  const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-  appendMessage({
-    role: "assistant",
-    content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-  } as AgentMessage);
-
-  appendMessage({
-    role: "toolResult",
-    toolCallId: "call_1",
-    isError: false,
-    content: [{ type: "text", text: "ok" }],
-    details: { big: "x".repeat(10_000) },
-    // oxlint-disable-next-line typescript/no-explicit-any
-  } as any);
-}
-
-function getPersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) {
-  const messages = sm
-    .getEntries()
-    .filter((e) => e.type === "message")
-    .map((e) => (e as { message: AgentMessage }).message);
-
-  // oxlint-disable-next-line typescript/no-explicit-any
-  return messages.find((m) => (m as any).role === "toolResult") as any;
-}
-
 afterEach(() => {
   resetGlobalHookRunner();
 });
@@ -70,13 +40,33 @@ describe("tool_result_persist hook", () => {
       agentId: "main",
       sessionKey: "main",
     });
-    appendToolCallAndResult(sm);
-    const toolResult = getPersistedToolResult(sm);
+
+    sm.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+    } as AgentMessage);
+
+    sm.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "ok" }],
+      details: { big: "x".repeat(10_000) },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const toolResult = messages.find((m) => (m as any).role === "toolResult") as any;
     expect(toolResult).toBeTruthy();
     expect(toolResult.details).toBeTruthy();
   });
 
-  it("loads tool_result_persist hooks without breaking persistence", () => {
+  it("composes transforms in priority order and allows stripping toolResult.details", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-toolpersist-"));
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
 
@@ -104,7 +94,7 @@ describe("tool_result_persist hook", () => {
 } };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    loadOpenClawPlugins({
       cache: false,
       workspaceDir: tmp,
       config: {
@@ -114,68 +104,42 @@ describe("tool_result_persist hook", () => {
         },
       },
     });
-    initializeGlobalHookRunner(registry);
 
     const sm = guardSessionManager(SessionManager.inMemory(), {
       agentId: "main",
       sessionKey: "main",
     });
 
-    appendToolCallAndResult(sm);
-    const toolResult = getPersistedToolResult(sm);
-    expect(toolResult).toBeTruthy();
-
-    // Hook registration should preserve a valid toolResult message shape.
-    expect(toolResult.role).toBe("toolResult");
-    expect(toolResult.toolCallId).toBe("call_1");
-    expect(Array.isArray(toolResult.content)).toBe(true);
-  });
-});
-
-describe("before_message_write hook", () => {
-  it("continues persistence when a before_message_write hook throws", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-before-write-"));
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-
-    const plugin = writeTempPlugin({
-      dir: tmp,
-      id: "before-write-throws",
-      body: `export default { id: "before-write-throws", register(api) {
-  api.on("before_message_write", () => {
-    throw new Error("boom");
-  }, { priority: 10 });
-} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: tmp,
-      config: {
-        plugins: {
-          load: { paths: [plugin] },
-          allow: ["before-write-throws"],
-        },
-      },
-    });
-    initializeGlobalHookRunner(registry);
-
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "user",
-      content: "hello",
-      timestamp: Date.now(),
+    // Tool call (so the guard can infer tool name -> id mapping).
+    sm.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
     } as AgentMessage);
+
+    // Tool result containing a large-ish details payload.
+    sm.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "ok" }],
+      details: { big: "x".repeat(10_000) },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
 
     const messages = sm
       .getEntries()
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.role).toBe("user");
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const toolResult = messages.find((m) => (m as any).role === "toolResult") as any;
+    expect(toolResult).toBeTruthy();
+
+    // Default behavior: strip details.
+    expect(toolResult.details).toBeUndefined();
+
+    // Hook composition: priority 10 runs before priority 5.
+    expect(toolResult.persistOrder).toEqual(["a", "b"]);
+    expect(toolResult.agentSeen).toBe("main");
   });
 });

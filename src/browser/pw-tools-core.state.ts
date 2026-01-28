@@ -1,6 +1,15 @@
+import type { CDPSession, Page } from "playwright-core";
 import { devices as playwrightDevices } from "playwright-core";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+
+async function withCdpSession<T>(page: Page, fn: (session: CDPSession) => Promise<T>): Promise<T> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    return await fn(session);
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
 
 export async function setOfflineViaPlaywright(opts: {
   cdpUrl: string;
@@ -103,20 +112,15 @@ export async function setLocaleViaPlaywright(opts: {
   if (!locale) {
     throw new Error("locale is required");
   }
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
-    page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      try {
-        await send("Emulation.setLocaleOverride", { locale });
-      } catch (err) {
-        if (String(err).includes("Another locale override is already in effect")) {
-          return;
-        }
-        throw err;
+  await withCdpSession(page, async (session) => {
+    try {
+      await session.send("Emulation.setLocaleOverride", { locale });
+    } catch (err) {
+      if (String(err).includes("Another locale override is already in effect")) {
+        return;
       }
-    },
+      throw err;
+    }
   });
 }
 
@@ -131,24 +135,19 @@ export async function setTimezoneViaPlaywright(opts: {
   if (!timezoneId) {
     throw new Error("timezoneId is required");
   }
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
-    page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      try {
-        await send("Emulation.setTimezoneOverride", { timezoneId });
-      } catch (err) {
-        const msg = String(err);
-        if (msg.includes("Timezone override is already in effect")) {
-          return;
-        }
-        if (msg.includes("Invalid timezone")) {
-          throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
-        }
-        throw err;
+  await withCdpSession(page, async (session) => {
+    try {
+      await session.send("Emulation.setTimezoneOverride", { timezoneId });
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("Timezone override is already in effect")) {
+        return;
       }
-    },
+      if (msg.includes("Invalid timezone")) {
+        throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
+      }
+      throw err;
+    }
   });
 }
 
@@ -184,32 +183,27 @@ export async function setDeviceViaPlaywright(opts: {
     });
   }
 
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
-    page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      if (descriptor.userAgent || descriptor.locale) {
-        await send("Emulation.setUserAgentOverride", {
-          userAgent: descriptor.userAgent ?? "",
-          acceptLanguage: descriptor.locale ?? undefined,
-        });
-      }
-      if (descriptor.viewport) {
-        await send("Emulation.setDeviceMetricsOverride", {
-          mobile: Boolean(descriptor.isMobile),
-          width: descriptor.viewport.width,
-          height: descriptor.viewport.height,
-          deviceScaleFactor: descriptor.deviceScaleFactor ?? 1,
-          screenWidth: descriptor.viewport.width,
-          screenHeight: descriptor.viewport.height,
-        });
-      }
-      if (descriptor.hasTouch) {
-        await send("Emulation.setTouchEmulationEnabled", {
-          enabled: true,
-        });
-      }
-    },
+  await withCdpSession(page, async (session) => {
+    if (descriptor.userAgent || descriptor.locale) {
+      await session.send("Emulation.setUserAgentOverride", {
+        userAgent: descriptor.userAgent ?? "",
+        acceptLanguage: descriptor.locale ?? undefined,
+      });
+    }
+    if (descriptor.viewport) {
+      await session.send("Emulation.setDeviceMetricsOverride", {
+        mobile: Boolean(descriptor.isMobile),
+        width: descriptor.viewport.width,
+        height: descriptor.viewport.height,
+        deviceScaleFactor: descriptor.deviceScaleFactor ?? 1,
+        screenWidth: descriptor.viewport.width,
+        screenHeight: descriptor.viewport.height,
+      });
+    }
+    if (descriptor.hasTouch) {
+      await session.send("Emulation.setTouchEmulationEnabled", {
+        enabled: true,
+      });
+    }
   });
 }

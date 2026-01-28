@@ -1,21 +1,15 @@
 ---
-summary: "Community proxy to expose Claude subscription credentials as an OpenAI-compatible endpoint"
+summary: "Use Claude Max/Pro subscription as an OpenAI-compatible API endpoint"
 read_when:
   - You want to use Claude Max subscription with OpenAI-compatible tools
   - You want a local API server that wraps Claude Code CLI
-  - You want to evaluate subscription-based vs API-key-based Anthropic access
+  - You want to save money by using subscription instead of API keys
 title: "Claude Max API Proxy"
 ---
 
 # Claude Max API Proxy
 
 **claude-max-api-proxy** is a community tool that exposes your Claude Max/Pro subscription as an OpenAI-compatible API endpoint. This allows you to use your subscription with any tool that supports the OpenAI API format.
-
-<Warning>
-This path is technical compatibility only. Anthropic has blocked some subscription
-usage outside Claude Code in the past. You must decide for yourself whether to use
-it and verify Anthropic's current terms before relying on it.
-</Warning>
 
 ## Why Use This?
 
@@ -24,7 +18,7 @@ it and verify Anthropic's current terms before relying on it.
 | Anthropic API           | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume               |
 | Claude Max subscription | $200/month flat                                     | Personal use, development, unlimited usage |
 
-If you have a Claude Max subscription and want to use it with OpenAI-compatible tools, this proxy may reduce cost for some workflows. API keys remain the clearer policy path for production use.
+If you have a Claude Max subscription and want to use it with OpenAI-compatible tools, this proxy can save you significant money.
 
 ## How It Works
 
@@ -137,9 +131,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 
 ## Links
 
-- **npm:** [https://www.npmjs.com/package/claude-max-api-proxy](https://www.npmjs.com/package/claude-max-api-proxy)
-- **GitHub:** [https://github.com/atalovesyou/claude-max-api-proxy](https://github.com/atalovesyou/claude-max-api-proxy)
-- **Issues:** [https://github.com/atalovesyou/claude-max-api-proxy/issues](https://github.com/atalovesyou/claude-max-api-proxy/issues)
+- **npm:** https://www.npmjs.com/package/claude-max-api-proxy
+- **GitHub:** https://github.com/atalovesyou/claude-max-api-proxy
+- **Issues:** https://github.com/atalovesyou/claude-max-api-proxy/issues
 
 ## Notes
 

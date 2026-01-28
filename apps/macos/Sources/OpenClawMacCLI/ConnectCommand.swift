@@ -1,7 +1,9 @@
-import Foundation
-import OpenClawDiscovery
 import OpenClawKit
 import OpenClawProtocol
+import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 struct ConnectOptions {
     var url: String?
@@ -15,7 +17,7 @@ struct ConnectOptions {
     var clientMode: String = "ui"
     var displayName: String?
     var role: String = "operator"
-    var scopes: [String] = defaultOperatorConnectScopes
+    var scopes: [String] = ["operator.admin", "operator.approvals", "operator.pairing"]
     var help: Bool = false
 
     static func parse(_ args: [String]) -> ConnectOptions {
@@ -53,7 +55,7 @@ struct ConnectOptions {
                 i += 1
                 continue
             }
-            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
+            if let handler = valueHandlers[arg], let value = self.nextValue(args, index: &i) {
                 handler(&opts, value)
                 i += 1
                 continue
@@ -61,6 +63,12 @@ struct ConnectOptions {
             i += 1
         }
         return opts
+    }
+
+    private static func nextValue(_ args: [String], index: inout Int) -> String? {
+        guard index + 1 < args.count else { return nil }
+        index += 1
+        return args[index].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -227,7 +235,14 @@ private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
 private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
     let resolvedMode = (opts.mode ?? config.mode ?? "local").lowercased()
     if let raw = opts.url, !raw.isEmpty {
-        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
+        guard let url = URL(string: raw) else {
+            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
+        }
+        return GatewayEndpoint(
+            url: url,
+            token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
+            password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
+            mode: resolvedMode)
     }
 
     if resolvedMode == "remote" {
@@ -239,7 +254,14 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url is missing"])
         }
-        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
+        guard let url = URL(string: raw) else {
+            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
+        }
+        return GatewayEndpoint(
+            url: url,
+            token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
+            password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
+            mode: resolvedMode)
     }
 
     let port = config.port ?? 18789
@@ -261,22 +283,6 @@ private func bestEffortEndpoint(opts: ConnectOptions, config: GatewayConfig) -> 
     try? resolveGatewayEndpoint(opts: opts, config: config)
 }
 
-private func gatewayEndpoint(
-    fromRawURL raw: String,
-    opts: ConnectOptions,
-    mode: String,
-    config: GatewayConfig) throws -> GatewayEndpoint
-{
-    guard let url = URL(string: raw) else {
-        throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
-    }
-    return GatewayEndpoint(
-        url: url,
-        token: resolvedToken(opts: opts, mode: mode, config: config),
-        password: resolvedPassword(opts: opts, mode: mode, config: config),
-        mode: mode)
-}
-
 private func resolvedToken(opts: ConnectOptions, mode: String, config: GatewayConfig) -> String? {
     if let token = opts.token, !token.isEmpty { return token }
     if mode == "remote" {
@@ -295,11 +301,53 @@ private func resolvedPassword(opts: ConnectOptions, mode: String, config: Gatewa
 
 private func resolveLocalHost(bind: String?) -> String {
     let normalized = (bind ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    let tailnetIP = TailscaleNetwork.detectTailnetIPv4()
+    let tailnetIP = detectTailnetIPv4()
     switch normalized {
     case "tailnet":
         return tailnetIP ?? "127.0.0.1"
     default:
         return "127.0.0.1"
     }
+}
+
+private func detectTailnetIPv4() -> String? {
+    var addrList: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
+    defer { freeifaddrs(addrList) }
+
+    for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        let flags = Int32(ptr.pointee.ifa_flags)
+        let isUp = (flags & IFF_UP) != 0
+        let isLoopback = (flags & IFF_LOOPBACK) != 0
+        let family = ptr.pointee.ifa_addr.pointee.sa_family
+        if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
+
+        var addr = ptr.pointee.ifa_addr.pointee
+        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let result = getnameinfo(
+            &addr,
+            socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+            &buffer,
+            socklen_t(buffer.count),
+            nil,
+            0,
+            NI_NUMERICHOST)
+        guard result == 0 else { continue }
+        let len = buffer.prefix { $0 != 0 }
+        let bytes = len.map { UInt8(bitPattern: $0) }
+        guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
+        if isTailnetIPv4(ip) { return ip }
+    }
+
+    return nil
+}
+
+private func isTailnetIPv4(_ address: String) -> Bool {
+    let parts = address.split(separator: ".")
+    guard parts.count == 4 else { return false }
+    let octets = parts.compactMap { Int($0) }
+    guard octets.count == 4 else { return false }
+    let a = octets[0]
+    let b = octets[1]
+    return a == 100 && b >= 64 && b <= 127
 }

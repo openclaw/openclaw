@@ -1,16 +1,16 @@
 import crypto from "node:crypto";
+import type { NodeSession } from "../node-registry.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../../browser/control-service.js";
-import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import type { NodeSession } from "../node-registry.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import { respondUnavailableOnNodeInvokeError, safeParseJson } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { safeParseJson } from "./nodes.helpers.js";
 
 type BrowserRequestParams = {
   method?: string;
@@ -19,45 +19,6 @@ type BrowserRequestParams = {
   body?: unknown;
   timeoutMs?: number;
 };
-
-function normalizeBrowserRequestPath(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (withLeadingSlash.length <= 1) {
-    return withLeadingSlash;
-  }
-  return withLeadingSlash.replace(/\/+$/, "");
-}
-
-function isPersistentBrowserProfileMutation(method: string, path: string): boolean {
-  const normalizedPath = normalizeBrowserRequestPath(path);
-  if (method === "POST" && normalizedPath === "/profiles/create") {
-    return true;
-  }
-  return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
-}
-
-function resolveRequestedProfile(params: {
-  query?: Record<string, unknown>;
-  body?: unknown;
-}): string | undefined {
-  const queryProfile =
-    typeof params.query?.profile === "string" ? params.query.profile.trim() : undefined;
-  if (queryProfile) {
-    return queryProfile;
-  }
-  if (!params.body || typeof params.body !== "object") {
-    return undefined;
-  }
-  const bodyProfile =
-    "profile" in params.body && typeof params.body.profile === "string"
-      ? params.body.profile.trim()
-      : undefined;
-  return bodyProfile || undefined;
-}
 
 type BrowserProxyFile = {
   path: string;
@@ -152,11 +113,36 @@ function resolveBrowserNodeTarget(params: {
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  return await persistBrowserProxyFiles(files);
+  if (!files || files.length === 0) {
+    return new Map<string, string>();
+  }
+  const mapping = new Map<string, string>();
+  for (const file of files) {
+    const buffer = Buffer.from(file.base64, "base64");
+    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser", buffer.byteLength);
+    mapping.set(file.path, saved.path);
+  }
+  return mapping;
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  applyBrowserProxyPaths(result, mapping);
+  if (!result || typeof result !== "object") {
+    return;
+  }
+  const obj = result as Record<string, unknown>;
+  if (typeof obj.path === "string" && mapping.has(obj.path)) {
+    obj.path = mapping.get(obj.path);
+  }
+  if (typeof obj.imagePath === "string" && mapping.has(obj.imagePath)) {
+    obj.imagePath = mapping.get(obj.imagePath);
+  }
+  const download = obj.download;
+  if (download && typeof download === "object") {
+    const d = download as Record<string, unknown>;
+    if (typeof d.path === "string" && mapping.has(d.path)) {
+      d.path = mapping.get(d.path);
+    }
+  }
 }
 
 export const browserHandlers: GatewayRequestHandlers = {
@@ -187,17 +173,6 @@ export const browserHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "browser.request cannot create or delete persistent browser profiles",
-        ),
-      );
-      return;
-    }
 
     const cfg = loadConfig();
     let nodeTarget: NodeSession | null = null;
@@ -219,12 +194,10 @@ export const browserHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
-        const platform = nodeTarget.platform ?? "unknown";
-        const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: browser.proxy)`;
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
+          errorShape(ErrorCodes.INVALID_REQUEST, "node command not allowed", {
             details: { reason: allowed.reason, command: "browser.proxy" },
           }),
         );
@@ -237,7 +210,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         query,
         body,
         timeoutMs,
-        profile: resolveRequestedProfile({ query, body }),
+        profile: typeof query?.profile === "string" ? query.profile : undefined,
       };
       const res = await context.nodeRegistry.invoke({
         nodeId: nodeTarget.nodeId,
@@ -246,7 +219,14 @@ export const browserHandlers: GatewayRequestHandlers = {
         timeoutMs,
         idempotencyKey: crypto.randomUUID(),
       });
-      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+      if (!res.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
+            details: { nodeError: res.error ?? null },
+          }),
+        );
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;

@@ -1,8 +1,7 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
-import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
-import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { note } from "../terminal/note.js";
 import { confirm, select } from "./configure.shared.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
@@ -11,25 +10,17 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
-import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { guardCancel } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 export async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
   port: number;
+  gatewayToken?: string;
   daemonRuntime?: GatewayDaemonRuntime;
 }) {
   const service = resolveGatewayService();
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (error) {
-    if (!isNonFatalSystemdInstallProbeError(error)) {
-      throw error;
-    }
-    loaded = false;
-  }
+  const loaded = await service.isLoaded({ env: process.env });
   let shouldCheckLinger = false;
   let shouldInstall = true;
   let daemonRuntime = params.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
@@ -50,13 +41,11 @@ export async function maybeInstallDaemon(params: {
         { label: "Gateway service", indeterminate: true, delayMs: 0 },
         async (progress) => {
           progress.setLabel("Restarting Gateway service…");
-          const restartResult = await service.restart({
+          await service.restart({
             env: process.env,
             stdout: process.stdout,
           });
-          progress.setLabel(
-            describeGatewayServiceRestart("Gateway", restartResult).progressMessage,
-          );
+          progress.setLabel("Gateway service restarted.");
         },
       );
       shouldCheckLinger = true;
@@ -99,25 +88,10 @@ export async function maybeInstallDaemon(params: {
         progress.setLabel("Preparing Gateway service…");
 
         const cfg = loadConfig();
-        const tokenResolution = await resolveGatewayInstallToken({
-          config: cfg,
-          env: process.env,
-        });
-        for (const warning of tokenResolution.warnings) {
-          note(warning, "Gateway");
-        }
-        if (tokenResolution.unavailableReason) {
-          installError = [
-            "Gateway install blocked:",
-            tokenResolution.unavailableReason,
-            "Fix gateway auth config/token input and rerun configure.",
-          ].join(" ");
-          progress.setLabel("Gateway service install blocked.");
-          return;
-        }
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port: params.port,
+          token: params.gatewayToken,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
           config: cfg,

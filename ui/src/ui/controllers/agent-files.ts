@@ -1,10 +1,10 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient } from "../gateway";
 import type {
   AgentFileEntry,
   AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsFilesSetResult,
-} from "../types.ts";
+} from "../types";
 
 export type AgentFilesState = {
   client: GatewayBrowserClient | null;
@@ -55,16 +55,11 @@ export async function loadAgentFiles(state: AgentFilesState, agentId: string) {
   }
 }
 
-export async function loadAgentFileContent(
-  state: AgentFilesState,
-  agentId: string,
-  name: string,
-  opts?: { force?: boolean; preserveDraft?: boolean },
-) {
+export async function loadAgentFileContent(state: AgentFilesState, agentId: string, name: string) {
   if (!state.client || !state.connected || state.agentFilesLoading) {
     return;
   }
-  if (!opts?.force && Object.hasOwn(state.agentFileContents, name)) {
+  if (Object.hasOwn(state.agentFileContents, name)) {
     return;
   }
   state.agentFilesLoading = true;
@@ -76,16 +71,9 @@ export async function loadAgentFileContent(
     });
     if (res?.file) {
       const content = res.file.content ?? "";
-      const previousBase = state.agentFileContents[name] ?? "";
-      const currentDraft = state.agentFileDrafts[name];
-      const preserveDraft = opts?.preserveDraft ?? true;
       state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      if (
-        !preserveDraft ||
-        !Object.hasOwn(state.agentFileDrafts, name) ||
-        currentDraft === previousBase
-      ) {
+      if (!Object.hasOwn(state.agentFileDrafts, name)) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
     }
