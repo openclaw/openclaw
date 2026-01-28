@@ -202,6 +202,26 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /** If true, the heartbeat interval is randomized between randomEveryMin and randomEveryMax. */
+    randomizeEvery?: boolean;
+    /** Min randomized interval (duration string; default unit: minutes; default: 45m). */
+    randomEveryMin?: string;
+    /** Max randomized interval (duration string; default unit: minutes; default: 1.5h). */
+    randomEveryMax?: string;
+    /**
+     * Quiet hours window (local time). When enabled, interval heartbeats are skipped
+     * during this window. Use `false` to disable quiet hours entirely.
+     */
+    quietHours?:
+      | {
+          /** Start time (e.g. "23:00" or "11pm"). */
+          start: string;
+          /** End time (e.g. "05:00" or "5am"). */
+          end: string;
+          /** Optional IANA timezone override. */
+          timezone?: string;
+        }
+      | false;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
       /** Start time (24h, HH:MM). Inclusive. */

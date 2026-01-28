@@ -13,6 +13,21 @@ import { sensitive } from "./zod-schema.sensitive.js";
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
+    randomizeEvery: z.boolean().optional(),
+    randomEveryMin: z.string().optional(),
+    randomEveryMax: z.string().optional(),
+    quietHours: z
+      .union([
+        z
+          .object({
+            start: z.string(),
+            end: z.string(),
+            timezone: z.string().optional(),
+          })
+          .strict(),
+        z.literal(false),
+      ])
+      .optional(),
     activeHours: z
       .object({
         start: z.string().optional(),
@@ -44,6 +59,28 @@ export const HeartbeatSchema = z
         path: ["every"],
         message: "invalid duration (use ms, s, m, h)",
       });
+    }
+    if (val.randomEveryMin) {
+      try {
+        parseDurationMs(val.randomEveryMin, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["randomEveryMin"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
+    }
+    if (val.randomEveryMax) {
+      try {
+        parseDurationMs(val.randomEveryMax, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["randomEveryMax"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
     }
 
     const active = val.activeHours;
