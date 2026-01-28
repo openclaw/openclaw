@@ -6,6 +6,7 @@ import {
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
 } from "../channels/targets.js";
+
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
 
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";

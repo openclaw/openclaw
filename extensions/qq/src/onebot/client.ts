@@ -233,6 +233,13 @@ export class OneBotClient {
           this.state = "disconnected";
           this.ws = null;
 
+          // Clean up pending requests to prevent memory leak
+          for (const [echo, pending] of this.pendingRequests) {
+            clearTimeout(pending.timeoutId);
+            pending.reject(new Error(`Connection closed (code: ${code})`));
+          }
+          this.pendingRequests.clear();
+
           this.events.onDisconnect?.(code, reason.toString());
 
           // Auto-reconnect if enabled and not manually disconnected
