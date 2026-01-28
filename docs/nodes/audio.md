@@ -105,7 +105,9 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - OpenAI auto default is `gpt-4o-mini-transcribe`; set `model: "gpt-4o-transcribe"` for higher accuracy.
 - Use `tools.media.audio.attachments` to process multiple voice notes (`mode: "all"` + `maxAttachments`).
 - Transcript is available to templates as `{{Transcript}}`.
+- `tools.media.audio.transcriptPostlude` appends a footer line after transcripts in the LLM-facing body (does not change `{{Transcript}}`).
 - CLI stdout is capped (5MB); keep CLI output concise.
+  - `transcribe.sh` is auto-detected when it's on `PATH`, or set `CLAWDBOT_AUDIO_TRANSCRIBE_COMMAND` to force a custom CLI.
 
 ## Mention Detection in Groups
 

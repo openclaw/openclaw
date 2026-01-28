@@ -1,11 +1,11 @@
-import { listChannelDocks } from "../channels/dock.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
+import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import { listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
@@ -248,7 +248,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
           "• On – Enable TTS for responses\n" +
           "• Off – Disable TTS\n" +
           "• Status – Show current settings\n" +
-          "• Provider – Set voice provider (edge, elevenlabs, openai)\n" +
+          "• Provider – Set voice provider (edge, elevenlabs, openai, qwen)\n" +
           "• Limit – Set max characters for TTS\n" +
           "• Summary – Toggle AI summary for long texts\n" +
           "• Audio – Generate TTS from custom text\n" +

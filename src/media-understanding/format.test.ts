@@ -88,4 +88,20 @@ describe("formatMediaUnderstandingBody", () => {
     });
     expect(body).toBe("[Image]\nDescription:\na cat");
   });
+
+  it("appends transcript postlude for audio outputs", () => {
+    const body = formatMediaUnderstandingBody({
+      body: "<media:audio>",
+      outputs: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "hello world",
+          provider: "groq",
+        },
+      ],
+      transcriptPostlude: "Transcribed by Whisper.",
+    });
+    expect(body).toBe("[Audio]\nTranscript:\nhello world\nTranscribed by Whisper.");
+  });
 });

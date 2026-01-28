@@ -84,6 +84,8 @@ export type MediaUnderstandingConfig = {
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Optional text appended after audio transcripts in LLM-facing body. */
+  transcriptPostlude?: string;
   /** Optional provider-specific query params (merged into requests). */
   providerOptions?: Record<string, Record<string, string | number | boolean>>;
   /** @deprecated Use providerOptions.deepgram instead. */

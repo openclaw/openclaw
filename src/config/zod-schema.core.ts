@@ -165,7 +165,7 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
-export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
+export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge", "qwen"]);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
 export const TtsConfigSchema = z
@@ -230,6 +230,26 @@ export const TtsConfigSchema = z
         saveSubtitles: z.boolean().optional(),
         proxy: z.string().optional(),
         timeoutMs: z.number().int().min(1000).max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    qwen: z
+      .object({
+        enabled: z.boolean().optional(),
+        command: z.string().optional(),
+        args: z.array(z.string()).optional(),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+        instruct: z.string().optional(),
+        speed: z.number().min(0.1).max(4).optional(),
+        language: z.string().optional(),
+        temperature: z.number().min(0).max(2).optional(),
+        cfgScale: z.number().min(0).max(20).optional(),
+        ddpmSteps: z.number().int().min(1).max(500).optional(),
+        maxTokens: z.number().int().min(1).max(5000).optional(),
+        refAudio: z.string().optional(),
+        refText: z.string().optional(),
+        outputFormat: z.enum(["ogg", "mp3", "wav"]).optional(),
       })
       .strict()
       .optional(),
@@ -462,6 +482,7 @@ export const ToolsMediaUnderstandingSchema = z
     prompt: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     language: z.string().optional(),
+    transcriptPostlude: z.string().optional(),
     providerOptions: ProviderOptionsSchema,
     deepgram: DeepgramAudioSchema,
     baseUrl: z.string().optional(),

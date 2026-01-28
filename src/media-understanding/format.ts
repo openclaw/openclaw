@@ -32,6 +32,7 @@ function formatSection(
 export function formatMediaUnderstandingBody(params: {
   body?: string;
   outputs: MediaUnderstandingOutput[];
+  transcriptPostlude?: string;
 }): string {
   const outputs = params.outputs.filter((output) => output.text.trim());
   if (outputs.length === 0) {
@@ -56,11 +57,13 @@ export function formatMediaUnderstandingBody(params: {
     seen.set(output.kind, next);
     const suffix = count > 1 ? ` ${next}/${count}` : "";
     if (output.kind === "audio.transcription") {
+      const postlude = params.transcriptPostlude?.trim();
+      const transcriptText = postlude ? `${output.text}\n${postlude}` : output.text;
       sections.push(
         formatSection(
           `Audio${suffix}`,
           "Transcript",
-          output.text,
+          transcriptText,
           outputs.length === 1 ? userText : undefined,
         ),
       );

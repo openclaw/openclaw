@@ -9,13 +9,15 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, Qwen (local),
+or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Qwen (local)** (runs `sam_tts.py` on your machine)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
 ### Edge TTS notes
@@ -30,6 +32,12 @@ as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenL
 Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
 does not publish limits, so assume similar or lower limits. citeturn0search3
 
+### Qwen (local) notes
+
+Qwen TTS runs locally via a CLI wrapper (default `sam_tts.py` on your `PATH`).
+Set `messages.tts.qwen.enabled: true` and configure `messages.tts.qwen.command`
+if the script is not on `PATH`.
+
 ## Optional keys
 
 If you want OpenAI or ElevenLabs:
@@ -37,7 +45,8 @@ If you want OpenAI or ElevenLabs:
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
+Edge TTS and Qwen TTS do **not** require API keys. If no API keys are found,
+OpenClaw prefers Qwen when `messages.tts.qwen.enabled=true`, otherwise it defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
@@ -138,6 +147,26 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Qwen TTS (local)
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "qwen",
+      qwen: {
+        enabled: true,
+        command: "sam_tts.py",
+        refAudio: "~/.openclaw/voices/sam_reference.wav",
+        speed: 1.0,
+        outputFormat: "mp3",
+      },
+    },
+  },
+}
+```
+
 ### Disable Edge TTS
 
 ```json5
@@ -204,9 +233,9 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"qwen"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+  then `qwen` when enabled, otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
@@ -231,6 +260,20 @@ Then run:
 - `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `edge.proxy`: proxy URL for Edge TTS requests.
 - `edge.timeoutMs`: request timeout override (ms).
+- `qwen.enabled`: enable the local Qwen CLI wrapper.
+- `qwen.command`: path or command name (default `sam_tts.py`).
+- `qwen.args`: extra CLI flags to pass through.
+- `qwen.refAudio`: reference audio path for voice cloning.
+- `qwen.refText`: reference audio transcript.
+- `qwen.voice`: voice name/id (when not cloning).
+- `qwen.instruct`: emotion/style instruction.
+- `qwen.speed`: playback speed multiplier.
+- `qwen.language`: language code (e.g. `en`).
+- `qwen.temperature`: sampling temperature.
+- `qwen.cfgScale`: CFG scale.
+- `qwen.ddpmSteps`: DDPM steps.
+- `qwen.maxTokens`: max tokens for generation.
+- `qwen.outputFormat`: `ogg`, `mp3`, or `wav`.
 
 ## Model-driven overrides (default on)
 

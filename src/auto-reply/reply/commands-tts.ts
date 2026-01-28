@@ -1,3 +1,5 @@
+import type { ReplyPayload } from "../types.js";
+import type { CommandHandler } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
 import {
   getLastTtsAttempt,
@@ -16,8 +18,6 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
-import type { ReplyPayload } from "../types.js";
-import type { CommandHandler } from "./commands-types.js";
 
 type ParsedTtsCommand = {
   action: string;
@@ -56,13 +56,15 @@ function ttsUsage(): ReplyPayload {
       `**Providers:**\n` +
       `• edge — Free, fast (default)\n` +
       `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `• elevenlabs — Premium voices (requires API key)\n` +
+      `• qwen — Local Qwen3-TTS (uses sam_tts.py)\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
       `/tts provider edge\n` +
+      `/tts provider qwen\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
@@ -162,6 +164,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
       const hasEdge = isTtsProviderConfigured(config, "edge");
+      const hasQwen = isTtsProviderConfigured(config, "qwen");
       return {
         shouldContinue: false,
         reply: {
@@ -171,13 +174,19 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
             `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+            `Qwen enabled: ${hasQwen ? "✅" : "❌"}\n` +
+            `Usage: /tts provider openai | elevenlabs | edge | qwen`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    if (
+      requested !== "openai" &&
+      requested !== "elevenlabs" &&
+      requested !== "edge" &&
+      requested !== "qwen"
+    ) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 

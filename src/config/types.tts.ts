@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "qwen";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,38 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Qwen TTS (local CLI wrapper) configuration. */
+  qwen?: {
+    enabled?: boolean;
+    /** CLI command (default: sam_tts.py on PATH). */
+    command?: string;
+    /** Extra args appended to the CLI invocation. */
+    args?: string[];
+    /** Qwen model id override. */
+    model?: string;
+    /** Qwen voice id/name. */
+    voice?: string;
+    /** Instruction/emotion prompt. */
+    instruct?: string;
+    /** Playback speed multiplier. */
+    speed?: number;
+    /** Language code (e.g. en). */
+    language?: string;
+    /** Sampling temperature. */
+    temperature?: number;
+    /** CFG scale override. */
+    cfgScale?: number;
+    /** DDPM steps override. */
+    ddpmSteps?: number;
+    /** Max tokens override. */
+    maxTokens?: number;
+    /** Reference audio path for voice cloning. */
+    refAudio?: string;
+    /** Reference audio transcript. */
+    refText?: string;
+    /** Output format override (ogg, mp3, wav). */
+    outputFormat?: "ogg" | "mp3" | "wav";
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

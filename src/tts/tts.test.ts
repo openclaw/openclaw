@@ -1,8 +1,8 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -237,6 +237,14 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("accepts qwen as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=qwen]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("qwen");
+    });
+
     it("keeps text intact when overrides are disabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: false });
       const input = "Hello [[tts:voice=alloy]] world";
@@ -432,6 +440,24 @@ describe("tts", () => {
           const config = resolveTtsConfig(baseCfg);
           const provider = getTtsProvider(config, "/tmp/tts-prefs-edge.json");
           expect(provider).toBe("edge");
+        },
+      );
+    });
+
+    it("prefers Qwen when enabled and no API keys are present", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig({
+            ...baseCfg,
+            messages: { tts: { qwen: { enabled: true } } },
+          });
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-qwen.json");
+          expect(provider).toBe("qwen");
         },
       );
     });
