@@ -266,7 +266,6 @@ const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.sessions.enabled": "QMD Session Indexing",
   "memory.qmd.sessions.exportDir": "QMD Session Export Directory",
   "memory.qmd.sessions.retentionDays": "QMD Session Retention (days)",
-  "memory.qmd.sessions.redactToolOutputs": "QMD Session Tool Redaction",
   "memory.qmd.update.interval": "QMD Update Interval",
   "memory.qmd.update.debounceMs": "QMD Update Debounce (ms)",
   "memory.qmd.update.onBoot": "QMD Update on Startup",
@@ -587,8 +586,6 @@ const FIELD_HELP: Record<string, string> = {
     "Override directory for sanitized session exports before indexing.",
   "memory.qmd.sessions.retentionDays":
     "Retention window for exported sessions before pruning (default: unlimited).",
-  "memory.qmd.sessions.redactToolOutputs":
-    "Strip tool call payloads/results when exporting sessions (default: true).",
   "memory.qmd.update.interval":
     "How often the QMD sidecar refreshes indexes (duration string, default: 5m).",
   "memory.qmd.update.debounceMs":
