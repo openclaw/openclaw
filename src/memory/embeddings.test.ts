@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
 vi.mock("../agents/model-auth.js", async () => {
@@ -58,6 +59,91 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
 }
 
 describe("embedding provider remote overrides", () => {
+  it("builds Mistral embeddings requests with api key header", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey("mistral-key");
+
+    const cfg = {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "mistral",
+      remote: {
+        apiKey: "mistral-key",
+      },
+      model: "mistral-embed",
+      fallback: "openai",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    const url = fetchMock.mock.calls[0]?.[0];
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(url).toBe("https://api.mistral.ai/v1/embeddings");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer mistral-key");
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("uses Mistral remote baseUrl/apiKey and merges headers", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey("provider-key");
+
+    const cfg = {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://provider.example/v1",
+            headers: {
+              "X-Provider": "p",
+              "X-Shared": "provider",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "mistral",
+      remote: {
+        baseUrl: "https://remote.example/v1",
+        apiKey: "  remote-key  ",
+        headers: {
+          "X-Shared": "remote",
+          "X-Remote": "r",
+        },
+      },
+      model: "mistral-embed",
+      fallback: "openai",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    expect(authModule.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    const url = fetchMock.mock.calls[0]?.[0];
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(url).toBe("https://remote.example/v1/embeddings");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer remote-key");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["X-Provider"]).toBe("p");
+    expect(headers["X-Shared"]).toBe("remote");
+    expect(headers["X-Remote"]).toBe("r");
+  });
+
   it("uses remote baseUrl/apiKey and merges headers", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -204,6 +290,26 @@ describe("embedding provider auto selection", () => {
     expect(result.requestedProvider).toBe("auto");
     const provider = requireProvider(result);
     expect(provider.id).toBe("openai");
+  });
+
+  it("prefers mistral when only a mistral key resolves", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "mistral") {
+        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" };
+      }
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "",
+      fallback: "none",
+    });
+
+    expect(result.requestedProvider).toBe("auto");
+    const provider = requireProvider(result);
+    expect(provider.id).toBe("mistral");
   });
 
   it("uses gemini when openai is missing", async () => {

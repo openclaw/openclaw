@@ -6,6 +6,7 @@ import {
   type OpenAiBatchRequest,
   runOpenAiEmbeddingBatches,
 } from "./batch-openai.js";
+import { type MistralBatchRequest, runMistralEmbeddingBatches } from "./batch-mistral.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
@@ -240,6 +241,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }),
       );
     }
+    if (this.provider.id === "mistral" && this.mistral) {
+      const entries = Object.entries(this.mistral.headers)
+        .filter(([key]) => key.toLowerCase() !== "authorization")
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, value]);
+      return hashText(
+        JSON.stringify({
+          provider: "mistral",
+          baseUrl: this.mistral.baseUrl,
+          model: this.mistral.model,
+          headers: entries,
+        }),
+      );
+    }
     return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
   }
 
@@ -259,6 +274,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     if (this.provider.id === "voyage" && this.voyage) {
       return this.embedChunksWithVoyageBatch(chunks, entry, source);
+    }
+    if (this.provider.id === "mistral" && this.mistral) {
+      return this.embedChunksWithMistralBatch(chunks, entry, source);
     }
     return this.embedChunksInBatches(chunks);
   }
@@ -435,6 +453,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       runBatch: async (runnerOptions) =>
         await runVoyageEmbeddingBatches({
           client: voyage!,
+          ...runnerOptions,
+        }),
+    });
+  }
+
+  private async embedChunksWithMistralBatch(
+    chunks: MemoryChunk[],
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+  ): Promise<number[][]> {
+    const mistral = this.mistral;
+    return await this.embedChunksWithProviderBatch<MistralBatchRequest>({
+      chunks,
+      entry,
+      source,
+      provider: "mistral",
+      enabled: Boolean(mistral),
+      buildRequest: (chunk) => ({
+        custom_id: hashText(chunk.text),
+        text: chunk.text,
+      }),
+      runBatch: async (runnerOptions) =>
+        await runMistralEmbeddingBatches({
+          mistral: mistral!,
           ...runnerOptions,
         }),
     });
