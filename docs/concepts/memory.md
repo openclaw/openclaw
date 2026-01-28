@@ -108,14 +108,14 @@ out to QMD for retrieval. Key points:
 - Install the QMD CLI separately (`bun install -g github.com/tobi/qmd` or grab
   a release) and make sure the `qmd` binary is on the gateway’s `PATH`.
 - QMD needs an SQLite build that allows extensions (`brew install sqlite` on
-  macOS). The gateway sets `INDEX_PATH`/`QMD_CONFIG_DIR` automatically.
-- QMD shells out to its CLI, which depends on an Ollama daemon listening on
-  `http://localhost:11434` to load the bundled models (`embeddinggemma`,
-  `ExpedientFalcon/qwen3-reranker:0.6b-q8_0`, `qwen3:0.6b`). Install/run Ollama
-  separately before enabling the backend.
-- OS support: macOS and Linux work out of the box once Bun + SQLite + Ollama are
-  installed. Windows requires WSL2 (or building the experimental Ollama port)
-  until Ollama ships native binaries.
+  macOS).
+- QMD runs fully locally via Bun + `node-llama-cpp` and auto-downloads GGUF
+  models from HuggingFace on first use (no separate Ollama daemon required).
+- The gateway runs QMD in a self-contained XDG home under
+  `~/.clawdbot/agents/<agentId>/qmd/` by setting `XDG_CONFIG_HOME` and
+  `XDG_CACHE_HOME`.
+- OS support: macOS and Linux work out of the box once Bun + SQLite are
+  installed. Windows is best supported via WSL2.
 
 **How the sidecar runs**
 - The gateway writes a self-contained QMD home under
