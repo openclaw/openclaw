@@ -24,20 +24,20 @@ Enable in `~/.clawdbot/moltbot.json`:
 {
   workspace: {
     sync: {
-      provider: "dropbox",           // dropbox | gdrive | onedrive | s3 | custom
-      remotePath: "moltbot-share",   // folder in cloud storage
-      localPath: "shared",           // subfolder in workspace
-      onSessionStart: true,          // sync when session starts
-      onSessionEnd: false            // sync when session ends
-    }
+      provider: "dropbox", // dropbox | gdrive | onedrive | s3 | custom
+      remotePath: "moltbot-share", // folder in cloud storage
+      localPath: "shared", // subfolder in workspace
+      onSessionStart: true, // sync when session starts
+      onSessionEnd: false, // sync when session ends
+    },
   },
   hooks: {
     internal: {
       entries: {
-        "workspace-sync": { enabled: true }
-      }
-    }
-  }
+        "workspace-sync": { enabled: true },
+      },
+    },
+  },
 }
 ```
 
@@ -55,6 +55,7 @@ moltbot workspace setup
 ```
 
 The wizard will:
+
 1. Install rclone (if needed)
 2. Guide you through provider selection
 3. Handle OAuth authorization
