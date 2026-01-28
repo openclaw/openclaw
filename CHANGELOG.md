@@ -2,8 +2,8 @@
 
 Docs: https://docs.molt.bot
 
-## 2026.1.26
-Status: unreleased.
+## 2026.1.27-beta.1
+Status: beta.
 
 ### Changes
 - Rebrand: rename the npm package/CLI to `moltbot`, add a `moltbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
@@ -69,7 +69,6 @@ Status: unreleased.
 ### Breaking
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
-<<<<<<< HEAD
 ### Fixes
 - Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
 - Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
