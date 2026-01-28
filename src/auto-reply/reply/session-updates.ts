@@ -43,18 +43,23 @@ export async function prependSystemEvents(params: {
 
   const resolveSystemEventTimezone = (cfg: MoltbotConfig) => {
     const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
-    if (!raw) return { mode: "local" as const };
-    const lowered = raw.toLowerCase();
-    if (lowered === "utc" || lowered === "gmt") return { mode: "utc" as const };
-    if (lowered === "local" || lowered === "host") return { mode: "local" as const };
-    if (lowered === "user") {
-      return {
-        mode: "iana" as const,
-        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-      };
+    if (raw) {
+      const lowered = raw.toLowerCase();
+      if (lowered === "utc" || lowered === "gmt") return { mode: "utc" as const };
+      if (lowered === "user") {
+        return {
+          mode: "iana" as const,
+          timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+        };
+      }
+      const explicit = resolveExplicitTimezone(raw);
+      if (explicit) return { mode: "iana" as const, timeZone: explicit };
     }
-    const explicit = resolveExplicitTimezone(raw);
-    return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
+    // Default to user's configured/detected timezone instead of just "local"
+    return {
+      mode: "iana" as const,
+      timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+    };
   };
 
   const formatUtcTimestamp = (date: Date): string => {
@@ -99,7 +104,6 @@ export async function prependSystemEvents(params: {
     if (Number.isNaN(date.getTime())) return "unknown-time";
     const zone = resolveSystemEventTimezone(cfg);
     if (zone.mode === "utc") return formatUtcTimestamp(date);
-    if (zone.mode === "local") return formatZonedTimestamp(date) ?? "unknown-time";
     return formatZonedTimestamp(date, zone.timeZone) ?? "unknown-time";
   };
 

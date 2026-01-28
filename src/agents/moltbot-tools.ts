@@ -7,6 +7,7 @@ import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import { createDateTool } from "./tools/date-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
@@ -82,6 +83,9 @@ export function createMoltbotTools(options?: {
     }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
+    }),
+    createDateTool({
+      config: options?.config,
     }),
     createMessageTool({
       agentAccountId: options?.agentAccountId,

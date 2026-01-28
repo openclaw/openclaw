@@ -75,6 +75,30 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const DASHSCOPE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const VOLCENGINE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const VOLCENGINE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const DEEPSEEK_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -359,6 +383,125 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildDashScopeProvider(): ProviderConfig {
+  return {
+    baseUrl: DASHSCOPE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "qwen-turbo",
+        name: "Qwen Turbo",
+        reasoning: false,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: 32768,
+        maxTokens: 8192,
+      },
+      {
+        id: "qwen-plus",
+        name: "Qwen Plus",
+        reasoning: false,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "qwen-max",
+        name: "Qwen Max",
+        reasoning: false,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: 32768,
+        maxTokens: 8192,
+      },
+      {
+        id: "qwen3-max",
+        name: "Qwen 3 Max",
+        reasoning: false,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "qwen3-max-2026-01-23",
+        name: "Qwen 3 Max (2026-01-23)",
+        reasoning: false,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "qwen-vl-max",
+        name: "Qwen VL Max",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: 32768,
+        maxTokens: 8192,
+      },
+    ],
+  };
+}
+
+function buildVolcengineProvider(): ProviderConfig {
+  return {
+    baseUrl: VOLCENGINE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      // Volcengine models usually require specific endpoint IDs.
+      // We provide some common ones or placeholders.
+      {
+        id: "doubao-pro-32k",
+        name: "Doubao Pro 32k",
+        reasoning: false,
+        input: ["text"],
+        cost: VOLCENGINE_DEFAULT_COST,
+        contextWindow: 32768,
+        maxTokens: 8192,
+      },
+      {
+        id: "doubao-pro-128k",
+        name: "Doubao Pro 128k",
+        reasoning: false,
+        input: ["text"],
+        cost: VOLCENGINE_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+    ],
+  };
+}
+
+function buildDeepSeekProvider(): ProviderConfig {
+  return {
+    baseUrl: DEEPSEEK_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        reasoning: false,
+        input: ["text"],
+        cost: DEEPSEEK_DEFAULT_COST,
+        contextWindow: 65536,
+        maxTokens: 8192,
+      },
+      {
+        id: "deepseek-reasoner",
+        name: "DeepSeek Reasoner",
+        reasoning: true,
+        input: ["text"],
+        cost: DEEPSEEK_DEFAULT_COST,
+        contextWindow: 65536,
+        maxTokens: 8192,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -416,6 +559,27 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  const dashscopeKey =
+    resolveEnvApiKeyVarName("dashscope") ??
+    resolveApiKeyFromProfiles({ provider: "dashscope", store: authStore });
+  if (dashscopeKey) {
+    providers.dashscope = { ...buildDashScopeProvider(), apiKey: dashscopeKey };
+  }
+
+  const volcengineKey =
+    resolveEnvApiKeyVarName("volcengine") ??
+    resolveApiKeyFromProfiles({ provider: "volcengine", store: authStore });
+  if (volcengineKey) {
+    providers.volcengine = { ...buildVolcengineProvider(), apiKey: volcengineKey };
+  }
+
+  const deepseekKey =
+    resolveEnvApiKeyVarName("deepseek") ??
+    resolveApiKeyFromProfiles({ provider: "deepseek", store: authStore });
+  if (deepseekKey) {
+    providers.deepseek = { ...buildDeepSeekProvider(), apiKey: deepseekKey };
   }
 
   return providers;

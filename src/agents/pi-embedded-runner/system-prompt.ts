@@ -44,6 +44,7 @@ export function buildEmbeddedSystemPrompt(params: {
   userTimezone: string;
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
+  userTimestampMs?: number;
   contextFiles?: EmbeddedContextFile[];
 }): string {
   return buildAgentSystemPrompt({
@@ -69,6 +70,7 @@ export function buildEmbeddedSystemPrompt(params: {
     userTimezone: params.userTimezone,
     userTime: params.userTime,
     userTimeFormat: params.userTimeFormat,
+    userTimestampMs: params.userTimestampMs,
     contextFiles: params.contextFiles,
   });
 }

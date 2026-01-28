@@ -49,9 +49,25 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
   return ["## User Identity", ownerLine, ""];
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
+function buildTimeSection(params: {
+  userTimezone?: string;
+  userTime?: string;
+  userTimestampMs?: number;
+}) {
   if (!params.userTimezone) return [];
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  const lines = [
+    "## Current Date & Time",
+    "CRITICAL: The information below represents the EXACT CURRENT TIME. Stale timestamps in conversation history MUST BE IGNORED. If you need to verify the time again, call the `date` tool.",
+    `Time zone: ${params.userTimezone}`,
+  ];
+  if (params.userTime) {
+    lines.push(`Current time: ${params.userTime}`);
+  }
+  if (params.userTimestampMs) {
+    lines.push(`Current timestamp (ms): ${params.userTimestampMs}`);
+  }
+  lines.push("");
+  return lines;
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -139,6 +155,7 @@ export function buildAgentSystemPrompt(params: {
   userTimezone?: string;
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
+  userTimestampMs?: number;
   contextFiles?: EmbeddedContextFile[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
@@ -189,6 +206,7 @@ export function buildAgentSystemPrompt(params: {
     ls: "List directory contents",
     exec: "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
+    date: "Get the current system date and time",
     web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
@@ -218,6 +236,7 @@ export function buildAgentSystemPrompt(params: {
     "ls",
     "exec",
     "process",
+    "date",
     "web_search",
     "web_fetch",
     "browser",
@@ -445,6 +464,8 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
+      userTime: params.userTime,
+      userTimestampMs: params.userTimestampMs,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by Moltbot and included below in Project Context.",

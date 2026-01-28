@@ -14,6 +14,7 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
   // Check for exact matches or known prefixes/substrings for reasoning providers
   if (
     normalized === "ollama" ||
+    normalized === "deepseek" ||
     normalized === "google-gemini-cli" ||
     normalized === "google-generative-ai"
   ) {
