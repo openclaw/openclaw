@@ -17,6 +17,7 @@ const mockPrimary = {
     sourceCounts: [{ source: "memory" as const, files: 0, chunks: 0 }],
   })),
   sync: vi.fn(async () => {}),
+  probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
   probeVectorAvailability: vi.fn(async () => true),
   close: vi.fn(async () => {}),
 };
@@ -41,6 +42,7 @@ beforeEach(() => {
   mockPrimary.readFile.mockClear();
   mockPrimary.status.mockClear();
   mockPrimary.sync.mockClear();
+  mockPrimary.probeEmbeddingAvailability.mockClear();
   mockPrimary.probeVectorAvailability.mockClear();
   mockPrimary.close.mockClear();
   QmdMemoryManager.create.mockClear();

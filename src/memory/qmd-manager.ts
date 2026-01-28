@@ -16,6 +16,7 @@ import {
 } from "./session-files.js";
 import { requireNodeSqlite } from "./sqlite.js";
 import type {
+  MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySearchManager,
   MemorySearchResult,
@@ -294,6 +295,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     };
   }
 
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    return { ok: true };
+  }
+
   async probeVectorAvailability(): Promise<boolean> {
     return true;
   }
@@ -314,6 +319,9 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runUpdate(reason: string, force?: boolean): Promise<void> {
     if (this.pendingUpdate && !force) return this.pendingUpdate;
+    if (this.shouldSkipUpdate(force)) {
+      return;
+    }
     const run = async () => {
       if (this.sessionExporter) {
         await this.exportSessions();
@@ -628,5 +636,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     }
     return clamped;
+  }
+
+  private shouldSkipUpdate(force?: boolean): boolean {
+    if (force) return false;
+    const debounceMs = this.qmd.update.debounceMs;
+    if (debounceMs <= 0) return false;
+    if (!this.lastUpdateAt) return false;
+    return Date.now() - this.lastUpdateAt < debounceMs;
   }
 }
