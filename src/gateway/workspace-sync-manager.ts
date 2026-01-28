@@ -57,6 +57,10 @@ async function runSync(): Promise<void> {
 
   const logger = currentLogger;
 
+  // Clear any stale locks before attempting sync
+  // (handles case where prior sync failed and left a lock behind)
+  clearStaleLocks(logger);
+
   try {
     // Check if rclone is available
     const installed = await isRcloneInstalled();
