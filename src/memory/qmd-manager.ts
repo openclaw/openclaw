@@ -84,6 +84,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private closed = false;
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
+  private lastEmbedAt: number | null = null;
 
   private constructor(params: {
     cfg: MoltbotConfig;
@@ -165,9 +166,27 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async ensureCollections(): Promise<void> {
     // QMD collections are persisted inside the index database and must be created
-    // via the CLI. The YAML file format is not supported by the QMD builds we
-    // target, so we ensure collections exist by running `qmd collection add`.
+    // via the CLI. Prefer listing existing collections when supported, otherwise
+    // fall back to best-effort idempotent `qmd collection add`.
+    const existing = new Set<string>();
+    try {
+      const result = await this.runQmd(["collection", "list", "--json"]);
+      const parsed = JSON.parse(result.stdout) as unknown;
+      if (Array.isArray(parsed)) {
+        for (const entry of parsed) {
+          if (typeof entry === "string") existing.add(entry);
+          else if (entry && typeof entry === "object") {
+            const name = (entry as { name?: unknown }).name;
+            if (typeof name === "string") existing.add(name);
+          }
+        }
+      }
+    } catch {
+      // ignore; older qmd versions might not support list --json.
+    }
+
     for (const collection of this.qmd.collections) {
+      if (existing.has(collection.name)) continue;
       try {
         await this.runQmd([
           "collection",
@@ -181,7 +200,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // Idempotency: qmd exits non-zero if the collection name already exists.
-        if (message.includes("already exists")) continue;
+        if (message.toLowerCase().includes("already exists")) continue;
+        if (message.toLowerCase().includes("exists")) continue;
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
@@ -335,10 +355,18 @@ export class QmdMemoryManager implements MemorySearchManager {
         await this.exportSessions();
       }
       await this.runQmd(["update"], { timeoutMs: 120_000 });
-      try {
-        await this.runQmd(["embed"], { timeoutMs: 120_000 });
-      } catch (err) {
-        log.warn(`qmd embed failed (${reason}): ${String(err)}`);
+      const embedIntervalMs = this.qmd.update.embedIntervalMs;
+      const shouldEmbed =
+        Boolean(force) ||
+        this.lastEmbedAt === null ||
+        (embedIntervalMs > 0 && Date.now() - this.lastEmbedAt > embedIntervalMs);
+      if (shouldEmbed) {
+        try {
+          await this.runQmd(["embed"], { timeoutMs: 120_000 });
+          this.lastEmbedAt = Date.now();
+        } catch (err) {
+          log.warn(`qmd embed failed (${reason}): ${String(err)}`);
+        }
       }
       this.lastUpdateAt = Date.now();
       this.docPathCache.clear();

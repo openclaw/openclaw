@@ -29,6 +29,7 @@ export type ResolvedQmdUpdateConfig = {
   intervalMs: number;
   debounceMs: number;
   onBoot: boolean;
+  embedIntervalMs: number;
 };
 
 export type ResolvedQmdLimitsConfig = {
@@ -59,6 +60,7 @@ const DEFAULT_CITATIONS: MemoryCitationsMode = "auto";
 const DEFAULT_QMD_INTERVAL = "5m";
 const DEFAULT_QMD_DEBOUNCE_MS = 15_000;
 const DEFAULT_QMD_TIMEOUT_MS = 4_000;
+const DEFAULT_QMD_EMBED_INTERVAL = "60m";
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxResults: 6,
   maxSnippetChars: 700,
@@ -112,6 +114,16 @@ function resolveIntervalMs(raw: string | undefined): number {
     return parseDurationMs(value, { defaultUnit: "m" });
   } catch {
     return parseDurationMs(DEFAULT_QMD_INTERVAL, { defaultUnit: "m" });
+  }
+}
+
+function resolveEmbedIntervalMs(raw: string | undefined): number {
+  const value = raw?.trim();
+  if (!value) return parseDurationMs(DEFAULT_QMD_EMBED_INTERVAL, { defaultUnit: "m" });
+  try {
+    return parseDurationMs(value, { defaultUnit: "m" });
+  } catch {
+    return parseDurationMs(DEFAULT_QMD_EMBED_INTERVAL, { defaultUnit: "m" });
   }
 }
 
@@ -221,7 +233,7 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const resolved: ResolvedQmdConfig = {
-    command: qmdCfg?.command?.trim() || "qmd",
+    command: (qmdCfg?.command?.trim() || "qmd").split(/\s+/)[0] || "qmd",
     collections,
     includeDefaultMemory,
     sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),
@@ -229,6 +241,7 @@ export function resolveMemoryBackendConfig(params: {
       intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),
       debounceMs: resolveDebounceMs(qmdCfg?.update?.debounceMs),
       onBoot: qmdCfg?.update?.onBoot !== false,
+      embedIntervalMs: resolveEmbedIntervalMs(qmdCfg?.update?.embedInterval),
     },
     limits: resolveLimits(qmdCfg?.limits),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,

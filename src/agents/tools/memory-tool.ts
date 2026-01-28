@@ -51,7 +51,10 @@ export function createMemorySearchTool(options: {
       }
       try {
         const citationsMode = resolveMemoryCitationsMode(cfg);
-        const includeCitations = citationsMode !== "off";
+        const includeCitations = shouldIncludeCitations({
+          mode: citationsMode,
+          sessionKey: options.agentSessionKey,
+        });
         const rawResults = await manager.search(query, {
           maxResults,
           minScore,
@@ -140,4 +143,22 @@ function formatCitation(entry: MemorySearchResult): string {
       ? `#L${entry.startLine}`
       : `#L${entry.startLine}-L${entry.endLine}`;
   return `${entry.path}${lineRange}`;
+}
+
+function shouldIncludeCitations(params: {
+  mode: MemoryCitationsMode;
+  sessionKey?: string;
+}): boolean {
+  if (params.mode === "on") return true;
+  if (params.mode === "off") return false;
+  // auto: show citations in direct chats; suppress in groups/channels by default.
+  const chatType = deriveChatTypeFromSessionKey(params.sessionKey);
+  return chatType === "direct";
+}
+
+function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" | "channel" {
+  if (!sessionKey) return "direct";
+  if (sessionKey.includes(":group:")) return "group";
+  if (sessionKey.includes(":channel:")) return "channel";
+  return "direct";
 }

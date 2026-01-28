@@ -162,7 +162,7 @@ out to QMD for retrieval. Key points:
   stable `name`).
 - `sessions`: opt into session JSONL indexing (`enabled`, `retentionDays`,
   `exportDir`).
-- `update`: controls refresh cadence (`interval`, `debounceMs`, `onBoot`).
+- `update`: controls refresh cadence (`interval`, `debounceMs`, `onBoot`, `embedInterval`).
 - `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
 - `scope`: same schema as [`session.sendPolicy`](/reference/configuration#session-sendpolicy).

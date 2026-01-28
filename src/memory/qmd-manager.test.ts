@@ -90,7 +90,8 @@ describe("QmdMemoryManager", () => {
       Date.now() - (resolved.qmd?.update.debounceMs ?? 0) - 10;
 
     await manager.sync({ reason: "after-wait" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 4);
+    // By default we refresh embeddings less frequently than index updates.
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 3);
 
     await manager.close();
   });
