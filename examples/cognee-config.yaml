@@ -16,7 +16,8 @@ agents:
 
         # For Cognee Cloud, use:
         # baseUrl: https://cognee--cognee-saas-backend-serve.modal.run
-        # apiKey: your-api-key-here
+        # Cognee API key is stored in the .env file
+        apiKey: ${COGNEE_API_KEY}
 
         # Dataset name for organizing memories
         datasetName: clawdbot

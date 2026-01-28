@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -40,7 +40,7 @@ export type CogneeMemorySource = "memory" | "sessions";
 
 export class CogneeMemoryProvider {
   private readonly client: CogneeClient;
-  private readonly cfg: ClawdbotConfig;
+  private readonly cfg: MoltbotConfig;
   private readonly agentId: string;
   private readonly workspaceDir: string;
   private readonly datasetName: string;
@@ -53,7 +53,7 @@ export class CogneeMemoryProvider {
   private syncedFiles = new Map<string, string>(); // path -> hash
 
   constructor(
-    cfg: ClawdbotConfig,
+    cfg: MoltbotConfig,
     agentId: string,
     sources: Array<CogneeMemorySource>,
     config: CogneeProviderConfig = {},
@@ -412,7 +412,7 @@ export class CogneeMemoryProvider {
 }
 
 export async function createCogneeProvider(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   agentId: string,
   sources: Array<CogneeMemorySource>,
   config: CogneeProviderConfig = {},
