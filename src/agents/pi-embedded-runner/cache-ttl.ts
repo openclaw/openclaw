@@ -1,5 +1,3 @@
-import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
-
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 export const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -13,15 +11,11 @@ export type CacheTtlEntryData = {
 export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
   const normalizedProvider = provider.toLowerCase();
   const normalizedModelId = modelId.toLowerCase();
-  const pluginEligibility = resolveProviderCacheTtlEligibility({
-    provider: normalizedProvider,
-    context: {
-      provider: normalizedProvider,
-      modelId: normalizedModelId,
-    },
-  });
-  if (pluginEligibility !== undefined) {
-    return pluginEligibility;
+  if (normalizedProvider === "anthropic") {
+    return true;
+  }
+  if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/")) {
+    return true;
   }
   return false;
 }

@@ -1,25 +1,23 @@
-import SHARED_TOOL_DISPLAY_JSON from "../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
-import {
-  defaultTitle,
-  formatToolDetailText,
-  normalizeToolName,
-  resolveToolVerbAndDetailForArgs,
-  type ToolDisplaySpec as ToolDisplaySpecBase,
-} from "../../../src/agents/tool-display-common.js";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icons";
+import rawConfig from "./tool-display.json";
 
-type ToolDisplaySpec = ToolDisplaySpecBase & {
+type ToolDisplayActionSpec = {
+  label?: string;
+  detailKeys?: string[];
+};
+
+type ToolDisplaySpec = {
   icon?: string;
+  title?: string;
+  label?: string;
+  detailKeys?: string[];
+  actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-type SharedToolDisplaySpec = ToolDisplaySpecBase & {
-  emoji?: string;
-};
-
-type SharedToolDisplayConfig = {
+type ToolDisplayConfig = {
   version?: number;
-  fallback?: SharedToolDisplaySpec;
-  tools?: Record<string, SharedToolDisplaySpec>;
+  fallback?: ToolDisplaySpec;
+  tools?: Record<string, ToolDisplaySpec>;
 };
 
 export type ToolDisplay = {
@@ -31,87 +29,131 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const EMOJI_ICON_MAP: Record<string, IconName> = {
-  "🧩": "puzzle",
-  "🛠️": "wrench",
-  "🧰": "wrench",
-  "📖": "fileText",
-  "✍️": "edit",
-  "📝": "penLine",
-  "📎": "paperclip",
-  "🌐": "globe",
-  "📺": "monitor",
-  "🧾": "fileText",
-  "🔐": "settings",
-  "💻": "monitor",
-  "🔌": "plug",
-  "💬": "messageSquare",
-};
+const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
+const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { icon: "puzzle" };
+const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
 
-const SLACK_SPEC: ToolDisplaySpec = {
-  icon: "messageSquare",
-  title: "Slack",
-  actions: {
-    react: { label: "react", detailKeys: ["channelId", "messageId", "emoji"] },
-    reactions: { label: "reactions", detailKeys: ["channelId", "messageId"] },
-    sendMessage: { label: "send", detailKeys: ["to", "content"] },
-    editMessage: { label: "edit", detailKeys: ["channelId", "messageId"] },
-    deleteMessage: { label: "delete", detailKeys: ["channelId", "messageId"] },
-    readMessages: { label: "read messages", detailKeys: ["channelId", "limit"] },
-    pinMessage: { label: "pin", detailKeys: ["channelId", "messageId"] },
-    unpinMessage: { label: "unpin", detailKeys: ["channelId", "messageId"] },
-    listPins: { label: "list pins", detailKeys: ["channelId"] },
-    memberInfo: { label: "member", detailKeys: ["userId"] },
-    emojiList: { label: "emoji list" },
-  },
-};
-
-function iconForEmoji(emoji?: string): IconName {
-  if (!emoji) {
-    return "puzzle";
-  }
-  return EMOJI_ICON_MAP[emoji] ?? "puzzle";
+function normalizeToolName(name?: string): string {
+  return (name ?? "tool").trim();
 }
 
-function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
-  return {
-    icon: iconForEmoji(spec?.emoji),
-    title: spec?.title,
-    label: spec?.label,
-    detailKeys: spec?.detailKeys,
-    actions: spec?.actions,
-  };
+function defaultTitle(name: string): string {
+  const cleaned = name.replace(/_/g, " ").trim();
+  if (!cleaned) {
+    return "Tool";
+  }
+  return cleaned
+    .split(/\s+/)
+    .map((part) =>
+      part.length <= 2 && part.toUpperCase() === part
+        ? part
+        : `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`,
+    )
+    .join(" ");
 }
 
-const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
-const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
-const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
-  Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
-    key,
-    convertSpec(spec),
-  ]),
-);
-TOOL_MAP.slack = SLACK_SPEC;
-
-function shortenHomeInString(input: string): string {
-  if (!input) {
-    return input;
+function normalizeVerb(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
   }
+  return trimmed.replace(/_/g, " ");
+}
 
-  // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
-  const patterns = [
-    { re: /^\/Users\/[^/]+(\/|$)/, replacement: "~$1" }, // macOS
-    { re: /^\/home\/[^/]+(\/|$)/, replacement: "~$1" }, // Linux
-    { re: /^C:\\Users\\[^\\]+(\\|$)/i, replacement: "~$1" }, // Windows
-  ] as const;
+function coerceDisplayValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
+    if (!firstLine) {
+      return undefined;
+    }
+    return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const values = value
+      .map((item) => coerceDisplayValue(item))
+      .filter((item): item is string => Boolean(item));
+    if (values.length === 0) {
+      return undefined;
+    }
+    const preview = values.slice(0, 3).join(", ");
+    return values.length > 3 ? `${preview}…` : preview;
+  }
+  return undefined;
+}
 
-  for (const pattern of patterns) {
-    if (pattern.re.test(input)) {
-      return input.replace(pattern.re, pattern.replacement);
+function lookupValueByPath(args: unknown, path: string): unknown {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  let current: unknown = args;
+  for (const segment of path.split(".")) {
+    if (!segment) {
+      return undefined;
+    }
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    const record = current as Record<string, unknown>;
+    current = record[segment];
+  }
+  return current;
+}
+
+function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = lookupValueByPath(args, key);
+    const display = coerceDisplayValue(value);
+    if (display) {
+      return display;
     }
   }
+  return undefined;
+}
 
-  return input;
+function resolveReadDetail(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path : undefined;
+  if (!path) {
+    return undefined;
+  }
+  const offset = typeof record.offset === "number" ? record.offset : undefined;
+  const limit = typeof record.limit === "number" ? record.limit : undefined;
+  if (offset !== undefined && limit !== undefined) {
+    return `${path}:${offset}-${offset + limit}`;
+  }
+  return path;
+}
+
+function resolveWriteDetail(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path : undefined;
+  return path;
+}
+
+function resolveActionSpec(
+  spec: ToolDisplaySpec | undefined,
+  action: string | undefined,
+): ToolDisplayActionSpec | undefined {
+  if (!spec || !action) {
+    return undefined;
+  }
+  return spec.actions?.[action] ?? undefined;
 }
 
 export function resolveToolDisplay(params: {
@@ -124,16 +166,31 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? title;
-  let { verb, detail } = resolveToolVerbAndDetailForArgs({
-    toolKey: key,
-    args: params.args,
-    meta: params.meta,
-    spec,
-    fallbackDetailKeys: FALLBACK.detailKeys,
-    detailMode: "first",
-    detailCoerce: { includeFalse: true, includeZero: true },
-  });
+  const label = spec?.label ?? name;
+  const actionRaw =
+    params.args && typeof params.args === "object"
+      ? ((params.args as Record<string, unknown>).action as string | undefined)
+      : undefined;
+  const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
+  const actionSpec = resolveActionSpec(spec, action);
+  const verb = normalizeVerb(actionSpec?.label ?? action);
+
+  let detail: string | undefined;
+  if (key === "read") {
+    detail = resolveReadDetail(params.args);
+  }
+  if (!detail && (key === "write" || key === "edit" || key === "attach")) {
+    detail = resolveWriteDetail(params.args);
+  }
+
+  const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
+  if (!detail && detailKeys.length > 0) {
+    detail = resolveDetailFromKeys(params.args, detailKeys);
+  }
+
+  if (!detail && params.meta) {
+    detail = params.meta;
+  }
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -150,10 +207,27 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  return formatToolDetailText(display.detail, { prefixWithWith: true });
+  const parts: string[] = [];
+  if (display.verb) {
+    parts.push(display.verb);
+  }
+  if (display.detail) {
+    parts.push(display.detail);
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return parts.join(" · ");
 }
 
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   return detail ? `${display.label}: ${detail}` : display.label;
+}
+
+function shortenHomeInString(input: string): string {
+  if (!input) {
+    return input;
+  }
+  return input.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
 }

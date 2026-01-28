@@ -26,17 +26,43 @@ Start conservative:
 
 ## Prerequisites
 
-- OpenClaw installed and onboarded — see [Getting Started](/start/getting-started) if you haven't done this yet
+- Node **22+**
+- OpenClaw available on PATH (recommended: global install)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
+
+```bash
+npm install -g openclaw@latest
+# or: pnpm add -g openclaw@latest
+```
+
+From source (development):
+
+```bash
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+pnpm install
+pnpm ui:build # auto-installs UI deps on first run
+pnpm build
+pnpm link --global
+```
 
 ## The two-phone setup (recommended)
 
 You want this:
 
-```mermaid
-flowchart TB
-    A["<b>Your Phone (personal)<br></b><br>Your WhatsApp<br>+1-555-YOU"] -- message --> B["<b>Second Phone (assistant)<br></b><br>Assistant WA<br>+1-555-ASSIST"]
-    B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>Pi agent"]
+```
+Your Phone (personal)          Second Phone (assistant)
+┌─────────────────┐           ┌─────────────────┐
+│  Your WhatsApp  │  ──────▶  │  Assistant WA   │
+│  +1-555-YOU     │  message  │  +1-555-ASSIST  │
+└─────────────────┘           └────────┬────────┘
+                                       │ linked via QR
+                                       ▼
+                              ┌─────────────────┐
+                              │  Your Mac       │
+                              │  (openclaw)      │
+                              │    Pi agent     │
+                              └─────────────────┘
 ```
 
 If you link your personal WhatsApp to OpenClaw, every message to you becomes “agent input”. That’s rarely what you want.
@@ -65,13 +91,13 @@ openclaw gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-When onboarding finishes, we auto-open the dashboard and print a clean (non-tokenized) link. If it prompts for auth, paste the token from `gateway.auth.token` into Control UI settings. To reopen later: `openclaw dashboard`.
+When onboarding finishes, we auto-open the dashboard with your gateway token and print the tokenized link. To reopen later: `openclaw dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
 OpenClaw reads operating instructions and “memory” from its workspace directory.
 
-By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
+By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it).
 
 Tip: treat this folder like OpenClaw’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up. If git is installed, brand-new workspaces are auto-initialized.
 
@@ -102,7 +128,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 }
 ```
 
-## The config that turns it into "an assistant"
+## The config that turns it into “an assistant”
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
@@ -116,7 +142,7 @@ Example:
 {
   logging: { level: "info" },
   agent: {
-    model: "anthropic/claude-opus-4-6",
+    model: "anthropic/claude-opus-4-5",
     workspace: "~/.openclaw/workspace",
     thinkingDefault: "high",
     timeoutSeconds: 1800,
@@ -164,7 +190,6 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable.
 - If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
-- By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
 ```json5

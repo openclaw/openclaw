@@ -1,9 +1,7 @@
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { hasRootVersionAlias } from "./argv.js";
-import { readCliBannerTaglineMode } from "./banner-config-lite.js";
-import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
+import { pickTagline, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
   argv?: string[];
@@ -34,40 +32,20 @@ const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
 const hasVersionFlag = (argv: string[]) =>
-  argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv);
-
-function parseTaglineMode(value: unknown): TaglineMode | undefined {
-  if (value === "random" || value === "default" || value === "off") {
-    return value;
-  }
-  return undefined;
-}
-
-function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
-  const explicit = parseTaglineMode(options.mode);
-  if (explicit) {
-    return explicit;
-  }
-  return readCliBannerTaglineMode(options.env);
-}
+  argv.some((arg) => arg === "--version" || arg === "-V" || arg === "-v");
 
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
-  const commit =
-    options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
+  const commit = options.commit ?? resolveCommitHash({ env: options.env });
   const commitLabel = commit ?? "unknown";
-  const tagline = pickTagline({ ...options, mode: resolveTaglineMode(options) });
+  const tagline = pickTagline(options);
   const rich = options.richTty ?? isRich();
   const title = "🦞 OpenClaw";
   const prefix = "🦞 ";
   const columns = options.columns ?? process.stdout.columns ?? 120;
-  const plainBaseLine = `${title} ${version} (${commitLabel})`;
-  const plainFullLine = tagline ? `${plainBaseLine} — ${tagline}` : plainBaseLine;
+  const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
     if (fitsOnOneLine) {
-      if (!tagline) {
-        return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(`(${commitLabel})`)}`;
-      }
       return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
         `(${commitLabel})`,
       )} ${theme.muted("—")} ${theme.accentDim(tagline)}`;
@@ -75,19 +53,13 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
     const line1 = `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
       `(${commitLabel})`,
     )}`;
-    if (!tagline) {
-      return line1;
-    }
     const line2 = `${" ".repeat(prefix.length)}${theme.accentDim(tagline)}`;
     return `${line1}\n${line2}`;
   }
   if (fitsOnOneLine) {
     return plainFullLine;
   }
-  const line1 = plainBaseLine;
-  if (!tagline) {
-    return line1;
-  }
+  const line1 = `${title} ${version} (${commitLabel})`;
   const line2 = `${" ".repeat(prefix.length)}${tagline}`;
   return `${line1}\n${line2}`;
 }

@@ -101,7 +101,6 @@ Use Tailscale Serve for the private dashboard and Funnel for the public webhook 
    If prompted, visit the authorization URL shown in the output to enable Funnel for this node in your tailnet policy.
 
 5. **Verify the configuration:**
-
    ```bash
    tailscale serve status
    tailscale funnel status
@@ -139,13 +138,11 @@ Configure your tunnel's ingress rules to only route the webhook path:
 ## How it works
 
 1. Google Chat sends webhook POSTs to the gateway. Each request includes an `Authorization: Bearer <token>` header.
-   - OpenClaw verifies bearer auth before reading/parsing full webhook bodies when the header is present.
-   - Google Workspace Add-on requests that carry `authorizationEventObject.systemIdToken` in the body are supported via a stricter pre-auth body budget.
 2. OpenClaw verifies the token against the configured `audienceType` + `audience`:
    - `audienceType: "app-url"` → audience is your HTTPS webhook URL.
    - `audienceType: "project-number"` → audience is the Cloud project number.
 3. Messages are routed by space:
-   - DMs use session key `agent:<agentId>:googlechat:direct:<spaceId>`.
+   - DMs use session key `agent:<agentId>:googlechat:dm:<spaceId>`.
    - Spaces use session key `agent:<agentId>:googlechat:group:<spaceId>`.
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
@@ -155,9 +152,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
 
 Use these identifiers for delivery and allowlists:
 
-- Direct messages: `users/<userId>` (recommended).
-- Raw email `name@example.com` is mutable and only used for direct allowlist matching when `channels.googlechat.dangerouslyAllowNameMatching: true`.
-- Deprecated: `users/<email>` is treated as a user id, not an email allowlist.
+- Direct messages: `users/<userId>` or `users/<email>` (email addresses are accepted).
 - Spaces: `spaces/<spaceId>`.
 
 ## Config highlights
@@ -168,14 +163,13 @@ Use these identifiers for delivery and allowlists:
     googlechat: {
       enabled: true,
       serviceAccountFile: "/path/to/service-account.json",
-      // or serviceAccountRef: { source: "file", provider: "filemain", id: "/channels/googlechat/serviceAccount" }
       audienceType: "app-url",
       audience: "https://gateway.example.com/googlechat",
       webhookPath: "/googlechat",
       botUser: "users/1234567890", // optional; helps mention detection
       dm: {
         policy: "pairing",
-        allowFrom: ["users/1234567890"],
+        allowFrom: ["users/1234567890", "name@example.com"],
       },
       groupPolicy: "allowlist",
       groups: {
@@ -197,14 +191,10 @@ Use these identifiers for delivery and allowlists:
 Notes:
 
 - Service account credentials can also be passed inline with `serviceAccount` (JSON string).
-- `serviceAccountRef` is also supported (env/file SecretRef), including per-account refs under `channels.googlechat.accounts.<id>.serviceAccountRef`.
 - Default webhook path is `/googlechat` if `webhookPath` isn’t set.
-- `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
 - `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
-
-Secrets reference details: [Secrets Management](/gateway/secrets).
 
 ## Troubleshooting
 
@@ -235,7 +225,6 @@ This means the webhook handler isn't registered. Common causes:
    If it shows "disabled", add `plugins.entries.googlechat.enabled: true` to your config.
 
 3. **Gateway not restarted**: After adding config, restart the gateway:
-
    ```bash
    openclaw gateway restart
    ```

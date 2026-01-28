@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+@Suite
 struct ScreenshotSizeTests {
     @Test
-    func `read PNG size returns dimensions`() throws {
+    func readPNGSizeReturnsDimensions() throws {
         let pngBase64 =
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+WZxkAAAAASUVORK5CYII="
         let data = try #require(Data(base64Encoded: pngBase64))
@@ -14,7 +15,7 @@ struct ScreenshotSizeTests {
     }
 
     @Test
-    func `read PNG size rejects non PNG data`() {
+    func readPNGSizeRejectsNonPNGData() {
         #expect(ScreenshotSize.readPNGSize(data: Data("nope".utf8)) == nil)
     }
 }

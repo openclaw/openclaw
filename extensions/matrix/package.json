@@ -1,13 +1,12 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.3.11",
+  "version": "2026.2.1",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-    "fake-indexeddb": "^6.2.5",
+    "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
     "markdown-it": "14.1.0",
-    "matrix-js-sdk": "^40.1.0",
     "music-metadata": "^11.11.2",
     "zod": "^4.3.6"
   },
@@ -18,7 +17,6 @@
     "extensions": [
       "./index.ts"
     ],
-    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "matrix",
       "label": "Matrix",
@@ -33,13 +31,6 @@
       "npmSpec": "@openclaw/matrix",
       "localPath": "extensions/matrix",
       "defaultChoice": "npm"
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "matrix-js-sdk",
-        "music-metadata"
-      ]
     }
   }
 }

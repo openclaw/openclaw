@@ -1,108 +1,180 @@
 ---
 read_when:
-  - 运行或配置 CLI 新手引导
-  - 设置一台新机器
-sidebarTitle: "Onboarding: CLI"
-summary: CLI 新手引导：用于 Gateway 网关、工作区、渠道和 Skills 的引导式设置
-title: CLI 新手引导
+  - 运行或配置新手引导向导
+  - 设置新机器
+summary: CLI 新手引导向导：Gateway网关、工作区、渠道和 Skills 的引导式设置
+title: 新手引导向导
 x-i18n:
-  generated_at: "2026-03-16T06:28:38Z"
-  model: gpt-5.4
-  provider: openai
-  source_hash: 99fd87dddd78798eb0087ad9433e5a32de2af110b6e65ee351b1a194a11c7df3
+  generated_at: "2026-02-01T13:49:20Z"
+  model: claude-opus-4-5
+  provider: pi
+  source_hash: 571302dcf63a0c700cab6b54964e524d75d98315d3b35fafe7232d2ce8199e83
   source_path: start/wizard.md
-  workflow: 15
+  workflow: 9
 ---
 
-# CLI 新手引导
+# 新手引导向导 (CLI)
 
-CLI 新手引导是在 macOS、
-Linux 或 Windows（通过 WSL2；强烈推荐）上设置 OpenClaw 的**推荐**方式。
-它可在一次引导式流程中配置本地 Gateway 网关或远程 Gateway 网关连接，以及渠道、Skills
-和工作区默认值。
+新手引导向导是 **推荐的** 在 macOS、Linux 或 Windows（通过 WSL2；强烈推荐）上设置 OpenClaw 的方式。它通过一个引导式流程配置本地 Gateway网关或远程 Gateway网关连接，以及渠道、Skills 和工作区默认设置。
+
+主要入口：
 
 ```bash
 openclaw onboard
 ```
 
-<Info>
-最快的首次聊天方式：打开 Control UI（无需设置渠道）。运行
-`openclaw dashboard` 并在浏览器中聊天。文档：[Dashboard](/web/dashboard)。
-</Info>
+最快的首次对话方式：打开 Control UI（无需设置渠道）。运行
+`openclaw dashboard` 然后在浏览器中对话。文档： [仪表盘](/web/dashboard)。
 
-若要稍后重新配置：
+后续重新配置：
 
 ```bash
 openclaw configure
+```
+
+推荐：设置 Brave Search API 密钥，以便智能体可以使用 `web_search`
+（`web_fetch` 无需密钥也可使用）。最简单的方式： `openclaw configure --section web`
+它会将 `tools.web.search.apiKey`存储。文档： [网页工具](/tools/web)。
+
+## 快速入门与高级模式
+
+向导以 **快速入门** （默认设置）与 **高级** （完全控制）模式开始。
+
+**快速入门** 保留默认设置：
+
+- 本地 Gateway网关（local loopback）
+- 默认工作区（或现有工作区）
+- Gateway网关端口 **18789**
+- Gateway网关认证 **令牌** （自动生成，即使在 local loopback 上也是如此）
+- Tailscale 暴露 **关闭**
+- Telegram + WhatsApp 私信默认为 **允许名单** （系统会提示你输入手机号码）
+
+**高级** 展示每个步骤（模式、工作区、Gateway网关、渠道、守护进程、Skills）。
+
+## 向导的功能
+
+**本地模式（默认）** 引导你完成：
+
+- 模型/认证（OpenAI Code (Codex) 订阅 OAuth、Anthropic API 密钥（推荐）或 setup-token（粘贴），以及 MiniMax/GLM/Moonshot/AI Gateway 选项）
+- 工作区位置 + 引导文件
+- Gateway网关设置（端口/绑定/认证/Tailscale）
+- 提供商（Telegram、WhatsApp、Discord、Google Chat、Mattermost（插件）、Signal）
+- 守护进程安装（LaunchAgent / systemd 用户单元）
+- 健康检查
+- Skills（推荐）
+
+**远程模式** 仅配置本地客户端以连接到其他位置的 Gateway网关。它 **不会** 在远程主机上安装或更改任何内容。
+
+要添加更多隔离的智能体（独立的工作区 + 会话 + 认证），请使用：
+
+```bash
 openclaw agents add <name>
 ```
 
-<Note>
-`--json` 并不意味着非交互模式。对于脚本，请使用 `--non-interactive`。
-</Note>
+提示： `--json` 会 **不会** 意味着非交互模式。请使用 `--non-interactive` （以及 `--workspace`）用于脚本。
 
-<Tip>
-CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
-（Perplexity、Brave、Gemini、Grok 或 Kimi），并粘贴你的 API 密钥，以便智能体
-可以使用 `web_search`。你也可以稍后通过
-`openclaw configure --section web` 进行配置。文档：[Web 工具](/tools/web)。
-</Tip>
+## 流程详情（本地）
 
-## 快速开始与高级模式
+1. **现有配置检测**
+   - 如果 `~/.openclaw/openclaw.json` 存在，请选择 **保留 / 修改 / 重置**。
+   - 重新运行向导 **不会** 不会删除任何内容，除非你明确选择 **重置**
+     （或传入 `--reset`）。
+   - 如果配置无效或包含遗留键，向导会停止并要求你运行 `openclaw doctor` 后再继续。
+   - 重置使用 `trash` （绝不使用 `rm`）并提供作用域：
+     - 仅配置
+     - 配置 + 凭据 + 会话
+     - 完全重置（同时移除工作区）
 
-新手引导开始时会让你选择**快速开始**（默认值）或**高级模式**（完全控制）。
+2. **模型/认证**
+   - **Anthropic API 密钥（推荐）**：使用 `ANTHROPIC_API_KEY` （如果存在）或提示输入密钥，然后保存供守护进程使用。
+   - **Anthropic OAuth (Claude Code CLI)**：在 macOS 上，向导会检查钥匙串项 "Claude Code-credentials"（请选择"始终允许"以避免 launchd 启动时被阻止）；在 Linux/Windows 上，它会复用 `~/.claude/.credentials.json` （如果存在）。
+   - **Anthropic 令牌（粘贴 setup-token）**：运行 `claude setup-token` 在任意机器上执行，然后粘贴令牌（可以命名；留空 = 默认）。
+   - **OpenAI Code (Codex) 订阅 (Codex CLI)**：如果 `~/.codex/auth.json` 存在，向导可以复用它。
+   - **OpenAI Code (Codex) 订阅 (OAuth)**：浏览器流程；粘贴 `code#state`。
+     - 设置 `agents.defaults.model` 为 `openai-codex/gpt-5.2` （当模型未设置或为 `openai/*`。
+   - **OpenAI API 密钥**：使用 `OPENAI_API_KEY` （如果存在）或提示输入密钥，然后保存到 `~/.openclaw/.env` 以便 launchd 可以读取。
+   - **OpenCode Zen（多模型代理）**：提示输入 `OPENCODE_API_KEY` （或 `OPENCODE_ZEN_API_KEY`，请在 https://opencode.ai/auth)。
+   - **API 密钥**：为你存储密钥。
+   - **Vercel AI Gateway（多模型代理）**：提示输入 `AI_GATEWAY_API_KEY`。
+   - 更多详情： [Vercel AI Gateway](/providers/vercel-ai-gateway)
+   - **MiniMax M2.1**：配置会自动写入。
+   - 更多详情： [MiniMax](/providers/minimax)
+   - **Synthetic（Anthropic 兼容）**：提示输入 `SYNTHETIC_API_KEY`。
+   - 更多详情： [Synthetic](/providers/synthetic)
+   - **Moonshot (Kimi K2)**：配置会自动写入。
+   - **Kimi Coding**：配置会自动写入。
+   - 更多详情： [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+   - **跳过**：暂不配置认证。
+   - 从检测到的选项中选择默认模型（或手动输入提供商/模型）。
+   - 向导会运行模型检查，如果配置的模型未知或缺少认证则发出警告。
 
-<Tabs>
-  <Tab title="快速开始（默认值）">
-    - 本地网关（loopback）
-    - 默认工作区（或现有工作区）
-    - Gateway 网关端口 **18789**
-    - Gateway 网关认证 **Token**（即使在 loopback 上也会自动生成）
-    - 新本地设置的默认工具策略：`tools.profile: "coding"`（会保留现有显式配置文件）
-    - 私信隔离默认值：本地新手引导会在未设置时写入 `session.dmScope: "per-channel-peer"`。详情见：[CLI 设置参考](/start/wizard-cli-reference#outputs-and-internals)
-    - Tailscale 暴露 **关闭**
-    - Telegram + WhatsApp 私信默认使用 **allowlist**（系统会提示你输入电话号码）
-  </Tab>
-  <Tab title="高级模式（完全控制）">
-    - 暴露每一个步骤（模式、工作区、Gateway 网关、渠道、守护进程、Skills）。
-  </Tab>
-</Tabs>
+- OAuth 凭据存储在 `~/.openclaw/credentials/oauth.json`；认证配置存储在 `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` （API 密钥 + OAuth）。
+- 更多详情： [/concepts/oauth](/concepts/oauth)
 
-## 新手引导会配置什么
+3. **工作区**
+   - 默认 `~/.openclaw/workspace` （可配置）。
+   - 生成智能体引导启动仪式所需的工作区文件。
+   - 完整工作区布局 + 备份指南： [智能体工作区](/concepts/agent-workspace)
 
-**本地模式（默认）**会引导你完成以下步骤：
+4. **Gateway网关**
+   - 端口、绑定、认证模式、网关仪表板暴露。
+   - 认证建议：保持 **令牌** 即使在 local loopback 上也使用，以确保本地 WS 客户端必须进行认证。
+   - 仅在你完全信任每个本地进程时才禁用认证。
+   - 非 local loopback 绑定仍需认证。
 
-1. **模型/认证** —— 选择任意受支持的提供商/认证流程（API 密钥、OAuth 或 setup-token），包括自定义提供商
-   （兼容 OpenAI、兼容 Anthropic，或未知自动检测）。选择一个默认模型。
-   安全说明：如果这个智能体将运行工具或处理 webhook/hooks 内容，请优先选择当前可用的最强最新一代模型，并保持严格的工具策略。较弱/较旧的层级更容易被 prompt 注入。
-   对于非交互式运行，`--secret-input-mode ref` 会在认证配置文件中存储基于环境变量的引用，而不是明文 API 密钥值。
-   在非交互式 `ref` 模式下，必须设置提供商环境变量；如果传入内联密钥标志但缺少该环境变量，则会快速失败。
-   在交互式运行中，选择 secret reference 模式后，你可以指向环境变量或已配置的 provider ref（`file` 或 `exec`），并在保存前进行快速预检校验。
-2. **工作区** —— 智能体文件的位置（默认 `~/.openclaw/workspace`）。会植入引导文件。
-3. **Gateway 网关** —— 端口、绑定地址、认证模式、Tailscale 暴露。
-   在交互式 token 模式中，你可以选择默认的明文 token 存储，或选择启用 SecretRef。
-   非交互式 token SecretRef 路径：`--gateway-token-ref-env <ENV_VAR>`。
-4. **渠道** —— WhatsApp、Telegram、Discord、Google Chat、Mattermost、Signal、BlueBubbles 或 iMessage。
-5. **守护进程** —— 安装 LaunchAgent（macOS）或 systemd 用户单元（Linux/WSL2）。
-   如果 token 认证需要 token，且 `gateway.auth.token` 由 SecretRef 管理，守护进程安装会验证它，但不会将已解析的 token 持久化到监督服务的环境元数据中。
-   如果 token 认证需要 token，而已配置的 token SecretRef 无法解析，守护进程安装会被阻止，并提供可执行的指导。
-   如果同时配置了 `gateway.auth.token` 和 `gateway.auth.password`，而 `gateway.auth.mode` 未设置，守护进程安装会被阻止，直到显式设置 mode。
-6. **健康检查** —— 启动 Gateway 网关并验证其正在运行。
-7. **Skills** —— 安装推荐的 Skills 和可选依赖项。
+5. **渠道**
+   - [WhatsApp](/channels/whatsapp)：可选二维码登录。
+   - [Telegram](/channels/telegram)：机器人令牌。
+   - [Discord](/channels/discord)：机器人令牌。
+   - [Google Chat](/channels/googlechat)：服务账户 JSON + webhook 受众。
+   - [Mattermost](/channels/mattermost) （插件）：机器人令牌 + 基础 URL。
+   - [Signal](/channels/signal)：可选 `signal-cli` 安装 + 账户配置。
+   - [iMessage](/channels/imessage)：本地 `imsg` CLI 路径 + 数据库访问。
+   - 私信安全：默认为配对模式。首次私信会发送一个验证码；通过 `openclaw pairing approve <channel> <code>` 批准，或使用允许名单。
 
-<Note>
-重新运行新手引导**不会**清除任何内容，除非你显式选择 **Reset**（或传入 `--reset`）。
-CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，请使用 `--reset-scope full`。
-如果配置无效或包含旧版键，新手引导会先要求你运行 `openclaw doctor`。
-</Note>
+6. **守护进程安装**
+   - macOS：LaunchAgent
+     - 需要已登录的用户会话；对于无头模式，请使用自定义 LaunchDaemon（未随附）。
+   - Linux（以及通过 WSL2 的 Windows）：systemd 用户单元
+     - 向导会尝试通过 `loginctl enable-linger <user>` 启用驻留，以便在注销后 Gateway网关保持运行。
+     - 可能会提示输入 sudo（写入 `/var/lib/systemd/linger`）；它会先尝试不使用 sudo。
+   - **运行时选择：** Node（推荐；WhatsApp/Telegram 需要）。Bun **不推荐**。
 
-**远程模式**只会配置本地客户端以连接到其他地方的 Gateway 网关。
-它**不会**在远程主机上安装或更改任何内容。
+7. **健康检查**
+   - 启动 Gateway网关（如需）并运行 `openclaw health`。
+   - 提示： `openclaw status --deep` 将 Gateway网关健康探测添加到状态输出中（需要可达的 Gateway网关）。
+
+8. **Skills（推荐）**
+   - 读取可用 Skills 并检查依赖条件。
+   - 让你选择一个 Node 管理器： **npm / pnpm** （不推荐 bun）。
+   - 安装可选依赖项（部分在 macOS 上使用 Homebrew）。
+
+9. **完成**
+   - 摘要 + 后续步骤，包括 iOS/Android/macOS 应用以获取额外功能。
+
+- 如果未检测到 GUI，向导会打印 Control UI 的 SSH 端口转发说明，而不是打开浏览器。
+- 如果 Control UI 资源文件缺失，向导会尝试构建它们；后备方案是 `pnpm ui:build` （自动安装 UI 依赖项）。
+
+## 远程模式
+
+远程模式配置本地客户端以连接到其他位置的 Gateway网关。
+
+你需要设置的内容：
+
+- 远程 Gateway网关 URL（`ws://...`）
+- 如果远程 Gateway网关需要认证，则需提供令牌（推荐）
+
+注意事项：
+
+- 不会执行远程安装或守护进程更改。
+- 如果 Gateway网关仅绑定 local loopback，请使用 SSH 隧道或 tailnet。
+- 发现提示：
+  - macOS：Bonjour（`dns-sd`）
+  - Linux：Avahi（`avahi-browse`）
 
 ## 添加另一个智能体
 
-使用 `openclaw agents add <name>` 创建一个单独的智能体，它拥有自己的工作区、
-会话和认证配置文件。不带 `--workspace` 运行会启动新手引导。
+使用 `openclaw agents add <name>` 创建一个拥有独立工作区、会话和认证配置的单独智能体。不使用 `--workspace` 运行会启动向导。
 
 它会设置：
 
@@ -110,23 +182,150 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 - `agents.list[].workspace`
 - `agents.list[].agentDir`
 
-说明：
+注意事项：
 
 - 默认工作区遵循 `~/.openclaw/workspace-<agentId>`。
-- 添加 `bindings` 以路由入站消息（新手引导可以完成这项操作）。
-- 非交互式标志：`--model`、`--agent-dir`、`--bind`、`--non-interactive`。
+- 添加 `bindings` 以路由入站消息（向导可以执行此操作）。
+- 非交互标志： `--model`， `--agent-dir`， `--bind`， `--non-interactive`。
 
-## 完整参考
+## 非交互模式
 
-有关详细的分步骤拆解和配置输出，请参见
-[CLI 设置参考](/start/wizard-cli-reference)。
-有关非交互式示例，请参见 [CLI 自动化](/start/wizard-cli-automation)。
-有关更深入的技术参考（包括 RPC 细节），请参见
-[新手引导参考](/reference/wizard)。
+使用 `--non-interactive` 用于自动化或脚本化新手引导：
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice apiKey \
+  --anthropic-api-key "$ANTHROPIC_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback \
+  --install-daemon \
+  --daemon-runtime node \
+  --skip-skills
+```
+
+添加 `--json` 以获取机器可读的摘要。
+
+Gemini 示例：
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice gemini-api-key \
+  --gemini-api-key "$GEMINI_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Z.AI 示例：
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice zai-api-key \
+  --zai-api-key "$ZAI_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Vercel AI Gateway 示例：
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice ai-gateway-api-key \
+  --ai-gateway-api-key "$AI_GATEWAY_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Moonshot 示例：
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice moonshot-api-key \
+  --moonshot-api-key "$MOONSHOT_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Synthetic 示例：
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice synthetic-api-key \
+  --synthetic-api-key "$SYNTHETIC_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+OpenCode Zen 示例：
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice opencode-zen \
+  --opencode-zen-api-key "$OPENCODE_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+添加智能体（非交互）示例：
+
+```bash
+openclaw agents add work \
+  --workspace ~/.openclaw/workspace-work \
+  --model openai/gpt-5.2 \
+  --bind whatsapp:biz \
+  --non-interactive \
+  --json
+```
+
+## Gateway网关向导 RPC
+
+Gateway网关通过 RPC 暴露向导流程（`wizard.start`， `wizard.next`， `wizard.cancel`， `wizard.status`）。客户端（macOS 应用、Control UI）可以渲染步骤而无需重新实现新手引导逻辑。
+
+## Signal 设置 (signal-cli)
+
+向导可以安装 `signal-cli` （从 GitHub 发布版本）：
+
+- 下载相应的发布资源。
+- 将其存储在 `~/.openclaw/tools/signal-cli/<version>/`。
+- 写入 `channels.signal.cliPath` 到你的配置中。
+
+注意事项：
+
+- JVM 构建需要 **Java 21**。
+- 如有原生构建则优先使用。
+- Windows 使用 WSL2；signal-cli 安装遵循 WSL 内的 Linux 流程。
+
+## 向导写入的内容
+
+中的典型字段 `~/.openclaw/openclaw.json`：
+
+- `agents.defaults.workspace`
+- `agents.defaults.model` / `models.providers` （如果选择了 Minimax）
+- `gateway.*` （模式、绑定、认证、Tailscale）
+- `channels.telegram.botToken`， `channels.discord.token`， `channels.signal.*`， `channels.imessage.*`
+- 渠道允许名单（Slack/Discord/Matrix/Microsoft Teams），在提示期间选择启用时生效（名称会尽可能解析为 ID）。
+- `skills.install.nodeManager`
+- `wizard.lastRunAt`
+- `wizard.lastRunVersion`
+- `wizard.lastRunCommit`
+- `wizard.lastRunCommand`
+- `wizard.lastRunMode`
+
+`openclaw agents add` 写入 `agents.list[]` 和可选的 `bindings`。
+
+WhatsApp 凭据存储在 `~/.openclaw/credentials/whatsapp/<accountId>/`下。会话存储在 `~/.openclaw/agents/<agentId>/sessions/`。
+
+部分渠道以插件形式提供。当你在新手引导期间选择某个渠道时，向导会提示先安装它（通过 npm 或本地路径），然后才能进行配置。
 
 ## 相关文档
 
-- CLI 命令参考：[`openclaw onboard`](/cli/onboard)
-- 新手引导概览：[Onboarding Overview](/start/onboarding-overview)
-- macOS 应用新手引导：[新手引导](/start/onboarding)
-- 智能体首次运行仪式：[智能体引导](/start/bootstrapping)
+- macOS 应用新手引导： [新手引导](/start/onboarding)
+- 配置参考： [Gateway网关配置](/gateway/configuration)
+- 提供商： [WhatsApp](/channels/whatsapp)， [Telegram](/channels/telegram)， [Discord](/channels/discord)， [Google Chat](/channels/googlechat)， [Signal](/channels/signal)， [iMessage](/channels/imessage)
+- Skills： [Skills](/tools/skills)， [Skills配置](/tools/skills-config)

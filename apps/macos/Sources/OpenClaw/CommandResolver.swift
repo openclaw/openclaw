@@ -246,17 +246,15 @@ enum CommandResolver {
             return ssh
         }
 
-        let root = self.projectRoot()
-        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-        if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-
         let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
+
         switch runtimeResult {
         case let .success(runtime):
+            let root = self.projectRoot()
+            if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
+                return [openclawPath, subcommand] + extraArgs
+            }
+
             if let entry = self.gatewayEntrypoint(in: root) {
                 return self.makeRuntimeCommand(
                     runtime: runtime,
@@ -264,21 +262,19 @@ enum CommandResolver {
                     subcommand: subcommand,
                     extraArgs: extraArgs)
             }
-        case .failure:
-            break
-        }
+            if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {
+                // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
+                return [pnpm, "--silent", "openclaw", subcommand] + extraArgs
+            }
+            if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
+                return [openclawPath, subcommand] + extraArgs
+            }
 
-        if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {
-            // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
-            return [pnpm, "--silent", "openclaw", subcommand] + extraArgs
-        }
-
-        switch runtimeResult {
-        case .success:
             let missingEntry = """
             openclaw entrypoint missing (looked for dist/index.js or openclaw.mjs); run pnpm build.
             """
             return self.errorCommand(with: missingEntry)
+
         case let .failure(error):
             return self.runtimeErrorCommand(error)
         }

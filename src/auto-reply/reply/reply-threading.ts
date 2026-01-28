@@ -1,8 +1,9 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { getChannelDock } from "../../channels/dock.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 
 export function resolveReplyToMode(
   cfg: OpenClawConfig,
@@ -14,7 +15,7 @@ export function resolveReplyToMode(
   if (!provider) {
     return "all";
   }
-  const resolved = getChannelPlugin(provider)?.threading?.resolveReplyToMode?.({
+  const resolved = getChannelDock(provider)?.threading?.resolveReplyToMode?.({
     cfg,
     accountId,
     chatType,
@@ -24,7 +25,7 @@ export function resolveReplyToMode(
 
 export function createReplyToModeFilter(
   mode: ReplyToMode,
-  opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
+  opts: { allowTagsWhenOff?: boolean } = {},
 ) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
@@ -32,8 +33,7 @@ export function createReplyToModeFilter(
       return payload;
     }
     if (mode === "off") {
-      const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
-      if (opts.allowExplicitReplyTagsWhenOff && isExplicit) {
+      if (opts.allowTagsWhenOff && payload.replyToTag) {
         return payload;
       }
       return { ...payload, replyToId: undefined };
@@ -54,15 +54,10 @@ export function createReplyToModeFilterForChannel(
   channel?: OriginatingChannelType,
 ) {
   const provider = normalizeChannelId(channel);
-  const normalized = typeof channel === "string" ? channel.trim().toLowerCase() : undefined;
-  const isWebchat = normalized === "webchat";
-  // Default: allow explicit reply tags/directives even when replyToMode is "off".
-  // Unknown channels fail closed; internal webchat stays allowed.
-  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
-  const allowExplicitReplyTagsWhenOff = provider
-    ? (threading?.allowExplicitReplyTagsWhenOff ?? threading?.allowTagsWhenOff ?? true)
-    : isWebchat;
+  const allowTagsWhenOff = provider
+    ? Boolean(getChannelDock(provider)?.threading?.allowTagsWhenOff)
+    : false;
   return createReplyToModeFilter(mode, {
-    allowExplicitReplyTagsWhenOff,
+    allowTagsWhenOff,
   });
 }

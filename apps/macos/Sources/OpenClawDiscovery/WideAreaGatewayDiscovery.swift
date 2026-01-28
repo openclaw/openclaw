@@ -1,7 +1,7 @@
-import Foundation
 import OpenClawKit
+import Foundation
 
-struct WideAreaGatewayBeacon: Equatable {
+struct WideAreaGatewayBeacon: Sendable, Equatable {
     var instanceName: String
     var displayName: String
     var host: String
@@ -19,7 +19,7 @@ enum WideAreaGatewayDiscovery {
     private static let defaultTimeoutSeconds: TimeInterval = 0.2
     private static let nameserverProbeConcurrency = 6
 
-    struct DiscoveryContext {
+    struct DiscoveryContext: Sendable {
         var tailscaleStatus: @Sendable () -> String?
         var dig: @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?
 
@@ -117,12 +117,13 @@ enum WideAreaGatewayDiscovery {
         }
 
         var seen = Set<String>()
-        return ips.filter { value in
+        let ordered = ips.filter { value in
             guard self.isTailnetIPv4(value) else { return false }
             if seen.contains(value) { return false }
             seen.insert(value)
             return true
         }
+        return ordered
     }
 
     private static func readTailscaleStatus() -> String? {
@@ -369,7 +370,5 @@ private struct TailscaleStatus: Decodable {
 }
 
 extension Collection {
-    fileprivate var nonEmpty: Self? {
-        isEmpty ? nil : self
-    }
+    fileprivate var nonEmpty: Self? { isEmpty ? nil : self }
 }

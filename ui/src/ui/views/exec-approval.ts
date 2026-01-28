@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { AppViewState } from "../app-view-state.ts";
+import type { AppViewState } from "../app-view-state";
 
 function formatRemaining(ms: number): string {
   const remaining = Math.max(0, ms);

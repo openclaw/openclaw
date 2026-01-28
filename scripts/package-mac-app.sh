@@ -14,16 +14,9 @@ BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
-APP_BUILD="${APP_BUILD:-}"
+APP_BUILD="${APP_BUILD:-$GIT_BUILD_NUMBER}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
-if [[ -n "${BUILD_ARCHS:-}" ]]; then
-  BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
-elif [[ "$BUILD_CONFIG" == "release" ]]; then
-  # Release packaging should be universal unless explicitly overridden.
-  BUILD_ARCHS_VALUE="all"
-else
-  BUILD_ARCHS_VALUE="$(uname -m)"
-fi
+BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
 if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
   BUILD_ARCHS_VALUE="arm64 x86_64"
 fi
@@ -36,10 +29,10 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
   AUTO_CHECKS=false
 fi
-
-sparkle_canonical_build_from_version() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
-}
+if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: APP_BUILD must be numeric for Sparkle compare (CFBundleVersion). Got: $APP_BUILD" >&2
+  exit 1
+fi
 
 build_path_for_arch() {
   echo "$BUILD_ROOT/$1"
@@ -116,30 +109,11 @@ merge_framework_machos() {
 
 echo "📦 Ensuring deps (pnpm install)"
 (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
-
-if [[ -z "${APP_BUILD:-}" ]]; then
-  APP_BUILD="$GIT_BUILD_NUMBER"
-  if [[ "$APP_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}([.-].*)?$ ]]; then
-    CANONICAL_BUILD="$(sparkle_canonical_build_from_version "$APP_VERSION")" || {
-      echo "ERROR: Failed to derive canonical Sparkle APP_BUILD from APP_VERSION '$APP_VERSION'." >&2
-      exit 1
-    }
-    if [[ "$CANONICAL_BUILD" =~ ^[0-9]+$ ]] && (( CANONICAL_BUILD > APP_BUILD )); then
-      APP_BUILD="$CANONICAL_BUILD"
-    fi
-  fi
-fi
-
-if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: APP_BUILD must be numeric for Sparkle compare (CFBundleVersion). Got: $APP_BUILD" >&2
-  exit 1
-fi
-
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
-  echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
+  echo "📦 Building JS (pnpm tsc)"
+  (cd "$ROOT_DIR" && pnpm tsc -p tsconfig.json --noEmit false)
 else
-  echo "📦 Skipping JS build (SKIP_TSC=1)"
+  echo "📦 Skipping TS build (SKIP_TSC=1)"
 fi
 
 if [[ "${SKIP_UI_BUILD:-0}" != "1" ]]; then

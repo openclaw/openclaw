@@ -35,14 +35,7 @@ export const InputImageSourceSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("base64"),
-    media_type: z.enum([
-      "image/jpeg",
-      "image/png",
-      "image/gif",
-      "image/webp",
-      "image/heic",
-      "image/heif",
-    ]),
+    media_type: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]),
     data: z.string().min(1), // base64-encoded
   }),
 ]);

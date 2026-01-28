@@ -1,10 +1,10 @@
 import Foundation
 
-enum MacNodeScreenCommand: String, Codable {
+enum MacNodeScreenCommand: String, Codable, Sendable {
     case record = "screen.record"
 }
 
-struct MacNodeScreenRecordParams: Codable, Equatable {
+struct MacNodeScreenRecordParams: Codable, Sendable, Equatable {
     var screenIndex: Int?
     var durationMs: Int?
     var fps: Double?

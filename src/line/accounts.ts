@@ -1,11 +1,5 @@
+import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId as normalizeSharedAccountId,
-  normalizeOptionalAccountId,
-} from "../routing/account-id.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
 import type {
   LineConfig,
   LineAccountConfig,
@@ -13,10 +7,17 @@ import type {
   LineTokenSource,
 } from "./types.js";
 
-export { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
+export const DEFAULT_ACCOUNT_ID = "default";
 
 function readFileIfExists(filePath: string | undefined): string | undefined {
-  return tryReadSecretFileSync(filePath, "LINE credential file", { rejectSymlink: true });
+  if (!filePath) {
+    return undefined;
+  }
+  try {
+    return fs.readFileSync(filePath, "utf-8").trim();
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveToken(params: {
@@ -99,12 +100,10 @@ export function resolveLineAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string;
 }): ResolvedLineAccount {
-  const cfg = params.cfg;
-  const accountId = normalizeSharedAccountId(params.accountId);
+  const { cfg, accountId = DEFAULT_ACCOUNT_ID } = params;
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
-  const accountConfig =
-    accountId !== DEFAULT_ACCOUNT_ID ? resolveAccountEntry(accounts, accountId) : undefined;
+  const accountConfig = accountId !== DEFAULT_ACCOUNT_ID ? accounts?.[accountId] : undefined;
 
   const { token, tokenSource } = resolveToken({
     accountId,
@@ -118,16 +117,8 @@ export function resolveLineAccount(params: {
     accountConfig,
   });
 
-  const {
-    accounts: _ignoredAccounts,
-    defaultAccount: _ignoredDefaultAccount,
-    ...lineBase
-  } = (lineConfig ?? {}) as LineConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
   const mergedConfig: LineConfig & LineAccountConfig = {
-    ...lineBase,
+    ...lineConfig,
     ...accountConfig,
   };
 
@@ -174,15 +165,6 @@ export function listLineAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
-  const preferred = normalizeOptionalAccountId(
-    (cfg.channels?.line as LineConfig | undefined)?.defaultAccount,
-  );
-  if (
-    preferred &&
-    listLineAccountIds(cfg).some((accountId) => normalizeSharedAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
   const ids = listLineAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
@@ -191,5 +173,9 @@ export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
 }
 
 export function normalizeAccountId(accountId: string | undefined): string {
-  return normalizeSharedAccountId(accountId);
+  const trimmed = accountId?.trim().toLowerCase();
+  if (!trimmed || trimmed === "default") {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  return trimmed;
 }

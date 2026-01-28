@@ -1,12 +1,19 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
+import { renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { shortenText } from "./text-format.js";
+
+const shortenText = (value: string, maxLen: number) => {
+  const chars = Array.from(value);
+  if (chars.length <= maxLen) {
+    return value;
+  }
+  return `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
+};
 
 const resolveChannelLabel = (channel: ChannelId) =>
   getChannelPlugin(channel)?.meta.label ?? channel;
@@ -257,7 +264,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
-  const width = getTerminalTableWidth();
+  const width = Math.max(60, (process.stdout.columns ?? 120) - 1);
   const opts: FormatOpts = { width };
 
   if (result.handledBy === "dry-run") {

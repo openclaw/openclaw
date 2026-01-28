@@ -1,6 +1,6 @@
-export type ChatType = "direct" | "group" | "channel";
+export type NormalizedChatType = "direct" | "group" | "channel";
 
-export function normalizeChatType(raw?: string): ChatType | undefined {
+export function normalizeChatType(raw?: string): NormalizedChatType | undefined {
   const value = raw?.trim().toLowerCase();
   if (!value) {
     return undefined;

@@ -25,7 +25,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/twitch
 ```
 
-Details: [Plugins](/tools/plugin)
+Details: [Plugins](/plugin)
 
 ## Quick setup (beginner)
 
@@ -34,7 +34,7 @@ Details: [Plugins](/tools/plugin)
    - Select **Bot Token**
    - Verify scopes `chat:read` and `chat:write` are selected
    - Copy the **Client ID** and **Access Token**
-3. Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
+3. Find your Twitch user ID: https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/
 4. Configure the token:
    - Env: `OPENCLAW_TWITCH_ACCESS_TOKEN=...` (default account only)
    - Or config: `channels.twitch.accessToken`
@@ -123,7 +123,7 @@ Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want 
 
 **Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
 
-Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (Convert your Twitch username to ID)
+Find your Twitch user ID: https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/ (Convert your Twitch username to ID)
 
 ## Token refresh (optional)
 
@@ -255,7 +255,7 @@ openclaw doctor
 openclaw channels status --probe
 ```
 
-### Bot does not respond to messages
+### Bot doesn't respond to messages
 
 **Check access control:** Ensure your user ID is in `allowFrom`, or temporarily remove
 `allowFrom` and set `allowedRoles: ["all"]` to test.

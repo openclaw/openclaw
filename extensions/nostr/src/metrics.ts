@@ -50,24 +50,6 @@ export type MetricName =
   | DecryptMetricName
   | MemoryMetricName;
 
-type RelayMetrics = {
-  connects: number;
-  disconnects: number;
-  reconnects: number;
-  errors: number;
-  messagesReceived: {
-    event: number;
-    eose: number;
-    closed: number;
-    notice: number;
-    ok: number;
-    auth: number;
-  };
-  circuitBreakerState: "closed" | "open" | "half_open";
-  circuitBreakerOpens: number;
-  circuitBreakerCloses: number;
-};
-
 // ============================================================================
 // Metric Event
 // ============================================================================
@@ -111,7 +93,26 @@ export interface MetricsSnapshot {
   };
 
   /** Relay stats by URL */
-  relays: Record<string, RelayMetrics>;
+  relays: Record<
+    string,
+    {
+      connects: number;
+      disconnects: number;
+      reconnects: number;
+      errors: number;
+      messagesReceived: {
+        event: number;
+        eose: number;
+        closed: number;
+        notice: number;
+        ok: number;
+        auth: number;
+      };
+      circuitBreakerState: "closed" | "open" | "half_open";
+      circuitBreakerOpens: number;
+      circuitBreakerCloses: number;
+    }
+  >;
 
   /** Rate limiting stats */
   rateLimiting: {
@@ -173,7 +174,26 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
   };
 
   // Per-relay stats
-  const relays = new Map<string, RelayMetrics>();
+  const relays = new Map<
+    string,
+    {
+      connects: number;
+      disconnects: number;
+      reconnects: number;
+      errors: number;
+      messagesReceived: {
+        event: number;
+        eose: number;
+        closed: number;
+        notice: number;
+        ok: number;
+        auth: number;
+      };
+      circuitBreakerState: "closed" | "open" | "half_open";
+      circuitBreakerOpens: number;
+      circuitBreakerCloses: number;
+    }
+  >();
 
   // Rate limiting stats
   const rateLimiting = {

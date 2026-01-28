@@ -1,5 +1,5 @@
-import { type ModelRef, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { type ModelRef, normalizeProviderId } from "../../agents/model-selection.js";
 
 export type ModelPickerCatalogEntry = {
   provider: string;
@@ -19,7 +19,6 @@ const MODEL_PICK_PROVIDER_PREFERENCE = [
   "zai",
   "openrouter",
   "opencode",
-  "opencode-go",
   "github-copilot",
   "groq",
   "cerebras",

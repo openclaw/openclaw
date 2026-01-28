@@ -1,16 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolvePreferredNodePath: vi.fn(),
   resolveGatewayProgramArguments: vi.fn(),
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildServiceEnvironment: vi.fn(),
-}));
-
-vi.mock("../agents/auth-profiles.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -47,43 +42,20 @@ describe("resolveGatewayDevMode", () => {
   });
 });
 
-function mockNodeGatewayPlanFixture(
-  params: {
-    workingDirectory?: string;
-    version?: string;
-    supported?: boolean;
-    warning?: string;
-    serviceEnvironment?: Record<string, string>;
-  } = {},
-) {
-  const {
-    workingDirectory = "/Users/me",
-    version = "22.0.0",
-    supported = true,
-    warning,
-    serviceEnvironment = { OPENCLAW_PORT: "3000" },
-  } = params;
-  mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
-  mocks.resolveGatewayProgramArguments.mockResolvedValue({
-    programArguments: ["node", "gateway"],
-    workingDirectory,
-  });
-  mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-    version: 1,
-    profiles: {},
-  });
-  mocks.resolveSystemNodeInfo.mockResolvedValue({
-    path: "/opt/node",
-    version,
-    supported,
-  });
-  mocks.renderSystemNodeWarning.mockReturnValue(warning);
-  mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
-}
-
 describe("buildGatewayInstallPlan", () => {
   it("uses provided nodePath and returns plan", async () => {
-    mockNodeGatewayPlanFixture();
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
+    mocks.buildServiceEnvironment.mockReturnValue({ OPENCLAW_PORT: "3000" });
 
     const plan = await buildGatewayInstallPlan({
       env: {},
@@ -96,41 +68,22 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.workingDirectory).toBe("/Users/me");
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: {},
-        port: 3000,
-        extraPathDirs: ["/custom"],
-      }),
-    );
-  });
-
-  it("does not prepend '.' when nodePath is a bare executable name", async () => {
-    mockNodeGatewayPlanFixture();
-
-    await buildGatewayInstallPlan({
-      env: {},
-      port: 3000,
-      runtime: "node",
-      nodePath: "node",
-    });
-
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        extraPathDirs: undefined,
-      }),
-    );
   });
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
     const warn = vi.fn();
-    mockNodeGatewayPlanFixture({
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
       workingDirectory: undefined,
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
       version: "18.0.0",
       supported: false,
-      warning: "Node too old",
-      serviceEnvironment: {},
     });
+    mocks.renderSystemNodeWarning.mockReturnValue("Node too old");
+    mocks.buildServiceEnvironment.mockReturnValue({});
 
     await buildGatewayInstallPlan({
       env: {},
@@ -144,11 +97,19 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("merges config env vars into the environment", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-        HOME: "/Users/me",
-      },
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({
+      OPENCLAW_PORT: "3000",
+      HOME: "/Users/me",
     });
 
     const plan = await buildGatewayInstallPlan({
@@ -158,7 +119,7 @@ describe("buildGatewayInstallPlan", () => {
       config: {
         env: {
           vars: {
-            GOOGLE_API_KEY: "test-key", // pragma: allowlist secret
+            GOOGLE_API_KEY: "test-key",
           },
           CUSTOM_VAR: "custom-value",
         },
@@ -173,33 +134,18 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.HOME).toBe("/Users/me");
   });
 
-  it("drops dangerous config env vars before service merge", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: {},
-      port: 3000,
-      runtime: "node",
-      config: {
-        env: {
-          vars: {
-            NODE_OPTIONS: "--require /tmp/evil.js",
-            SAFE_KEY: "safe-value",
-          },
-        },
-      },
-    });
-
-    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
-    expect(plan.environment.SAFE_KEY).toBe("safe-value");
-  });
-
   it("does not include empty config env values", async () => {
-    mockNodeGatewayPlanFixture();
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({ OPENCLAW_PORT: "3000" });
 
     const plan = await buildGatewayInstallPlan({
       env: {},
@@ -220,7 +166,17 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("drops whitespace-only config env values", async () => {
-    mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({});
 
     const plan = await buildGatewayInstallPlan({
       env: {},
@@ -241,11 +197,19 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("keeps service env values over config env vars", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/Users/service",
-        OPENCLAW_PORT: "3000",
-      },
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/opt/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({
+      HOME: "/Users/service",
+      OPENCLAW_PORT: "3000",
     });
 
     const plan = await buildGatewayInstallPlan({
@@ -265,73 +229,11 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.HOME).toBe("/Users/service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
-
-  it("merges env-backed auth-profile refs into the service environment", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        },
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: {
-        OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
-        ANTHROPIC_TOKEN: "ant-test-token",
-      },
-      port: 3000,
-      runtime: "node",
-    });
-
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
-  });
-
-  it("skips unresolved auth-profile env refs", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: {},
-      port: 3000,
-      runtime: "node",
-    });
-
-    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
-  });
 });
 
 describe("gatewayInstallErrorHint", () => {
   it("returns platform-specific hints", () => {
-    expect(gatewayInstallErrorHint("win32")).toContain("Startup-folder login item");
-    expect(gatewayInstallErrorHint("win32")).toContain("elevated PowerShell");
+    expect(gatewayInstallErrorHint("win32")).toContain("Run as administrator");
     expect(gatewayInstallErrorHint("linux")).toMatch(
       /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
     );

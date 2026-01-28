@@ -8,8 +8,6 @@ const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceacc
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
 
-// Size-capped to prevent unbounded growth in long-running deployments (#4948)
-const MAX_AUTH_CACHE_SIZE = 32;
 const authCache = new Map<string, { key: string; auth: GoogleAuth }>();
 const verifyClient = new OAuth2Client();
 
@@ -32,32 +30,20 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
     return cached.auth;
   }
 
-  const evictOldest = () => {
-    if (authCache.size > MAX_AUTH_CACHE_SIZE) {
-      const oldest = authCache.keys().next().value;
-      if (oldest !== undefined) {
-        authCache.delete(oldest);
-      }
-    }
-  };
-
   if (account.credentialsFile) {
     const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
     authCache.set(account.accountId, { key, auth });
-    evictOldest();
     return auth;
   }
 
   if (account.credentials) {
     const auth = new GoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
     authCache.set(account.accountId, { key, auth });
-    evictOldest();
     return auth;
   }
 
   const auth = new GoogleAuth({ scopes: [CHAT_SCOPE] });
   authCache.set(account.accountId, { key, auth });
-  evictOldest();
   return auth;
 }
 
@@ -94,7 +80,6 @@ export async function verifyGoogleChatRequest(params: {
   bearer?: string | null;
   audienceType?: GoogleChatAudienceType | null;
   audience?: string | null;
-  expectedAddOnPrincipal?: string | null;
 }): Promise<{ ok: boolean; reason?: string }> {
   const bearer = params.bearer?.trim();
   if (!bearer) {
@@ -113,32 +98,10 @@ export async function verifyGoogleChatRequest(params: {
         audience,
       });
       const payload = ticket.getPayload();
-      const email = String(payload?.email ?? "")
-        .trim()
-        .toLowerCase();
-      if (!payload?.email_verified) {
-        return { ok: false, reason: "email not verified" };
-      }
-      if (email === CHAT_ISSUER) {
-        return { ok: true };
-      }
-      if (!ADDON_ISSUER_PATTERN.test(email)) {
-        return { ok: false, reason: `invalid issuer: ${email}` };
-      }
-      const expectedAddOnPrincipal = params.expectedAddOnPrincipal?.trim().toLowerCase();
-      if (!expectedAddOnPrincipal) {
-        return { ok: false, reason: "missing add-on principal binding" };
-      }
-      const tokenPrincipal = String(payload?.sub ?? "")
-        .trim()
-        .toLowerCase();
-      if (!tokenPrincipal || tokenPrincipal !== expectedAddOnPrincipal) {
-        return {
-          ok: false,
-          reason: `unexpected add-on principal: ${tokenPrincipal || "<missing>"}`,
-        };
-      }
-      return { ok: true };
+      const email = payload?.email ?? "";
+      const ok =
+        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+      return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
     }

@@ -8,8 +8,7 @@ const QWEN_OAUTH_CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56";
 export async function refreshQwenPortalCredentials(
   credentials: OAuthCredentials,
 ): Promise<OAuthCredentials> {
-  const refreshToken = credentials.refresh?.trim();
-  if (!refreshToken) {
+  if (!credentials.refresh?.trim()) {
     throw new Error("Qwen OAuth refresh token missing; re-authenticate.");
   }
 
@@ -21,7 +20,7 @@ export async function refreshQwenPortalCredentials(
     },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      refresh_token: refreshToken,
+      refresh_token: credentials.refresh,
       client_id: QWEN_OAUTH_CLIENT_ID,
     }),
   });
@@ -41,22 +40,15 @@ export async function refreshQwenPortalCredentials(
     refresh_token?: string;
     expires_in?: number;
   };
-  const accessToken = payload.access_token?.trim();
-  const newRefreshToken = payload.refresh_token?.trim();
-  const expiresIn = payload.expires_in;
 
-  if (!accessToken) {
+  if (!payload.access_token || !payload.expires_in) {
     throw new Error("Qwen OAuth refresh response missing access token.");
-  }
-  if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
-    throw new Error("Qwen OAuth refresh response missing or invalid expires_in.");
   }
 
   return {
     ...credentials,
-    access: accessToken,
-    // RFC 6749 section 6: new refresh token is optional; if present, replace old.
-    refresh: newRefreshToken || refreshToken,
-    expires: Date.now() + expiresIn * 1000,
+    access: payload.access_token,
+    refresh: payload.refresh_token || credentials.refresh,
+    expires: Date.now() + payload.expires_in * 1000,
   };
 }

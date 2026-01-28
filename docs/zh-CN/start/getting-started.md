@@ -1,143 +1,210 @@
 ---
 read_when:
-  - 从零开始进行首次设置
-  - 你想用最快的路径开始可用聊天
-summary: 在几分钟内安装 OpenClaw 并开始你的第一次聊天。
+  - 从零开始的首次设置
+  - 你希望找到从安装 → 新手引导 → 发送第一条消息的最快路径
+summary: 入门指南：从零开始到发送第一条消息（向导、认证、渠道、配对）
 title: 入门指南
 x-i18n:
-  generated_at: "2026-03-16T06:27:55Z"
-  model: gpt-5.4
-  provider: openai
-  source_hash: 47583047c1a603c1254d2540846452ad321d12bc7fc3f24e5def9282ee96f415
+  generated_at: "2026-02-01T13:38:44Z"
+  model: claude-opus-4-5
+  provider: pi
+  source_hash: d0ebc83c10efc569eaf6fb32368a29ef75a373f15da61f3499621462f08aff63
   source_path: start/getting-started.md
-  workflow: 15
+  workflow: 9
 ---
 
 # 入门指南
 
-目标：以最少的设置，从零开始到完成第一次可用聊天。
+目标：从 **零开始** → **第一次成功聊天** （使用合理的默认配置）尽可能快地完成。
 
-<Info>
-最快的聊天方式：打开 Control UI（无需设置渠道）。运行 `openclaw dashboard`
-并在浏览器中聊天，或在
-<Tooltip headline="Gateway host" tip="运行 OpenClaw Gateway 网关服务的机器。">网关主机</Tooltip>
-上打开 `http://127.0.0.1:18789/`。
-文档：[Dashboard](/web/dashboard) 和 [Control UI](/web/control-ui)。
-</Info>
+最快聊天方式：打开控制界面（无需设置渠道）。运行 `openclaw dashboard`
+然后在浏览器中聊天，或打开 `http://127.0.0.1:18789/` （在 Gateway网关主机上）。
+文档： [仪表盘](/web/dashboard) 和 [控制界面](/web/control-ui)。
 
-## 前置条件
+推荐路径：使用 **CLI 新手引导向导** （`openclaw onboard`）。它会设置：
 
-- 推荐使用 Node 24（Node 22 LTS，目前为 `22.16+`，仍因兼容性而受支持）
+- 模型/认证（推荐使用 OAuth）
+- Gateway网关设置
+- 渠道（WhatsApp/Telegram/Discord/Mattermost（插件）/...）
+- 配对默认设置（安全私信）
+- 工作区引导 + Skills
+- 可选的后台服务
 
-<Tip>
-如果你不确定，请使用 `node --version` 检查你的 Node 版本。
-</Tip>
+如果你需要更详细的参考页面，请跳转至： [向导](/start/wizard), [设置](/start/setup), [配对](/start/pairing), [安全](/gateway/security)。
 
-## 快速设置（CLI）
+沙盒注意事项： `agents.defaults.sandbox.mode: "non-main"` 使用 `session.mainKey` （默认 `"main"`），因此群组/渠道会话是沙箱隔离的。如果你希望主智能体始终在主机上运行，请设置显式的逐智能体覆盖：
 
-<Steps>
-  <Step title="安装 OpenClaw（推荐）">
-    <Tabs>
-      <Tab title="macOS/Linux">
-        ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
-        ```
-        <img
-  src="/assets/install-script.svg"
-  alt="安装脚本流程"
-  className="rounded-lg"
-/>
-      </Tab>
-      <Tab title="Windows（PowerShell）">
-        ```powershell
-        iwr -useb https://openclaw.ai/install.ps1 | iex
-        ```
-      </Tab>
-    </Tabs>
+```json
+{
+  "routing": {
+    "agents": {
+      "main": {
+        "workspace": "~/.openclaw/workspace",
+        "sandbox": { "mode": "off" }
+      }
+    }
+  }
+}
+```
 
-    <Note>
-    其他安装方式和要求： [Install](/install)。
-    </Note>
+## 0）前提条件
 
-  </Step>
-  <Step title="运行新手引导">
-    ```bash
-    openclaw onboard --install-daemon
-    ```
+- Node `>=22`
+- `pnpm` （可选；如果从源码构建则推荐安装）
+- **推荐：** Brave Search API 密钥用于网络搜索。最简单的方式：
+  `openclaw configure --section web` （存储 `tools.web.search.apiKey`）。
+  参见 [网络工具](/tools/web)。
 
-    新手引导会配置认证、Gateway 网关设置和可选渠道。
-    详情请参见 [CLI 新手引导](/start/wizard)。
+macOS：如果你计划构建应用程序，请安装 Xcode / CLT。如果仅使用 CLI + Gateway网关，Node 就足够了。
+Windows：使用 **WSL2** （推荐 Ubuntu）。强烈推荐使用 WSL2；原生 Windows 未经测试，问题较多，且工具兼容性较差。请先安装 WSL2，然后在 WSL 内执行 Linux 步骤。参见 [Windows (WSL2)](/platforms/windows)。
 
-  </Step>
-  <Step title="检查 Gateway 网关">
-    如果你已安装服务，它应该已经在运行：
+## 1）安装 CLI（推荐）
 
-    ```bash
-    openclaw gateway status
-    ```
+```bash
+curl -fsSL https://openclaw.bot/install.sh | bash
+```
 
-  </Step>
-  <Step title="打开 Control UI">
-    ```bash
-    openclaw dashboard
-    ```
-  </Step>
-</Steps>
+安装选项（安装方式、非交互式、从 GitHub 安装）： [安装](/install)。
 
-<Check>
-如果 Control UI 能加载，你的 Gateway 网关就已准备就绪，可以使用。
-</Check>
+Windows (PowerShell)：
 
-## 可选检查和附加内容
+```powershell
+iwr -useb https://openclaw.ai/install.ps1 | iex
+```
 
-<AccordionGroup>
-  <Accordion title="在前台运行 Gateway 网关">
-    适合快速测试或故障排除。
+替代方式（全局安装）：
 
-    ```bash
-    openclaw gateway --port 18789
-    ```
+```bash
+npm install -g openclaw@latest
+```
 
-  </Accordion>
-  <Accordion title="发送一条测试消息">
-    需要已配置的渠道。
+```bash
+pnpm add -g openclaw@latest
+```
 
-    ```bash
-    openclaw message send --target +15555550123 --message "Hello from OpenClaw"
-    ```
+## 2）运行新手引导向导（并安装服务）
 
-  </Accordion>
-</AccordionGroup>
+```bash
+openclaw onboard --install-daemon
+```
 
-## 常用环境变量
+你需要选择的内容：
 
-如果你将 OpenClaw 作为服务账户运行，或想使用自定义配置/状态位置：
+- **本地 vs 远程** Gateway网关
+- **认证**：OpenAI Code (Codex) 订阅（OAuth）或 API 密钥。对于 Anthropic，我们推荐使用 API 密钥； `claude setup-token` 也受支持。
+- **提供商**：WhatsApp 二维码登录、Telegram/Discord 机器人令牌、Mattermost 插件令牌等。
+- **守护进程**：后台安装（launchd/systemd；WSL2 使用 systemd）
+  - **运行时**：Node（推荐；WhatsApp/Telegram 必需）。Bun 为 **不推荐**。
+- **Gateway网关令牌**：向导默认会生成一个（即使在 local loopback 上）并将其存储在 `gateway.auth.token`。
 
-- `OPENCLAW_HOME` 设置用于内部路径解析的主目录。
-- `OPENCLAW_STATE_DIR` 覆盖状态目录。
-- `OPENCLAW_CONFIG_PATH` 覆盖配置文件路径。
+向导文档： [向导](/start/wizard)
 
-完整的环境变量参考： [环境变量](/help/environment)。
+### 凭证：存储位置（重要）
 
-## 深入了解
+- **推荐的 Anthropic 路径：** 设置 API 密钥（向导可以将其存储以供服务使用）。 `claude setup-token`：你可以复用 Claude Code 凭据。
 
-<Columns>
-  <Card title="CLI 新手引导" href="/start/wizard">
-    完整的 CLI 新手引导参考和高级选项。
-  </Card>
-  <Card title="macOS 应用新手引导" href="/start/onboarding">
-    macOS 应用的首次运行流程。
-  </Card>
-</Columns>
+- OAuth 凭据（旧版导入）： `~/.openclaw/credentials/oauth.json`
+- 认证配置文件（OAuth + API 密钥）： `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 
-## 你将获得什么
+无头/服务器提示：先在普通机器上完成 OAuth，然后复制 `oauth.json` 到 Gateway网关主机上。
 
-- 一个正在运行的 Gateway 网关
-- 已配置好的认证
-- Control UI 访问权限或一个已连接的渠道
+## 3）启动 Gateway网关如果你在新手引导过程中安装了服务，Gateway网关应该已经在运行：
 
-## 后续步骤
+```bash
+openclaw gateway status
+```
 
-- 私信安全和批准：[Pairing](/channels/pairing)
-- 连接更多渠道：[Channels](/channels)
-- 高级工作流和源码安装：[Setup](/start/setup)
+手动运行（前台）：
+
+```bash
+openclaw gateway --port 18789 --verbose
+```
+
+仪表盘（本地 local loopback）： `http://127.0.0.1:18789/`
+如果配置了令牌，请将其粘贴到控制界面设置中（存储为 `connect.params.auth.token`）。
+
+⚠️ **Bun 警告（WhatsApp + Telegram）：** Bun 在这些渠道上存在已知问题。如果你使用 WhatsApp 或 Telegram，请使用 **Node **。
+
+## 3.5）快速验证（2 分钟）
+
+```bash
+openclaw status
+openclaw health
+openclaw security audit --deep
+```
+
+## 4）配对 + 连接你的第一个聊天界面
+
+### WhatsApp（二维码登录）
+
+```bash
+openclaw channels login
+```
+
+通过 WhatsApp → 设置 → 已关联设备 进行扫描。
+
+WhatsApp 文档： [WhatsApp](/channels/whatsapp)
+
+### Telegram / Discord / 其他
+
+向导可以为你写入令牌/配置。如果你更喜欢手动配置，请从以下内容开始：
+
+- Telegram： [Telegram](/channels/telegram)
+- Discord： [Discord](/channels/discord)
+- Mattermost（插件）： [Mattermost](/channels/mattermost)
+
+**Telegram 私信提示：** 你的第一条私信会返回一个配对码。请批准它（参见下一步），否则机器人将不会响应。
+
+## 5）私信安全（配对审批）
+
+默认策略：未知私信会收到一个短码，消息在批准之前不会被处理。
+如果你的第一条私信没有收到回复，请批准配对：
+
+```bash
+openclaw pairing list whatsapp
+openclaw pairing approve whatsapp <code>
+```
+
+配对文档： [配对](/start/pairing)
+
+## 从源码安装（开发）
+
+如果你正在开发 OpenClaw 本身，请从源码运行：
+
+```bash
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+pnpm install
+pnpm ui:build # auto-installs UI deps on first run
+pnpm build
+openclaw onboard --install-daemon
+```
+
+如果你尚未进行全局安装，请通过以下方式运行新手引导流程 `pnpm openclaw ...` （从仓库中）。
+`pnpm build` 也会打包 A2UI 资源；如果你只需要运行该步骤，请使用 `pnpm canvas:a2ui:bundle`。
+
+Gateway网关（从此仓库）：
+
+```bash
+node openclaw.mjs gateway --port 18789 --verbose
+```
+
+## 7）端到端验证
+
+在新终端中，发送一条测试消息：
+
+```bash
+openclaw message send --target +15555550123 --message "Hello from OpenClaw"
+```
+
+如果 `openclaw health` 显示"未配置认证"，请返回向导设置 OAuth/密钥认证——智能体在没有认证的情况下将无法响应。
+
+提示： `openclaw status --all` 是最佳的可粘贴只读调试报告。
+健康探针： `openclaw health` （或 `openclaw status --deep`）向运行中的 Gateway网关请求健康快照。
+
+## 后续步骤（可选，但强烈推荐）
+
+- macOS 菜单栏应用 + 语音唤醒： [macOS 应用](/platforms/macos)
+- iOS/Android 节点（Canvas/相机/语音）： [节点](/nodes)
+- 远程访问（SSH 隧道 / Tailscale Serve）： [远程访问](/gateway/remote) 和 [Tailscale](/gateway/tailscale)
+- 常驻运行 / VPN 设置： [远程访问](/gateway/remote), [exe.dev](/platforms/exe-dev), [Hetzner](/platforms/hetzner), [macOS 远程](/platforms/mac/remote)

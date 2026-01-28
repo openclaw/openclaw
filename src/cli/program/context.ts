@@ -9,24 +9,11 @@ export type ProgramContext = {
 };
 
 export function createProgramContext(): ProgramContext {
-  let cachedChannelOptions: string[] | undefined;
-  const getChannelOptions = (): string[] => {
-    if (cachedChannelOptions === undefined) {
-      cachedChannelOptions = resolveCliChannelOptions();
-    }
-    return cachedChannelOptions;
-  };
-
+  const channelOptions = resolveCliChannelOptions();
   return {
     programVersion: VERSION,
-    get channelOptions() {
-      return getChannelOptions();
-    },
-    get messageChannelOptions() {
-      return getChannelOptions().join("|");
-    },
-    get agentChannelOptions() {
-      return ["last", ...getChannelOptions()].join("|");
-    },
+    channelOptions,
+    messageChannelOptions: channelOptions.join("|"),
+    agentChannelOptions: ["last", ...channelOptions].join("|"),
   };
 }

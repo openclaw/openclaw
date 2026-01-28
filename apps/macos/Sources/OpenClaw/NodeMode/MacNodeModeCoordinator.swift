@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawKit
+import Foundation
 import OSLog
 
 @MainActor
@@ -32,7 +32,6 @@ final class MacNodeModeCoordinator {
     private func run() async {
         var retryDelay: UInt64 = 1_000_000_000
         var lastCameraEnabled: Bool?
-        var lastBrowserControlEnabled: Bool?
         let defaults = UserDefaults.standard
 
         while !Task.isCancelled {
@@ -46,14 +45,6 @@ final class MacNodeModeCoordinator {
                 lastCameraEnabled = cameraEnabled
             } else if lastCameraEnabled != cameraEnabled {
                 lastCameraEnabled = cameraEnabled
-                await self.session.disconnect()
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            let browserControlEnabled = OpenClawConfigFile.browserControlEnabled()
-            if lastBrowserControlEnabled == nil {
-                lastBrowserControlEnabled = browserControlEnabled
-            } else if lastBrowserControlEnabled != browserControlEnabled {
-                lastBrowserControlEnabled = browserControlEnabled
                 await self.session.disconnect()
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
@@ -77,7 +68,6 @@ final class MacNodeModeCoordinator {
                 try await self.session.connect(
                     url: config.url,
                     token: config.token,
-                    bootstrapToken: nil,
                     password: config.password,
                     connectOptions: connectOptions,
                     sessionBox: sessionBox,
@@ -118,9 +108,6 @@ final class MacNodeModeCoordinator {
 
     private func currentCaps() -> [String] {
         var caps: [String] = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
-        if OpenClawConfigFile.browserControlEnabled() {
-            caps.append(OpenClawCapability.browser.rawValue)
-        }
         if UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false {
             caps.append(OpenClawCapability.camera.rawValue)
         }
@@ -155,9 +142,6 @@ final class MacNodeModeCoordinator {
         ]
 
         let capsSet = Set(caps)
-        if capsSet.contains(OpenClawCapability.browser.rawValue) {
-            commands.append(OpenClawBrowserCommand.proxy.rawValue)
-        }
         if capsSet.contains(OpenClawCapability.camera.rawValue) {
             commands.append(OpenClawCameraCommand.list.rawValue)
             commands.append(OpenClawCameraCommand.snap.rawValue)

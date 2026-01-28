@@ -4,7 +4,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct InstancesSettingsSmokeTests {
-    @Test func `instances settings builds body with multiple instances`() {
+    @Test func instancesSettingsBuildsBodyWithMultipleInstances() {
         let store = InstancesStore(isPreview: true)
         store.statusMessage = "Loaded"
         store.instances = [
@@ -53,7 +53,7 @@ struct InstancesSettingsSmokeTests {
         _ = view.body
     }
 
-    @Test func `instances settings exercises helpers`() {
+    @Test func instancesSettingsExercisesHelpers() {
         InstancesSettings.exerciseForTesting()
     }
 }

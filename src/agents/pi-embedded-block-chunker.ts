@@ -5,14 +5,13 @@ export type BlockReplyChunking = {
   minChars: number;
   maxChars: number;
   breakPreference?: "paragraph" | "newline" | "sentence";
-  /** When true, prefer \n\n paragraph boundaries once minChars has been satisfied. */
+  /** When true, flush eagerly on \n\n paragraph boundaries regardless of minChars. */
   flushOnParagraph?: boolean;
 };
 
 type FenceSplit = {
   closeFenceLine: string;
   reopenFenceLine: string;
-  fence: FenceSpan;
 };
 
 type BreakResult = {
@@ -24,76 +23,6 @@ type ParagraphBreak = {
   index: number;
   length: number;
 };
-
-function findSafeSentenceBreakIndex(
-  text: string,
-  fenceSpans: FenceSpan[],
-  minChars: number,
-  offset = 0,
-): number {
-  const matches = text.matchAll(/[.!?](?=\s|$)/g);
-  let sentenceIdx = -1;
-  for (const match of matches) {
-    const at = match.index ?? -1;
-    if (at < minChars) {
-      continue;
-    }
-    const candidate = at + 1;
-    if (isSafeFenceBreak(fenceSpans, offset + candidate)) {
-      sentenceIdx = candidate;
-    }
-  }
-  return sentenceIdx >= minChars ? sentenceIdx : -1;
-}
-
-function findSafeParagraphBreakIndex(params: {
-  text: string;
-  fenceSpans: FenceSpan[];
-  minChars: number;
-  reverse: boolean;
-  offset?: number;
-}): number {
-  const { text, fenceSpans, minChars, reverse, offset = 0 } = params;
-  let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
-  while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
-    const candidates = [paragraphIdx, paragraphIdx + 1];
-    for (const candidate of candidates) {
-      if (candidate < minChars) {
-        continue;
-      }
-      if (candidate < 0 || candidate >= text.length) {
-        continue;
-      }
-      if (isSafeFenceBreak(fenceSpans, offset + candidate)) {
-        return candidate;
-      }
-    }
-    paragraphIdx = reverse
-      ? text.lastIndexOf("\n\n", paragraphIdx - 1)
-      : text.indexOf("\n\n", paragraphIdx + 2);
-  }
-  return -1;
-}
-
-function findSafeNewlineBreakIndex(params: {
-  text: string;
-  fenceSpans: FenceSpan[];
-  minChars: number;
-  reverse: boolean;
-  offset?: number;
-}): number {
-  const { text, fenceSpans, minChars, reverse, offset = 0 } = params;
-  let newlineIdx = reverse ? text.lastIndexOf("\n") : text.indexOf("\n");
-  while (reverse ? newlineIdx >= minChars : newlineIdx !== -1) {
-    if (newlineIdx >= minChars && isSafeFenceBreak(fenceSpans, offset + newlineIdx)) {
-      return newlineIdx;
-    }
-    newlineIdx = reverse
-      ? text.lastIndexOf("\n", newlineIdx - 1)
-      : text.indexOf("\n", newlineIdx + 1);
-  }
-  return -1;
-}
 
 export class EmbeddedBlockChunker {
   #buffer = "";
@@ -129,6 +58,13 @@ export class EmbeddedBlockChunker {
     const minChars = Math.max(1, Math.floor(this.#chunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
 
+    // When flushOnParagraph is set (chunkMode="newline"), eagerly split on \n\n
+    // boundaries regardless of minChars so each paragraph is sent immediately.
+    if (this.#chunking.flushOnParagraph && !force) {
+      this.#drainParagraphs(emit, maxChars);
+      return;
+    }
+
     if (this.#buffer.length < minChars && !force) {
       return;
     }
@@ -141,158 +77,153 @@ export class EmbeddedBlockChunker {
       return;
     }
 
-    const source = this.#buffer;
-    const fenceSpans = parseFenceSpans(source);
-    let start = 0;
-    let reopenFence: FenceSpan | undefined;
-
-    while (start < source.length) {
-      const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
-      const remainingLength = reopenPrefix.length + (source.length - start);
-
-      if (!force && remainingLength < minChars) {
-        break;
-      }
-
-      if (this.#chunking.flushOnParagraph && !force) {
-        const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
-        const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
-          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
-          if (chunk.trim().length > 0) {
-            emit(chunk);
-          }
-          start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
-          reopenFence = undefined;
-          continue;
-        }
-        if (remainingLength < maxChars) {
-          break;
-        }
-      }
-
-      const view = source.slice(start);
+    while (this.#buffer.length >= minChars || (force && this.#buffer.length > 0)) {
       const breakResult =
-        force && remainingLength <= maxChars
-          ? this.#pickSoftBreakIndex(view, fenceSpans, 1, start)
-          : this.#pickBreakIndex(view, fenceSpans, force ? 1 : undefined, start);
+        force && this.#buffer.length <= maxChars
+          ? this.#pickSoftBreakIndex(this.#buffer, 1)
+          : this.#pickBreakIndex(this.#buffer, force ? 1 : undefined);
       if (breakResult.index <= 0) {
         if (force) {
-          emit(`${reopenPrefix}${source.slice(start)}`);
-          start = source.length;
-          reopenFence = undefined;
+          emit(this.#buffer);
+          this.#buffer = "";
         }
-        break;
+        return;
       }
 
-      const consumed = this.#emitBreakResult({
-        breakResult,
-        emit,
-        reopenPrefix,
-        source,
-        start,
-      });
-      if (consumed === null) {
+      if (!this.#emitBreakResult(breakResult, emit)) {
         continue;
       }
-      start = consumed.start;
-      reopenFence = consumed.reopenFence;
 
-      const nextLength =
-        (reopenFence ? `${reopenFence.openLine}\n`.length : 0) + (source.length - start);
-      if (nextLength < minChars && !force) {
-        break;
+      if (this.#buffer.length < minChars && !force) {
+        return;
       }
-      if (nextLength < maxChars && !force && !this.#chunking.flushOnParagraph) {
-        break;
+      if (this.#buffer.length < maxChars && !force) {
+        return;
       }
     }
-    this.#buffer = reopenFence
-      ? `${reopenFence.openLine}\n${source.slice(start)}`
-      : stripLeadingNewlines(source.slice(start));
   }
 
-  #emitBreakResult(params: {
-    breakResult: BreakResult;
-    emit: (chunk: string) => void;
-    reopenPrefix: string;
-    source: string;
-    start: number;
-  }): { start: number; reopenFence?: FenceSpan } | null {
-    const { breakResult, emit, reopenPrefix, source, start } = params;
+  /** Eagerly emit complete paragraphs (text before \n\n) regardless of minChars. */
+  #drainParagraphs(emit: (chunk: string) => void, maxChars: number) {
+    while (this.#buffer.length > 0) {
+      const fenceSpans = parseFenceSpans(this.#buffer);
+      const paragraphBreak = findNextParagraphBreak(this.#buffer, fenceSpans);
+      if (!paragraphBreak || paragraphBreak.index > maxChars) {
+        // No paragraph boundary yet (or the next boundary is too far). If the
+        // buffer exceeds maxChars, fall back to normal break logic to avoid
+        // oversized chunks or unbounded accumulation.
+        if (this.#buffer.length >= maxChars) {
+          const breakResult = this.#pickBreakIndex(this.#buffer, 1);
+          if (breakResult.index > 0) {
+            this.#emitBreakResult(breakResult, emit);
+            continue;
+          }
+        }
+        return;
+      }
+
+      const chunk = this.#buffer.slice(0, paragraphBreak.index);
+      if (chunk.trim().length > 0) {
+        emit(chunk);
+      }
+      this.#buffer = stripLeadingNewlines(
+        this.#buffer.slice(paragraphBreak.index + paragraphBreak.length),
+      );
+    }
+  }
+
+  #emitBreakResult(breakResult: BreakResult, emit: (chunk: string) => void): boolean {
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
-      return null;
+      return false;
     }
 
-    const absoluteBreakIdx = start + breakIdx;
-    let rawChunk = `${reopenPrefix}${source.slice(start, absoluteBreakIdx)}`;
+    let rawChunk = this.#buffer.slice(0, breakIdx);
     if (rawChunk.trim().length === 0) {
-      return { start: skipLeadingNewlines(source, absoluteBreakIdx), reopenFence: undefined };
+      this.#buffer = stripLeadingNewlines(this.#buffer.slice(breakIdx)).trimStart();
+      return false;
     }
 
+    let nextBuffer = this.#buffer.slice(breakIdx);
     const fenceSplit = breakResult.fenceSplit;
     if (fenceSplit) {
       const closeFence = rawChunk.endsWith("\n")
         ? `${fenceSplit.closeFenceLine}\n`
         : `\n${fenceSplit.closeFenceLine}\n`;
       rawChunk = `${rawChunk}${closeFence}`;
+
+      const reopenFence = fenceSplit.reopenFenceLine.endsWith("\n")
+        ? fenceSplit.reopenFenceLine
+        : `${fenceSplit.reopenFenceLine}\n`;
+      nextBuffer = `${reopenFence}${nextBuffer}`;
     }
 
     emit(rawChunk);
 
     if (fenceSplit) {
-      return { start: absoluteBreakIdx, reopenFence: fenceSplit.fence };
+      this.#buffer = nextBuffer;
+    } else {
+      const nextStart =
+        breakIdx < this.#buffer.length && /\s/.test(this.#buffer[breakIdx])
+          ? breakIdx + 1
+          : breakIdx;
+      this.#buffer = stripLeadingNewlines(this.#buffer.slice(nextStart));
     }
 
-    const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source[absoluteBreakIdx])
-        ? absoluteBreakIdx + 1
-        : absoluteBreakIdx;
-    return { start: skipLeadingNewlines(source, nextStart), reopenFence: undefined };
+    return true;
   }
 
-  #pickSoftBreakIndex(
-    buffer: string,
-    fenceSpans: FenceSpan[],
-    minCharsOverride?: number,
-    offset = 0,
-  ): BreakResult {
+  #pickSoftBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
     if (buffer.length < minChars) {
       return { index: -1 };
     }
+    const fenceSpans = parseFenceSpans(buffer);
     const preference = this.#chunking.breakPreference ?? "paragraph";
 
     if (preference === "paragraph") {
-      const paragraphIdx = findSafeParagraphBreakIndex({
-        text: buffer,
-        fenceSpans,
-        minChars,
-        reverse: false,
-        offset,
-      });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
+      let paragraphIdx = buffer.indexOf("\n\n");
+      while (paragraphIdx !== -1) {
+        const candidates = [paragraphIdx, paragraphIdx + 1];
+        for (const candidate of candidates) {
+          if (candidate < minChars) {
+            continue;
+          }
+          if (candidate < 0 || candidate >= buffer.length) {
+            continue;
+          }
+          if (isSafeFenceBreak(fenceSpans, candidate)) {
+            return { index: candidate };
+          }
+        }
+        paragraphIdx = buffer.indexOf("\n\n", paragraphIdx + 2);
       }
     }
 
     if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeNewlineBreakIndex({
-        text: buffer,
-        fenceSpans,
-        minChars,
-        reverse: false,
-        offset,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
+      let newlineIdx = buffer.indexOf("\n");
+      while (newlineIdx !== -1) {
+        if (newlineIdx >= minChars && isSafeFenceBreak(fenceSpans, newlineIdx)) {
+          return { index: newlineIdx };
+        }
+        newlineIdx = buffer.indexOf("\n", newlineIdx + 1);
       }
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(buffer, fenceSpans, minChars, offset);
-      if (sentenceIdx !== -1) {
+      const matches = buffer.matchAll(/[.!?](?=\s|$)/g);
+      let sentenceIdx = -1;
+      for (const match of matches) {
+        const at = match.index ?? -1;
+        if (at < minChars) {
+          continue;
+        }
+        const candidate = at + 1;
+        if (isSafeFenceBreak(fenceSpans, candidate)) {
+          sentenceIdx = candidate;
+        }
+      }
+      if (sentenceIdx >= minChars) {
         return { index: sentenceIdx };
       }
     }
@@ -300,49 +231,59 @@ export class EmbeddedBlockChunker {
     return { index: -1 };
   }
 
-  #pickBreakIndex(
-    buffer: string,
-    fenceSpans: FenceSpan[],
-    minCharsOverride?: number,
-    offset = 0,
-  ): BreakResult {
+  #pickBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
     if (buffer.length < minChars) {
       return { index: -1 };
     }
     const window = buffer.slice(0, Math.min(maxChars, buffer.length));
+    const fenceSpans = parseFenceSpans(buffer);
 
     const preference = this.#chunking.breakPreference ?? "paragraph";
     if (preference === "paragraph") {
-      const paragraphIdx = findSafeParagraphBreakIndex({
-        text: window,
-        fenceSpans,
-        minChars,
-        reverse: true,
-        offset,
-      });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
+      let paragraphIdx = window.lastIndexOf("\n\n");
+      while (paragraphIdx >= minChars) {
+        const candidates = [paragraphIdx, paragraphIdx + 1];
+        for (const candidate of candidates) {
+          if (candidate < minChars) {
+            continue;
+          }
+          if (candidate < 0 || candidate >= buffer.length) {
+            continue;
+          }
+          if (isSafeFenceBreak(fenceSpans, candidate)) {
+            return { index: candidate };
+          }
+        }
+        paragraphIdx = window.lastIndexOf("\n\n", paragraphIdx - 1);
       }
     }
 
     if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeNewlineBreakIndex({
-        text: window,
-        fenceSpans,
-        minChars,
-        reverse: true,
-        offset,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
+      let newlineIdx = window.lastIndexOf("\n");
+      while (newlineIdx >= minChars) {
+        if (isSafeFenceBreak(fenceSpans, newlineIdx)) {
+          return { index: newlineIdx };
+        }
+        newlineIdx = window.lastIndexOf("\n", newlineIdx - 1);
       }
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(window, fenceSpans, minChars, offset);
-      if (sentenceIdx !== -1) {
+      const matches = window.matchAll(/[.!?](?=\s|$)/g);
+      let sentenceIdx = -1;
+      for (const match of matches) {
+        const at = match.index ?? -1;
+        if (at < minChars) {
+          continue;
+        }
+        const candidate = at + 1;
+        if (isSafeFenceBreak(fenceSpans, candidate)) {
+          sentenceIdx = candidate;
+        }
+      }
+      if (sentenceIdx >= minChars) {
         return { index: sentenceIdx };
       }
     }
@@ -352,23 +293,22 @@ export class EmbeddedBlockChunker {
     }
 
     for (let i = window.length - 1; i >= minChars; i--) {
-      if (/\s/.test(window[i]) && isSafeFenceBreak(fenceSpans, offset + i)) {
+      if (/\s/.test(window[i]) && isSafeFenceBreak(fenceSpans, i)) {
         return { index: i };
       }
     }
 
     if (buffer.length >= maxChars) {
-      if (isSafeFenceBreak(fenceSpans, offset + maxChars)) {
+      if (isSafeFenceBreak(fenceSpans, maxChars)) {
         return { index: maxChars };
       }
-      const fence = findFenceSpanAt(fenceSpans, offset + maxChars);
+      const fence = findFenceSpanAt(fenceSpans, maxChars);
       if (fence) {
         return {
           index: maxChars,
           fenceSplit: {
             closeFenceLine: `${fence.indent}${fence.marker}`,
             reopenFenceLine: fence.openLine,
-            fence,
           },
         };
       }
@@ -379,24 +319,18 @@ export class EmbeddedBlockChunker {
   }
 }
 
-function skipLeadingNewlines(value: string, start = 0): number {
-  let i = start;
+function stripLeadingNewlines(value: string): string {
+  let i = 0;
   while (i < value.length && value[i] === "\n") {
     i++;
   }
-  return i;
-}
-
-function stripLeadingNewlines(value: string): string {
-  const start = skipLeadingNewlines(value);
-  return start > 0 ? value.slice(start) : value;
+  return i > 0 ? value.slice(i) : value;
 }
 
 function findNextParagraphBreak(
   buffer: string,
   fenceSpans: FenceSpan[],
   startIndex = 0,
-  minCharsFromStart = 1,
 ): ParagraphBreak | null {
   if (startIndex < 0) {
     return null;
@@ -407,9 +341,6 @@ function findNextParagraphBreak(
   while ((match = re.exec(buffer)) !== null) {
     const index = match.index ?? -1;
     if (index < 0) {
-      continue;
-    }
-    if (index - startIndex < minCharsFromStart) {
       continue;
     }
     if (!isSafeFenceBreak(fenceSpans, index)) {

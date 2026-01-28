@@ -1,42 +1,30 @@
 import crypto from "node:crypto";
-import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import type { TypingMode } from "../../config/types.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { FollowupRun } from "./queue.js";
+import type { TypingController } from "./typing.js";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { TypingMode } from "../../config/types.js";
+import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { resolveRunAuthProfile } from "./agent-runner-utils.js";
-import {
-  resolveOriginAccountId,
-  resolveOriginMessageProvider,
-  resolveOriginMessageTo,
-} from "./origin-routing.js";
-import type { FollowupRun } from "./queue.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { incrementCompactionCount } from "./session-updates.js";
+import { persistSessionUsageUpdate } from "./session-usage.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import type { TypingController } from "./typing.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -85,12 +73,13 @@ export function createFollowupRunner(params: {
     }
 
     for (const payload of payloads) {
-      if (!payload || !hasOutboundReplyContent(payload)) {
+      if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
         continue;
       }
       if (
         isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
-        !resolveSendableOutboundReplyParts(payload).hasMedia
+        !payload.mediaUrl &&
+        !payload.mediaUrls?.length
       ) {
         continue;
       }
@@ -108,21 +97,11 @@ export function createFollowupRunner(params: {
           cfg: queued.run.config,
         });
         if (!result.ok) {
+          // Log error and fall back to dispatcher if available.
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply && origin && origin === provider) {
+          // Fallback: try the dispatcher if routing failed.
+          if (opts?.onBlockReply) {
             await opts.onBlockReply(payload);
           }
         }
@@ -135,118 +114,74 @@ export function createFollowupRunner(params: {
   return async (queued: FollowupRun) => {
     try {
       const runId = crypto.randomUUID();
-      const shouldSurfaceToControlUi = isInternalMessageChannel(
-        resolveOriginMessageProvider({
-          originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
-        }),
-      );
       if (queued.run.sessionKey) {
         registerAgentRunContext(runId, {
           sessionKey: queued.run.sessionKey,
           verboseLevel: queued.run.verboseLevel,
-          isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
-      let autoCompactionCount = 0;
+      let autoCompactionCompleted = false;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-      const activeSessionEntry =
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
-      let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-        activeSessionEntry?.systemPromptReport,
-      );
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
           provider: queued.run.provider,
           model: queued.run.model,
-          runId,
           agentDir: queued.run.agentDir,
-          fallbacksOverride: resolveRunModelFallbacksOverride({
-            cfg: queued.run.config,
-            agentId: queued.run.agentId,
-            sessionKey: queued.run.sessionKey,
-          }),
-          run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(queued.run, provider);
-            let attemptCompactionCount = 0;
-            try {
-              const result = await runEmbeddedPiAgent({
-                allowGatewaySubagentBinding: true,
-                sessionId: queued.run.sessionId,
-                sessionKey: queued.run.sessionKey,
-                agentId: queued.run.agentId,
-                trigger: "user",
-                messageChannel: queued.originatingChannel ?? undefined,
-                messageProvider: queued.run.messageProvider,
-                agentAccountId: queued.run.agentAccountId,
-                messageTo: queued.originatingTo,
-                messageThreadId: queued.originatingThreadId,
-                currentChannelId: queued.originatingTo,
-                currentThreadTs:
-                  queued.originatingThreadId != null
-                    ? String(queued.originatingThreadId)
-                    : undefined,
-                groupId: queued.run.groupId,
-                groupChannel: queued.run.groupChannel,
-                groupSpace: queued.run.groupSpace,
-                senderId: queued.run.senderId,
-                senderName: queued.run.senderName,
-                senderUsername: queued.run.senderUsername,
-                senderE164: queued.run.senderE164,
-                senderIsOwner: queued.run.senderIsOwner,
-                sessionFile: queued.run.sessionFile,
-                agentDir: queued.run.agentDir,
-                workspaceDir: queued.run.workspaceDir,
-                config: queued.run.config,
-                skillsSnapshot: queued.run.skillsSnapshot,
-                prompt: queued.prompt,
-                extraSystemPrompt: queued.run.extraSystemPrompt,
-                ownerNumbers: queued.run.ownerNumbers,
-                enforceFinalTag: queued.run.enforceFinalTag,
-                provider,
-                model,
-                ...authProfile,
-                thinkLevel: queued.run.thinkLevel,
-                verboseLevel: queued.run.verboseLevel,
-                reasoningLevel: queued.run.reasoningLevel,
-                suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
-                execOverrides: queued.run.execOverrides,
-                bashElevated: queued.run.bashElevated,
-                timeoutMs: queued.run.timeoutMs,
-                runId,
-                allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-                blockReplyBreak: queued.run.blockReplyBreak,
-                bootstrapPromptWarningSignaturesSeen,
-                bootstrapPromptWarningSignature:
-                  bootstrapPromptWarningSignaturesSeen[
-                    bootstrapPromptWarningSignaturesSeen.length - 1
-                  ],
-                onAgentEvent: (evt) => {
-                  if (evt.stream !== "compaction") {
-                    return;
-                  }
-                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  const completed = evt.data?.completed === true;
-                  if (phase === "end" && completed) {
-                    attemptCompactionCount += 1;
-                  }
-                },
-              });
-              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                result.meta?.systemPromptReport,
-              );
-              const resultCompactionCount = Math.max(
-                0,
-                result.meta?.agentMeta?.compactionCount ?? 0,
-              );
-              attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
-              return result;
-            } finally {
-              autoCompactionCount += attemptCompactionCount;
-            }
+          fallbacksOverride: resolveAgentModelFallbacksOverride(
+            queued.run.config,
+            resolveAgentIdFromSessionKey(queued.run.sessionKey),
+          ),
+          run: (provider, model) => {
+            const authProfileId =
+              provider === queued.run.provider ? queued.run.authProfileId : undefined;
+            return runEmbeddedPiAgent({
+              sessionId: queued.run.sessionId,
+              sessionKey: queued.run.sessionKey,
+              messageProvider: queued.run.messageProvider,
+              agentAccountId: queued.run.agentAccountId,
+              messageTo: queued.originatingTo,
+              messageThreadId: queued.originatingThreadId,
+              groupId: queued.run.groupId,
+              groupChannel: queued.run.groupChannel,
+              groupSpace: queued.run.groupSpace,
+              senderId: queued.run.senderId,
+              senderName: queued.run.senderName,
+              senderUsername: queued.run.senderUsername,
+              senderE164: queued.run.senderE164,
+              sessionFile: queued.run.sessionFile,
+              workspaceDir: queued.run.workspaceDir,
+              config: queued.run.config,
+              skillsSnapshot: queued.run.skillsSnapshot,
+              prompt: queued.prompt,
+              extraSystemPrompt: queued.run.extraSystemPrompt,
+              ownerNumbers: queued.run.ownerNumbers,
+              enforceFinalTag: queued.run.enforceFinalTag,
+              provider,
+              model,
+              authProfileId,
+              authProfileIdSource: authProfileId ? queued.run.authProfileIdSource : undefined,
+              thinkLevel: queued.run.thinkLevel,
+              verboseLevel: queued.run.verboseLevel,
+              reasoningLevel: queued.run.reasoningLevel,
+              execOverrides: queued.run.execOverrides,
+              bashElevated: queued.run.bashElevated,
+              timeoutMs: queued.run.timeoutMs,
+              runId,
+              blockReplyBreak: queued.run.blockReplyBreak,
+              onAgentEvent: (evt) => {
+                if (evt.stream !== "compaction") {
+                  return;
+                }
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const willRetry = Boolean(evt.data.willRetry);
+                if (phase === "end" && !willRetry) {
+                  autoCompactionCompleted = true;
+                }
+              },
+            });
           },
         });
         runResult = fallbackResult.result;
@@ -258,27 +193,22 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      const usage = runResult.meta?.agentMeta?.usage;
-      const promptTokens = runResult.meta?.agentMeta?.promptTokens;
-      const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const contextTokensUsed =
-        agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
-
       if (storePath && sessionKey) {
-        await persistRunSessionUsage({
+        const usage = runResult.meta.agentMeta?.usage;
+        const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+        const contextTokensUsed =
+          agentCfgContextTokens ??
+          lookupContextTokens(modelUsed) ??
+          sessionEntry?.contextTokens ??
+          DEFAULT_CONTEXT_TOKENS;
+
+        await persistSessionUsageUpdate({
           storePath,
           sessionKey,
-          cfg: queued.run.config,
           usage,
-          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-          promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
-          systemPromptReport: runResult.meta?.systemPromptReport,
           logLabel: "followup",
         });
       }
@@ -293,16 +223,15 @@ export function createFollowupRunner(params: {
           return [payload];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel = resolveOriginMessageProvider({
-        originatingChannel: queued.originatingChannel,
-        provider: queued.run.messageProvider,
-      }) as OriginatingChannelType | undefined;
+      const replyToChannel =
+        queued.originatingChannel ??
+        (queued.run.messageProvider?.toLowerCase() as OriginatingChannelType | undefined);
       const replyToMode = resolveReplyToMode(
         queued.run.config,
         replyToChannel,
@@ -320,39 +249,24 @@ export function createFollowupRunner(params: {
         payloads: replyTaggedPayloads,
         sentTexts: runResult.messagingToolSentTexts ?? [],
       });
-      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-        payloads: dedupedPayloads,
-        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
-      });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-        messageProvider: resolveOriginMessageProvider({
-          originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
-        }),
+        messageProvider: queued.run.messageProvider,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: queued.originatingTo,
-        }),
-        accountId: resolveOriginAccountId({
-          originatingAccountId: queued.originatingAccountId,
-          accountId: queued.run.agentAccountId,
-        }),
+        originatingTo: queued.originatingTo,
+        accountId: queued.run.agentAccountId,
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
+      const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
 
       if (finalPayloads.length === 0) {
         return;
       }
 
-      if (autoCompactionCount > 0) {
-        const count = await incrementRunCompactionCount({
+      if (autoCompactionCompleted) {
+        const count = await incrementCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
-          amount: autoCompactionCount,
-          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-          contextTokensUsed,
         });
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
@@ -364,15 +278,7 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
-      // Both signals are required for the typing controller to clean up.
-      // The main inbound dispatch path calls markDispatchIdle() from the
-      // buffered dispatcher's finally block, but followup turns bypass the
-      // dispatcher entirely — so we must fire both signals here.  Without
-      // this, NO_REPLY / empty-payload followups leave the typing indicator
-      // stuck (the keepalive loop keeps sending "typing" to Telegram
-      // indefinitely until the TTL expires).
       typing.markRunComplete();
-      typing.markDispatchIdle();
     }
   };
 }

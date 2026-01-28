@@ -1,5 +1,3 @@
-import { createDedupeCache } from "../../api.js";
-
 export type ProcessedMessageTracker = {
   mark: (id?: string | null) => boolean;
   has: (id?: string | null) => boolean;
@@ -7,14 +5,29 @@ export type ProcessedMessageTracker = {
 };
 
 export function createProcessedMessageTracker(limit = 2000): ProcessedMessageTracker {
-  const dedupe = createDedupeCache({ ttlMs: 0, maxSize: limit });
+  const seen = new Set<string>();
+  const order: string[] = [];
 
   const mark = (id?: string | null) => {
     const trimmed = id?.trim();
     if (!trimmed) {
       return true;
     }
-    return !dedupe.check(trimmed);
+    if (seen.has(trimmed)) {
+      return false;
+    }
+    seen.add(trimmed);
+    order.push(trimmed);
+    if (order.length > limit) {
+      const overflow = order.length - limit;
+      for (let i = 0; i < overflow; i += 1) {
+        const oldest = order.shift();
+        if (oldest) {
+          seen.delete(oldest);
+        }
+      }
+    }
+    return true;
   };
 
   const has = (id?: string | null) => {
@@ -22,12 +35,12 @@ export function createProcessedMessageTracker(limit = 2000): ProcessedMessageTra
     if (!trimmed) {
       return false;
     }
-    return dedupe.peek(trimmed);
+    return seen.has(trimmed);
   };
 
   return {
     mark,
     has,
-    size: () => dedupe.size(),
+    size: () => seen.size,
   };
 }

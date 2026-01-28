@@ -37,20 +37,7 @@ describe("resolveMentionGating", () => {
 });
 
 describe("resolveMentionGatingWithBypass", () => {
-  it.each([
-    {
-      name: "enables bypass when control commands are authorized",
-      commandAuthorized: true,
-      shouldBypassMention: true,
-      shouldSkip: false,
-    },
-    {
-      name: "does not bypass when control commands are not authorized",
-      commandAuthorized: false,
-      shouldBypassMention: false,
-      shouldSkip: true,
-    },
-  ])("$name", ({ commandAuthorized, shouldBypassMention, shouldSkip }) => {
+  it("enables bypass when control commands are authorized", () => {
     const res = resolveMentionGatingWithBypass({
       isGroup: true,
       requireMention: true,
@@ -59,9 +46,24 @@ describe("resolveMentionGatingWithBypass", () => {
       hasAnyMention: false,
       allowTextCommands: true,
       hasControlCommand: true,
-      commandAuthorized,
+      commandAuthorized: true,
     });
-    expect(res.shouldBypassMention).toBe(shouldBypassMention);
-    expect(res.shouldSkip).toBe(shouldSkip);
+    expect(res.shouldBypassMention).toBe(true);
+    expect(res.shouldSkip).toBe(false);
+  });
+
+  it("does not bypass when control commands are not authorized", () => {
+    const res = resolveMentionGatingWithBypass({
+      isGroup: true,
+      requireMention: true,
+      canDetectMention: true,
+      wasMentioned: false,
+      hasAnyMention: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
+      commandAuthorized: false,
+    });
+    expect(res.shouldBypassMention).toBe(false);
+    expect(res.shouldSkip).toBe(true);
   });
 });

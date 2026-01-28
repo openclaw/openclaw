@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
-import type { MediaUnderstandingCapability } from "./types.js";
 
-const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
+const providerRegistry = new Map([
   ["openai", { capabilities: ["image"] }],
   ["groq", { capabilities: ["audio"] }],
 ]);
@@ -72,38 +71,6 @@ describe("resolveModelEntries", () => {
 });
 
 describe("resolveEntriesWithActiveFallback", () => {
-  type ResolveWithFallbackInput = Parameters<typeof resolveEntriesWithActiveFallback>[0];
-  const defaultActiveModel = { provider: "groq", model: "whisper-large-v3" } as const;
-
-  function resolveWithActiveFallback(params: {
-    cfg: ResolveWithFallbackInput["cfg"];
-    capability: ResolveWithFallbackInput["capability"];
-    config: ResolveWithFallbackInput["config"];
-  }) {
-    return resolveEntriesWithActiveFallback({
-      cfg: params.cfg,
-      capability: params.capability,
-      config: params.config,
-      providerRegistry,
-      activeModel: defaultActiveModel,
-    });
-  }
-
-  function expectResolvedProviders(params: {
-    cfg: OpenClawConfig;
-    capability: ResolveWithFallbackInput["capability"];
-    config: ResolveWithFallbackInput["config"];
-    providers: string[];
-  }) {
-    const entries = resolveWithActiveFallback({
-      cfg: params.cfg,
-      capability: params.capability,
-      config: params.config,
-    });
-    expect(entries).toHaveLength(params.providers.length);
-    expect(entries.map((entry) => entry.provider)).toEqual(params.providers);
-  }
-
   it("uses active model when enabled and no models are configured", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -113,12 +80,15 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    expectResolvedProviders({
+    const entries = resolveEntriesWithActiveFallback({
       cfg,
       capability: "audio",
       config: cfg.tools?.media?.audio,
-      providers: ["groq"],
+      providerRegistry,
+      activeModel: { provider: "groq", model: "whisper-large-v3" },
     });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.provider).toBe("groq");
   });
 
   it("ignores active model when configured entries exist", () => {
@@ -130,12 +100,15 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    expectResolvedProviders({
+    const entries = resolveEntriesWithActiveFallback({
       cfg,
       capability: "audio",
       config: cfg.tools?.media?.audio,
-      providers: ["openai"],
+      providerRegistry,
+      activeModel: { provider: "groq", model: "whisper-large-v3" },
     });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.provider).toBe("openai");
   });
 
   it("skips active model when provider lacks capability", () => {
@@ -147,10 +120,12 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    const entries = resolveWithActiveFallback({
+    const entries = resolveEntriesWithActiveFallback({
       cfg,
       capability: "video",
       config: cfg.tools?.media?.video,
+      providerRegistry,
+      activeModel: { provider: "groq", model: "whisper-large-v3" },
     });
     expect(entries).toHaveLength(0);
   });

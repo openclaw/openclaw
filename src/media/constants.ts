@@ -3,11 +3,11 @@ export const MAX_AUDIO_BYTES = 16 * 1024 * 1024; // 16MB
 export const MAX_VIDEO_BYTES = 16 * 1024 * 1024; // 16MB
 export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024; // 100MB
 
-export type MediaKind = "image" | "audio" | "video" | "document";
+export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
-export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
+export function mediaKindFromMime(mime?: string | null): MediaKind {
   if (!mime) {
-    return undefined;
+    return "unknown";
   }
   if (mime.startsWith("image/")) {
     return "image";
@@ -21,13 +21,10 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   if (mime === "application/pdf") {
     return "document";
   }
-  if (mime.startsWith("text/")) {
-    return "document";
-  }
   if (mime.startsWith("application/")) {
     return "document";
   }
-  return undefined;
+  return "unknown";
 }
 
 export function maxBytesForKind(kind: MediaKind): number {

@@ -10,37 +10,11 @@ export function resolveAgentIdentity(
   return resolveAgentConfig(cfg, agentId)?.identity;
 }
 
-export function resolveAckReaction(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { channel?: string; accountId?: string },
-): string {
-  // L1: Channel account level
-  if (opts?.channel && opts?.accountId) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountReaction = accounts?.[opts.accountId]?.ackReaction as string | undefined;
-    if (accountReaction !== undefined) {
-      return accountReaction.trim();
-    }
-  }
-
-  // L2: Channel level
-  if (opts?.channel) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelReaction = channelCfg?.ackReaction as string | undefined;
-    if (channelReaction !== undefined) {
-      return channelReaction.trim();
-    }
-  }
-
-  // L3: Global messages level
+export function resolveAckReaction(cfg: OpenClawConfig, agentId: string): string {
   const configured = cfg.messages?.ackReaction;
   if (configured !== undefined) {
     return configured.trim();
   }
-
-  // L4: Agent identity emoji fallback
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;
 }
@@ -79,49 +53,7 @@ export function resolveMessagePrefix(
   return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]";
 }
 
-/** Helper to extract a channel config value by dynamic key. */
-function getChannelConfig(
-  cfg: OpenClawConfig,
-  channel: string,
-): Record<string, unknown> | undefined {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const value = channels?.[channel];
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-export function resolveResponsePrefix(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { channel?: string; accountId?: string },
-): string | undefined {
-  // L1: Channel account level
-  if (opts?.channel && opts?.accountId) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountPrefix = accounts?.[opts.accountId]?.responsePrefix as string | undefined;
-    if (accountPrefix !== undefined) {
-      if (accountPrefix === "auto") {
-        return resolveIdentityNamePrefix(cfg, agentId);
-      }
-      return accountPrefix;
-    }
-  }
-
-  // L2: Channel level
-  if (opts?.channel) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelPrefix = channelCfg?.responsePrefix as string | undefined;
-    if (channelPrefix !== undefined) {
-      if (channelPrefix === "auto") {
-        return resolveIdentityNamePrefix(cfg, agentId);
-      }
-      return channelPrefix;
-    }
-  }
-
-  // L4: Global level
+export function resolveResponsePrefix(cfg: OpenClawConfig, agentId: string): string | undefined {
   const configured = cfg.messages?.responsePrefix;
   if (configured !== undefined) {
     if (configured === "auto") {
@@ -135,22 +67,14 @@ export function resolveResponsePrefix(
 export function resolveEffectiveMessagesConfig(
   cfg: OpenClawConfig,
   agentId: string,
-  opts?: {
-    hasAllowFrom?: boolean;
-    fallbackMessagePrefix?: string;
-    channel?: string;
-    accountId?: string;
-  },
+  opts?: { hasAllowFrom?: boolean; fallbackMessagePrefix?: string },
 ): { messagePrefix: string; responsePrefix?: string } {
   return {
     messagePrefix: resolveMessagePrefix(cfg, agentId, {
       hasAllowFrom: opts?.hasAllowFrom,
       fallback: opts?.fallbackMessagePrefix,
     }),
-    responsePrefix: resolveResponsePrefix(cfg, agentId, {
-      channel: opts?.channel,
-      accountId: opts?.accountId,
-    }),
+    responsePrefix: resolveResponsePrefix(cfg, agentId),
   };
 }
 

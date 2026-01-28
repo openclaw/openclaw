@@ -2,10 +2,10 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-struct InstancesStoreTests {
+@Suite struct InstancesStoreTests {
     @Test
     @MainActor
-    func `presence event payload decodes via JSON encoder`() {
+    func presenceEventPayloadDecodesViaJSONEncoder() {
         // Build a payload that mirrors the gateway's presence event shape:
         // { "presence": [ PresenceEntry ] }
         let entry: [String: OpenClawProtocol.AnyCodable] = [

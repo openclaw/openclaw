@@ -1,8 +1,7 @@
 import { html } from "lit";
-import type { ConfigUiHints } from "../types.ts";
-import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
-import type { ChannelsProps } from "./channels.types.ts";
-import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form.ts";
+import type { ConfigUiHints } from "../types";
+import type { ChannelsProps } from "./channels.types";
+import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form";
 
 type ChannelConfigFormProps = {
   channelId: string;
@@ -53,10 +52,32 @@ function resolveChannelValue(
   config: Record<string, unknown>,
   channelId: string,
 ): Record<string, unknown> {
-  return resolveChannelConfigValue(config, channelId) ?? {};
+  const channels = (config.channels ?? {}) as Record<string, unknown>;
+  const fromChannels = channels[channelId];
+  const fallback = config[channelId];
+  const resolved =
+    (fromChannels && typeof fromChannels === "object"
+      ? (fromChannels as Record<string, unknown>)
+      : null) ??
+    (fallback && typeof fallback === "object" ? (fallback as Record<string, unknown>) : null);
+  return resolved ?? {};
 }
 
 const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
+
+function formatExtraValue(raw: unknown): string {
+  if (raw == null) {
+    return "n/a";
+  }
+  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+    return String(raw);
+  }
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return "n/a";
+  }
+}
 
 function renderExtraChannelFields(value: Record<string, unknown>) {
   const entries = EXTRA_CHANNEL_FIELDS.flatMap((field) => {
@@ -74,7 +95,7 @@ function renderExtraChannelFields(value: Record<string, unknown>) {
         ([field, raw]) => html`
           <div>
             <span class="label">${field}</span>
-            <span>${formatChannelExtraValue(raw)}</span>
+            <span>${formatExtraValue(raw)}</span>
           </div>
         `,
       )}

@@ -101,7 +101,7 @@
     },
     "tts.provider": {
       "label": "TTS Provider Override",
-      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
+      "help": "Deep-merges with messages.tts (Edge is ignored for calls).",
       "advanced": true
     },
     "tts.openai.model": {
@@ -249,10 +249,6 @@
         "type": "integer",
         "minimum": 1
       },
-      "staleCallReaperSeconds": {
-        "type": "integer",
-        "minimum": 0
-      },
       "silenceTimeoutMs": {
         "type": "integer",
         "minimum": 1
@@ -317,27 +313,6 @@
           }
         }
       },
-      "webhookSecurity": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "allowedHosts": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "trustForwardingHeaders": {
-            "type": "boolean"
-          },
-          "trustedProxyIPs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
       "streaming": {
         "type": "object",
         "additionalProperties": false,
@@ -366,22 +341,6 @@
           },
           "streamPath": {
             "type": "string"
-          },
-          "preStartTimeoutMs": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "maxPendingConnections": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "maxPendingConnectionsPerIp": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "maxConnections": {
-            "type": "integer",
-            "minimum": 1
           }
         }
       },
@@ -420,7 +379,8 @@
             "enum": ["final", "all"]
           },
           "provider": {
-            "type": "string"
+            "type": "string",
+            "enum": ["openai", "elevenlabs", "edge"]
           },
           "summaryModel": {
             "type": "string"
@@ -521,21 +481,10 @@
               "apiKey": {
                 "type": "string"
               },
-              "baseUrl": {
-                "type": "string"
-              },
               "model": {
                 "type": "string"
               },
               "voice": {
-                "type": "string"
-              },
-              "speed": {
-                "type": "number",
-                "minimum": 0.25,
-                "maximum": 4.0
-              },
-              "instructions": {
                 "type": "string"
               }
             }

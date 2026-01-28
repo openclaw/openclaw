@@ -2,58 +2,25 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-private func makeSkillStatus(
-    name: String,
-    description: String,
-    source: String,
-    filePath: String,
-    skillKey: String,
-    primaryEnv: String? = nil,
-    emoji: String,
-    homepage: String? = nil,
-    disabled: Bool = false,
-    eligible: Bool,
-    requirements: SkillRequirements = SkillRequirements(bins: [], env: [], config: []),
-    missing: SkillMissing = SkillMissing(bins: [], env: [], config: []),
-    configChecks: [SkillStatusConfigCheck] = [],
-    install: [SkillInstallOption] = [])
-    -> SkillStatus
-{
-    SkillStatus(
-        name: name,
-        description: description,
-        source: source,
-        filePath: filePath,
-        baseDir: "/tmp/skills",
-        skillKey: skillKey,
-        primaryEnv: primaryEnv,
-        emoji: emoji,
-        homepage: homepage,
-        always: false,
-        disabled: disabled,
-        eligible: eligible,
-        requirements: requirements,
-        missing: missing,
-        configChecks: configChecks,
-        install: install)
-}
-
 @Suite(.serialized)
 @MainActor
 struct SkillsSettingsSmokeTests {
-    @Test func `skills settings builds body with skills remote`() {
+    @Test func skillsSettingsBuildsBodyWithSkillsRemote() {
         let model = SkillsSettingsModel()
         model.statusMessage = "Loaded"
         model.skills = [
-            makeSkillStatus(
+            SkillStatus(
                 name: "Needs Setup",
                 description: "Missing bins and env",
                 source: "openclaw-managed",
                 filePath: "/tmp/skills/needs-setup",
+                baseDir: "/tmp/skills",
                 skillKey: "needs-setup",
                 primaryEnv: "API_KEY",
                 emoji: "🧰",
                 homepage: "https://example.com/needs-setup",
+                always: false,
+                disabled: false,
                 eligible: false,
                 requirements: SkillRequirements(
                     bins: ["python3"],
@@ -69,29 +36,43 @@ struct SkillsSettingsSmokeTests {
                 install: [
                     SkillInstallOption(id: "brew", kind: "brew", label: "brew install python", bins: ["python3"]),
                 ]),
-            makeSkillStatus(
+            SkillStatus(
                 name: "Ready Skill",
                 description: "All set",
                 source: "openclaw-bundled",
                 filePath: "/tmp/skills/ready",
+                baseDir: "/tmp/skills",
                 skillKey: "ready",
+                primaryEnv: nil,
                 emoji: "✅",
                 homepage: "https://example.com/ready",
+                always: false,
+                disabled: false,
                 eligible: true,
+                requirements: SkillRequirements(bins: [], env: [], config: []),
+                missing: SkillMissing(bins: [], env: [], config: []),
                 configChecks: [
                     SkillStatusConfigCheck(path: "skills.ready", value: AnyCodable(true), satisfied: true),
                     SkillStatusConfigCheck(path: "skills.limit", value: AnyCodable(5), satisfied: true),
                 ],
                 install: []),
-            makeSkillStatus(
+            SkillStatus(
                 name: "Disabled Skill",
                 description: "Disabled in config",
                 source: "openclaw-extra",
                 filePath: "/tmp/skills/disabled",
+                baseDir: "/tmp/skills",
                 skillKey: "disabled",
+                primaryEnv: nil,
                 emoji: "🚫",
+                homepage: nil,
+                always: false,
                 disabled: true,
-                eligible: false),
+                eligible: false,
+                requirements: SkillRequirements(bins: [], env: [], config: []),
+                missing: SkillMissing(bins: [], env: [], config: []),
+                configChecks: [],
+                install: []),
         ]
 
         let state = AppState(preview: true)
@@ -103,17 +84,26 @@ struct SkillsSettingsSmokeTests {
         _ = view.body
     }
 
-    @Test func `skills settings builds body with local mode`() {
+    @Test func skillsSettingsBuildsBodyWithLocalMode() {
         let model = SkillsSettingsModel()
         model.skills = [
-            makeSkillStatus(
+            SkillStatus(
                 name: "Local Skill",
                 description: "Local ready",
                 source: "openclaw-workspace",
                 filePath: "/tmp/skills/local",
+                baseDir: "/tmp/skills",
                 skillKey: "local",
+                primaryEnv: nil,
                 emoji: "🏠",
-                eligible: true),
+                homepage: nil,
+                always: false,
+                disabled: false,
+                eligible: true,
+                requirements: SkillRequirements(bins: [], env: [], config: []),
+                missing: SkillMissing(bins: [], env: [], config: []),
+                configChecks: [],
+                install: []),
         ]
 
         let state = AppState(preview: true)
@@ -123,7 +113,7 @@ struct SkillsSettingsSmokeTests {
         _ = view.body
     }
 
-    @Test func `skills settings exercises private views`() {
+    @Test func skillsSettingsExercisesPrivateViews() {
         SkillsSettings.exerciseForTesting()
     }
 }

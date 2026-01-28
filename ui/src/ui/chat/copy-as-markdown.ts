@@ -1,5 +1,5 @@
 import { html, type TemplateResult } from "lit";
-import { icons } from "../icons.ts";
+import { icons } from "../icons";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;

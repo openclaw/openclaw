@@ -1,13 +1,8 @@
 import type { Command } from "commander";
+import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { BrowserParentOpts } from "../browser-cli-shared.js";
-import {
-  callBrowserAct,
-  logBrowserActionResult,
-  readFields,
-  resolveBrowserActionContext,
-} from "./shared.js";
+import { callBrowserAct, readFields, resolveBrowserActionContext } from "./shared.js";
 
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
@@ -35,7 +30,11 @@ export function registerBrowserFormWaitEvalCommands(
             targetId: opts.targetId?.trim() || undefined,
           },
         });
-        logBrowserActionResult(parent, result, `filled ${fields.length} field(s)`);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log(`filled ${fields.length} field(s)`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -84,7 +83,11 @@ export function registerBrowserFormWaitEvalCommands(
           },
           timeoutMs,
         });
-        logBrowserActionResult(parent, result, "wait complete");
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log("wait complete");
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

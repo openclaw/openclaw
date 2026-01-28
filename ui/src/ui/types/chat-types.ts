@@ -5,7 +5,6 @@
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown }
-  | { kind: "divider"; key: string; label: string; timestamp: number }
   | { kind: "stream"; key: string; text: string; startedAt: number }
   | { kind: "reading-indicator"; key: string };
 
@@ -14,7 +13,6 @@ export type MessageGroup = {
   kind: "group";
   key: string;
   role: string;
-  senderLabel?: string | null;
   messages: Array<{ message: unknown; key: string }>;
   timestamp: number;
   isStreaming: boolean;
@@ -34,7 +32,6 @@ export type NormalizedMessage = {
   content: MessageContentItem[];
   timestamp: number;
   id?: string;
-  senderLabel?: string | null;
 };
 
 /** Tool card representation for tool calls and results */

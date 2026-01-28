@@ -47,7 +47,7 @@ export const ConnectParamsSchema = Type.Object(
           publicKey: NonEmptyString,
           signature: NonEmptyString,
           signedAt: Type.Integer({ minimum: 0 }),
-          nonce: NonEmptyString,
+          nonce: Type.Optional(NonEmptyString),
         },
         { additionalProperties: false },
       ),
@@ -56,8 +56,6 @@ export const ConnectParamsSchema = Type.Object(
       Type.Object(
         {
           token: Type.Optional(Type.String()),
-          bootstrapToken: Type.Optional(Type.String()),
-          deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
@@ -76,6 +74,8 @@ export const HelloOkSchema = Type.Object(
     server: Type.Object(
       {
         version: NonEmptyString,
+        commit: Type.Optional(NonEmptyString),
+        host: Type.Optional(NonEmptyString),
         connId: NonEmptyString,
       },
       { additionalProperties: false },

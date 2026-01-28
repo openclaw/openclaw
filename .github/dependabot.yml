@@ -7,7 +7,6 @@ registries:
   npm-npmjs:
     type: npm-registry
     url: https://registry.npmjs.org
-    token: ${{secrets.NPM_NPMJS_TOKEN}}
     replaces-base: true
 
 updates:
@@ -15,9 +14,9 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
-      default-days: 2
+      default-days: 7
     groups:
       production:
         dependency-type: production
@@ -37,9 +36,9 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
-      default-days: 2
+      default-days: 7
     groups:
       actions:
         patterns:
@@ -53,9 +52,9 @@ updates:
   - package-ecosystem: swift
     directory: /apps/macos
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
-      default-days: 2
+      default-days: 7
     groups:
       swift-deps:
         patterns:
@@ -69,9 +68,9 @@ updates:
   - package-ecosystem: swift
     directory: /apps/shared/MoltbotKit
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
-      default-days: 2
+      default-days: 7
     groups:
       swift-deps:
         patterns:
@@ -85,9 +84,9 @@ updates:
   - package-ecosystem: swift
     directory: /Swabble
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
-      default-days: 2
+      default-days: 7
     groups:
       swift-deps:
         patterns:
@@ -101,9 +100,9 @@ updates:
   - package-ecosystem: gradle
     directory: /apps/android
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
-      default-days: 2
+      default-days: 7
     groups:
       android-deps:
         patterns:
@@ -111,17 +110,4 @@ updates:
         update-types:
           - minor
           - patch
-    open-pull-requests-limit: 5
-
-  # Docker base images
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 2
-    groups:
-      docker-images:
-        patterns:
-          - "*"
     open-pull-requests-limit: 5

@@ -166,7 +166,7 @@ Example (allow only file tools + browser):
 ## Plugins + tools
 
 Plugins can register **additional tools** (and CLI commands) beyond the core set.
-See [Plugins](/tools/plugin) for install + config, and [Skills](/tools/skills) for how
+See [Plugins](/plugin) for install + config, and [Skills](/tools/skills) for how
 tool usage guidance is injected into prompts. Some plugins ship their own skills
 alongside tools (for example, the voice-call plugin).
 
@@ -174,7 +174,6 @@ Optional plugin tools:
 
 - [Lobster](/tools/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
 - [LLM Task](/tools/llm-task): JSON-only LLM step for structured workflow output (optional schema validation).
-- [Diffs](/tools/diffs): read-only diff viewer and PNG or PDF file renderer for before/after text or unified patches.
 
 ## Tool inventory
 
@@ -182,7 +181,6 @@ Optional plugin tools:
 
 Apply structured patches across one or more files. Use for multi-hunk edits.
 Experimental: enable via `tools.exec.applyPatch.enabled` (OpenAI models only).
-`tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
 
 ### `exec`
 
@@ -225,38 +223,9 @@ Notes:
 - `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 - `process` is scoped per agent; sessions from other agents are not visible.
 
-### `loop-detection` (tool-call loop guardrails)
-
-OpenClaw tracks recent tool-call history and blocks or warns when it detects repetitive no-progress loops.
-Enable with `tools.loopDetection.enabled: true` (default is `false`).
-
-```json5
-{
-  tools: {
-    loopDetection: {
-      enabled: true,
-      warningThreshold: 10,
-      criticalThreshold: 20,
-      globalCircuitBreakerThreshold: 30,
-      historySize: 30,
-      detectors: {
-        genericRepeat: true,
-        knownPollNoProgress: true,
-        pingPong: true,
-      },
-    },
-  },
-}
-```
-
-- `genericRepeat`: repeated same tool + same params call pattern.
-- `knownPollNoProgress`: repeating poll-like tools with identical outputs.
-- `pingPong`: alternating `A/B/A/B` no-progress patterns.
-- Per-agent override: `agents.list[].tools.loopDetection`.
-
 ### `web_search`
 
-Search the web using Brave, Firecrawl, Gemini, Grok, Kimi, or Perplexity.
+Search the web using Brave Search API.
 
 Core parameters:
 
@@ -265,7 +234,7 @@ Core parameters:
 
 Notes:
 
-- Requires an API key for the chosen provider (recommended: `openclaw configure --section web`).
+- Requires a Brave API key (recommended: `openclaw configure --section web`, or set `BRAVE_API_KEY`).
 - Enable via `tools.web.search.enabled`.
 - Responses are cached (default 15 min).
 - See [Web tools](/tools/web) for setup.
@@ -283,7 +252,6 @@ Core parameters:
 Notes:
 
 - Enable via `tools.web.fetch.enabled`.
-- `maxChars` is clamped by `tools.web.fetch.maxCharsCap` (default 50000).
 - Responses are cached (default 15 min).
 - For JS-heavy sites, prefer the browser tool.
 - See [Web tools](/tools/web) for setup.
@@ -316,10 +284,7 @@ Common parameters:
   Notes:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - All actions accept optional `profile` parameter for multi-instance support.
-- Omit `profile` for the safe default: isolated OpenClaw-managed browser (`openclaw`).
-- Use `profile="user"` for the real local host browser when existing logins/cookies matter and the user is present to click/approve any attach prompt.
-- `profile="user"` is host-only; do not combine it with sandbox/node targets.
-- When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
+- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "chrome").
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
 - Remote profiles are attach-only (no start/stop/reset).
@@ -358,9 +323,8 @@ Core actions:
 - `pending`, `approve`, `reject` (pairing)
 - `notify` (macOS `system.notify`)
 - `run` (macOS `system.run`)
-- `camera_list`, `camera_snap`, `camera_clip`, `screen_record`
-- `location_get`, `notifications_list`, `notifications_action`
-- `device_status`, `device_info`, `device_permissions`, `device_health`
+- `camera_snap`, `camera_clip`, `screen_record`
+- `location_get`
 
 Notes:
 
@@ -399,52 +363,6 @@ Notes:
 
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
-
-### `image_generate`
-
-Generate one or more images with the configured or inferred image-generation model.
-
-Core parameters:
-
-- `action` (optional: `generate` or `list`; default `generate`)
-- `prompt` (required)
-- `image` or `images` (optional reference image path/URL for edit mode)
-- `model` (optional provider/model override)
-- `size` (optional size hint)
-- `resolution` (optional `1K|2K|4K` hint)
-- `count` (optional, `1-4`, default `1`)
-
-Notes:
-
-- Available when `agents.defaults.imageGenerationModel` is configured, or when OpenClaw can infer a compatible image-generation default from your enabled providers plus available auth.
-- Explicit `agents.defaults.imageGenerationModel` still wins over any inferred default.
-- Use `action: "list"` to inspect registered providers, default models, supported model ids, sizes, resolutions, and edit support.
-- Returns local `MEDIA:<path>` lines so channels can deliver the generated files directly.
-- Uses the image-generation model directly (independent of the main chat model).
-- Google-backed flows, including `google/gemini-3-pro-image-preview` for the native Nano Banana-style path, support reference-image edits plus explicit `1K|2K|4K` resolution hints.
-- When editing and `resolution` is omitted, OpenClaw infers a draft/final resolution from the input image size.
-- This is the built-in replacement for the old `nano-banana-pro` skill workflow. Use `agents.defaults.imageGenerationModel`, not `skills.entries`, for stock image generation.
-
-Native example:
-
-```json5
-{
-  agents: {
-    defaults: {
-      imageGenerationModel: {
-        primary: "google/gemini-3-pro-image-preview", // native Nano Banana path
-        fallbacks: ["fal/fal-ai/flux/dev"],
-      },
-    },
-  },
-}
-```
-
-### `pdf`
-
-Analyze one or more PDF documents.
-
-For full behavior, limits, config, and examples, see [PDF tool](/tools/pdf).
 
 ### `message`
 
@@ -487,7 +405,7 @@ Core actions:
 Notes:
 
 - `add` expects a full cron job object (same schema as `cron.add` RPC).
-- `update` uses `{ jobId, patch }` (`id` accepted for compatibility).
+- `update` uses `{ id, patch }`.
 
 ### `gateway`
 
@@ -496,19 +414,15 @@ Restart or apply updates to the running Gateway process (in-place).
 Core actions:
 
 - `restart` (authorizes + sends `SIGUSR1` for in-process restart; `openclaw gateway` restart in-place)
-- `config.schema.lookup` (inspect one config path at a time without loading the full schema into prompt context)
-- `config.get`
+- `config.get` / `config.schema`
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Notes:
 
-- `config.schema.lookup` expects a targeted config path such as `gateway.auth` or `agents.list.*.heartbeat`.
-- Paths may include slash-delimited plugin ids when addressing `plugins.entries.<id>`, for example `plugins.entries.pack/one.config`.
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
-- `config.schema` remains available to internal Control UI flows and is not exposed through the agent `gateway` tool.
-- `restart` is enabled by default; set `commands.restart: false` to disable it.
+- `restart` is disabled by default; enable with `commands.restart: true`.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
 
@@ -519,35 +433,19 @@ Core parameters:
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey` (or `sessionId`), `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey` (or `sessionId`), `message`, `timeoutSeconds?` (0 = fire-and-forget)
-- `sessions_spawn`: `task`, `label?`, `runtime?`, `agentId?`, `model?`, `thinking?`, `cwd?`, `runTimeoutSeconds?`, `thread?`, `mode?`, `cleanup?`, `sandbox?`, `streamTo?`, `attachments?`, `attachAs?`
+- `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
 - `session_status`: `sessionKey?` (default current; accepts `sessionId`), `model?` (`default` clears override)
 
 Notes:
 
 - `main` is the canonical direct-chat key; global/unknown are hidden.
 - `messageLimit > 0` fetches last N messages per session (tool messages filtered).
-- Session targeting is controlled by `tools.sessions.visibility` (default `tree`: current session + spawned subagent sessions). If you run a shared agent for multiple users, consider setting `tools.sessions.visibility: "self"` to prevent cross-session browsing.
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
-- `sessions_spawn` supports `runtime: "subagent" | "acp"` (`subagent` default). For ACP runtime behavior, see [ACP Agents](/tools/acp-agents).
-- For ACP runtime, `streamTo: "parent"` routes initial-run progress summaries back to the requester session as system events instead of direct child delivery.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
-  - Supports one-shot mode (`mode: "run"`) and persistent thread-bound mode (`mode: "session"` with `thread: true`).
-  - If `thread: true` and `mode` is omitted, mode defaults to `session`.
-  - `mode: "session"` requires `thread: true`.
-  - If `runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise timeout defaults to `0` (no timeout).
-  - Discord thread-bound flows depend on `session.threadBindings.*` and `channels.discord.threadBindings.*`.
-  - Reply format includes `Status`, `Result`, and compact stats.
-  - `Result` is the assistant completion text; if missing, the latest `toolResult` is used as fallback.
-- Manual completion-mode spawns send directly first, with queue fallback and retry on transient failures (`status: "ok"` means run finished, not that announce delivered).
-- `sessions_spawn` supports inline file attachments for subagent runtime only (ACP rejects them). Each attachment has `name`, `content`, and optional `encoding` (`utf8` or `base64`) and `mimeType`. Files are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json` metadata file. The tool returns a receipt with `count`, `totalBytes`, per file `sha256`, and `relDir`. Attachment content is automatically redacted from transcript persistence.
-  - Configure limits via `tools.sessions_spawn.attachments` (`enabled`, `maxTotalBytes`, `maxFiles`, `maxFileBytes`, `retainOnSessionKeep`).
-  - `attachAs.mountPath` is a reserved hint for future mount implementations.
 - `sessions_spawn` is non-blocking and returns `status: "accepted"` immediately.
-- ACP `streamTo: "parent"` responses may include `streamLogPath` (session-scoped `*.acp-stream.jsonl`) for tailing progress history.
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
-- Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility: "spawned"`, OpenClaw clamps `tools.sessions.visibility` to `tree`.
 
 ### `agents_list`
 
@@ -566,17 +464,11 @@ Gateway-backed tools (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (if auth enabled)
 - `timeoutMs`
 
-Note: when `gatewayUrl` is set, include `gatewayToken` explicitly. Tools do not inherit config
-or environment credentials for overrides, and missing explicit credentials is an error.
-
 Browser tool:
 
 - `profile` (optional; defaults to `browser.defaultProfile`)
 - `target` (`sandbox` | `host` | `node`)
 - `node` (optional; pin a specific node id/name)
-- Troubleshooting guides:
-  - Linux startup/CDP issues: [Browser troubleshooting (Linux)](/tools/browser-linux-troubleshooting)
-  - WSL2 Gateway + Windows remote Chrome CDP: [WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
 ## Recommended agent flows
 

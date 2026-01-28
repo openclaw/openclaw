@@ -6,7 +6,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MasterDiscoveryMenuSmokeTests {
-    @Test func `inline list builds body when empty`() {
+    @Test func inlineListBuildsBodyWhenEmpty() {
         let discovery = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
         discovery.statusText = "Searching…"
         discovery.gateways = []
@@ -20,7 +20,7 @@ struct MasterDiscoveryMenuSmokeTests {
         _ = view.body
     }
 
-    @Test func `inline list builds body with master and selection`() {
+    @Test func inlineListBuildsBodyWithMasterAndSelection() {
         let discovery = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
         discovery.statusText = "Found 1"
         discovery.gateways = [
@@ -46,7 +46,7 @@ struct MasterDiscoveryMenuSmokeTests {
         _ = view.body
     }
 
-    @Test func `menu builds body with masters`() {
+    @Test func menuBuildsBodyWithMasters() {
         let discovery = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
         discovery.statusText = "Found 2"
         discovery.gateways = [

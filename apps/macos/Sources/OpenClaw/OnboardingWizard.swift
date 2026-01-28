@@ -1,7 +1,7 @@
-import Foundation
-import Observation
 import OpenClawKit
 import OpenClawProtocol
+import Foundation
+import Observation
 import OSLog
 import SwiftUI
 
@@ -41,13 +41,8 @@ final class OnboardingWizardModel {
     private var restartAttempts = 0
     private let maxRestartAttempts = 1
 
-    var isComplete: Bool {
-        self.status == "done"
-    }
-
-    var isRunning: Bool {
-        self.status == "running"
-    }
+    var isComplete: Bool { self.status == "done" }
+    var isRunning: Bool { self.status == "running" }
 
     func reset() {
         self.sessionId = nil
@@ -413,7 +408,5 @@ private struct WizardOptionItem: Identifiable {
     let index: Int
     let option: WizardOption
 
-    var id: Int {
-        self.index
-    }
+    var id: Int { self.index }
 }

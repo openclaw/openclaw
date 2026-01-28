@@ -1,37 +1,43 @@
+import type { GatewayService } from "../daemon/service.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
-import { readServiceStatusSummary } from "./status.service-summary.js";
 
 type DaemonStatusSummary = {
   label: string;
   installed: boolean | null;
-  managedByOpenClaw: boolean;
-  externallyManaged: boolean;
   loadedText: string;
   runtimeShort: string | null;
 };
 
 async function buildDaemonStatusSummary(
-  serviceLabel: "gateway" | "node",
+  service: GatewayService,
+  fallbackLabel: string,
 ): Promise<DaemonStatusSummary> {
-  const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
-  const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
-  const summary = await readServiceStatusSummary(service, fallbackLabel);
-  return {
-    label: summary.label,
-    installed: summary.installed,
-    managedByOpenClaw: summary.managedByOpenClaw,
-    externallyManaged: summary.externallyManaged,
-    loadedText: summary.loadedText,
-    runtimeShort: formatDaemonRuntimeShort(summary.runtime),
-  };
+  try {
+    const [loaded, runtime, command] = await Promise.all([
+      service.isLoaded({ env: process.env }).catch(() => false),
+      service.readRuntime(process.env).catch(() => undefined),
+      service.readCommand(process.env).catch(() => null),
+    ]);
+    const installed = command != null;
+    const loadedText = loaded ? service.loadedText : service.notLoadedText;
+    const runtimeShort = formatDaemonRuntimeShort(runtime);
+    return { label: service.label, installed, loadedText, runtimeShort };
+  } catch {
+    return {
+      label: fallbackLabel,
+      installed: null,
+      loadedText: "unknown",
+      runtimeShort: null,
+    };
+  }
 }
 
 export async function getDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("gateway");
+  return await buildDaemonStatusSummary(resolveGatewayService(), "Daemon");
 }
 
 export async function getNodeDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("node");
+  return await buildDaemonStatusSummary(resolveNodeService(), "Node");
 }

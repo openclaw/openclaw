@@ -26,12 +26,12 @@ Notes:
 
 Unified logging redacts most payloads unless a subsystem opts into `privacy -off`. Per Peter's write-up on macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) this is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by the subsystem name. Only new log entries pick up the flag, so enable it before reproducing an issue.
 
-## Enable for OpenClaw (`ai.openclaw`)
+## Enable for OpenClaw (`bot.molt`)
 
 - Write the plist to a temp file first, then install it atomically as root:
 
 ```bash
-cat <<'EOF' >/tmp/ai.openclaw.plist
+cat <<'EOF' >/tmp/bot.molt.plist
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -44,7 +44,7 @@ cat <<'EOF' >/tmp/ai.openclaw.plist
 </dict>
 </plist>
 EOF
-sudo install -m 644 -o root -g wheel /tmp/ai.openclaw.plist /Library/Preferences/Logging/Subsystems/ai.openclaw.plist
+sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Logging/Subsystems/bot.molt.plist
 ```
 
 - No reboot is required; logd notices the file quickly, but only new log lines will include private payloads.
@@ -52,6 +52,6 @@ sudo install -m 644 -o root -g wheel /tmp/ai.openclaw.plist /Library/Preferences
 
 ## Disable after debugging
 
-- Remove the override: `sudo rm /Library/Preferences/Logging/Subsystems/ai.openclaw.plist`.
+- Remove the override: `sudo rm /Library/Preferences/Logging/Subsystems/bot.molt.plist`.
 - Optionally run `sudo log config --reload` to force logd to drop the override immediately.
 - Remember this surface can include phone numbers and message bodies; keep the plist in place only while you actively need the extra detail.

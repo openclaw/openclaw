@@ -1,8 +1,9 @@
-import type { BaseProbeResult } from "../runtime-api.js";
 import { createMatrixClient, isBunRuntime } from "./client.js";
 
-export type MatrixProbe = BaseProbeResult & {
+export type MatrixProbe = {
+  ok: boolean;
   status?: number | null;
+  error?: string | null;
   elapsedMs: number;
   userId?: string | null;
 };
@@ -12,7 +13,6 @@ export async function probeMatrix(params: {
   accessToken: string;
   userId?: string;
   timeoutMs: number;
-  accountId?: string | null;
 }): Promise<MatrixProbe> {
   const started = Date.now();
   const result: MatrixProbe = {
@@ -43,15 +43,13 @@ export async function probeMatrix(params: {
     };
   }
   try {
-    const inputUserId = params.userId?.trim() || undefined;
     const client = await createMatrixClient({
       homeserver: params.homeserver,
-      userId: inputUserId,
+      userId: params.userId ?? "",
       accessToken: params.accessToken,
       localTimeoutMs: params.timeoutMs,
-      accountId: params.accountId,
     });
-    // The client wrapper resolves user ID via whoami when needed.
+    // @vector-im/matrix-bot-sdk uses getUserId() which calls whoami internally
     const userId = await client.getUserId();
     result.ok = true;
     result.userId = userId ?? null;

@@ -1,50 +1,60 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import type { RuntimeEnv } from "../runtime.js";
 
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-
-const wizardMocks = vi.hoisted(() => ({
-  createClackPrompter: vi.fn(),
+const configMocks = vi.hoisted(() => ({
+  readConfigFileSnapshot: vi.fn(),
+  writeConfigFile: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  writeConfigFile: writeConfigFileMock,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+    writeConfigFile: configMocks.writeConfigFile,
+  };
+});
 
-vi.mock("../wizard/clack-prompter.js", () => ({
-  createClackPrompter: wizardMocks.createClackPrompter,
-}));
-
-import { WizardCancelledError } from "../wizard/prompts.js";
 import { agentsAddCommand } from "./agents.js";
 
-const runtime = createTestRuntime();
+const runtime: RuntimeEnv = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+};
+
+const baseSnapshot = {
+  path: "/tmp/openclaw.json",
+  exists: true,
+  raw: "{}",
+  parsed: {},
+  valid: true,
+  config: {},
+  issues: [],
+  legacyIssues: [],
+};
 
 describe("agents add command", () => {
   beforeEach(() => {
-    readConfigFileSnapshotMock.mockClear();
-    writeConfigFileMock.mockClear();
-    wizardMocks.createClackPrompter.mockClear();
+    configMocks.readConfigFileSnapshot.mockReset();
+    configMocks.writeConfigFile.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
   });
 
   it("requires --workspace when flags are present", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
 
     await agentsAddCommand({ name: "Work" }, runtime, { hasFlags: true });
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("requires --workspace in non-interactive mode", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
 
     await agentsAddCommand({ name: "Work", nonInteractive: true }, runtime, {
       hasFlags: false,
@@ -52,22 +62,6 @@ describe("agents add command", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it("exits with code 1 when the interactive wizard is cancelled", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-    wizardMocks.createClackPrompter.mockReturnValue({
-      intro: vi.fn().mockRejectedValue(new WizardCancelledError()),
-      text: vi.fn(),
-      confirm: vi.fn(),
-      note: vi.fn(),
-      outro: vi.fn(),
-    });
-
-    await agentsAddCommand({}, runtime);
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 });

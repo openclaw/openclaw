@@ -11,8 +11,8 @@ import type {
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
-} from "../types.ts";
-import type { NostrProfileFormState } from "./channels.nostr-profile-form.ts";
+} from "../types";
+import type { NostrProfileFormState } from "./channels.nostr-profile-form";
 
 export type ChannelKey = string;
 

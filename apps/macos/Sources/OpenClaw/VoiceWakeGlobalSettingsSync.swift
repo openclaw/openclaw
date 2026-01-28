@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawKit
+import Foundation
 import OSLog
 
 @MainActor
@@ -14,7 +14,8 @@ final class VoiceWakeGlobalSettingsSync {
     }
 
     func start() {
-        SimpleTaskSupport.start(task: &self.task) { [weak self] in
+        guard self.task == nil else { return }
+        self.task = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
                 do {
@@ -38,7 +39,8 @@ final class VoiceWakeGlobalSettingsSync {
     }
 
     func stop() {
-        SimpleTaskSupport.stop(task: &self.task)
+        self.task?.cancel()
+        self.task = nil
     }
 
     private func refreshFromGateway() async {

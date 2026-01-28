@@ -1,7 +1,6 @@
-import { isPlainObject } from "../utils.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
-
 type PathNode = Record<string, unknown>;
+
+const BLOCKED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export function parseConfigPath(raw: string): {
   ok: boolean;
@@ -22,7 +21,7 @@ export function parseConfigPath(raw: string): {
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
-  if (parts.some((part) => isBlockedObjectKey(part))) {
+  if (parts.some((part) => BLOCKED_KEYS.has(part))) {
     return { ok: false, error: "Invalid path segment." };
   }
   return { ok: true, path: parts };
@@ -79,4 +78,13 @@ export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
     cursor = cursor[key];
   }
   return cursor;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
 }

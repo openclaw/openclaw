@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { expectOpenDmPolicyConfigIssue } from "../../../test/helpers/extensions/status-issues.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
 describe("collectZalouserStatusIssues", () => {
+  it("flags missing zca when configured is false", () => {
+    const issues = collectZalouserStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        configured: false,
+        lastError: "zca CLI not found in PATH",
+      },
+    ]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.kind).toBe("runtime");
+    expect(issues[0]?.message).toMatch(/zca CLI not found/i);
+  });
+
   it("flags missing auth when configured is false", () => {
     const issues = collectZalouserStatusIssues([
       {
@@ -18,15 +31,16 @@ describe("collectZalouserStatusIssues", () => {
   });
 
   it("warns when dmPolicy is open", () => {
-    expectOpenDmPolicyConfigIssue({
-      collectIssues: collectZalouserStatusIssues,
-      account: {
+    const issues = collectZalouserStatusIssues([
+      {
         accountId: "default",
         enabled: true,
         configured: true,
         dmPolicy: "open",
       },
-    });
+    ]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.kind).toBe("config");
   });
 
   it("skips disabled accounts", () => {
@@ -35,7 +49,7 @@ describe("collectZalouserStatusIssues", () => {
         accountId: "default",
         enabled: false,
         configured: false,
-        lastError: "not authenticated",
+        lastError: "zca CLI not found in PATH",
       },
     ]);
     expect(issues).toHaveLength(0);

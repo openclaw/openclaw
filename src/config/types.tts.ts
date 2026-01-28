@@ -1,6 +1,4 @@
-import type { SecretInput } from "./types.secrets.js";
-
-export type TtsProvider = string;
+export type TtsProvider = "elevenlabs" | "openai" | "edge";
 
 export type TtsMode = "final" | "all";
 
@@ -11,7 +9,7 @@ export type TtsModelOverrideConfig = {
   enabled?: boolean;
   /** Allow model-provided TTS text blocks. */
   allowText?: boolean;
-  /** Allow model-provided provider override (default: false). */
+  /** Allow model-provided provider override. */
   allowProvider?: boolean;
   /** Allow model-provided voice/voiceId override. */
   allowVoice?: boolean;
@@ -40,7 +38,7 @@ export type TtsConfig = {
   modelOverrides?: TtsModelOverrideConfig;
   /** ElevenLabs configuration. */
   elevenlabs?: {
-    apiKey?: SecretInput;
+    apiKey?: string;
     baseUrl?: string;
     voiceId?: string;
     modelId?: string;
@@ -57,31 +55,13 @@ export type TtsConfig = {
   };
   /** OpenAI configuration. */
   openai?: {
-    apiKey?: SecretInput;
-    baseUrl?: string;
+    apiKey?: string;
     model?: string;
     voice?: string;
-    /** Playback speed (0.25–4.0, default 1.0). */
-    speed?: number;
-    /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
-    instructions?: string;
   };
-  /** Legacy alias for Microsoft speech configuration. */
+  /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
-    /** Explicitly allow Microsoft speech usage (no API key required). */
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
-  /** Preferred alias for Microsoft speech configuration. */
-  microsoft?: {
+    /** Explicitly allow Edge TTS usage (no API key required). */
     enabled?: boolean;
     voice?: string;
     lang?: string;

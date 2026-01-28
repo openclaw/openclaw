@@ -13,32 +13,50 @@ extension VoiceWakeOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = VoiceWakeOverlayView(controller: self)
         let target = self.targetFrame()
-        let isFirst = !self.model.isVisible
-        if isFirst { self.model.isVisible = true }
-        OverlayPanelFactory.present(
-            window: self.window,
-            isFirstPresent: isFirst,
-            target: target,
-            onFirstPresent: {
-                self.logger.log(
-                    level: .info,
-                    "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
-                // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
-                AppStateStore.shared.triggerVoiceEars(ttl: nil)
-            },
-            onAlreadyVisible: { window in
-                self.updateWindowFrame(animate: true)
-                window.orderFrontRegardless()
-            })
+
+        guard let window else { return }
+        if !self.model.isVisible {
+            self.model.isVisible = true
+            self.logger.log(
+                level: .info,
+                "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
+            // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
+            AppStateStore.shared.triggerVoiceEars(ttl: nil)
+            let start = target.offsetBy(dx: 0, dy: -6)
+            window.setFrame(start, display: true)
+            window.alphaValue = 0
+            window.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(target, display: true)
+                window.animator().alphaValue = 1
+            }
+        } else {
+            self.updateWindowFrame(animate: true)
+            window.orderFrontRegardless()
+        }
     }
 
     private func ensureWindow() {
         if self.window != nil { return }
         let borderPad = self.closeOverflow
-        let panel = OverlayPanelFactory.makePanel(
+        let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: self.width + borderPad * 2, height: 60 + borderPad * 2),
-            level: Self.preferredWindowLevel,
-            hasShadow: false)
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = Self.preferredWindowLevel
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
 
         let host = NSHostingView(rootView: VoiceWakeOverlayView(controller: self))
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -66,7 +84,17 @@ extension VoiceWakeOverlayController {
     }
 
     func updateWindowFrame(animate: Bool = false) {
-        OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: animate)
+        guard let window else { return }
+        let frame = self.targetFrame()
+        if animate {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(frame, display: true)
+            }
+        } else {
+            window.setFrame(frame, display: true)
+        }
     }
 
     func measuredHeight() -> CGFloat {

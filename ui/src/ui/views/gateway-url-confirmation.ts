@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { AppViewState } from "../app-view-state.ts";
+import type { AppViewState } from "../app-view-state";
 
 export function renderGatewayUrlConfirmation(state: AppViewState) {
   const { pendingGatewayUrl } = state;

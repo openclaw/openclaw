@@ -1,9 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
-import path from "node:path";
-import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import { resolveBlueBubblesAccount } from "./accounts.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesChatOpts = {
@@ -15,86 +12,40 @@ export type BlueBubblesChatOpts = {
 };
 
 function resolveAccount(params: BlueBubblesChatOpts) {
-  return resolveBlueBubblesServerAccount(params);
-}
-
-function assertPrivateApiEnabled(accountId: string, feature: string): void {
-  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
-    throw new Error(
-      `BlueBubbles ${feature} requires Private API, but it is disabled on the BlueBubbles server.`,
-    );
-  }
-}
-
-function resolvePartIndex(partIndex: number | undefined): number {
-  return typeof partIndex === "number" ? partIndex : 0;
-}
-
-async function sendBlueBubblesChatEndpointRequest(params: {
-  chatGuid: string;
-  opts: BlueBubblesChatOpts;
-  endpoint: "read" | "typing";
-  method: "POST" | "DELETE";
-  action: "read" | "typing";
-}): Promise<void> {
-  const trimmed = params.chatGuid.trim();
-  if (!trimmed) {
-    return;
-  }
-  const { baseUrl, password, accountId } = resolveAccount(params.opts);
-  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
-    return;
-  }
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: `/api/v1/chat/${encodeURIComponent(trimmed)}/${params.endpoint}`,
-    password,
+  const account = resolveBlueBubblesAccount({
+    cfg: params.cfg ?? {},
+    accountId: params.accountId,
   });
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    { method: params.method },
-    params.opts.timeoutMs,
-  );
-  await assertMultipartActionOk(res, params.action);
-}
-
-async function sendPrivateApiJsonRequest(params: {
-  opts: BlueBubblesChatOpts;
-  feature: string;
-  action: string;
-  path: string;
-  method: "POST" | "PUT" | "DELETE";
-  payload?: unknown;
-}): Promise<void> {
-  const { baseUrl, password, accountId } = resolveAccount(params.opts);
-  assertPrivateApiEnabled(accountId, params.feature);
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: params.path,
-    password,
-  });
-
-  const request: RequestInit = { method: params.method };
-  if (params.payload !== undefined) {
-    request.headers = { "Content-Type": "application/json" };
-    request.body = JSON.stringify(params.payload);
+  const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
+  const password = params.password?.trim() || account.config.password?.trim();
+  if (!baseUrl) {
+    throw new Error("BlueBubbles serverUrl is required");
   }
-
-  const res = await blueBubblesFetchWithTimeout(url, request, params.opts.timeoutMs);
-  await assertMultipartActionOk(res, params.action);
+  if (!password) {
+    throw new Error("BlueBubbles password is required");
+  }
+  return { baseUrl, password };
 }
 
 export async function markBlueBubblesChatRead(
   chatGuid: string,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
-  await sendBlueBubblesChatEndpointRequest({
-    chatGuid,
-    opts,
-    endpoint: "read",
-    method: "POST",
-    action: "read",
+  const trimmed = chatGuid.trim();
+  if (!trimmed) {
+    return;
+  }
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
+    path: `/api/v1/chat/${encodeURIComponent(trimmed)}/read`,
+    password,
   });
+  const res = await blueBubblesFetchWithTimeout(url, { method: "POST" }, opts.timeoutMs);
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles read failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }
 
 export async function sendBlueBubblesTyping(
@@ -102,13 +53,25 @@ export async function sendBlueBubblesTyping(
   typing: boolean,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
-  await sendBlueBubblesChatEndpointRequest({
-    chatGuid,
-    opts,
-    endpoint: "typing",
-    method: typing ? "POST" : "DELETE",
-    action: "typing",
+  const trimmed = chatGuid.trim();
+  if (!trimmed) {
+    return;
+  }
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
+    path: `/api/v1/chat/${encodeURIComponent(trimmed)}/typing`,
+    password,
   });
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    { method: typing ? "POST" : "DELETE" },
+    opts.timeoutMs,
+  );
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles typing failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }
 
 /**
@@ -129,18 +92,33 @@ export async function editBlueBubblesMessage(
     throw new Error("BlueBubbles edit requires newText");
   }
 
-  await sendPrivateApiJsonRequest({
-    opts,
-    feature: "edit",
-    action: "edit",
-    method: "POST",
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
     path: `/api/v1/message/${encodeURIComponent(trimmedGuid)}/edit`,
-    payload: {
-      editedMessage: trimmedText,
-      backwardsCompatibilityMessage: opts.backwardsCompatMessage ?? `Edited to: ${trimmedText}`,
-      partIndex: resolvePartIndex(opts.partIndex),
-    },
+    password,
   });
+
+  const payload = {
+    editedMessage: trimmedText,
+    backwardsCompatibilityMessage: opts.backwardsCompatMessage ?? `Edited to: ${trimmedText}`,
+    partIndex: typeof opts.partIndex === "number" ? opts.partIndex : 0,
+  };
+
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    opts.timeoutMs,
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles edit failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }
 
 /**
@@ -156,14 +134,31 @@ export async function unsendBlueBubblesMessage(
     throw new Error("BlueBubbles unsend requires messageGuid");
   }
 
-  await sendPrivateApiJsonRequest({
-    opts,
-    feature: "unsend",
-    action: "unsend",
-    method: "POST",
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
     path: `/api/v1/message/${encodeURIComponent(trimmedGuid)}/unsend`,
-    payload: { partIndex: resolvePartIndex(opts.partIndex) },
+    password,
   });
+
+  const payload = {
+    partIndex: typeof opts.partIndex === "number" ? opts.partIndex : 0,
+  };
+
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    opts.timeoutMs,
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles unsend failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }
 
 /**
@@ -179,14 +174,27 @@ export async function renameBlueBubblesChat(
     throw new Error("BlueBubbles rename requires chatGuid");
   }
 
-  await sendPrivateApiJsonRequest({
-    opts,
-    feature: "renameGroup",
-    action: "rename",
-    method: "PUT",
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}`,
-    payload: { displayName },
+    password,
   });
+
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName }),
+    },
+    opts.timeoutMs,
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles rename failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }
 
 /**
@@ -206,14 +214,27 @@ export async function addBlueBubblesParticipant(
     throw new Error("BlueBubbles addParticipant requires address");
   }
 
-  await sendPrivateApiJsonRequest({
-    opts,
-    feature: "addParticipant",
-    action: "addParticipant",
-    method: "POST",
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/participant`,
-    payload: { address: trimmedAddress },
+    password,
   });
+
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: trimmedAddress }),
+    },
+    opts.timeoutMs,
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles addParticipant failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }
 
 /**
@@ -233,14 +254,29 @@ export async function removeBlueBubblesParticipant(
     throw new Error("BlueBubbles removeParticipant requires address");
   }
 
-  await sendPrivateApiJsonRequest({
-    opts,
-    feature: "removeParticipant",
-    action: "removeParticipant",
-    method: "DELETE",
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/participant`,
-    payload: { address: trimmedAddress },
+    password,
   });
+
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: trimmedAddress }),
+    },
+    opts.timeoutMs,
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(
+      `BlueBubbles removeParticipant failed (${res.status}): ${errorText || "unknown"}`,
+    );
+  }
 }
 
 /**
@@ -255,13 +291,19 @@ export async function leaveBlueBubblesChat(
     throw new Error("BlueBubbles leaveChat requires chatGuid");
   }
 
-  await sendPrivateApiJsonRequest({
-    opts,
-    feature: "leaveGroup",
-    action: "leaveChat",
-    method: "POST",
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/leave`,
+    password,
   });
+
+  const res = await blueBubblesFetchWithTimeout(url, { method: "POST" }, opts.timeoutMs);
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles leaveChat failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }
 
 /**
@@ -282,8 +324,7 @@ export async function setGroupIconBlueBubbles(
     throw new Error("BlueBubbles setGroupIcon requires image buffer");
   }
 
-  const { baseUrl, password, accountId } = resolveAccount(opts);
-  assertPrivateApiEnabled(accountId, "setGroupIcon");
+  const { baseUrl, password } = resolveAccount(opts);
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/icon`,
@@ -295,13 +336,10 @@ export async function setGroupIconBlueBubbles(
   const parts: Uint8Array[] = [];
   const encoder = new TextEncoder();
 
-  // Sanitize filename to prevent multipart header injection (CWE-93)
-  const safeFilename = path.basename(filename).replace(/[\r\n"\\]/g, "_") || "icon.png";
-
   // Add file field named "icon" as per API spec
   parts.push(encoder.encode(`--${boundary}\r\n`));
   parts.push(
-    encoder.encode(`Content-Disposition: form-data; name="icon"; filename="${safeFilename}"\r\n`),
+    encoder.encode(`Content-Disposition: form-data; name="icon"; filename="${filename}"\r\n`),
   );
   parts.push(
     encoder.encode(`Content-Type: ${opts.contentType ?? "application/octet-stream"}\r\n\r\n`),
@@ -312,12 +350,29 @@ export async function setGroupIconBlueBubbles(
   // Close multipart body
   parts.push(encoder.encode(`--${boundary}--\r\n`));
 
-  const res = await postMultipartFormData({
-    url,
-    boundary,
-    parts,
-    timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-  });
+  // Combine into single buffer
+  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
+  const body = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    body.set(part, offset);
+    offset += part.length;
+  }
 
-  await assertMultipartActionOk(res, "setGroupIcon");
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    },
+    opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles setGroupIcon failed (${res.status}): ${errorText || "unknown"}`);
+  }
 }

@@ -3,7 +3,7 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
   isToolResultMessage,
-} from "./message-normalizer.ts";
+} from "./message-normalizer";
 
 describe("message-normalizer", () => {
   describe("normalizeMessage", () => {
@@ -29,7 +29,6 @@ describe("message-normalizer", () => {
         content: [{ type: "text", text: "Hello world" }],
         timestamp: 1000,
         id: "msg-1",
-        senderLabel: null,
       });
     });
 
@@ -110,16 +109,6 @@ describe("message-normalizer", () => {
       });
 
       expect(result.content[0].args).toEqual({ foo: "bar" });
-    });
-
-    it("preserves top-level sender labels", () => {
-      const result = normalizeMessage({
-        role: "user",
-        content: "Hello from Telegram",
-        senderLabel: "Iris",
-      });
-
-      expect(result.senderLabel).toBe("Iris");
     });
   });
 

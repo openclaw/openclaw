@@ -73,27 +73,7 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
 }
 
 export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | undefined {
-  let low = 0;
-  let high = spans.length - 1;
-
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    const span = spans[mid];
-    if (!span) {
-      break;
-    }
-    if (index <= span.start) {
-      high = mid - 1;
-      continue;
-    }
-    if (index >= span.end) {
-      low = mid + 1;
-      continue;
-    }
-    return span;
-  }
-
-  return undefined;
+  return spans.find((span) => index > span.start && index < span.end);
 }
 
 export function isSafeFenceBreak(spans: FenceSpan[], index: number): boolean {

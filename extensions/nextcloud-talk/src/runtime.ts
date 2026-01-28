@@ -1,6 +1,14 @@
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "../runtime-api.js";
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 
-const { setRuntime: setNextcloudTalkRuntime, getRuntime: getNextcloudTalkRuntime } =
-  createPluginRuntimeStore<PluginRuntime>("Nextcloud Talk runtime not initialized");
-export { getNextcloudTalkRuntime, setNextcloudTalkRuntime };
+let runtime: PluginRuntime | null = null;
+
+export function setNextcloudTalkRuntime(next: PluginRuntime) {
+  runtime = next;
+}
+
+export function getNextcloudTalkRuntime(): PluginRuntime {
+  if (!runtime) {
+    throw new Error("Nextcloud Talk runtime not initialized");
+  }
+  return runtime;
+}

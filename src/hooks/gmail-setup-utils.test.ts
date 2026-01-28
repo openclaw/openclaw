@@ -2,23 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import {
-  ensureTailscaleEndpoint,
-  resetGmailSetupUtilsCachesForTest,
-  resolvePythonExecutablePath,
-} from "./gmail-setup-utils.js";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
-const runCommandWithTimeoutMock = vi.fn();
-
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
-}));
 
 beforeEach(() => {
-  runCommandWithTimeoutMock.mockClear();
-  resetGmailSetupUtilsCachesForTest();
+  vi.resetModules();
 });
 
 describe("resolvePythonExecutablePath", () => {
@@ -26,6 +14,7 @@ describe("resolvePythonExecutablePath", () => {
     "resolves a working python path and caches the result",
     async () => {
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-"));
+      const originalPath = process.env.PATH;
       try {
         const realPython = path.join(tmp, "python-real");
         await fs.writeFile(realPython, "#!/bin/sh\nexit 0\n", "utf-8");
@@ -34,28 +23,25 @@ describe("resolvePythonExecutablePath", () => {
         const shimDir = path.join(tmp, "shims");
         await fs.mkdir(shimDir, { recursive: true });
         const shim = path.join(shimDir, "python3");
-        await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.writeFile(
+          shim,
+          `#!/bin/sh\nif [ "$1" = "-c" ]; then\n  echo "${realPython}"\n  exit 0\nfi\nexit 1\n`,
+          "utf-8",
+        );
         await fs.chmod(shim, 0o755);
 
-        await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
-          runCommandWithTimeoutMock.mockResolvedValue({
-            stdout: `${realPython}\n`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-          });
+        process.env.PATH = `${shimDir}${path.delimiter}/usr/bin`;
 
-          const resolved = await resolvePythonExecutablePath();
-          expect(resolved).toBe(realPython);
+        const { resolvePythonExecutablePath } = await import("./gmail-setup-utils.js");
 
-          await withEnvAsync({ PATH: "/bin" }, async () => {
-            const cached = await resolvePythonExecutablePath();
-            expect(cached).toBe(realPython);
-          });
-          expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-        });
+        const resolved = await resolvePythonExecutablePath();
+        expect(resolved).toBe(realPython);
+
+        process.env.PATH = "/bin";
+        const cached = await resolvePythonExecutablePath();
+        expect(cached).toBe(realPython);
       } finally {
+        process.env.PATH = originalPath;
         await fs.rm(tmp, { recursive: true, force: true });
       }
     },
@@ -65,7 +51,15 @@ describe("resolvePythonExecutablePath", () => {
 
 describe("ensureTailscaleEndpoint", () => {
   it("includes stdout and exit code when tailscale serve fails", async () => {
-    runCommandWithTimeoutMock
+    vi.doMock("../process/exec.js", () => ({
+      runCommandWithTimeout: vi.fn(),
+    }));
+
+    const { ensureTailscaleEndpoint } = await import("./gmail-setup-utils.js");
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const runCommand = vi.mocked(runCommandWithTimeout);
+
+    runCommand
       .mockResolvedValueOnce({
         stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
         stderr: "",
@@ -98,7 +92,15 @@ describe("ensureTailscaleEndpoint", () => {
   });
 
   it("includes JSON parse failure details with stdout", async () => {
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
+    vi.doMock("../process/exec.js", () => ({
+      runCommandWithTimeout: vi.fn(),
+    }));
+
+    const { ensureTailscaleEndpoint } = await import("./gmail-setup-utils.js");
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const runCommand = vi.mocked(runCommandWithTimeout);
+
+    runCommand.mockResolvedValueOnce({
       stdout: "not-json",
       stderr: "",
       code: 0,

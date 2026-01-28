@@ -11,25 +11,6 @@ import {
 import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
 
 describe("browser client", () => {
-  function stubSnapshotFetch(calls: string[]) {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        calls.push(url);
-        return {
-          ok: true,
-          json: async () => ({
-            ok: true,
-            format: "ai",
-            targetId: "t1",
-            url: "https://x",
-            snapshot: "ok",
-          }),
-        } as unknown as Response;
-      }),
-    );
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -69,7 +50,22 @@ describe("browser client", () => {
 
   it("adds labels + efficient mode query params to snapshots", async () => {
     const calls: string[] = [];
-    stubSnapshotFetch(calls);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            format: "ai",
+            targetId: "t1",
+            url: "https://x",
+            snapshot: "ok",
+          }),
+        } as unknown as Response;
+      }),
+    );
 
     await expect(
       browserSnapshot("http://127.0.0.1:18791", {
@@ -88,7 +84,22 @@ describe("browser client", () => {
 
   it("adds refs=aria to snapshots when requested", async () => {
     const calls: string[] = [];
-    stubSnapshotFetch(calls);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            format: "ai",
+            targetId: "t1",
+            url: "https://x",
+            snapshot: "ok",
+          }),
+        } as unknown as Response;
+      }),
+    );
 
     await browserSnapshot("http://127.0.0.1:18791", {
       format: "ai",
@@ -99,21 +110,6 @@ describe("browser client", () => {
     expect(snapshotCall).toBeTruthy();
     const parsed = new URL(snapshotCall as string);
     expect(parsed.searchParams.get("refs")).toBe("aria");
-  });
-
-  it("omits format when the caller wants server-side snapshot capability defaults", async () => {
-    const calls: string[] = [];
-    stubSnapshotFetch(calls);
-
-    await browserSnapshot("http://127.0.0.1:18791", {
-      profile: "chrome",
-    });
-
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
-    expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
-    expect(parsed.searchParams.get("format")).toBeNull();
-    expect(parsed.searchParams.get("profile")).toBe("chrome");
   });
 
   it("uses the expected endpoints + methods for common calls", async () => {
@@ -160,7 +156,6 @@ describe("browser client", () => {
               targetId: "t1",
               url: "https://x",
               result: 1,
-              results: [{ ok: true }],
             }),
           } as unknown as Response;
         }
@@ -259,7 +254,7 @@ describe("browser client", () => {
     ).resolves.toMatchObject({ ok: true, targetId: "t1" });
     await expect(
       browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" }),
-    ).resolves.toMatchObject({ ok: true, targetId: "t1", results: [{ ok: true }] });
+    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
     await expect(
       browserArmFileChooser("http://127.0.0.1:18791", {
         paths: ["/tmp/a.txt"],

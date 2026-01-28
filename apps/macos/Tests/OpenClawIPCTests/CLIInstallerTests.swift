@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CLIInstallerTests {
-    @Test func `installed location finds executable`() throws {
+    @Test func installedLocationFindsExecutable() throws {
         let fm = FileManager()
         let root = fm.temporaryDirectory.appendingPathComponent(
             "openclaw-cli-installer-\(UUID().uuidString)")

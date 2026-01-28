@@ -7,20 +7,12 @@ import Testing
         private(set) var began = 0
         private(set) var ended = 0
 
-        func incBegin() {
-            self.began += 1
-        }
-
-        func incEnd() {
-            self.ended += 1
-        }
-
-        func snapshot() -> (began: Int, ended: Int) {
-            (self.began, self.ended)
-        }
+        func incBegin() { self.began += 1 }
+        func incEnd() { self.ended += 1 }
+        func snapshot() -> (began: Int, ended: Int) { (self.began, self.ended) }
     }
 
-    @Test func `begin end fires once per hold`() async {
+    @Test func beginEndFiresOncePerHold() async {
         let counter = Counter()
         let hotkey = VoicePushToTalkHotkey(
             beginAction: { await counter.incBegin() },

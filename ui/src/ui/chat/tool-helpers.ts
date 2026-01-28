@@ -2,7 +2,7 @@
  * Helper functions for tool card rendering.
  */
 
-import { PREVIEW_MAX_CHARS, PREVIEW_MAX_LINES } from "./constants.ts";
+import { PREVIEW_MAX_CHARS, PREVIEW_MAX_LINES } from "./constants";
 
 /**
  * Format tool output content for display in the sidebar.

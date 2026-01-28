@@ -1,37 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles.js";
-import {
-  ANTHROPIC_CFG,
-  ANTHROPIC_STORE,
-} from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("resolveAuthProfileOrder", () => {
-  const store = ANTHROPIC_STORE;
-  const cfg = ANTHROPIC_CFG;
-
-  function resolveWithAnthropicOrderAndUsage(params: {
-    orderSource: "store" | "config";
-    usageStats: NonNullable<AuthProfileStore["usageStats"]>;
-  }) {
-    const configuredOrder = { anthropic: ["anthropic:default", "anthropic:work"] };
-    return resolveAuthProfileOrder({
-      cfg:
-        params.orderSource === "config"
-          ? {
-              auth: {
-                order: configuredOrder,
-                profiles: cfg.auth?.profiles,
-              },
-            }
-          : undefined,
-      store:
-        params.orderSource === "store"
-          ? { ...store, order: configuredOrder, usageStats: params.usageStats }
-          : { ...store, usageStats: params.usageStats },
-      provider: "anthropic",
-    });
-  }
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-default",
+      },
+      "anthropic:work": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-work",
+      },
+    },
+  };
+  const cfg = {
+    auth: {
+      profiles: {
+        "anthropic:default": { provider: "anthropic", mode: "api_key" },
+        "anthropic:work": { provider: "anthropic", mode: "api_key" },
+      },
+    },
+  };
 
   it("does not prioritize lastGood over round-robin ordering", () => {
     const order = resolveAuthProfileOrder({
@@ -61,7 +54,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:work", "anthropic:default"] },
-          profiles: cfg.auth?.profiles,
+          profiles: cfg.auth.profiles,
         },
       },
       store,
@@ -74,7 +67,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth?.profiles,
+          profiles: cfg.auth.profiles,
         },
       },
       store: {
@@ -85,27 +78,47 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
-  it.each(["store", "config"] as const)(
-    "pushes cooldown profiles to the end even with %s order",
-    (orderSource) => {
-      const now = Date.now();
-      const order = resolveWithAnthropicOrderAndUsage({
-        orderSource,
+  it("pushes cooldown profiles to the end even with store order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      store: {
+        ...store,
+        order: { anthropic: ["anthropic:default", "anthropic:work"] },
         usageStats: {
           "anthropic:default": { cooldownUntil: now + 60_000 },
           "anthropic:work": { lastUsed: 1 },
         },
-      });
-      expect(order).toEqual(["anthropic:work", "anthropic:default"]);
-    },
-  );
-
-  it.each(["store", "config"] as const)(
-    "pushes disabled profiles to the end even with %s order",
-    (orderSource) => {
-      const now = Date.now();
-      const order = resolveWithAnthropicOrderAndUsage({
-        orderSource,
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+  it("pushes cooldown profiles to the end even with configured order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:default", "anthropic:work"] },
+          profiles: cfg.auth.profiles,
+        },
+      },
+      store: {
+        ...store,
+        usageStats: {
+          "anthropic:default": { cooldownUntil: now + 60_000 },
+          "anthropic:work": { lastUsed: 1 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+  it("pushes disabled profiles to the end even with store order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      store: {
+        ...store,
+        order: { anthropic: ["anthropic:default", "anthropic:work"] },
         usageStats: {
           "anthropic:default": {
             disabledUntil: now + 60_000,
@@ -113,54 +126,34 @@ describe("resolveAuthProfileOrder", () => {
           },
           "anthropic:work": { lastUsed: 1 },
         },
-      });
-      expect(order).toEqual(["anthropic:work", "anthropic:default"]);
-    },
-  );
-
-  it.each(["store", "config"] as const)(
-    "keeps OpenRouter explicit order even when cooldown fields exist (%s)",
-    (orderSource) => {
-      const now = Date.now();
-      const explicitOrder = ["openrouter:default", "openrouter:work"];
-      const order = resolveAuthProfileOrder({
-        cfg:
-          orderSource === "config"
-            ? {
-                auth: {
-                  order: { openrouter: explicitOrder },
-                },
-              }
-            : undefined,
-        store: {
-          version: 1,
-          ...(orderSource === "store" ? { order: { openrouter: explicitOrder } } : {}),
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-default",
-            },
-            "openrouter:work": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-work",
-            },
-          },
-          usageStats: {
-            "openrouter:default": {
-              cooldownUntil: now + 60_000,
-              disabledUntil: now + 120_000,
-              disabledReason: "billing",
-            },
-          },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+  it("pushes disabled profiles to the end even with configured order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:default", "anthropic:work"] },
+          profiles: cfg.auth.profiles,
         },
-        provider: "openrouter",
-      });
-
-      expect(order).toEqual(explicitOrder);
-    },
-  );
+      },
+      store: {
+        ...store,
+        usageStats: {
+          "anthropic:default": {
+            disabledUntil: now + 60_000,
+            disabledReason: "billing",
+          },
+          "anthropic:work": { lastUsed: 1 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
 
   it("mode: oauth config accepts both oauth and token credentials (issue #559)", () => {
     const now = Date.now();

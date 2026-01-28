@@ -1,14 +1,12 @@
-import crypto from "node:crypto";
-import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
-import { safeJsonStringify } from "../utils/safe-json.js";
-import { redactImageDataForDiagnostics } from "./payload-redaction.js";
-import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 
 type PayloadLogStage = "request" | "usage";
 
@@ -33,7 +31,10 @@ type PayloadLogConfig = {
   filePath: string;
 };
 
-type PayloadLogWriter = QueuedFileWriter;
+type PayloadLogWriter = {
+  filePath: string;
+  write: (line: string) => void;
+};
 
 const writers = new Map<string, PayloadLogWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
@@ -48,7 +49,49 @@ function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
 }
 
 function getWriter(filePath: string): PayloadLogWriter {
-  return getQueuedFileWriter(writers, filePath);
+  const existing = writers.get(filePath);
+  if (existing) {
+    return existing;
+  }
+
+  const dir = path.dirname(filePath);
+  const ready = fs.mkdir(dir, { recursive: true }).catch(() => undefined);
+  let queue = Promise.resolve();
+
+  const writer: PayloadLogWriter = {
+    filePath,
+    write: (line: string) => {
+      queue = queue
+        .then(() => ready)
+        .then(() => fs.appendFile(filePath, line, "utf8"))
+        .catch(() => undefined);
+    },
+  };
+
+  writers.set(filePath, writer);
+  return writer;
+}
+
+function safeJsonStringify(value: unknown): string | null {
+  try {
+    return JSON.stringify(value, (_key, val) => {
+      if (typeof val === "bigint") {
+        return val.toString();
+      }
+      if (typeof val === "function") {
+        return "[Function]";
+      }
+      if (val instanceof Error) {
+        return { name: val.name, message: val.message, stack: val.stack };
+      }
+      if (val instanceof Uint8Array) {
+        return { type: "Uint8Array", data: Buffer.from(val).toString("base64") };
+      }
+      return val;
+    });
+  } catch {
+    return null;
+  }
 }
 
 function formatError(error: unknown): string | undefined {
@@ -104,7 +147,6 @@ export function createAnthropicPayloadLogger(params: {
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  writer?: PayloadLogWriter;
 }): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
   const cfg = resolvePayloadLogConfig(env);
@@ -112,7 +154,7 @@ export function createAnthropicPayloadLogger(params: {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer = getWriter(cfg.filePath);
   const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -137,15 +179,14 @@ export function createAnthropicPayloadLogger(params: {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {
-        const redactedPayload = redactImageDataForDiagnostics(payload);
         record({
           ...base,
           ts: new Date().toISOString(),
           stage: "request",
-          payload: redactedPayload,
-          payloadDigest: digest(redactedPayload),
+          payload,
+          payloadDigest: digest(payload),
         });
-        return options?.onPayload?.(payload, model);
+        options?.onPayload?.(payload);
       };
       return streamFn(model, context, {
         ...options,

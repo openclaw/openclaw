@@ -46,7 +46,7 @@ The Ansible playbook installs and configures:
 1. **Tailscale** (mesh VPN for secure remote access)
 2. **UFW firewall** (SSH + Tailscale ports only)
 3. **Docker CE + Compose V2** (for agent sandboxes)
-4. **Node.js 24 + pnpm** (runtime dependencies; Node 22 LTS, currently `22.16+`, remains supported for compatibility)
+4. **Node.js 22.x + pnpm** (runtime dependencies)
 5. **OpenClaw** (host-based, not containerized)
 6. **Systemd service** (auto-start with security hardening)
 
@@ -107,7 +107,7 @@ Should show **only port 22** (SSH) open. All other services (gateway, Docker) ar
 
 Docker is installed for **agent sandboxes** (isolated tool execution), not for running the gateway itself. The gateway binds to localhost only and is accessible via Tailscale VPN.
 
-See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for sandbox configuration.
+See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for sandbox configuration.
 
 ## Manual Installation
 
@@ -154,7 +154,7 @@ If you're locked out:
 - SSH access (port 22) is always allowed
 - The gateway is **only** accessible via Tailscale by design
 
-### Service will not start
+### Service won't start
 
 ```bash
 # Check logs
@@ -205,4 +205,4 @@ For detailed security architecture and troubleshooting:
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) — full deployment guide
 - [Docker](/install/docker) — containerized gateway setup
 - [Sandboxing](/gateway/sandboxing) — agent sandbox configuration
-- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) — per-agent isolation
+- [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) — per-agent isolation
