@@ -24,6 +24,8 @@ export type FollowupRun = {
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
+  /** Optional note to prepend when routing non-primary inbound to a primary channel. */
+  nonPrimaryNote?: string;
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

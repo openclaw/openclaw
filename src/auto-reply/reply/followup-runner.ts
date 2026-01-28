@@ -1,20 +1,22 @@
 import crypto from "node:crypto";
+import type { TypingMode } from "../../config/types.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { FollowupRun } from "./queue.js";
+import type { TypingController } from "./typing.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
-import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { resolvePrimaryDeliveryDecision, resolvePrimaryRouting } from "../../routing/primary.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
-import type { FollowupRun } from "./queue.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -25,7 +27,6 @@ import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import type { TypingController } from "./typing.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -56,19 +57,35 @@ export function createFollowupRunner(params: {
   });
 
   /**
-   * Sends followup payloads, routing to the originating channel if set.
+   * Sends followup payloads with primary routing awareness.
    *
-   * When originatingChannel/originatingTo are set on the queued run,
-   * replies are routed directly to that provider instead of using the
-   * session's current dispatcher. This ensures replies go back to
-   * where the message originated.
+   * When primary routing is configured, non-primary inbound replies route to the
+   * primary channel (and optionally mirror to source). Otherwise, replies route
+   * to the originating channel when set, falling back to the dispatcher.
    */
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
-    // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
-    const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    const cfg = queued.run.config;
+    const currentSurface = queued.run.messageProvider?.toLowerCase();
+    const inboundSurface = (originatingChannel ?? currentSurface)?.toLowerCase();
+    const primaryRouting = resolvePrimaryRouting(cfg);
+    const primaryDecision = resolvePrimaryDeliveryDecision({
+      cfg,
+      inboundSurface,
+      entry: sessionEntry,
+    });
+    const primaryRoutingActive =
+      primaryDecision.sendToPrimary && primaryDecision.primaryChannel && primaryDecision.primaryTo;
+    const shouldSendToSource = primaryDecision.sendToSource ?? true;
+    const canRouteToOriginating = isRoutableChannel(originatingChannel) && Boolean(originatingTo);
+    const originMatchesSurface =
+      Boolean(originatingChannel) &&
+      Boolean(currentSurface) &&
+      originatingChannel === currentSurface;
+    const allowOriginRouting =
+      !primaryRouting || primaryDecision.sendToPrimary || originMatchesSurface;
 
-    if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+    if (!canRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
       return;
     }
@@ -86,8 +103,10 @@ export function createFollowupRunner(params: {
       }
       await typingSignals.signalTextDelta(payload.text);
 
-      // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      const sendToOrigin = async (): Promise<boolean> => {
+        if (!canRouteToOriginating || !originatingChannel || !originatingTo) {
+          return false;
+        }
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -95,19 +114,54 @@ export function createFollowupRunner(params: {
           sessionKey: queued.run.sessionKey,
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
-          cfg: queued.run.config,
+          cfg,
         });
         if (!result.ok) {
-          // Log error and fall back to dispatcher if available.
-          const errorMsg = result.error ?? "unknown error";
-          logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fallback: try the dispatcher if routing failed.
-          if (opts?.onBlockReply) {
-            await opts.onBlockReply(payload);
+          logVerbose(`followup queue: route-reply failed: ${result.error ?? "unknown error"}`);
+          return false;
+        }
+        return true;
+      };
+
+      const sendToSource = async (): Promise<void> => {
+        if (!shouldSendToSource) {
+          return;
+        }
+        if (allowOriginRouting && canRouteToOriginating) {
+          const ok = await sendToOrigin();
+          if (ok) {
+            return;
           }
         }
-      } else if (opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+        if (opts?.onBlockReply) {
+          await opts.onBlockReply(payload);
+        }
+      };
+
+      if (primaryRoutingActive && primaryDecision.primaryChannel && primaryDecision.primaryTo) {
+        await sendToSource();
+        const primaryPayload = queued.nonPrimaryNote
+          ? {
+              ...payload,
+              text: payload.text
+                ? `${queued.nonPrimaryNote}\n\n${payload.text}`
+                : queued.nonPrimaryNote,
+            }
+          : payload;
+        const result = await routeReply({
+          payload: primaryPayload,
+          channel: primaryDecision.primaryChannel,
+          to: primaryDecision.primaryTo,
+          sessionKey: queued.run.sessionKey,
+          cfg,
+        });
+        if (!result.ok) {
+          logVerbose(
+            `followup queue: route-reply (primary) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else {
+        await sendToSource();
       }
     }
   };
