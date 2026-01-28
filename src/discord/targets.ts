@@ -10,7 +10,6 @@ import {
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
 
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
-import { resolveDiscordAccount } from "./accounts.js";
 
 export type DiscordTargetKind = MessagingTargetKind;
 
@@ -104,7 +103,7 @@ export async function resolveDiscordTarget(
       const userId = match.id.replace(/^user:/, "");
       return buildMessagingTarget("user", userId, trimmed);
     }
-  } catch (error) {
+  } catch {
     // Directory lookup failed - fall through to parse as-is
     // This preserves existing behavior for channel names
   }
