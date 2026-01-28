@@ -6,8 +6,17 @@ import { join } from "node:path";
 import express, { type Request, type Response } from "express";
 
 const PORT = 18793;
+const GATEWAY_URL = "http://localhost:18789";
+const GATEWAY_TOKEN = "cos-webhook-secret-2026";
+
 const app = express();
 app.use(express.json());
+
+// SECURITY: Only these email addresses can send messages to Clawdette
+const ALLOWED_SENDERS = [
+  "justin@remixpartners.ai",
+  "justinmassa@gmail.com", // backup in case GChat uses personal email
+];
 
 const PYTHON = "/Users/justinmassa/chief-of-staff/.venv/bin/python";
 const GCHAT_SENDER = "/Users/justinmassa/chief-of-staff/scripts/gchat_send_file.py";
@@ -114,62 +123,66 @@ function sendChatMessage(spaceId: string, text: string): void {
   }
 }
 
-// Run clawdbot agent (no shell, direct spawn)
-function runAgent(
+// Run clawdbot agent via gateway hooks API (more reliable than spawning processes)
+async function runAgent(
   message: string,
   sessionId: string,
   callback: (err: Error | null, response: string) => void,
-): void {
-  const proc = spawn(
-    "clawdbot",
-    ["agent", "--message", message, "--session-id", sessionId, "--local"],
-    {
-      timeout: 300000,
-      env: { ...process.env, PATH: `/opt/homebrew/bin:${process.env.PATH}` },
-    },
-  );
+): Promise<void> {
+  try {
+    console.log(`[googlechat] Calling gateway hooks API for session ${sessionId}...`);
 
-  let stdout = "";
-  let stderr = "";
+    // Call the gateway hooks API instead of spawning a process
+    const response = await fetch(`${GATEWAY_URL}/webhook/agent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${GATEWAY_TOKEN}`,
+      },
+      body: JSON.stringify({
+        message,
+        sessionKey: sessionId,
+      }),
+      // 10 minute timeout for long-running agent tasks
+      signal: AbortSignal.timeout(600000),
+    });
 
-  proc.stdout.on("data", (data) => {
-    stdout += data.toString();
-  });
-
-  proc.stderr.on("data", (data) => {
-    stderr += data.toString();
-  });
-
-  proc.on("close", (code) => {
-    // Filter out ANSI-coded log lines that leak from the agent
-    // These look like: [33m[subsystem][39m [36mmessage[39m
-    const filtered = stdout
-      .split("\n")
-      .filter((line) => !line.match(/^\x1b\[\d+m\[/)) // Filter ANSI log lines
-      .join("\n")
-      .trim();
-
-    // IMPORTANT: clawdbot exits with code 1 when tools fail, but the agent
-    // may still have produced a valid response. Use the response if available.
-    if (filtered) {
-      if (code !== 0) {
-        console.log(`[googlechat] Agent exited with code ${code} but had response - using it`);
-        if (stderr) {
-          console.log(`[googlechat] Agent stderr (non-fatal): ${stderr.slice(0, 200)}`);
-        }
-      }
-      callback(null, filtered);
-    } else if (code !== 0) {
-      console.error(`[googlechat] Agent stderr: ${stderr}`);
-      callback(new Error(`Agent exited with code ${code}: ${stderr}`), "");
-    } else {
-      callback(null, "");
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[googlechat] Gateway returned ${response.status}: ${errorText}`);
+      callback(new Error(`Gateway error ${response.status}: ${errorText}`), "");
+      return;
     }
-  });
 
-  proc.on("error", (err) => {
-    callback(err, "");
-  });
+    const result = (await response.json()) as {
+      ok: boolean;
+      runId?: string;
+      response?: string;
+      error?: string;
+    };
+
+    if (!result.ok) {
+      console.error(`[googlechat] Gateway error:`, result.error);
+      callback(new Error(result.error || "Unknown gateway error"), "");
+      return;
+    }
+
+    // The hooks API returns the agent's response directly
+    const agentResponse = result.response || "";
+    callback(null, agentResponse);
+  } catch (err) {
+    if (err instanceof Error) {
+      if (err.name === "TimeoutError") {
+        console.error(`[googlechat] Gateway request timed out after 10 minutes`);
+        callback(new Error("Request timed out - the AI took too long to respond"), "");
+      } else {
+        console.error(`[googlechat] Gateway request failed:`, err.message);
+        callback(err, "");
+      }
+    } else {
+      callback(new Error("Unknown error"), "");
+    }
+  }
 }
 
 // Health check
@@ -208,10 +221,18 @@ app.post("/webhook/googlechat", async (req: Request, res: Response) => {
     if (isMessage) {
       const msg = chat.messagePayload.message;
       const senderName = msg?.sender?.displayName || "Unknown";
+      const senderEmail = msg?.sender?.email || "";
       const text = msg?.argumentText || msg?.text || "";
       const spaceId = msg?.space?.name?.replace("spaces/", "") || "default";
 
-      console.log(`[googlechat] Message from ${senderName}: ${text}`);
+      console.log(`[googlechat] Message from ${senderName} <${senderEmail}>: ${text}`);
+
+      // SECURITY: Reject messages from unauthorized senders
+      if (!ALLOWED_SENDERS.includes(senderEmail.toLowerCase())) {
+        console.log(`[googlechat] BLOCKED: Unauthorized sender ${senderEmail}`);
+        res.json({}); // Acknowledge but don't process
+        return;
+      }
 
       // Acknowledge immediately - no blocking!
       res.json({});
@@ -233,5 +254,6 @@ app.post("/webhook/googlechat", async (req: Request, res: Response) => {
 
 app.listen(PORT, () => {
   console.log(`[googlechat] Webhook server running on port ${PORT}`);
-  console.log(`[googlechat] Mode: ASYNC with spawn (no shell escaping issues)`);
+  console.log(`[googlechat] Mode: Gateway hooks API (no process spawning)`);
+  console.log(`[googlechat] Gateway: ${GATEWAY_URL}`);
 });
