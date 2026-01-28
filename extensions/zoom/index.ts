@@ -1,3 +1,4 @@
+// Zoom Team Chat channel plugin for Moltbot
 import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
 import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
 
