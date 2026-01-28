@@ -59,6 +59,7 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId: "main" });
 
     expect(first.manager).toBe(second.manager);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(QmdMemoryManager.create).toHaveBeenCalledTimes(1);
   });
 });

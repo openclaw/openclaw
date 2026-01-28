@@ -266,7 +266,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           | Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>>
           | undefined;
         let indexError: string | undefined;
-        const syncFn = manager.sync;
+        const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
           await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
             progress.setLabel("Probing vector…");
@@ -519,7 +519,7 @@ export function registerMemoryCli(program: Command) {
           },
           run: async (manager) => {
             try {
-              const syncFn = manager.sync;
+              const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
               if (opts.verbose) {
                 const status = manager.status();
                 const rich = isRich();
