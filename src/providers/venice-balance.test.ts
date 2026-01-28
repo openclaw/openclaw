@@ -32,14 +32,12 @@ describe("venice-balance", () => {
       const headers = new Headers();
       headers.set("x-venice-balance-diem", "44.32116826");
       headers.set("x-venice-balance-usd", "10.50");
-      headers.set("x-venice-balance-vcu", "1000");
 
       const balance = extractVeniceBalance(headers);
 
       expect(balance).not.toBeNull();
       expect(balance?.diem).toBeCloseTo(44.32116826);
       expect(balance?.usd).toBeCloseTo(10.5);
-      expect(balance?.vcu).toBeCloseTo(1000);
       expect(balance?.lastChecked).toBeGreaterThan(0);
     });
 

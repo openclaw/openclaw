@@ -4,7 +4,6 @@
  * Extracts and tracks Venice API balance from response headers:
  * - x-venice-balance-diem: DIEM token balance
  * - x-venice-balance-usd: USD credit balance
- * - x-venice-balance-vcu: VCU balance
  *
  * This module provides:
  * - Balance extraction from response headers
@@ -16,7 +15,6 @@
 export interface VeniceBalance {
   diem?: number;
   usd?: number;
-  vcu?: number;
   lastChecked: number;
   /** Provider identifier (for multi-key scenarios) */
   providerId?: string;
@@ -82,7 +80,6 @@ export function extractVeniceBalance(headers: Headers | Record<string, string>):
   if (isNaN(diem)) return null;
 
   const usdRaw = get("x-venice-balance-usd");
-  const vcuRaw = get("x-venice-balance-vcu");
 
   // Extract rate limit headers (tracks API key spending cap)
   const limitRequestsRaw = get("x-ratelimit-limit-requests");
@@ -104,7 +101,6 @@ export function extractVeniceBalance(headers: Headers | Record<string, string>):
   return {
     diem,
     usd: usdRaw ? parseFloat(usdRaw) : undefined,
-    vcu: vcuRaw ? parseFloat(vcuRaw) : undefined,
     rateLimit,
     lastChecked: Date.now(),
   };
