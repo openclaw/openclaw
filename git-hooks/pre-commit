@@ -1,12 +1,4 @@
 #!/bin/sh
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -z "$ROOT" ] && exit 0
-
-# Use Node 22 via nvm if available
-export NVM_DIR="$HOME/.nvm"
-if [ -s "$NVM_DIR/nvm.sh" ]; then
-  . "$NVM_DIR/nvm.sh"
-  nvm use 22 > /dev/null 2>&1 || true
-fi
-
 node "$ROOT/scripts/format-staged.js"

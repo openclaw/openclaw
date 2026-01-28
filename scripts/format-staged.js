@@ -58,27 +58,14 @@ function filterOutPartialTargets(targets, partialTargets) {
 }
 
 function resolveOxfmtCommand(repoRoot) {
-  // Run oxfmt via node to avoid Node.js ESM issues with extensionless binaries
-  const cliPath = path.join(repoRoot, "node_modules", "oxfmt", "dist", "cli.js");
-  if (fs.existsSync(cliPath)) {
-    return { command: "node", args: [cliPath] };
-  }
-
-  // Fallback to pnpm
-  const pnpmResult = spawnSync("pnpm", ["--version"], { stdio: "ignore", cwd: repoRoot });
-  if (pnpmResult.status === 0) {
-    return { command: "pnpm", args: ["oxfmt"] };
-  }
-
-  // Fallback to direct oxfmt if available
   const binName = process.platform === "win32" ? "oxfmt.cmd" : "oxfmt";
   const local = path.join(repoRoot, "node_modules", ".bin", binName);
   if (fs.existsSync(local)) {
     return { command: local, args: [] };
   }
 
-  const globalResult = spawnSync("oxfmt", ["--version"], { stdio: "ignore" });
-  if (globalResult.status === 0) {
+  const result = spawnSync("oxfmt", ["--version"], { stdio: "ignore" });
+  if (result.status === 0) {
     return { command: "oxfmt", args: [] };
   }
 
@@ -92,11 +79,7 @@ function getGitPaths(args, repoRoot) {
 }
 
 function formatFiles(repoRoot, oxfmt, files) {
-  const args =
-    oxfmt.command === "pnpm" ? [...oxfmt.args, "--write", ...files]
-    : oxfmt.command === "node" ? [...oxfmt.args, "--write", ...files]
-    : ["--write", ...oxfmt.args, ...files];
-  const result = spawnSync(oxfmt.command, args, {
+  const result = spawnSync(oxfmt.command, ["--write", ...oxfmt.args, ...files], {
     cwd: repoRoot,
     stdio: "inherit",
   });
