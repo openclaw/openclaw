@@ -2,7 +2,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { MoltbotConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
-import type { MemoryIndexManager } from "./manager.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,

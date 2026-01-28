@@ -74,6 +74,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly collectionsFile: string;
   private readonly indexPath: string;
+  private readonly legacyCollectionsFile: string;
+  private readonly legacyIndexPath: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
@@ -107,6 +109,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.xdgCacheHome = path.join(this.qmdDir, "xdg-cache");
     this.collectionsFile = path.join(this.xdgConfigHome, "qmd", "index.yml");
     this.indexPath = path.join(this.xdgCacheHome, "qmd", "index.sqlite");
+
+    // Legacy locations (older builds wrote here). Keep them in sync via symlinks
+    // so upgrades don't strand an empty index.
+    this.legacyCollectionsFile = path.join(this.qmdDir, "config", "index.yml");
+    this.legacyIndexPath = path.join(this.qmdDir, "cache", "index.sqlite");
+
     this.env = {
       ...process.env,
       XDG_CONFIG_HOME: this.xdgConfigHome,
@@ -141,8 +149,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(path.dirname(this.collectionsFile), { recursive: true });
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
 
+    // Legacy dirs
+    await fs.mkdir(path.dirname(this.legacyCollectionsFile), { recursive: true });
+    await fs.mkdir(path.dirname(this.legacyIndexPath), { recursive: true });
+
     this.bootstrapCollections();
     await this.writeCollectionsConfig();
+    await this.ensureLegacyCompatSymlinks();
 
     if (this.qmd.update.onBoot) {
       await this.runUpdate("boot", true);
@@ -176,6 +189,42 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const yaml = YAML.stringify({ collections }, { indent: 2, lineWidth: 0 });
     await fs.writeFile(this.collectionsFile, yaml, "utf-8");
+
+    // Also write legacy path so older qmd homes remain usable.
+    await fs.writeFile(this.legacyCollectionsFile, yaml, "utf-8");
+  }
+
+  private async ensureLegacyCompatSymlinks(): Promise<void> {
+    // Best-effort: keep legacy locations pointing at the XDG locations.
+    // This helps when users have old state dirs on disk.
+    try {
+      await fs.rm(this.legacyCollectionsFile, { force: true });
+    } catch {}
+    try {
+      await fs.symlink(this.collectionsFile, this.legacyCollectionsFile);
+    } catch {}
+
+    try {
+      // If a legacy index already exists (from an older version), prefer it by
+      // linking the XDG path to the legacy DB.
+      const legacyExists = await fs
+        .stat(this.legacyIndexPath)
+        .then(() => true)
+        .catch(() => false);
+      const xdgExists = await fs
+        .stat(this.indexPath)
+        .then(() => true)
+        .catch(() => false);
+
+      if (legacyExists && !xdgExists) {
+        await fs.symlink(this.legacyIndexPath, this.indexPath);
+      } else if (!legacyExists && xdgExists) {
+        // nothing to do
+      } else if (!legacyExists && !xdgExists) {
+        // Create an empty file so the path exists for read-only opens later.
+        await fs.writeFile(this.indexPath, "");
+      }
+    } catch {}
   }
 
   async search(
