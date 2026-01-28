@@ -104,7 +104,7 @@ It does NOT wake the bot or trigger any LLM calls - it's just file synchronizati
 }
 ```
 
-**S3/R2/Minio:**
+**S3 (AWS, R2, Minio):**
 
 ```json5
 {
@@ -113,12 +113,12 @@ It does NOT wake the bot or trigger any LLM calls - it's just file synchronizati
       provider: "s3",
       remotePath: "moltbot-sync",  // path within bucket
       s3: {
+        // AWS S3: https://s3.<REGION>.amazonaws.com (or omit for default)
         // Cloudflare R2: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-        // AWS S3: https://s3.<REGION>.amazonaws.com
         // Minio: https://your-minio-host:9000
-        endpoint: "https://abc123def456.r2.cloudflarestorage.com",
+        endpoint: "https://s3.us-east-1.amazonaws.com",
         bucket: "your-bucket",
-        region: "auto"  // "auto" for R2, or specific region for AWS
+        region: "us-east-1"
         // accessKeyId and secretAccessKey via env vars recommended
       }
     }
