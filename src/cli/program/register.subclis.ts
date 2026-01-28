@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { buildParseArgv, getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { resolveActionArgs } from "./helpers.js";
@@ -22,7 +22,7 @@ const shouldEagerRegisterSubcommands = (_argv: string[]) => {
   return isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_LAZY_SUBCOMMANDS);
 };
 
-const loadConfig = async (): Promise<ClawdbotConfig> => {
+const loadConfig = async (): Promise<MoltbotConfig> => {
   const mod = await import("../../config/config.js");
   return mod.loadConfig();
 };
@@ -168,6 +168,11 @@ const entries: SubCliEntry[] = [
     name: "pairing",
     description: "Pairing helpers",
     register: async (program) => {
+      // Initialize plugins before registering pairing CLI.
+      // The pairing CLI calls listPairingChannels() at registration time,
+      // which requires the plugin registry to be populated with channel plugins.
+      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
+      registerPluginCliCommands(program, await loadConfig());
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
