@@ -1,4 +1,20 @@
-# Repository Guidelines
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+Moltbot is a multi-channel AI assistant gateway that connects messaging platforms (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, LINE, and more) to AI models. It runs as a local gateway (CLI or macOS menubar app) and routes messages between users and AI agents.
+
+**Core architecture:**
+- **Gateway** (`src/gateway/`): WebSocket server handling client connections, chat sessions, and channel routing
+- **Channels** (`src/telegram/`, `src/discord/`, `src/slack/`, `src/signal/`, `src/imessage/`, `src/web/`, `src/line/`): Platform-specific message adapters
+- **Agents** (`src/agents/`): AI agent runtime with Pi integration (`@mariozechner/pi-*` packages)
+- **CLI** (`src/cli/`, `src/commands/`): Command-line interface built with Commander
+- **Extensions** (`extensions/`): Plugin system for additional channels (MS Teams, Matrix, Zalo, Twitch, etc.)
+- **Native apps** (`apps/`): macOS, iOS, and Android apps wrapping the gateway
+
+## Repository Guidelines
 - Repo: https://github.com/moltbot/moltbot
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 
@@ -47,6 +63,9 @@
 - Type-check/build: `pnpm build` (tsc)
 - Lint/format: `pnpm lint` (oxlint), `pnpm format` (oxfmt)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Run a single test file: `pnpm test src/path/to/file.test.ts`
+- Run tests matching a pattern: `pnpm test -t "pattern"`
+- Watch mode: `pnpm test:watch`
 
 ## Coding Style & Naming Conventions
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
