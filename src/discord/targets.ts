@@ -80,13 +80,15 @@ export async function resolveDiscordTarget(
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
 
-  const shouldLookup = isExplicitUserLookup(trimmed, options);
-  const directParse = safeParseDiscordTarget(trimmed, options);
-  if (directParse && directParse.kind !== "channel") {
+  const parseOptions: DiscordTargetParseOptions = {};
+  const likelyUsername = isLikelyUsername(trimmed);
+  const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
+  const directParse = safeParseDiscordTarget(trimmed, parseOptions);
+  if (directParse && directParse.kind !== "channel" && !likelyUsername) {
     return directParse;
   }
   if (!shouldLookup) {
-    return directParse ?? parseDiscordTarget(trimmed, options);
+    return directParse ?? parseDiscordTarget(trimmed, parseOptions);
   }
 
   // Try to resolve as a username via directory lookup
@@ -109,7 +111,7 @@ export async function resolveDiscordTarget(
   }
 
   // Fallback to original parsing (for channels, etc.)
-  return parseDiscordTarget(trimmed, options);
+  return parseDiscordTarget(trimmed, parseOptions);
 }
 
 function safeParseDiscordTarget(
@@ -137,4 +139,17 @@ function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions)
     return options.defaultKind === "user";
   }
   return false;
+}
+
+/**
+ * Check if a string looks like a Discord username (not a mention, prefix, or ID).
+ * Usernames typically don't start with special characters except underscore.
+ */
+function isLikelyUsername(input: string): boolean {
+  // Skip if it's already a known format
+  if (/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(input)) {
+    return false;
+  }
+  // Likely a username if it doesn't match known patterns
+  return true;
 }

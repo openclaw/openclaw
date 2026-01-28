@@ -71,6 +71,8 @@ Status: beta.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
+- Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
 - Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
 - Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
 - Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.
