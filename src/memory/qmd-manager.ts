@@ -70,8 +70,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly stateDir: string;
   private readonly agentStateDir: string;
   private readonly qmdDir: string;
-  private readonly cacheDir: string;
-  private readonly configDir: string;
   private readonly xdgConfigHome: string;
   private readonly xdgCacheHome: string;
   private readonly collectionsFile: string;
@@ -102,18 +100,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.stateDir = resolveStateDir(process.env, os.homedir);
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");
-    this.cacheDir = path.join(this.qmdDir, "cache");
-    this.configDir = path.join(this.qmdDir, "config");
+    // QMD respects XDG base dirs:
+    // - config:  $XDG_CONFIG_HOME/qmd/index.yml
+    // - cache:   $XDG_CACHE_HOME/qmd/index.sqlite
     this.xdgConfigHome = path.join(this.qmdDir, "xdg-config");
     this.xdgCacheHome = path.join(this.qmdDir, "xdg-cache");
-    this.collectionsFile = path.join(this.configDir, "index.yml");
-    this.indexPath = path.join(this.cacheDir, "index.sqlite");
+    this.collectionsFile = path.join(this.xdgConfigHome, "qmd", "index.yml");
+    this.indexPath = path.join(this.xdgCacheHome, "qmd", "index.sqlite");
     this.env = {
       ...process.env,
-      QMD_CONFIG_DIR: this.configDir,
       XDG_CONFIG_HOME: this.xdgConfigHome,
       XDG_CACHE_HOME: this.xdgCacheHome,
-      INDEX_PATH: this.indexPath,
       NO_COLOR: "1",
     };
     this.sessionExporter = this.qmd.sessions.enabled
@@ -139,10 +136,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async initialize(): Promise<void> {
-    await fs.mkdir(this.cacheDir, { recursive: true });
-    await fs.mkdir(this.configDir, { recursive: true });
     await fs.mkdir(this.xdgConfigHome, { recursive: true });
     await fs.mkdir(this.xdgCacheHome, { recursive: true });
+    await fs.mkdir(path.dirname(this.collectionsFile), { recursive: true });
+    await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
 
     this.bootstrapCollections();
     await this.writeCollectionsConfig();
