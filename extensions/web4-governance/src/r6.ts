@@ -23,6 +23,8 @@ export type R6Request = {
 export type R6Rules = {
   auditLevel: string;
   constraints: string[];
+  /** Policy entity ID (policy as first-class trust participant) */
+  policyEntityId?: string;
 };
 
 export type R6Role = {
@@ -114,6 +116,7 @@ export function createR6Request(
   actionIndex: number,
   prevR6Id: string | undefined,
   auditLevel: string,
+  policyEntityId?: string,
 ): R6Request {
   return {
     id: `r6:${randomUUID().slice(0, 8)}`,
@@ -121,6 +124,7 @@ export function createR6Request(
     rules: {
       auditLevel,
       constraints: [],
+      policyEntityId,
     },
     role: {
       sessionId,

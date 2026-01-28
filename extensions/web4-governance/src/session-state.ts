@@ -14,6 +14,8 @@ export type SessionState = {
   startedAt: string;
   toolCounts: Record<string, number>;
   categoryCounts: Record<string, number>;
+  /** Policy entity ID (policy:<name>:<version>:<hash>) */
+  policyEntityId?: string;
 };
 
 export class SessionStore {

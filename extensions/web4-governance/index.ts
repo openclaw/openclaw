@@ -19,6 +19,7 @@ import type { PolicyConfig, PolicyEvaluation } from "./src/policy-types.js";
 import { RateLimiter } from "./src/rate-limiter.js";
 import { resolvePreset, listPresets, isPresetName } from "./src/presets.js";
 import { AuditReporter } from "./src/reporter.js";
+import { PolicyRegistry, type PolicyEntityId } from "./src/policy-entity.js";
 
 type PluginConfig = {
   auditLevel?: string;
@@ -54,6 +55,9 @@ const plugin = {
     // Rate limiter (memory-only, shared across all sessions)
     const rateLimiter = new RateLimiter();
 
+    // Policy entity registry (policies as first-class trust participants)
+    const policyRegistry = new PolicyRegistry();
+
     // Resolve policy config: preset → merge with overrides
     let resolvedPolicyConfig: Partial<PolicyConfig> = {};
     if (config.policy) {
@@ -85,6 +89,20 @@ const plugin = {
       if (!entry) {
         const sessionId = sessionKey || randomUUID();
         const lct = createSoftLCT(sessionId);
+
+        // Register policy entity (policy as first-class trust participant)
+        let policyEntityId: PolicyEntityId | undefined;
+        const presetName = config.policy?.preset ?? "safety";
+        if (isPresetName(presetName)) {
+          const policyEntity = policyRegistry.registerPolicy({
+            name: presetName,
+            preset: presetName,
+          });
+          policyEntityId = policyEntity.entityId;
+          // Session witnesses operating under this policy
+          policyRegistry.witnessSession(policyEntity.entityId, sessionId);
+        }
+
         const state: SessionState = {
           sessionId,
           lct,
@@ -92,12 +110,14 @@ const plugin = {
           startedAt: new Date().toISOString(),
           toolCounts: {},
           categoryCounts: {},
+          policyEntityId,
         };
         const audit = new AuditChain(storagePath, sessionId);
         sessionStore.save(state);
         entry = { state, audit };
         sessions.set(sessionKey, entry);
-        logger.info(`[web4] Session ${lct.tokenId} initialized (${auditLevel} audit)`);
+        const policyInfo = policyEntityId ? ` [policy:${presetName}]` : "";
+        logger.info(`[web4] Session ${lct.tokenId} initialized (${auditLevel} audit)${policyInfo}`);
       }
       return entry;
     }
@@ -149,6 +169,7 @@ const plugin = {
         state.actionIndex,
         state.lastR6Id,
         auditLevel,
+        state.policyEntityId,
       );
 
       // Record in audit chain with success (commands that reach hooks succeeded)
@@ -220,11 +241,25 @@ const plugin = {
         entry.state.actionIndex,
         entry.state.lastR6Id,
         auditLevel,
+        entry.state.policyEntityId,
       );
 
       // Write policy constraints to R6
       if (policyEval) {
         r6.rules.constraints = policyEval.constraints;
+      }
+
+      // Witness policy decision (policy witnesses the outcome)
+      if (entry.state.policyEntityId) {
+        const decision = policyEval?.decision ?? "allow";
+        const success = !event.error;
+        policyRegistry.witnessDecision(
+          entry.state.policyEntityId as PolicyEntityId,
+          entry.state.sessionId,
+          event.toolName,
+          decision,
+          success
+        );
       }
 
       const result = {
@@ -466,6 +501,29 @@ const plugin = {
               console.log();
             }
             console.log(`Usage: { "policy": { "preset": "<name>" } }`);
+          });
+
+        // --- Policy Entity CLI ---
+        policy
+          .command("entities")
+          .description("List registered policy entities (policies as trust participants)")
+          .action(() => {
+            const entities = policyRegistry.listPolicies();
+            if (entities.length === 0) {
+              console.log("No policy entities registered.");
+              return;
+            }
+            console.log(`${entities.length} policy entities:\n`);
+            for (const e of entities) {
+              console.log(`  ${e.entityId}`);
+              console.log(`    name: ${e.name} | source: ${e.source}`);
+              console.log(`    hash: ${e.contentHash}`);
+              console.log(`    created: ${e.createdAt}`);
+              const witnessedBy = policyRegistry.getWitnessedBy(e.entityId);
+              const hasWitnessed = policyRegistry.getHasWitnessed(e.entityId);
+              console.log(`    witnessed by: ${witnessedBy.length} | has witnessed: ${hasWitnessed.length}`);
+              console.log();
+            }
           });
       },
       { commands: ["policy"] },
