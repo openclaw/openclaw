@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   resolveDefaultConfigCandidates,
@@ -47,6 +49,61 @@ describe("state + config path candidates", () => {
     const home = "/home/test";
     const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
     expect(candidates[0]).toBe(path.join(home, ".moltbot", "moltbot.json"));
-    expect(candidates[1]).toBe(path.join(home, ".clawdbot", "moltbot.json"));
+    expect(candidates[1]).toBe(path.join(home, ".moltbot", "clawdbot.json"));
+    expect(candidates[2]).toBe(path.join(home, ".clawdbot", "moltbot.json"));
+    expect(candidates[3]).toBe(path.join(home, ".clawdbot", "clawdbot.json"));
+  });
+
+  it("prefers ~/.moltbot when it exists and legacy dir is missing", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-state-"));
+    try {
+      const newDir = path.join(root, ".moltbot");
+      await fs.mkdir(newDir, { recursive: true });
+      const resolved = resolveStateDir({} as NodeJS.ProcessEnv, () => root);
+      expect(resolved).toBe(newDir);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("CONFIG_PATH prefers existing legacy filename when present", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-config-"));
+    const previousHome = process.env.HOME;
+    const previousMoltbotConfig = process.env.MOLTBOT_CONFIG_PATH;
+    const previousClawdbotConfig = process.env.CLAWDBOT_CONFIG_PATH;
+    const previousMoltbotState = process.env.MOLTBOT_STATE_DIR;
+    const previousClawdbotState = process.env.CLAWDBOT_STATE_DIR;
+    try {
+      const legacyDir = path.join(root, ".clawdbot");
+      await fs.mkdir(legacyDir, { recursive: true });
+      const legacyPath = path.join(legacyDir, "clawdbot.json");
+      await fs.writeFile(legacyPath, "{}", "utf-8");
+
+      process.env.HOME = root;
+      delete process.env.MOLTBOT_CONFIG_PATH;
+      delete process.env.CLAWDBOT_CONFIG_PATH;
+      delete process.env.MOLTBOT_STATE_DIR;
+      delete process.env.CLAWDBOT_STATE_DIR;
+
+      vi.resetModules();
+      const { CONFIG_PATH } = await import("./paths.js");
+      expect(CONFIG_PATH).toBe(legacyPath);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousMoltbotConfig === undefined) delete process.env.MOLTBOT_CONFIG_PATH;
+      else process.env.MOLTBOT_CONFIG_PATH = previousMoltbotConfig;
+      if (previousClawdbotConfig === undefined) delete process.env.CLAWDBOT_CONFIG_PATH;
+      else process.env.CLAWDBOT_CONFIG_PATH = previousClawdbotConfig;
+      if (previousMoltbotState === undefined) delete process.env.MOLTBOT_STATE_DIR;
+      else process.env.MOLTBOT_STATE_DIR = previousMoltbotState;
+      if (previousClawdbotState === undefined) delete process.env.CLAWDBOT_STATE_DIR;
+      else process.env.CLAWDBOT_STATE_DIR = previousClawdbotState;
+      await fs.rm(root, { recursive: true, force: true });
+      vi.resetModules();
+    }
   });
 });
