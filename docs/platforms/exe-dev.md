@@ -103,8 +103,8 @@ server {
 
 ## 5) Access Moltbot and grant privileges
 
-Access `https//<vm-name>.exe.xyz/?token=YOUR-TOKEN-FROM-TERMINAL`. Approve
-devices with `clawdbot device list` and `clawdbot device accept`. When in doubt,
+Access `https://<vm-name>.exe.xyz/?token=YOUR-TOKEN-FROM-TERMINAL`. Approve
+devices with `moltbot devices list` and `moltbot device approve`. When in doubt,
 use Shelley from your browser!
 
 ## Remote Access
