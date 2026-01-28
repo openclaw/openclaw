@@ -925,13 +925,14 @@
           "concepts/typing-indicators",
           "concepts/queue",
           "concepts/retry",
-          "concepts/model-providers",
-          "concepts/models",
-          "concepts/model-failover",
-          "concepts/usage-tracking",
-          "concepts/timezone",
-          "concepts/typebox"
-        ]
+        "concepts/model-providers",
+        "concepts/models",
+        "concepts/model-routing",
+        "concepts/model-failover",
+        "concepts/usage-tracking",
+        "concepts/timezone",
+        "concepts/typebox"
+      ]
       },
       {
         "group": "Gateway & Ops",

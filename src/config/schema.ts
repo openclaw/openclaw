@@ -292,6 +292,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.runtime": "Default Runtime",
   "agents.defaults.mainRuntime": "Main Agent Runtime",
   "agents.defaults.mainCcsdkProvider": "Main Agent CCSDK Provider",
+  "agents.defaults.ccsdkProvider": "Worker Agent CCSDK Provider",
   "agents.defaults.models": "Models",
   "agents.defaults.model.primary": "Primary Model",
   "agents.defaults.model.fallbacks": "Model Fallbacks",
@@ -546,6 +547,8 @@ const FIELD_HELP: Record<string, string> = {
     'Runtime override for the main agent loop only. Falls back to "Default Runtime" when unset.',
   "agents.defaults.mainCcsdkProvider":
     'Which provider backend to use for the main agent when running in CCSDK mode ("anthropic", "zai", or "openrouter").',
+  "agents.defaults.ccsdkProvider":
+    "Default provider backend for worker agents when running in CCSDK mode. Falls back to mainCcsdkProvider if unset.",
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",

@@ -13,6 +13,26 @@ import {
   HumanDelaySchema,
 } from "./zod-schema.core.js";
 
+const ModelRoutingTierSchema = z.enum(["local-small", "local-large", "remote"]);
+const ModelRoutingModeSchema = z.enum(["off", "tiered", "hybrid"]);
+const ModelRoutingStakesSchema = z.enum(["low", "medium", "high"]);
+const ModelRoutingVerifiabilitySchema = z.enum(["low", "medium", "high"]);
+
+const ModelRoutingPolicySchema = z
+  .object({
+    mode: ModelRoutingModeSchema.optional(),
+    tier: ModelRoutingTierSchema.optional(),
+    executorTier: ModelRoutingTierSchema.optional(),
+    plannerModel: z.string().optional(),
+    executorModel: z.string().optional(),
+    stakes: ModelRoutingStakesSchema.optional(),
+    verifiability: ModelRoutingVerifiabilitySchema.optional(),
+    maxToolCalls: z.number().int().positive().optional(),
+    allowWriteTools: z.boolean().optional(),
+    respectSessionOverride: z.boolean().optional(),
+  })
+  .strict();
+
 export const AgentDefaultsSchema = z
   .object({
     model: z
@@ -40,6 +60,23 @@ export const AgentDefaultsSchema = z
           })
           .strict(),
       )
+      .optional(),
+    modelRouting: z
+      .object({
+        enabled: z.boolean().optional(),
+        models: z
+          .object({
+            localSmall: z.string().optional(),
+            localLarge: z.string().optional(),
+            remote: z.string().optional(),
+            planner: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        defaultPolicy: ModelRoutingPolicySchema.optional(),
+        intents: z.record(z.string(), ModelRoutingPolicySchema).optional(),
+      })
+      .strict()
       .optional(),
     workspace: z.string().optional(),
     repoRoot: z.string().optional(),
@@ -158,6 +195,8 @@ export const AgentDefaultsSchema = z
     mainRuntime: z.enum(["pi", "ccsdk"]).optional(),
     /** Which well-known CCSDK provider backend to use for the main agent (when mainRuntime is "ccsdk"). */
     mainCcsdkProvider: z.enum(["anthropic", "zai", "openrouter"]).optional(),
+    /** Default CCSDK provider backend for worker agents (when runtime is "ccsdk"). Falls back to mainCcsdkProvider if unset. */
+    ccsdkProvider: z.enum(["anthropic", "zai", "openrouter"]).optional(),
     sandbox: z
       .object({
         mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),

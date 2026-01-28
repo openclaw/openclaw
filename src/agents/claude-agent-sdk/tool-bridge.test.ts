@@ -10,7 +10,12 @@ import {
   mcpToolName,
   wrapToolHandler,
 } from "./tool-bridge.js";
-import type { McpCallToolResult, McpServerLike } from "./tool-bridge.types.js";
+import type {
+  McpServerLike,
+  McpToolConfig,
+  McpToolHandlerExtra,
+  McpToolHandlerFn,
+} from "./tool-bridge.types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,22 +39,32 @@ function createStubTool(name: string, overrides?: Partial<AnyAgentTool>): AnyAge
   };
 }
 
-/** Mock McpServer that records tool registrations. */
+/** Create a mock extra object for testing. */
+function createMockExtra(overrides?: Partial<McpToolHandlerExtra>): McpToolHandlerExtra {
+  return {
+    signal: overrides?.signal,
+    _meta: overrides?._meta ?? {},
+    sessionId: overrides?.sessionId,
+    requestId: overrides?.requestId ?? 1,
+  };
+}
+
+/** Mock McpServer that records tool registrations using registerTool(). */
 class MockMcpServer implements McpServerLike {
   tools: Array<{
     name: string;
     description: string;
-    schema: Record<string, unknown>;
-    handler: (args: Record<string, unknown>) => Promise<McpCallToolResult>;
+    inputSchema: unknown;
+    handler: McpToolHandlerFn;
   }> = [];
 
-  tool(
-    name: string,
-    description: string,
-    inputSchema: Record<string, unknown>,
-    handler: (args: Record<string, unknown>) => Promise<McpCallToolResult>,
-  ): void {
-    this.tools.push({ name, description, schema: inputSchema, handler });
+  registerTool(name: string, config: McpToolConfig, handler: McpToolHandlerFn): void {
+    this.tools.push({
+      name,
+      description: config.description ?? "",
+      inputSchema: config.inputSchema,
+      handler,
+    });
   }
 }
 
@@ -181,20 +196,36 @@ describe("wrapToolHandler", () => {
     const tool = createStubTool("my_tool", { execute: executeFn });
 
     const handler = wrapToolHandler(tool);
-    const result = await handler({ input: "hello" });
+    const extra = createMockExtra();
+    const result = await handler({ input: "hello" }, extra);
 
     expect(executeFn).toHaveBeenCalledTimes(1);
 
     const [toolCallId, params, signal, onUpdate] = executeFn.mock.calls[0];
     expect(toolCallId).toMatch(/^mcp-bridge-my_tool-/);
     expect(params).toEqual({ input: "hello" });
-    expect(signal).toBeUndefined(); // No abort signal provided
+    expect(signal).toBeUndefined(); // No abort signal in extra or fallback
     expect(onUpdate).toBeUndefined(); // MCP doesn't support streaming updates
 
     expect(result.content).toEqual([{ type: "text", text: "done" }]);
   });
 
-  it("passes abort signal to tool.execute", async () => {
+  it("passes abort signal from extra to tool.execute", async () => {
+    const executeFn = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+    });
+    const tool = createStubTool("signaled", { execute: executeFn });
+
+    const controller = new AbortController();
+    const handler = wrapToolHandler(tool);
+    const extra = createMockExtra({ signal: controller.signal });
+    await handler({}, extra);
+
+    const [, , signal] = executeFn.mock.calls[0];
+    expect(signal).toBe(controller.signal);
+  });
+
+  it("uses fallback abort signal when extra has none", async () => {
     const executeFn = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "ok" }],
     });
@@ -202,7 +233,8 @@ describe("wrapToolHandler", () => {
 
     const controller = new AbortController();
     const handler = wrapToolHandler(tool, controller.signal);
-    await handler({});
+    const extra = createMockExtra(); // No signal in extra
+    await handler({}, extra);
 
     const [, , signal] = executeFn.mock.calls[0];
     expect(signal).toBe(controller.signal);
@@ -213,7 +245,7 @@ describe("wrapToolHandler", () => {
     const tool = createStubTool("failing", { execute: executeFn });
 
     const handler = wrapToolHandler(tool);
-    const result = await handler({});
+    const result = await handler({}, createMockExtra());
 
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({
@@ -228,7 +260,7 @@ describe("wrapToolHandler", () => {
     const tool = createStubTool("abortable", { execute: executeFn });
 
     const handler = wrapToolHandler(tool);
-    const result = await handler({});
+    const result = await handler({}, createMockExtra());
 
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({
@@ -322,12 +354,10 @@ describe("bridgeClawdbrainToolsSync", () => {
     expect(server.tools[0].description).toBe("My custom description");
   });
 
-  it("passes JSON Schema to MCP server", () => {
-    const schema = Type.Object({
-      url: Type.String({ description: "URL to fetch" }),
-    });
-
-    const tools = [createStubTool("fetch", { parameters: schema })];
+  it("uses passthrough Zod schema for MCP server", () => {
+    // With the new implementation, we use a passthrough Zod schema that accepts any object.
+    // Our tools do their own validation via TypeBox schemas.
+    const tools = [createStubTool("fetch")];
     const result = bridgeClawdbrainToolsSync({
       name: "s",
       tools,
@@ -335,11 +365,8 @@ describe("bridgeClawdbrainToolsSync", () => {
     });
 
     const server = result.serverConfig.instance as MockMcpServer;
-    const registeredSchema = server.tools[0].schema;
-    expect(registeredSchema.type).toBe("object");
-
-    const props = registeredSchema.properties as Record<string, { description?: string }>;
-    expect(props.url?.description).toBe("URL to fetch");
+    // The inputSchema should be a Zod record schema (not JSON Schema)
+    expect(server.tools[0].inputSchema).toBeDefined();
   });
 
   it("handler calls through to original tool execute", async () => {
@@ -356,7 +383,8 @@ describe("bridgeClawdbrainToolsSync", () => {
     });
 
     const server = result.serverConfig.instance as MockMcpServer;
-    const mcpResult = await server.tools[0].handler({ arg1: "value1" });
+    // Handler now takes (args, extra) per MCP SDK convention
+    const mcpResult = await server.tools[0].handler({ arg1: "value1" }, createMockExtra());
 
     expect(executeFn).toHaveBeenCalledTimes(1);
     expect(mcpResult.content[0]).toMatchObject({ type: "text", text: "executed!" });

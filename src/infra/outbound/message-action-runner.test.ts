@@ -150,7 +150,7 @@ describe("runMessageAction context isolation", () => {
         toolContext: { currentChannelId: "C12345678" },
         dryRun: true,
       }),
-    ).rejects.toThrow(/message required/i);
+    ).rejects.toThrow(/Missing required parameter 'message'/i);
   });
 
   it("blocks send when target differs from current channel", async () => {

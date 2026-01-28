@@ -57,7 +57,11 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     path: Type.Optional(Type.String()),
     filePath: Type.Optional(Type.String()),
     replyTo: Type.Optional(Type.String()),
-    threadId: Type.Optional(Type.String()),
+    threadId: Type.Optional(
+      Type.String({
+        description: "Thread ID for fetch action (to get messages from a specific thread).",
+      }),
+    ),
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
     bestEffort: Type.Optional(Type.Boolean()),
@@ -103,10 +107,16 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: Type.Optional(Type.Number()),
-    before: Type.Optional(Type.String()),
-    after: Type.Optional(Type.String()),
-    around: Type.Optional(Type.String()),
+    limit: Type.Optional(
+      Type.Number({ description: "Maximum number of messages to fetch (default 50, max 100)." }),
+    ),
+    before: Type.Optional(
+      Type.String({ description: "Fetch messages before this message ID (pagination)." }),
+    ),
+    after: Type.Optional(
+      Type.String({ description: "Fetch messages after this message ID (pagination)." }),
+    ),
+    around: Type.Optional(Type.String({ description: "Fetch messages around this message ID." })),
     fromMe: Type.Optional(Type.Boolean()),
     includeArchived: Type.Optional(Type.Boolean()),
   };
@@ -226,7 +236,10 @@ function buildMessageToolSchemaFromActions(
 ) {
   const props = buildMessageToolSchemaProps(options);
   return Type.Object({
-    action: stringEnum(actions),
+    action: stringEnum(actions, {
+      description:
+        "REQUIRED. The message action to perform. Must be one of the supported actions (e.g., 'send', 'react', 'delete').",
+    }),
     ...props,
   });
 }
@@ -289,7 +302,13 @@ function buildMessageToolDescription(options?: {
   currentChannel?: string;
   currentChannelId?: string;
 }): string {
-  const baseDescription = "Send, delete, and manage messages via channel plugins.";
+  const baseDescription =
+    "Send, fetch, delete, and manage messages via channel plugins. " +
+    "REQUIRED PARAMETER: action (string) - must be one of the supported actions. " +
+    "Examples: " +
+    "Send: { action: 'send', message: 'Hello!', target: '#general' } -> { ok: true, messageId: '123' }. " +
+    "Fetch messages: { action: 'fetch', target: '#general', limit: 50 } -> { ok: true, messages: [...] }. " +
+    "Fetch thread: { action: 'fetch', threadId: '123456', limit: 20 } -> { ok: true, messages: [...] }.";
 
   // If we have a current channel, show only its supported actions
   if (options?.currentChannel) {

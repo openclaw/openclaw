@@ -10,7 +10,7 @@ import { readStringParam } from "./common.js";
 const CodingTaskToolSchema = Type.Object({
   task: Type.String({
     description:
-      "A coding task to run via Claude Agent SDK (Claude Code-style; capabilities gated by tools.codingTask).",
+      "REQUIRED. A coding task to run via Claude Agent SDK (Claude Code-style; capabilities gated by tools.codingTask).",
   }),
 });
 
@@ -41,7 +41,10 @@ export function createCodingTaskTool(opts?: {
     label: "Coding",
     name: "coding_task",
     description:
-      "Run a Claude Code-style coding task via the Claude Agent SDK (experimental; gated by tools.codingTask).",
+      "Run a Claude Code-style coding task via the Claude Agent SDK. " +
+      "REQUIRED PARAMETER: task (string). " +
+      "Example input: { task: 'Create a function that calculates fibonacci numbers' }. " +
+      "Example output: { status: 'completed', result: '...extracted text...', durationMs: 5000 }.",
     parameters: CodingTaskToolSchema,
     execute: async (_toolCallId, args) => {
       const cfg = opts?.config;

@@ -20,6 +20,7 @@ export * from "./types.models.js";
 export * from "./types.node-host.js";
 export * from "./types.overseer.js";
 export * from "./types.msteams.js";
+export * from "./types.model-routing.js";
 export * from "./types.plugins.js";
 export * from "./types.queue.js";
 export * from "./types.sandbox.js";

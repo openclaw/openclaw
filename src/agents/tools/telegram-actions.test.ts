@@ -295,7 +295,7 @@ describe("handleTelegramAction", () => {
         },
         cfg,
       ),
-    ).rejects.toThrow(/content required/i);
+    ).rejects.toThrow(/Missing required parameter 'content'/i);
   });
 
   it("respects sendMessage gating", async () => {

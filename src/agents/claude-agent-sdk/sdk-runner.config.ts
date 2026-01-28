@@ -7,11 +7,37 @@
  */
 
 import type { ClawdbrainConfig } from "../../config/config.js";
+import type { SdkThinkingBudgetTier } from "../../config/types.agents.js";
 import { logDebug } from "../../logger.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { SdkProviderConfig, SdkProviderEnv } from "./sdk-runner.types.js";
 import { resolveMainAgentRuntimeKind } from "../main-agent-runtime-factory.js";
+
+// ---------------------------------------------------------------------------
+// Thinking budget tier mapping
+// ---------------------------------------------------------------------------
+
+/** Token budgets for each thinking tier. */
+const THINKING_BUDGET_MAP: Record<SdkThinkingBudgetTier, number> = {
+  none: 0,
+  low: 10_000,
+  medium: 25_000,
+  high: 50_000,
+};
+
+/** Default thinking budget tier when not configured. */
+const DEFAULT_THINKING_TIER: SdkThinkingBudgetTier = "medium";
+
+/**
+ * Convert a thinking budget tier to a token budget number.
+ * Returns undefined if the tier is "none" (disabled).
+ */
+export function resolveThinkingBudget(tier?: SdkThinkingBudgetTier): number | undefined {
+  const resolved = tier ?? DEFAULT_THINKING_TIER;
+  const budget = THINKING_BUDGET_MAP[resolved];
+  return budget === 0 ? undefined : budget;
+}
 
 // ---------------------------------------------------------------------------
 // Well-known providers
@@ -219,9 +245,15 @@ export function isSdkRunnerEnabled(config?: ClawdbrainConfig, agentId?: string):
 /**
  * Resolve the default SDK provider from config.
  *
- * Resolution order:
- * 1. `agents.defaults.mainCcsdkProvider` — explicit well-known provider selection.
- * 2. `tools.codingTask.providers` — legacy provider configuration fallback.
+ * Resolution order for main agent (agentId === "main" or undefined):
+ * 1. `agents.defaults.mainCcsdkProvider` — explicit main agent provider selection.
+ * 2. `agents.defaults.ccsdkProvider` — fallback default provider.
+ * 3. `tools.codingTask.providers` — legacy provider configuration fallback.
+ *
+ * Resolution order for worker agents (agentId !== "main"):
+ * 1. `agents.defaults.ccsdkProvider` — explicit worker provider selection.
+ * 2. `agents.defaults.mainCcsdkProvider` — fallback to main provider.
+ * 3. `tools.codingTask.providers` — legacy provider configuration fallback.
  *
  * Within the legacy fallback, prefers "zai" if configured, then "anthropic",
  * then the first available provider.
@@ -230,15 +262,29 @@ export function isSdkRunnerEnabled(config?: ClawdbrainConfig, agentId?: string):
 export function resolveDefaultSdkProvider(params: {
   config?: ClawdbrainConfig;
   env?: NodeJS.ProcessEnv;
+  agentId?: string;
 }): SdkProviderEntry | undefined {
-  // 1. Explicit main CCSDK provider selection takes priority.
-  const mainCcsdkProvider = params.config?.agents?.defaults?.mainCcsdkProvider;
-  if (mainCcsdkProvider) {
-    const wellKnown = resolveWellKnownProvider(mainCcsdkProvider);
+  const defaults = params.config?.agents?.defaults;
+  const isMainAgent = !params.agentId || normalizeAgentId(params.agentId) === DEFAULT_AGENT_ID;
+
+  // For main agent: prefer mainCcsdkProvider, then ccsdkProvider
+  // For workers: prefer ccsdkProvider, then mainCcsdkProvider
+  const primaryProvider = isMainAgent ? defaults?.mainCcsdkProvider : defaults?.ccsdkProvider;
+  const fallbackProvider = isMainAgent ? defaults?.ccsdkProvider : defaults?.mainCcsdkProvider;
+
+  // 1. Try primary provider for this agent type.
+  if (primaryProvider) {
+    const wellKnown = resolveWellKnownProvider(primaryProvider);
     if (wellKnown) return wellKnown;
   }
 
-  // 2. Fall back to tools.codingTask.providers (existing logic).
+  // 2. Try fallback provider.
+  if (fallbackProvider) {
+    const wellKnown = resolveWellKnownProvider(fallbackProvider);
+    if (wellKnown) return wellKnown;
+  }
+
+  // 3. Fall back to tools.codingTask.providers (existing logic).
   const providers = resolveSdkProviders(params);
   if (providers.length === 0) return undefined;
 

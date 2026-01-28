@@ -22,6 +22,7 @@ import { loadClaudeAgentSdk } from "./sdk.js";
 import { isSdkTerminalToolEventType } from "./sdk-event-checks.js";
 import { buildClawdbrainSdkHooks } from "./sdk-hooks.js";
 import { normalizeToolName } from "../tool-policy.js";
+import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../usage.js";
 import type { SdkRunnerParams, SdkRunnerResult } from "./sdk-runner.types.js";
 
 // ---------------------------------------------------------------------------
@@ -329,6 +330,18 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     sdkOptions.permissionMode = params.permissionMode;
   }
 
+  // Model selection (e.g., "sonnet", "opus", "haiku", or full model ID).
+  if (params.model) {
+    sdkOptions.model = params.model;
+    logDebug(`[sdk-runner] Using model: ${params.model}`);
+  }
+
+  // Extended thinking budget (token allocation for reasoning).
+  if (params.thinkingBudget && params.thinkingBudget > 0) {
+    sdkOptions.thinkingBudget = params.thinkingBudget;
+    logInfo(`[sdk-runner] Extended thinking enabled with budget: ${params.thinkingBudget} tokens`);
+  }
+
   // System prompt (no history suffix - we use SDK's native session resume instead).
   if (params.systemPrompt) {
     sdkOptions.systemPrompt = params.systemPrompt;
@@ -397,6 +410,10 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
   let didAssistantMessageStart = false;
   let returnedSessionId: string | undefined;
 
+  // Usage and turn tracking
+  let accumulatedUsage: NormalizedUsage | undefined;
+  let turnCount = 0;
+
   // Set up timeout if configured.
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutController = new AbortController();
@@ -447,12 +464,38 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
       // to calling this once when we see the first assistant text.
       if (!didAssistantMessageStart && isRecord(event) && event.type === "message_start") {
         didAssistantMessageStart = true;
+        turnCount += 1;
         try {
           void Promise.resolve(params.onAssistantMessageStart?.()).catch((err) => {
             logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
           });
         } catch (err) {
           logDebug(`[sdk-runner] onAssistantMessageStart callback error: ${String(err)}`);
+        }
+      }
+
+      // Extract and accumulate usage from any event that has it.
+      // Claude Agent SDK can include usage in message_delta, message_stop, or result events.
+      if (isRecord(event)) {
+        const eventUsage = event.usage as UsageLike | undefined;
+        if (eventUsage && typeof eventUsage === "object") {
+          const normalized = normalizeUsage(eventUsage);
+          if (normalized) {
+            // Accumulate usage - take the largest values seen (final usage includes totals)
+            accumulatedUsage = {
+              input: Math.max(accumulatedUsage?.input ?? 0, normalized.input ?? 0) || undefined,
+              output: Math.max(accumulatedUsage?.output ?? 0, normalized.output ?? 0) || undefined,
+              cacheRead:
+                Math.max(accumulatedUsage?.cacheRead ?? 0, normalized.cacheRead ?? 0) || undefined,
+              cacheWrite:
+                Math.max(accumulatedUsage?.cacheWrite ?? 0, normalized.cacheWrite ?? 0) ||
+                undefined,
+              total: Math.max(accumulatedUsage?.total ?? 0, normalized.total ?? 0) || undefined,
+            };
+            logDebug(
+              `[sdk-runner] Accumulated usage: input=${accumulatedUsage.input} output=${accumulatedUsage.output}`,
+            );
+          }
         }
       }
 
@@ -635,6 +678,8 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
           truncated,
           aborted: true,
           error: { kind: "timeout", message },
+          usage: accumulatedUsage,
+          turnCount: turnCount > 0 ? turnCount : undefined,
           bridge: {
             toolCount: bridgeResult.toolCount,
             registeredTools: bridgeResult.registeredTools,
@@ -670,6 +715,8 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
           extractedChars,
           truncated,
           error: { kind: "run_failed", message },
+          usage: accumulatedUsage,
+          turnCount: turnCount > 0 ? turnCount : undefined,
           bridge: {
             toolCount: bridgeResult.toolCount,
             registeredTools: bridgeResult.registeredTools,
@@ -717,6 +764,8 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
         truncated: false,
         aborted,
         error: aborted ? undefined : { kind: "no_output", message: "No text output" },
+        usage: accumulatedUsage,
+        turnCount: turnCount > 0 ? turnCount : undefined,
         bridge: {
           toolCount: bridgeResult.toolCount,
           registeredTools: bridgeResult.registeredTools,
@@ -745,6 +794,8 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     truncated,
     aborted,
     durationMs: Date.now() - startedAt,
+    usage: accumulatedUsage,
+    turnCount: turnCount > 0 ? turnCount : undefined,
   });
   emitEvent("lifecycle", {
     phase: "end",
@@ -753,10 +804,16 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
     runtime: "ccsdk",
     aborted,
     truncated,
+    usage: accumulatedUsage,
+    turnCount: turnCount > 0 ? turnCount : undefined,
   });
 
+  // Log usage summary if available
+  const usageLog = accumulatedUsage
+    ? ` usage=[in=${accumulatedUsage.input ?? 0} out=${accumulatedUsage.output ?? 0}]`
+    : "";
   logInfo(
-    `[sdk-runner] Run complete: durationMs=${Date.now() - startedAt} finalTextLen=${finalText.length}`,
+    `[sdk-runner] Run complete: durationMs=${Date.now() - startedAt} finalTextLen=${finalText.length} turns=${turnCount}${usageLog}`,
   );
 
   return {
@@ -769,6 +826,8 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
       truncated,
       aborted,
       claudeSessionId: returnedSessionId,
+      usage: accumulatedUsage,
+      turnCount: turnCount > 0 ? turnCount : undefined,
       bridge: {
         toolCount: bridgeResult.toolCount,
         registeredTools: bridgeResult.registeredTools,

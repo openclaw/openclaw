@@ -231,6 +231,11 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
+  /**
+   * When true, ignore any stored (session/parent) model overrides.
+   * This is used when a higher-level router is explicitly selecting a model.
+   */
+  ignoreStoredOverride?: boolean;
 }): Promise<ModelSelectionState> {
   const {
     cfg,
@@ -248,13 +253,16 @@ export async function createModelSelectionState(params: {
   let model = params.model;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-  const initialStoredOverride = resolveStoredModelOverride({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-  });
-  const hasStoredOverride = Boolean(initialStoredOverride);
+  const ignoreStoredOverride = params.ignoreStoredOverride === true;
+  const initialStoredOverride = ignoreStoredOverride
+    ? null
+    : resolveStoredModelOverride({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        parentSessionKey,
+      });
+  const hasStoredOverride = !ignoreStoredOverride && Boolean(initialStoredOverride);
   const needsModelCatalog = params.hasModelDirective || hasAllowlist || hasStoredOverride;
 
   let allowedModelKeys = new Set<string>();
@@ -297,18 +305,20 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const storedOverride = resolveStoredModelOverride({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-  });
-  if (storedOverride?.model) {
-    const candidateProvider = storedOverride.provider || defaultProvider;
-    const key = modelKey(candidateProvider, storedOverride.model);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
-      provider = candidateProvider;
-      model = storedOverride.model;
+  if (!ignoreStoredOverride) {
+    const storedOverride = resolveStoredModelOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey,
+    });
+    if (storedOverride?.model) {
+      const candidateProvider = storedOverride.provider || defaultProvider;
+      const key = modelKey(candidateProvider, storedOverride.model);
+      if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+        provider = candidateProvider;
+        model = storedOverride.model;
+      }
     }
   }
 
@@ -357,6 +367,22 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     needsModelCatalog,
   };
+}
+
+export function hasStoredModelOverrideForSession(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): boolean {
+  return Boolean(
+    resolveStoredModelOverride({
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      parentSessionKey: params.parentSessionKey,
+    }),
+  );
 }
 
 export function resolveModelDirectiveSelection(params: {

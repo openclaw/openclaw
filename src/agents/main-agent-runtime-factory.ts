@@ -1,5 +1,6 @@
 import type { ClawdbrainConfig } from "../config/config.js";
 import { createSdkAgentRuntime } from "./claude-agent-sdk/sdk-agent-runtime.js";
+import { resolveThinkingBudget } from "./claude-agent-sdk/sdk-runner.config.js";
 import type { AgentRuntime } from "./agent-runtime.js";
 import { createClawdbrainCodingTools } from "./pi-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -93,6 +94,8 @@ export async function createSdkMainAgentRuntime(
   return createSdkAgentRuntime({
     tools: tools as AnyAgentTool[],
     claudeSessionId: params.claudeSessionId,
+    model: sdkCfg?.model,
+    thinkingBudget: resolveThinkingBudget(sdkCfg?.thinkingBudget),
     hooksEnabled: sdkCfg?.hooksEnabled ?? true,
     sdkOptions: sdkCfg?.options,
   });

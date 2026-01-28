@@ -86,10 +86,17 @@ const gatewayArgs = [
   "--token", token,
 ];
 
+// Skip channels by default for faster dev startup, but allow override via env var.
+// Set CLAWDBRAIN_SKIP_CHANNELS=0 to enable channels for e2e testing.
+const skipChannels = process.env.CLAWDBRAIN_SKIP_CHANNELS !== "0";
+
 const gateway = spawn(process.execPath, gatewayArgs, {
   cwd: repoRoot,
   stdio: "inherit",
-  env: { ...process.env, CLAWDBRAIN_SKIP_CHANNELS: "1" },
+  env: {
+    ...process.env,
+    ...(skipChannels ? { CLAWDBRAIN_SKIP_CHANNELS: "1" } : {}),
+  },
 });
 children.push(gateway);
 

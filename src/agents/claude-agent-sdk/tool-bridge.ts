@@ -18,6 +18,7 @@
  */
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import * as z from "zod/v4";
 
 import { logDebug, logError } from "../../logger.js";
 import { normalizeToolName } from "../tool-policy.js";
@@ -28,6 +29,7 @@ import type {
   McpSdkServerConfig,
   McpServerConstructor,
   McpServerLike,
+  McpToolHandlerExtra,
 } from "./tool-bridge.types.js";
 
 // ---------------------------------------------------------------------------
@@ -126,22 +128,32 @@ export function convertToolResult(result: AgentToolResult<unknown>): McpCallTool
 // ---------------------------------------------------------------------------
 
 /**
+ * MCP tool handler signature: receives (args, extra) where:
+ * - args: The validated tool arguments (parsed from Zod schema)
+ * - extra: Request handler context with signal, _meta, sessionId, etc.
+ */
+export type McpToolHandler = (
+  args: Record<string, unknown>,
+  extra: McpToolHandlerExtra,
+) => Promise<McpCallToolResult>;
+
+/**
  * Wrap a Clawdbrain tool's `execute()` as an MCP tool handler.
  *
  * Differences bridged:
  * - Clawdbrain: `execute(toolCallId, params, signal?, onUpdate?)`
- * - MCP:      `handler(args) → Promise<CallToolResult>`
+ * - MCP:      `handler(args, extra) → Promise<CallToolResult>`
  *
- * Notable: MCP handlers have no abort signal or streaming update callback.
- * We pass the shared `abortSignal` (if provided) and skip `onUpdate`.
+ * The MCP SDK passes args as the first parameter and context (signal, etc.)
+ * as the second parameter when using registerTool() with an inputSchema.
  */
-export function wrapToolHandler(
-  tool: AnyAgentTool,
-  abortSignal?: AbortSignal,
-): (args: Record<string, unknown>) => Promise<McpCallToolResult> {
+export function wrapToolHandler(tool: AnyAgentTool, abortSignal?: AbortSignal): McpToolHandler {
   const normalizedName = normalizeToolName(tool.name);
 
-  return async (args: Record<string, unknown>): Promise<McpCallToolResult> => {
+  return async (
+    rawArgs: Record<string, unknown>,
+    extra: McpToolHandlerExtra,
+  ): Promise<McpCallToolResult> => {
     // Generate a synthetic toolCallId. The Claude Agent SDK doesn't expose its
     // internal tool call ID to MCP handlers, so we create a unique one for
     // internal tracking/logging. This is safe because Clawdbrain tools only use
@@ -149,11 +161,17 @@ export function wrapToolHandler(
     // model's response.
     const toolCallId = `mcp-bridge-${normalizedName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    // Debug: log received args for troubleshooting parameter issues
+    logDebug(`[tool-bridge] ${normalizedName} received args: ${JSON.stringify(rawArgs)}`);
+
+    // Use the abort signal from extra if available, falling back to the shared one
+    const effectiveSignal = extra?.signal ?? abortSignal;
+
     try {
       const result = await tool.execute(
         toolCallId,
-        args,
-        abortSignal, // 3rd arg: AbortSignal (undefined if not provided)
+        rawArgs,
+        effectiveSignal, // 3rd arg: AbortSignal
         undefined, // 4th arg: onUpdate — not supported in MCP tool protocol
       );
       return convertToolResult(result);
@@ -276,6 +294,12 @@ export async function bridgeClawdbrainToolsToMcpServer(
   const registered: string[] = [];
   const skipped: string[] = [];
 
+  // Create a permissive Zod schema that accepts any object.
+  // The MCP SDK requires Zod schemas (not JSON Schema) for input validation.
+  // We use a passthrough object schema so all arguments flow through to our handlers,
+  // which perform their own validation via TypeBox schemas.
+  const passthroughSchema = z.record(z.string(), z.unknown());
+
   for (const tool of options.tools) {
     const toolName = tool.name;
     if (!toolName?.trim()) {
@@ -285,13 +309,17 @@ export async function bridgeClawdbrainToolsToMcpServer(
     }
 
     try {
-      const jsonSchema = extractJsonSchema(tool);
       const handler = wrapToolHandler(tool, options.abortSignal);
 
-      server.tool(
+      // Use registerTool() (the recommended API) instead of deprecated tool().
+      // The inputSchema must be a Zod schema - we use a passthrough schema that
+      // accepts any object, since our tools do their own validation.
+      server.registerTool(
         toolName,
-        tool.description ?? `Clawdbrain tool: ${toolName}`,
-        jsonSchema,
+        {
+          description: tool.description ?? `Clawdbrain tool: ${toolName}`,
+          inputSchema: passthroughSchema,
+        },
         handler,
       );
 
@@ -337,6 +365,9 @@ export function bridgeClawdbrainToolsSync(
   const registered: string[] = [];
   const skipped: string[] = [];
 
+  // Create a permissive Zod schema that accepts any object
+  const passthroughSchema = z.record(z.string(), z.unknown());
+
   for (const tool of options.tools) {
     const toolName = tool.name;
     if (!toolName?.trim()) {
@@ -345,12 +376,13 @@ export function bridgeClawdbrainToolsSync(
     }
 
     try {
-      const jsonSchema = extractJsonSchema(tool);
       const handler = wrapToolHandler(tool, options.abortSignal);
-      server.tool(
+      server.registerTool(
         toolName,
-        tool.description ?? `Clawdbrain tool: ${toolName}`,
-        jsonSchema,
+        {
+          description: tool.description ?? `Clawdbrain tool: ${toolName}`,
+          inputSchema: passthroughSchema,
+        },
         handler,
       );
       registered.push(toolName);

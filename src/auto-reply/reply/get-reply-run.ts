@@ -43,6 +43,9 @@ import { resolveQueueSettings } from "./queue.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
 import { resolveTypingMode } from "./typing-mode.js";
+import type { ModelRoutingSelection } from "../../agents/model-routing.js";
+import { planHybridSpec } from "../../agents/hybrid-planner.js";
+import { isSdkRunnerEnabled } from "../../agents/claude-agent-sdk/sdk-runner.config.js";
 
 type AgentDefaults = NonNullable<ClawdbrainConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
@@ -79,6 +82,7 @@ type RunPreparedReplyParams = {
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
+  modelRoutingSelection?: ModelRoutingSelection;
   provider: string;
   model: string;
   perMessageQueueMode?: InlineDirectives["queueMode"];
@@ -127,6 +131,7 @@ export async function runPreparedReply(
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     modelState,
+    modelRoutingSelection,
     provider,
     model,
     perMessageQueueMode,
@@ -179,7 +184,7 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
-  const extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
+  let extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -253,6 +258,40 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
+
+  // Hybrid mode: let a strong remote planner produce a compact execution spec, then
+  // inject it as system prompt guidance for a cheaper local executor model.
+  if (
+    modelRoutingSelection?.mode === "hybrid" &&
+    modelRoutingSelection.planner &&
+    !isSdkRunnerEnabled(cfg, agentId)
+  ) {
+    const planned = await planHybridSpec({
+      cfg,
+      intent: modelRoutingSelection.intent,
+      planner: modelRoutingSelection.planner,
+      hints: {
+        stakes: modelRoutingSelection.policy?.stakes,
+        verifiability: modelRoutingSelection.policy?.verifiability,
+        maxToolCalls: modelRoutingSelection.policy?.maxToolCalls,
+        allowWriteTools: modelRoutingSelection.policy?.allowWriteTools,
+      },
+      prompt: prefixedCommandBody,
+      workspaceDir,
+      agentDir,
+      timeoutMs: Math.min(timeoutMs, 120_000),
+      abortSignal: opts?.abortSignal,
+    });
+    if (planned.raw.trim()) {
+      const specBlock = [
+        `ModelRouting spec (planner=${modelRoutingSelection.planner.provider}/${modelRoutingSelection.planner.model}):`,
+        planned.raw.trim(),
+        "",
+        "Executor instructions: Follow the spec. If you cannot comply or constraints conflict, say so and ask to escalate to the planner model.",
+      ].join("\n");
+      extraSystemPrompt = [extraSystemPrompt?.trim(), specBlock].filter(Boolean).join("\n\n");
+    }
+  }
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);

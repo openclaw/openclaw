@@ -69,8 +69,10 @@ export type SdkRunnerQueryOptions = {
   systemPrompt?: string | { type: "preset"; preset: string };
   /** Max agent turns before stopping. */
   maxTurns?: number;
-  /** Model to use. */
+  /** Model to use (e.g., "sonnet", "opus", "haiku", or full model ID). */
   model?: string;
+  /** Token budget for extended thinking (0 = disabled). */
+  thinkingBudget?: number;
   /** Resume a previous Claude Code session by ID (native session continuity). */
   resume?: string;
   /** Additional directories the agent can access. */
@@ -97,20 +99,48 @@ export type SdkResultEvent = {
 };
 
 // ---------------------------------------------------------------------------
-// MCP Server tool registration (shape of McpServer.tool() from the SDK)
+// MCP Server tool registration (shape of McpServer.registerTool() from the SDK)
 // ---------------------------------------------------------------------------
 
 /**
+ * MCP tool handler extra context passed as second argument to tool handlers.
+ * Contains abort signal, metadata, and session info from the MCP request.
+ */
+export type McpToolHandlerExtra = {
+  /** Abort signal for cancellation. */
+  signal?: AbortSignal;
+  /** Metadata from the original request (_meta field). */
+  _meta?: Record<string, unknown>;
+  /** Session ID if available. */
+  sessionId?: string;
+  /** JSON-RPC request ID. */
+  requestId?: number;
+};
+
+/**
+ * Tool registration config for McpServer.registerTool().
+ */
+export type McpToolConfig = {
+  description?: string;
+  /** Zod schema for input validation. MCP SDK requires Zod, not JSON Schema. */
+  inputSchema?: unknown;
+};
+
+/**
+ * Tool handler function signature for MCP SDK.
+ * When inputSchema is provided, handler receives (args, extra).
+ */
+export type McpToolHandlerFn = (
+  args: Record<string, unknown>,
+  extra: McpToolHandlerExtra,
+) => Promise<McpCallToolResult>;
+
+/**
  * Minimal interface for the McpServer class from `@modelcontextprotocol/sdk`.
- * We only use the `tool()` registration method and the constructor.
+ * We use the `registerTool()` method (the recommended API, not deprecated `tool()`).
  */
 export interface McpServerLike {
-  tool(
-    name: string,
-    description: string,
-    inputSchema: Record<string, unknown>,
-    handler: (args: Record<string, unknown>) => Promise<McpCallToolResult>,
-  ): void;
+  registerTool(name: string, config: McpToolConfig, handler: McpToolHandlerFn): void;
 }
 
 /**

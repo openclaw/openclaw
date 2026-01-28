@@ -23,6 +23,10 @@ export type SdkRuntimeContext = {
   tools: AnyAgentTool[];
   /** Enable Claude Code hook wiring for richer event parity. */
   hooksEnabled?: boolean;
+  /** Model to use (e.g., "sonnet", "opus", "haiku", or full model ID). */
+  model?: string;
+  /** Token budget for extended thinking (0 or undefined = disabled). */
+  thinkingBudget?: number;
   /** Additional `query({ options })` fields to pass through. */
   sdkOptions?: Record<string, unknown>;
   /** Claude Code session ID from previous run (for native session resume). */

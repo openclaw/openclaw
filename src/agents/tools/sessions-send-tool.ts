@@ -29,11 +29,29 @@ import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./session
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
-  sessionKey: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
-  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-  message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  sessionKey: Type.Optional(
+    Type.String({ description: "Target session key (optional if using label or agentId)." }),
+  ),
+  label: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: SESSION_LABEL_MAX_LENGTH,
+      description: "Target session label (optional if using sessionKey).",
+    }),
+  ),
+  agentId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 64,
+      description: "Target agent ID (optional, for agent-to-agent messaging).",
+    }),
+  ),
+  message: Type.String({
+    description: "REQUIRED. The message content to send to the target session.",
+  }),
+  timeoutSeconds: Type.Optional(
+    Type.Number({ minimum: 0, description: "Optional timeout in seconds." }),
+  ),
 });
 
 export function createSessionsSendTool(opts?: {
@@ -45,7 +63,11 @@ export function createSessionsSendTool(opts?: {
     label: "Session Send",
     name: "sessions_send",
     description:
-      "Send a message into another session. Use sessionKey or label to identify the target.",
+      "Send a message into another session. " +
+      "REQUIRED PARAMETER: message (string). " +
+      "Use sessionKey or label to identify the target. " +
+      "Example input: { message: 'Hello from main session', label: 'research-session' }. " +
+      "Example output: { status: 'delivered', reply: '...assistant response...' }.",
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

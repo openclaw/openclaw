@@ -108,13 +108,16 @@ export async function handleDiscordMessageAction(
     );
   }
 
-  if (action === "read") {
+  if (action === "read" || action === "fetch") {
     const limit = readNumberParam(params, "limit", { integer: true });
+    const threadId = readStringParam(params, "threadId");
+    // Use threadId as channelId if provided (threads are channels in Discord)
+    const targetChannelId = threadId ?? resolveChannelId();
     return await handleDiscordAction(
       {
         action: "readMessages",
         accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
+        channelId: targetChannelId,
         limit,
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),

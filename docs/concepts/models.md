@@ -24,6 +24,7 @@ Related:
 - `agents.defaults.models` is the allowlist/catalog of models Clawdbrain can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
+- Optional: `agents.defaults.modelRouting` can route between local and remote models per intent (see [/concepts/model-routing](/concepts/model-routing)).
 
 ## Quick model picks (anecdotal)
 

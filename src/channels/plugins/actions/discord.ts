@@ -18,6 +18,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     }
     if (gate("messages")) {
       actions.add("read");
+      actions.add("fetch");
       actions.add("edit");
       actions.add("delete");
     }

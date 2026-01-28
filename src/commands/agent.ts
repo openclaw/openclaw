@@ -67,6 +67,8 @@ import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import type { AgentCommandOpts } from "./agent/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { EmbeddedPiRunResult } from "../agents/pi-embedded-runner/types.js";
+import { resolveModelRoutingSelection } from "../agents/model-routing.js";
+import { planHybridSpec } from "../agents/hybrid-planner.js";
 
 export async function agentCommand(
   opts: AgentCommandOpts,
@@ -347,6 +349,29 @@ export async function agentCommand(
         }
       }
 
+      const routingSelection = resolveModelRoutingSelection({
+        cfg,
+        intent: "cli.agent",
+        base: { provider, model },
+        sessionHasModelOverride: hasStoredOverride,
+      });
+      if (routingSelection.mode !== "off") {
+        const routed = routingSelection.executor;
+        const key = modelKey(routed.provider, routed.model);
+        const allowed =
+          isCliProvider(routed.provider, cfg) ||
+          allowedModelKeys.size === 0 ||
+          allowedModelKeys.has(key);
+        if (allowed) {
+          provider = routed.provider;
+          model = routed.model;
+        } else {
+          runtime.log(
+            `[clawdbrain] modelRouting selected ${key}, but it is not allowed by the configured model allowlist; using ${provider}/${model} instead.`,
+          );
+        }
+      }
+
       if (!resolvedThinkLevel) {
         let catalogForThinking = modelCatalog ?? allowedModelCatalog;
         if (!catalogForThinking || catalogForThinking.length === 0) {
@@ -389,7 +414,48 @@ export async function agentCommand(
     let result: EmbeddedPiRunResult;
     let fallbackProvider = provider;
     let fallbackModel = model;
+    let effectiveExtraSystemPrompt = opts.extraSystemPrompt;
     try {
+      if (mainRuntimeKind !== "ccsdk") {
+        const hybridSelection = resolveModelRoutingSelection({
+          cfg,
+          intent: "cli.agent",
+          base: { provider, model },
+          sessionHasModelOverride: Boolean(
+            sessionEntry?.modelOverride || sessionEntry?.providerOverride,
+          ),
+        });
+        if (hybridSelection.mode === "hybrid" && hybridSelection.planner) {
+          const planned = await planHybridSpec({
+            cfg,
+            intent: "cli.agent",
+            planner: hybridSelection.planner,
+            hints: {
+              stakes: hybridSelection.policy?.stakes,
+              verifiability: hybridSelection.policy?.verifiability,
+              maxToolCalls: hybridSelection.policy?.maxToolCalls,
+              allowWriteTools: hybridSelection.policy?.allowWriteTools,
+            },
+            prompt: body,
+            workspaceDir,
+            agentDir,
+            timeoutMs,
+            abortSignal: opts.abortSignal,
+          });
+          if (planned.raw.trim()) {
+            const specBlock = [
+              `ModelRouting spec (planner=${hybridSelection.planner.provider}/${hybridSelection.planner.model}):`,
+              planned.raw.trim(),
+              "",
+              "Executor instructions: Follow the spec. If you cannot comply or constraints conflict, say so and ask to escalate to the planner model.",
+            ].join("\n");
+            effectiveExtraSystemPrompt = [effectiveExtraSystemPrompt?.trim(), specBlock]
+              .filter(Boolean)
+              .join("\n\n");
+          }
+        }
+      }
+
       const runContext = resolveAgentRunContext(opts);
       const messageChannel = resolveMessageChannel(
         runContext.messageChannel,
@@ -426,7 +492,7 @@ export async function agentCommand(
           agentDir,
           config: cfg,
           prompt: body,
-          extraSystemPrompt: opts.extraSystemPrompt,
+          extraSystemPrompt: effectiveExtraSystemPrompt,
           timeoutMs,
           runId,
           abortSignal: opts.abortSignal,
@@ -470,7 +536,7 @@ export async function agentCommand(
                 thinkLevel: resolvedThinkLevel,
                 timeoutMs,
                 runId,
-                extraSystemPrompt: opts.extraSystemPrompt,
+                extraSystemPrompt: effectiveExtraSystemPrompt,
                 cliSessionId,
                 images: opts.images,
                 streamParams: opts.streamParams,
@@ -512,7 +578,7 @@ export async function agentCommand(
               runId,
               lane: opts.lane,
               abortSignal: opts.abortSignal,
-              extraSystemPrompt: opts.extraSystemPrompt,
+              extraSystemPrompt: effectiveExtraSystemPrompt,
               streamParams: opts.streamParams,
               agentDir,
               onAgentEvent: (evt: { stream: string; data: Record<string, unknown> }) => {

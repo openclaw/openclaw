@@ -10,6 +10,7 @@ import type {
   SandboxDockerSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
+import type { ModelRoutingConfig } from "./types.model-routing.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelEntryConfig = {
@@ -105,12 +106,16 @@ export type AgentDefaultsConfig = {
   mainRuntime?: AgentRuntime;
   /** Which well-known CCSDK provider backend to use for the main agent (when mainRuntime is "ccsdk"). */
   mainCcsdkProvider?: ClaudeCodeSDKProviderKey;
+  /** Default CCSDK provider backend for worker agents (when runtime is "ccsdk"). Falls back to mainCcsdkProvider if unset. */
+  ccsdkProvider?: ClaudeCodeSDKProviderKey;
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
   /** Optional image-capable model and fallbacks (provider/model). */
   imageModel?: AgentModelListConfig;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Optional per-intent routing between local tiers and remote models. */
+  modelRouting?: ModelRoutingConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */

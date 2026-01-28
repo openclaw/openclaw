@@ -8,6 +8,12 @@ import type {
 } from "./types.sandbox.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
+/**
+ * Extended thinking budget tier for Claude Code SDK.
+ * Maps to token budgets: none=0, low=10k, medium=25k, high=50k
+ */
+export type SdkThinkingBudgetTier = "none" | "low" | "medium" | "high";
+
 export type AgentModelConfig =
   | string
   | {
@@ -81,6 +87,20 @@ export type AgentsConfig = {
     sdk?: {
       /** Enable Claude Code hook wiring for richer lifecycle/tool parity. */
       hooksEnabled?: boolean;
+      /**
+       * Model to use (e.g., "sonnet", "opus", "haiku", or full model ID).
+       * Default: SDK's default (typically sonnet).
+       */
+      model?: string;
+      /**
+       * Extended thinking budget tier. Controls how much the model "thinks" before responding.
+       * - "none": Disable extended thinking (fastest, cheapest)
+       * - "low": Light thinking (~10k tokens) — quick queries
+       * - "medium": Moderate thinking (~25k tokens) — standard tasks
+       * - "high": Deep thinking (~50k tokens) — complex reasoning
+       * Default: "low"
+       */
+      thinkingBudget?: SdkThinkingBudgetTier;
       /**
        * Additional SDK `query({ options })` fields to pass through.
        *

@@ -98,6 +98,12 @@ export type SdkRunnerParams = {
   /** Max agent turns before the SDK stops. */
   maxTurns?: number;
 
+  /** Model to use (e.g., "sonnet", "opus", "haiku", or full model ID). */
+  model?: string;
+
+  /** Token budget for extended thinking (0 or undefined = disabled). */
+  thinkingBudget?: number;
+
   /** Timeout in milliseconds for the entire run. */
   timeoutMs?: number;
 
@@ -165,6 +171,18 @@ export type SdkRunnerMeta = {
   aborted?: boolean;
   /** Claude Code session ID returned from the SDK (use for subsequent `resume` calls). */
   claudeSessionId?: string;
+  /** Token usage statistics from the API response. */
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  /** Number of assistant turns (responses) in this run. */
+  turnCount?: number;
+  /** Estimated cost in USD (computed from usage if available). */
+  costUsd?: number;
   error?: {
     kind: "sdk_unavailable" | "mcp_bridge_failed" | "run_failed" | "timeout" | "no_output";
     message: string;

@@ -11,6 +11,7 @@ import os from "node:os";
 
 import type { ClawdbrainConfig } from "../../config/config.js";
 import { logDebug, logInfo, logWarn } from "../../logger.js";
+import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -377,6 +378,10 @@ export type RunSdkAgentAdaptedParams = {
   abortSignal?: AbortSignal;
   /** Claude Code session ID from previous run (for native session resume). */
   claudeSessionId?: string;
+  /** Model to use (e.g., "sonnet", "opus", "haiku", or full model ID). */
+  model?: string;
+  /** Token budget for extended thinking (0 or undefined = disabled). */
+  thinkingBudget?: number;
   hooksEnabled?: boolean;
   sdkOptions?: Record<string, unknown>;
 
@@ -408,8 +413,12 @@ export async function runSdkAgentAdapted(
     logDebug("[sdk-runner-adapter] Could not load auth profile store");
   }
 
+  // Resolve agent ID from session key to select the appropriate CCSDK provider.
+  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
+
   let providerEntry = resolveDefaultSdkProvider({
     config: params.config,
+    agentId,
   });
 
   // Enrich with auth profile keys.
@@ -457,6 +466,8 @@ export async function runSdkAgentAdapted(
     tools: params.tools,
     provider: providerEntry?.config,
     systemPrompt: params.extraSystemPrompt,
+    model: params.model,
+    thinkingBudget: params.thinkingBudget,
     timeoutMs: params.timeoutMs,
     abortSignal: params.abortSignal,
     claudeSessionId: params.claudeSessionId,
