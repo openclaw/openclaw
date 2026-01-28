@@ -5,9 +5,9 @@ import {
   type MessagingTarget,
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
-  type DirectoryConfigParams,
-  type ChannelDirectoryEntry,
 } from "../channels/targets.js";
+
+import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
 
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
 import { resolveDiscordAccount } from "./accounts.js";

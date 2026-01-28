@@ -79,6 +79,7 @@ Status: beta.
 - Gateway: prevent crashes on transient network errors (fetch failures, timeouts, DNS). Added fatal error detection to only exit on truly critical errors. Fixes #2895, #2879, #2873. (#2980) Thanks @elliotsecops.
 - Agents: guard channel tool listActions to avoid plugin crashes. (#2859) Thanks @mbelinky.
 - Discord: avoid resolving bare channel names to user DMs when a username matches. Thanks @thewilloftheshadow.
+- Discord: fix directory config type import for target resolution. Thanks @thewilloftheshadow.
 - Providers: update MiniMax API endpoint and compatibility mode. (#3064) Thanks @hlbbbbbbb.
 - Telegram: treat more network errors as recoverable in polling. (#3013) Thanks @ryancontent.
 - Discord: resolve usernames to user IDs for outbound messages. (#2649) Thanks @nonggialiang.
