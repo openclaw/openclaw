@@ -226,6 +226,8 @@ export type MemorySearchConfig = {
   enabled?: boolean;
   /** Sources to index and search (default: ["memory"]). */
   sources?: Array<"memory" | "sessions">;
+  /** Additional paths to include in memory search (directories or .md files). */
+  paths?: string[];
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */

@@ -60,7 +60,10 @@ async function walkDir(dir: string, files: string[]) {
   }
 }
 
-export async function listMemoryFiles(workspaceDir: string): Promise<string[]> {
+export async function listMemoryFiles(
+  workspaceDir: string,
+  additionalPaths?: string[],
+): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
   const altMemoryFile = path.join(workspaceDir, "memory.md");
@@ -69,6 +72,19 @@ export async function listMemoryFiles(workspaceDir: string): Promise<string[]> {
   const memoryDir = path.join(workspaceDir, "memory");
   if (await exists(memoryDir)) {
     await walkDir(memoryDir, result);
+  }
+  // Include files from additional explicit paths
+  if (additionalPaths && additionalPaths.length > 0) {
+    for (const p of additionalPaths) {
+      const resolved = path.isAbsolute(p) ? p : path.resolve(workspaceDir, p);
+      if (!(await exists(resolved))) continue;
+      const stat = await fs.stat(resolved);
+      if (stat.isDirectory()) {
+        await walkDir(resolved, result);
+      } else if (stat.isFile() && resolved.endsWith(".md")) {
+        result.push(resolved);
+      }
+    }
   }
   if (result.length <= 1) return result;
   const seen = new Set<string>();

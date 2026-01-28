@@ -975,7 +975,7 @@ export class MemoryIndexManager {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const files = await listMemoryFiles(this.workspaceDir);
+    const files = await listMemoryFiles(this.workspaceDir, this.settings.paths);
     const fileEntries = await Promise.all(
       files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
     );
