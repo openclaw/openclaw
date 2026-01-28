@@ -5,7 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { type ClawdbotConfig, loadConfig } from "../config/config.js";
+import { type MoltbotConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
@@ -85,7 +85,7 @@ function isWorkspaceRelativePath(value: string): boolean {
 }
 
 function resolveIdentityAvatarUrl(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   agentId: string,
   avatar: string | undefined,
 ): string | undefined {
@@ -211,7 +211,7 @@ function listExistingAgentIdsFromDisk(): string[] {
   }
 }
 
-function listConfiguredAgentIds(cfg: ClawdbotConfig): string[] {
+function listConfiguredAgentIds(cfg: MoltbotConfig): string[] {
   const agents = cfg.agents?.list ?? [];
   if (agents.length > 0) {
     const ids = new Set<string>();
@@ -239,7 +239,7 @@ function listConfiguredAgentIds(cfg: ClawdbotConfig): string[] {
   return sorted;
 }
 
-export function listAgentsForGateway(cfg: ClawdbotConfig): {
+export function listAgentsForGateway(cfg: MoltbotConfig): {
   defaultId: string;
   mainKey: string;
   scope: SessionScope;
@@ -301,14 +301,11 @@ function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
   return `agent:${normalizeAgentId(agentId)}:${key}`;
 }
 
-function resolveDefaultStoreAgentId(cfg: ClawdbotConfig): string {
+function resolveDefaultStoreAgentId(cfg: MoltbotConfig): string {
   return normalizeAgentId(resolveDefaultAgentId(cfg));
 }
 
-export function resolveSessionStoreKey(params: {
-  cfg: ClawdbotConfig;
-  sessionKey: string;
-}): string {
+export function resolveSessionStoreKey(params: { cfg: MoltbotConfig; sessionKey: string }): string {
   const raw = params.sessionKey.trim();
   if (!raw) return raw;
   if (raw === "global" || raw === "unknown") return raw;
@@ -333,7 +330,7 @@ export function resolveSessionStoreKey(params: {
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
-function resolveSessionStoreAgentId(cfg: ClawdbotConfig, canonicalKey: string): string {
+function resolveSessionStoreAgentId(cfg: MoltbotConfig, canonicalKey: string): string {
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     return resolveDefaultStoreAgentId(cfg);
   }
@@ -350,7 +347,7 @@ function canonicalizeSpawnedByForAgent(agentId: string, spawnedBy?: string): str
   return `agent:${normalizeAgentId(agentId)}:${raw}`;
 }
 
-export function resolveGatewaySessionStoreTarget(params: { cfg: ClawdbotConfig; key: string }): {
+export function resolveGatewaySessionStoreTarget(params: { cfg: MoltbotConfig; key: string }): {
   agentId: string;
   storePath: string;
   canonicalKey: string;
@@ -381,7 +378,32 @@ export function resolveGatewaySessionStoreTarget(params: { cfg: ClawdbotConfig; 
   };
 }
 
-export function loadCombinedSessionStoreForGateway(cfg: ClawdbotConfig): {
+// Merge with existing entry based on latest timestamp to ensure data consistency and avoid overwriting with less complete data.
+function mergeSessionEntryIntoCombined(params: {
+  combined: Record<string, SessionEntry>;
+  entry: SessionEntry;
+  agentId: string;
+  canonicalKey: string;
+}) {
+  const { combined, entry, agentId, canonicalKey } = params;
+  const existing = combined[canonicalKey];
+
+  if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
+    combined[canonicalKey] = {
+      ...entry,
+      ...existing,
+      spawnedBy: canonicalizeSpawnedByForAgent(agentId, existing.spawnedBy ?? entry.spawnedBy),
+    };
+  } else {
+    combined[canonicalKey] = {
+      ...existing,
+      ...entry,
+      spawnedBy: canonicalizeSpawnedByForAgent(agentId, entry.spawnedBy ?? existing?.spawnedBy),
+    };
+  }
+}
+
+export function loadCombinedSessionStoreForGateway(cfg: MoltbotConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
@@ -393,10 +415,12 @@ export function loadCombinedSessionStoreForGateway(cfg: ClawdbotConfig): {
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
-      combined[canonicalKey] = {
-        ...entry,
-        spawnedBy: canonicalizeSpawnedByForAgent(defaultAgentId, entry.spawnedBy),
-      };
+      mergeSessionEntryIntoCombined({
+        combined,
+        entry,
+        agentId: defaultAgentId,
+        canonicalKey,
+      });
     }
     return { storePath, store: combined };
   }
@@ -408,13 +432,12 @@ export function loadCombinedSessionStoreForGateway(cfg: ClawdbotConfig): {
     const store = loadSessionStore(storePath);
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
-      // Merge with existing entry if present (avoid overwriting with less complete data)
-      const existing = combined[canonicalKey];
-      combined[canonicalKey] = {
-        ...existing,
-        ...entry,
-        spawnedBy: canonicalizeSpawnedByForAgent(agentId, entry.spawnedBy ?? existing?.spawnedBy),
-      };
+      mergeSessionEntryIntoCombined({
+        combined,
+        entry,
+        agentId,
+        canonicalKey,
+      });
     }
   }
 
@@ -423,7 +446,7 @@ export function loadCombinedSessionStoreForGateway(cfg: ClawdbotConfig): {
   return { storePath, store: combined };
 }
 
-export function getSessionDefaults(cfg: ClawdbotConfig): GatewaySessionsDefaults {
+export function getSessionDefaults(cfg: MoltbotConfig): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -441,7 +464,7 @@ export function getSessionDefaults(cfg: ClawdbotConfig): GatewaySessionsDefaults
 }
 
 export function resolveSessionModelRef(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   entry?: SessionEntry,
 ): { provider: string; model: string } {
   const resolved = resolveConfiguredModelRef({
@@ -460,7 +483,7 @@ export function resolveSessionModelRef(
 }
 
 export function listSessionsFromStore(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;

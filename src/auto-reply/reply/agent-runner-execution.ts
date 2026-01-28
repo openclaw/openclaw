@@ -89,6 +89,7 @@ export async function runAgentTurnWithFallback(params: {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
+      isHeartbeat: params.isHeartbeat,
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -137,6 +138,7 @@ export async function runAgentTurnWithFallback(params: {
         cfg: params.followupRun.run.config,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
+        agentDir: params.followupRun.run.agentDir,
         fallbacksOverride: resolveAgentModelFallbacksOverride(
           params.followupRun.run.config,
           resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
@@ -230,6 +232,10 @@ export async function runAgentTurnWithFallback(params: {
             groupChannel:
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+            senderId: params.sessionCtx.SenderId?.trim() || undefined,
+            senderName: params.sessionCtx.SenderName?.trim() || undefined,
+            senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
+            senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
             // Provider threading context for tool auto-injection
             ...buildThreadingToolContext({
               sessionCtx: params.sessionCtx,
@@ -369,12 +375,13 @@ export async function runAgentTurnWithFallback(params: {
                   // Use pipeline if available (block streaming enabled), otherwise send directly
                   if (params.blockStreamingEnabled && params.blockReplyPipeline) {
                     params.blockReplyPipeline.enqueue(blockPayload);
-                  } else {
-                    // Send directly when flushing before tool execution (no streaming).
+                  } else if (params.blockStreamingEnabled) {
+                    // Send directly when flushing before tool execution (no pipeline but streaming enabled).
                     // Track sent key to avoid duplicate in final payloads.
                     directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
                     await params.opts?.onBlockReply?.(blockPayload);
                   }
+                  // When streaming is disabled entirely, blocks are accumulated in final text instead.
                 }
               : undefined,
             onBlockReplyFlush:
@@ -528,7 +535,7 @@ export async function runAgentTurnWithFallback(params: {
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: clawdbot logs --follow`;
+          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: moltbot logs --follow`;
 
       return {
         kind: "final",
