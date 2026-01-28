@@ -225,7 +225,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
-    return results.slice(0, limit);
+    return this.clampResultsByInjectedChars(results.slice(0, limit));
   }
 
   async sync(params?: {
@@ -608,5 +608,25 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (candidate === root) return true;
     const next = candidate.endsWith(path.sep) ? candidate : `${candidate}${path.sep}`;
     return next.startsWith(normalizedRoot);
+  }
+
+  private clampResultsByInjectedChars(results: MemorySearchResult[]): MemorySearchResult[] {
+    const budget = this.qmd.limits.maxInjectedChars;
+    if (!budget || budget <= 0) return results;
+    let remaining = budget;
+    const clamped: MemorySearchResult[] = [];
+    for (const entry of results) {
+      if (remaining <= 0) break;
+      const snippet = entry.snippet ?? "";
+      if (snippet.length <= remaining) {
+        clamped.push(entry);
+        remaining -= snippet.length;
+      } else {
+        const trimmed = snippet.slice(0, Math.max(0, remaining));
+        clamped.push({ ...entry, snippet: trimmed });
+        break;
+      }
+    }
+    return clamped;
   }
 }
