@@ -18,7 +18,7 @@ extension CronSettings {
                 }
             }
             HStack(spacing: 6) {
-                StatusPill(text: job.sessionTargetDisplayValue, tint: .secondary)
+                StatusPill(text: job.sessionTarget.rawValue, tint: .secondary)
                 StatusPill(text: job.wakeMode.rawValue, tint: .secondary)
                 if let agentId = job.agentId, !agentId.isEmpty {
                     StatusPill(text: "agent \(agentId)", tint: .secondary)
@@ -34,9 +34,9 @@ extension CronSettings {
     @ViewBuilder
     func jobContextMenu(_ job: CronJob) -> some View {
         Button("Run now") { Task { await self.store.runJob(id: job.id, force: true) } }
-        if let transcriptSessionKey = job.transcriptSessionKey {
+        if job.sessionTarget == .isolated {
             Button("Open transcript") {
-                WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                WebChatManager.shared.show(sessionKey: "cron:\(job.id)")
             }
         }
         Divider()
@@ -75,9 +75,9 @@ extension CronSettings {
                     .labelsHidden()
                 Button("Run") { Task { await self.store.runJob(id: job.id, force: true) } }
                     .buttonStyle(.borderedProminent)
-                if let transcriptSessionKey = job.transcriptSessionKey {
+                if job.sessionTarget == .isolated {
                     Button("Transcript") {
-                        WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                        WebChatManager.shared.show(sessionKey: "cron:\(job.id)")
                     }
                     .buttonStyle(.bordered)
                 }
@@ -103,7 +103,7 @@ extension CronSettings {
             if let agentId = job.agentId, !agentId.isEmpty {
                 LabeledContent("Agent") { Text(agentId) }
             }
-            LabeledContent("Session") { Text(job.sessionTargetDisplayValue) }
+            LabeledContent("Session") { Text(job.sessionTarget.rawValue) }
             LabeledContent("Wake") { Text(job.wakeMode.rawValue) }
             LabeledContent("Next run") {
                 if let date = job.nextRunDate {
@@ -128,7 +128,7 @@ extension CronSettings {
                     .foregroundStyle(.orange)
                     .textSelection(.enabled)
             }
-            self.payloadSummary(job)
+            self.payloadSummary(job.payload)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -205,9 +205,8 @@ extension CronSettings {
         .padding(.vertical, 4)
     }
 
-    func payloadSummary(_ job: CronJob) -> some View {
-        let payload = job.payload
-        return VStack(alignment: .leading, spacing: 6) {
+    func payloadSummary(_ payload: CronPayload) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Payload")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -216,7 +215,7 @@ extension CronSettings {
                 Text(text)
                     .font(.callout)
                     .textSelection(.enabled)
-            case let .agentTurn(message, thinking, timeoutSeconds, _, _, _, _):
+            case let .agentTurn(message, thinking, timeoutSeconds, deliver, provider, to, _):
                 VStack(alignment: .leading, spacing: 4) {
                     Text(message)
                         .font(.callout)
@@ -224,19 +223,10 @@ extension CronSettings {
                     HStack(spacing: 8) {
                         if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
-                        if job.supportsAnnounceDelivery {
-                            let delivery = job.delivery
-                            if let delivery {
-                                if delivery.mode == .announce {
-                                    StatusPill(text: "announce", tint: .secondary)
-                                    if let channel = delivery.channel, !channel.isEmpty {
-                                        StatusPill(text: channel, tint: .secondary)
-                                    }
-                                    if let to = delivery.to, !to.isEmpty { StatusPill(text: to, tint: .secondary) }
-                                } else {
-                                    StatusPill(text: "no delivery", tint: .secondary)
-                                }
-                            }
+                        if deliver ?? false {
+                            StatusPill(text: "deliver", tint: .secondary)
+                            if let provider, !provider.isEmpty { StatusPill(text: provider, tint: .secondary) }
+                            if let to, !to.isEmpty { StatusPill(text: to, tint: .secondary) }
                         }
                     }
                 }

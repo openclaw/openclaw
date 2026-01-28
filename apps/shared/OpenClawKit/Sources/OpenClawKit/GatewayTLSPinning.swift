@@ -17,41 +17,23 @@ public struct GatewayTLSParams: Sendable {
 }
 
 public enum GatewayTLSStore {
-    private static let keychainService = "ai.openclaw.tls-pinning"
+    private static let suiteName = "ai.openclaw.shared"
+    private static let keyPrefix = "gateway.tls."
 
-    // Legacy UserDefaults location used before Keychain migration.
-    private static let legacySuiteName = "ai.openclaw.shared"
-    private static let legacyKeyPrefix = "gateway.tls."
+    private static var defaults: UserDefaults {
+        UserDefaults(suiteName: suiteName) ?? .standard
+    }
 
     public static func loadFingerprint(stableID: String) -> String? {
-        self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
-        let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = self.keyPrefix + stableID
+        let raw = self.defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw?.isEmpty == false { return raw }
         return nil
     }
 
     public static func saveFingerprint(_ value: String, stableID: String) {
-        _ = GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID)
-    }
-
-    // MARK: - Migration
-
-    /// On first Keychain read for a given stableID, move any legacy UserDefaults
-    /// fingerprint into Keychain and remove the old entry.
-    private static func migrateFromUserDefaultsIfNeeded(stableID: String) {
-        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
-        let legacyKey = self.legacyKeyPrefix + stableID
-        guard let existing = defaults.string(forKey: legacyKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !existing.isEmpty
-        else { return }
-        if GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID) == nil {
-            guard GenericPasswordKeychainStore.saveString(existing, service: self.keychainService, account: stableID) else {
-                return
-            }
-        }
-        defaults.removeObject(forKey: legacyKey)
+        let key = self.keyPrefix + stableID
+        self.defaults.set(value, forKey: key)
     }
 }
 

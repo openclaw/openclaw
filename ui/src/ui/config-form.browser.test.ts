@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { analyzeConfigSchema, renderConfigForm } from "./views/config-form.ts";
+import { analyzeConfigSchema, renderConfigForm } from "./views/config-form";
 
 const rootSchema = {
   type: "object",
@@ -46,15 +46,12 @@ describe("config form renderer", () => {
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
-        revealSensitive: true,
         onPatch,
       }),
       container,
     );
 
-    const tokenInput: HTMLInputElement | null = container.querySelector(
-      '#config-section-gateway input.cfg-input[type="text"]',
-    );
+    const tokenInput = container.querySelector("input[type='password']");
     expect(tokenInput).not.toBeNull();
     if (!tokenInput) {
       return;
@@ -70,7 +67,7 @@ describe("config form renderer", () => {
     tokenButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
-    const checkbox: HTMLInputElement | null = container.querySelector("input[type='checkbox']");
+    const checkbox = container.querySelector("input[type='checkbox']");
     expect(checkbox).not.toBeNull();
     if (!checkbox) {
       return;
@@ -200,194 +197,7 @@ describe("config form renderer", () => {
     expect(container.textContent).toContain("Plugin Enabled");
   });
 
-  it("renders tags from uiHints metadata", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security", "secret"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        onPatch,
-      }),
-      container,
-    );
-
-    const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(tags).toContain("security");
-    expect(tags).toContain("secret");
-  });
-
-  it("filters by tag query", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "tag:security",
-        onPatch,
-      }),
-      container,
-    );
-
-    expect(container.textContent).toContain("Gateway");
-    expect(container.textContent).toContain("Token");
-    expect(container.textContent).not.toContain("Allow From");
-    expect(container.textContent).not.toContain("Mode");
-  });
-
-  it("does not treat plain text as tag filter", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "security",
-        onPatch,
-      }),
-      container,
-    );
-
-    expect(container.textContent).toContain('No settings match "security"');
-  });
-
-  it("requires both text and tag when combined", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "token tag:security",
-        onPatch,
-      }),
-      container,
-    );
-
-    expect(container.textContent).toContain("Token");
-    expect(container.textContent).not.toContain('No settings match "token tag:security"');
-
-    const noMatchContainer = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "mode tag:security",
-        onPatch,
-      }),
-      noMatchContainer,
-    );
-    expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
-  });
-
-  it("supports SecretInput unions in additionalProperties maps", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "object",
-      properties: {
-        models: {
-          type: "object",
-          properties: {
-            providers: {
-              type: "object",
-              additionalProperties: {
-                type: "object",
-                properties: {
-                  apiKey: {
-                    anyOf: [
-                      { type: "string" },
-                      {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: { type: "string", const: "env" },
-                              provider: { type: "string" },
-                              id: { type: "string" },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: { type: "string", const: "file" },
-                              provider: { type: "string" },
-                              id: { type: "string" },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("models.providers");
-    expect(analysis.unsupportedPaths).not.toContain("models.providers.*.apiKey");
-
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "models.providers.*.apiKey": { sensitive: true },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { models: { providers: { openai: { apiKey: "old" } } } }, // pragma: allowlist secret
-        revealSensitive: true,
-        onPatch,
-      }),
-      container,
-    );
-
-    const apiKeyInput: HTMLInputElement | null = container.querySelector(
-      "#config-section-models .cfg-map__item-value input.cfg-input[type='text']",
-    );
-    expect(apiKeyInput).not.toBeNull();
-    if (!apiKeyInput) {
-      return;
-    }
-    apiKeyInput.value = "new-key";
-    apiKeyInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["models", "providers", "openai", "apiKey"], "new-key");
-  });
-
-  it("accepts renderable unions", () => {
+  it("flags unsupported unions", () => {
     const schema = {
       type: "object",
       properties: {
@@ -397,7 +207,7 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("mixed");
+    expect(analysis.unsupportedPaths).toContain("mixed");
   });
 
   it("supports nullable types", () => {
@@ -433,35 +243,17 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).not.toContain("channels");
   });
 
-  it("treats additionalProperties true as editable map fields", () => {
+  it("flags additionalProperties true", () => {
     const schema = {
       type: "object",
       properties: {
-        accounts: {
+        extra: {
           type: "object",
           additionalProperties: true,
         },
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("accounts");
-
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { default: { enabled: true } } },
-        onPatch,
-      }),
-      container,
-    );
-
-    const removeButton = container.querySelector(".cfg-map__item-remove");
-    expect(removeButton).not.toBeNull();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
+    expect(analysis.unsupportedPaths).toContain("extra");
   });
 });

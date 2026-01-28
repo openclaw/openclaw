@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "experimentalDecorators": true,
+    "skipLibCheck": true,
+    "types": ["vite/client"],
+    "useDefineForClassFields": false
+  },
+  "include": ["src"]
+}

@@ -1,9 +1,5 @@
 ---
 title: "Pi Development Workflow"
-summary: "Developer workflow for Pi integration: build, test, and live validation"
-read_when:
-  - Working on Pi integration code or tests
-  - Running Pi-specific lint, typecheck, and live test flows
 ---
 
 # Pi Development Workflow
@@ -19,25 +15,19 @@ This guide summarizes a sane workflow for working on the pi integration in OpenC
 
 ## Running Pi Tests
 
-Run the Pi-focused test set directly with Vitest:
+Use the dedicated script for the pi integration test set:
 
 ```bash
-pnpm test -- \
-  "src/agents/pi-*.test.ts" \
-  "src/agents/pi-embedded-*.test.ts" \
-  "src/agents/pi-tools*.test.ts" \
-  "src/agents/pi-settings.test.ts" \
-  "src/agents/pi-tool-definition-adapter*.test.ts" \
-  "src/agents/pi-extensions/**/*.test.ts"
+scripts/pi/run-tests.sh
 ```
 
-To include the live provider exercise:
+To include the live test that exercises real provider behavior:
 
 ```bash
-OPENCLAW_LIVE_TEST=1 pnpm test -- src/agents/pi-embedded-runner-extraparams.live.test.ts
+scripts/pi/run-tests.sh --live
 ```
 
-This covers the main Pi unit suites:
+The script runs all pi related unit tests via these globs:
 
 - `src/agents/pi-*.test.ts`
 - `src/agents/pi-embedded-*.test.ts`
@@ -76,5 +66,5 @@ If you only want to reset sessions, delete `agents/<agentId>/sessions/` and `age
 
 ## References
 
-- [Testing](/help/testing)
-- [Getting Started](/start/getting-started)
+- https://docs.openclaw.ai/testing
+- https://docs.openclaw.ai/start/getting-started

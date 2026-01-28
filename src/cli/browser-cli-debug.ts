@@ -5,67 +5,11 @@ import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
-const BROWSER_DEBUG_TIMEOUT_MS = 20000;
-
-type BrowserRequestParams = Parameters<typeof callBrowserRequest>[1];
-
-type DebugContext = {
-  parent: BrowserParentOpts;
-  profile?: string;
-};
-
 function runBrowserDebug(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
   });
-}
-
-async function withDebugContext(
-  cmd: Command,
-  parentOpts: (cmd: Command) => BrowserParentOpts,
-  action: (context: DebugContext) => Promise<void>,
-) {
-  const parent = parentOpts(cmd);
-  await runBrowserDebug(() =>
-    action({
-      parent,
-      profile: parent.browserProfile,
-    }),
-  );
-}
-
-function printJsonResult(parent: BrowserParentOpts, result: unknown): boolean {
-  if (!parent.json) {
-    return false;
-  }
-  defaultRuntime.log(JSON.stringify(result, null, 2));
-  return true;
-}
-
-async function callDebugRequest<T>(
-  parent: BrowserParentOpts,
-  params: BrowserRequestParams,
-): Promise<T> {
-  return callBrowserRequest<T>(parent, params, { timeoutMs: BROWSER_DEBUG_TIMEOUT_MS });
-}
-
-function resolveProfileQuery(profile?: string) {
-  return profile ? { profile } : undefined;
-}
-
-function resolveDebugQuery(params: {
-  targetId?: unknown;
-  clear?: unknown;
-  profile?: string;
-  filter?: unknown;
-}) {
-  return {
-    targetId: typeof params.targetId === "string" ? params.targetId.trim() || undefined : undefined,
-    filter: typeof params.filter === "string" ? params.filter.trim() || undefined : undefined,
-    clear: Boolean(params.clear),
-    profile: params.profile,
-  };
 }
 
 export function registerBrowserDebugCommands(
@@ -78,17 +22,24 @@ export function registerBrowserDebugCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
-          method: "POST",
-          path: "/highlight",
-          query: resolveProfileQuery(profile),
-          body: {
-            ref: ref.trim(),
-            targetId: opts.targetId?.trim() || undefined,
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserDebug(async () => {
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/highlight",
+            query: profile ? { profile } : undefined,
+            body: {
+              ref: ref.trim(),
+              targetId: opts.targetId?.trim() || undefined,
+            },
           },
-        });
-        if (printJsonResult(parent, result)) {
+          { timeoutMs: 20000 },
+        );
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log(`highlighted ${ref.trim()}`);
@@ -101,19 +52,26 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored errors after reading", false)
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserDebug(async () => {
+        const result = await callBrowserRequest<{
           errors: Array<{ timestamp: string; name?: string; message: string }>;
-        }>(parent, {
-          method: "GET",
-          path: "/errors",
-          query: resolveDebugQuery({
-            targetId: opts.targetId,
-            clear: opts.clear,
-            profile,
-          }),
-        });
-        if (printJsonResult(parent, result)) {
+        }>(
+          parent,
+          {
+            method: "GET",
+            path: "/errors",
+            query: {
+              targetId: opts.targetId?.trim() || undefined,
+              clear: Boolean(opts.clear),
+              profile,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         if (!result.errors.length) {
@@ -135,8 +93,10 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored requests after reading", false)
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserDebug(async () => {
+        const result = await callBrowserRequest<{
           requests: Array<{
             timestamp: string;
             method: string;
@@ -145,17 +105,22 @@ export function registerBrowserDebugCommands(
             url: string;
             failureText?: string;
           }>;
-        }>(parent, {
-          method: "GET",
-          path: "/requests",
-          query: resolveDebugQuery({
-            targetId: opts.targetId,
-            filter: opts.filter,
-            clear: opts.clear,
-            profile,
-          }),
-        });
-        if (printJsonResult(parent, result)) {
+        }>(
+          parent,
+          {
+            method: "GET",
+            path: "/requests",
+            query: {
+              targetId: opts.targetId?.trim() || undefined,
+              filter: opts.filter?.trim() || undefined,
+              clear: Boolean(opts.clear),
+              profile,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         if (!result.requests.length) {
@@ -185,19 +150,26 @@ export function registerBrowserDebugCommands(
     .option("--no-snapshots", "Disable snapshots")
     .option("--sources", "Include sources (bigger traces)", false)
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
-          method: "POST",
-          path: "/trace/start",
-          query: resolveProfileQuery(profile),
-          body: {
-            targetId: opts.targetId?.trim() || undefined,
-            screenshots: Boolean(opts.screenshots),
-            snapshots: Boolean(opts.snapshots),
-            sources: Boolean(opts.sources),
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserDebug(async () => {
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/trace/start",
+            query: profile ? { profile } : undefined,
+            body: {
+              targetId: opts.targetId?.trim() || undefined,
+              screenshots: Boolean(opts.screenshots),
+              snapshots: Boolean(opts.snapshots),
+              sources: Boolean(opts.sources),
+            },
           },
-        });
-        if (printJsonResult(parent, result)) {
+          { timeoutMs: 20000 },
+        );
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log("trace started");
@@ -207,23 +179,27 @@ export function registerBrowserDebugCommands(
   trace
     .command("stop")
     .description("Stop trace recording and write a .zip")
-    .option(
-      "--out <path>",
-      "Output path within openclaw temp dir (e.g. trace.zip or /tmp/openclaw/trace.zip)",
-    )
+    .option("--out <path>", "Output path for the trace zip")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{ path: string }>(parent, {
-          method: "POST",
-          path: "/trace/stop",
-          query: resolveProfileQuery(profile),
-          body: {
-            targetId: opts.targetId?.trim() || undefined,
-            path: opts.out?.trim() || undefined,
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserDebug(async () => {
+        const result = await callBrowserRequest<{ path: string }>(
+          parent,
+          {
+            method: "POST",
+            path: "/trace/stop",
+            query: profile ? { profile } : undefined,
+            body: {
+              targetId: opts.targetId?.trim() || undefined,
+              path: opts.out?.trim() || undefined,
+            },
           },
-        });
-        if (printJsonResult(parent, result)) {
+          { timeoutMs: 20000 },
+        );
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         defaultRuntime.log(`TRACE:${shortenHomePath(result.path)}`);

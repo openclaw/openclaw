@@ -1,8 +1,9 @@
 import { getMe, ZaloApiError, type ZaloBotInfo, type ZaloFetch } from "./api.js";
-import type { BaseProbeResult } from "./runtime-api.js";
 
-export type ZaloProbeResult = BaseProbeResult<string> & {
+export type ZaloProbeResult = {
+  ok: boolean;
   bot?: ZaloBotInfo;
+  error?: string;
   elapsedMs: number;
 };
 

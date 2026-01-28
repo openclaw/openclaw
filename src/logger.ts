@@ -14,68 +14,44 @@ function splitSubsystem(message: string) {
   return { subsystem, rest };
 }
 
-type LogMethod = "info" | "warn" | "error";
-type RuntimeMethod = "log" | "error";
-
-function logWithSubsystem(params: {
-  message: string;
-  runtime: RuntimeEnv;
-  runtimeMethod: RuntimeMethod;
-  runtimeFormatter: (value: string) => string;
-  loggerMethod: LogMethod;
-  subsystemMethod: LogMethod;
-}) {
-  const parsed = params.runtime === defaultRuntime ? splitSubsystem(params.message) : null;
+export function logInfo(message: string, runtime: RuntimeEnv = defaultRuntime) {
+  const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
   if (parsed) {
-    createSubsystemLogger(parsed.subsystem)[params.subsystemMethod](parsed.rest);
+    createSubsystemLogger(parsed.subsystem).info(parsed.rest);
     return;
   }
-  params.runtime[params.runtimeMethod](params.runtimeFormatter(params.message));
-  getLogger()[params.loggerMethod](params.message);
-}
-
-export function logInfo(message: string, runtime: RuntimeEnv = defaultRuntime) {
-  logWithSubsystem({
-    message,
-    runtime,
-    runtimeMethod: "log",
-    runtimeFormatter: info,
-    loggerMethod: "info",
-    subsystemMethod: "info",
-  });
+  runtime.log(info(message));
+  getLogger().info(message);
 }
 
 export function logWarn(message: string, runtime: RuntimeEnv = defaultRuntime) {
-  logWithSubsystem({
-    message,
-    runtime,
-    runtimeMethod: "log",
-    runtimeFormatter: warn,
-    loggerMethod: "warn",
-    subsystemMethod: "warn",
-  });
+  const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
+  if (parsed) {
+    createSubsystemLogger(parsed.subsystem).warn(parsed.rest);
+    return;
+  }
+  runtime.log(warn(message));
+  getLogger().warn(message);
 }
 
 export function logSuccess(message: string, runtime: RuntimeEnv = defaultRuntime) {
-  logWithSubsystem({
-    message,
-    runtime,
-    runtimeMethod: "log",
-    runtimeFormatter: success,
-    loggerMethod: "info",
-    subsystemMethod: "info",
-  });
+  const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
+  if (parsed) {
+    createSubsystemLogger(parsed.subsystem).info(parsed.rest);
+    return;
+  }
+  runtime.log(success(message));
+  getLogger().info(message);
 }
 
 export function logError(message: string, runtime: RuntimeEnv = defaultRuntime) {
-  logWithSubsystem({
-    message,
-    runtime,
-    runtimeMethod: "error",
-    runtimeFormatter: danger,
-    loggerMethod: "error",
-    subsystemMethod: "error",
-  });
+  const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
+  if (parsed) {
+    createSubsystemLogger(parsed.subsystem).error(parsed.rest);
+    return;
+  }
+  runtime.error(danger(message));
+  getLogger().error(message);
 }
 
 export function logDebug(message: string) {

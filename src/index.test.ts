@@ -1,27 +1,32 @@
-import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { assertWebChannel, normalizeE164, toWhatsappJid } from "./index.js";
 
-describe("legacy root entry", () => {
-  afterEach(() => {
-    vi.resetModules();
+describe("normalizeE164", () => {
+  it("strips whatsapp prefix and whitespace", () => {
+    expect(normalizeE164("whatsapp:+1 555 555 0123")).toBe("+15555550123");
   });
 
-  it("routes the package root export to the pure library entry", () => {
-    const packageJson = JSON.parse(
-      fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-    ) as {
-      exports?: Record<string, unknown>;
-      main?: string;
-    };
+  it("adds plus when missing", () => {
+    expect(normalizeE164("1555123")).toBe("+1555123");
+  });
+});
 
-    expect(packageJson.main).toBe("dist/index.js");
-    expect(packageJson.exports?.["."]).toBe("./dist/index.js");
+describe("toWhatsappJid", () => {
+  it("converts E164 to jid", () => {
+    expect(toWhatsappJid("+1 555 555 0123")).toBe("15555550123@s.whatsapp.net");
   });
 
-  it("does not run CLI bootstrap when imported as a library dependency", async () => {
-    const mod = await import("./index.js");
+  it("keeps group JIDs intact", () => {
+    expect(toWhatsappJid("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
+  });
+});
 
-    expect(typeof mod.applyTemplate).toBe("function");
-    expect(typeof mod.runLegacyCliEntry).toBe("function");
+describe("assertWebChannel", () => {
+  it("accepts valid channels", () => {
+    expect(() => assertWebChannel("web")).not.toThrow();
+  });
+
+  it("throws on invalid channel", () => {
+    expect(() => assertWebChannel("invalid" as string)).toThrow();
   });
 });

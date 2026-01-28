@@ -1,55 +1,126 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createReasoningFinalAnswerMessage,
-  createStubSessionHarness,
-  emitAssistantTextDelta,
-  emitAssistantTextEnd,
-} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
+type StubSession = {
+  subscribe: (fn: (evt: unknown) => void) => () => void;
+};
+
 describe("subscribeEmbeddedPiSession", () => {
+  const _THINKING_TAG_CASES = [
+    { tag: "think", open: "<think>", close: "</think>" },
+    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+    { tag: "thought", open: "<thought>", close: "</thought>" },
+    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+  ] as const;
+
   it("keeps assistantTexts to the final answer when block replies are disabled", () => {
-    const { session, emit } = createStubSessionHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
     const subscription = subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       reasoningMode: "on",
     });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "Final " });
-    emitAssistantTextDelta({ emit, delta: "answer" });
-    emitAssistantTextEnd({ emit });
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Final ",
+      },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "answer",
+      },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+      },
+    });
 
-    const assistantMessage = createReasoningFinalAnswerMessage();
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ],
+    } as AssistantMessage;
 
-    emit({ type: "message_end", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
 
     expect(subscription.assistantTexts).toEqual(["Final answer"]);
   });
   it("suppresses partial replies when reasoning is enabled and block replies are disabled", () => {
-    const { session, emit } = createStubSessionHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
     const onPartialReply = vi.fn();
 
     const subscription = subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       reasoningMode: "on",
       onPartialReply,
     });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "Draft " });
-    emitAssistantTextDelta({ emit, delta: "reply" });
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Draft ",
+      },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "reply",
+      },
+    });
 
     expect(onPartialReply).not.toHaveBeenCalled();
 
-    const assistantMessage = createReasoningFinalAnswerMessage();
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ],
+    } as AssistantMessage;
 
-    emit({ type: "message_end", message: assistantMessage });
-    emitAssistantTextEnd({ emit, content: "Draft reply" });
+    handler?.({ type: "message_end", message: assistantMessage });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "Draft reply",
+      },
+    });
 
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toEqual(["Final answer"]);

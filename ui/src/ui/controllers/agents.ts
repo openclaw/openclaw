@@ -1,7 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, ToolsCatalogResult } from "../types.ts";
-import { saveConfig } from "./config.ts";
-import type { ConfigState } from "./config.ts";
+import type { GatewayBrowserClient } from "../gateway";
+import type { AgentsListResult } from "../types";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -10,13 +8,7 @@ export type AgentsState = {
   agentsError: string | null;
   agentsList: AgentsListResult | null;
   agentsSelectedId: string | null;
-  toolsCatalogLoading: boolean;
-  toolsCatalogLoadingAgentId?: string | null;
-  toolsCatalogError: string | null;
-  toolsCatalogResult: ToolsCatalogResult | null;
 };
-
-export type AgentsConfigSaveState = AgentsState & ConfigState;
 
 export async function loadAgents(state: AgentsState) {
   if (!state.client || !state.connected) {
@@ -28,7 +20,7 @@ export async function loadAgents(state: AgentsState) {
   state.agentsLoading = true;
   state.agentsError = null;
   try {
-    const res = await state.client.request<AgentsListResult>("agents.list", {});
+    const res = await state.client.request("agents.list", {});
     if (res) {
       state.agentsList = res;
       const selected = state.agentsSelectedId;
@@ -41,55 +33,5 @@ export async function loadAgents(state: AgentsState) {
     state.agentsError = String(err);
   } finally {
     state.agentsLoading = false;
-  }
-}
-
-export async function loadToolsCatalog(state: AgentsState, agentId: string) {
-  const resolvedAgentId = agentId.trim();
-  if (!state.client || !state.connected || !resolvedAgentId) {
-    return;
-  }
-  if (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId) {
-    return;
-  }
-  state.toolsCatalogLoading = true;
-  state.toolsCatalogLoadingAgentId = resolvedAgentId;
-  state.toolsCatalogError = null;
-  state.toolsCatalogResult = null;
-  try {
-    const res = await state.client.request<ToolsCatalogResult>("tools.catalog", {
-      agentId: resolvedAgentId,
-      includePlugins: true,
-    });
-    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
-      return;
-    }
-    state.toolsCatalogResult = res;
-  } catch (err) {
-    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
-      return;
-    }
-    state.toolsCatalogResult = null;
-    state.toolsCatalogError = String(err);
-  } finally {
-    if (state.toolsCatalogLoadingAgentId === resolvedAgentId) {
-      state.toolsCatalogLoadingAgentId = null;
-      state.toolsCatalogLoading = false;
-    }
-  }
-}
-
-export async function saveAgentsConfig(state: AgentsConfigSaveState) {
-  const selectedBefore = state.agentsSelectedId;
-  await saveConfig(state);
-  await loadAgents(state);
-  if (selectedBefore && state.agentsList?.agents.some((entry) => entry.id === selectedBefore)) {
-    state.agentsSelectedId = selectedBefore;
   }
 }

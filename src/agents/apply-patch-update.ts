@@ -7,17 +7,11 @@ type UpdateFileChunk = {
   isEndOfFile: boolean;
 };
 
-async function defaultReadFile(filePath: string): Promise<string> {
-  return fs.readFile(filePath, "utf8");
-}
-
 export async function applyUpdateHunk(
   filePath: string,
   chunks: UpdateFileChunk[],
-  options?: { readFile?: (filePath: string) => Promise<string> },
 ): Promise<string> {
-  const reader = options?.readFile ?? defaultReadFile;
-  const originalContents = await reader(filePath).catch((err) => {
+  const originalContents = await fs.readFile(filePath, "utf8").catch((err) => {
     throw new Error(`Failed to read file to update ${filePath}: ${err}`);
   });
 

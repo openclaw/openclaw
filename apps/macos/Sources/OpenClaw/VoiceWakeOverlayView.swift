@@ -131,9 +131,7 @@ private struct OverlayBackground: View {
 }
 
 extension OverlayBackground: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        true
-    }
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
 }
 
 struct CloseHoverButton: View {

@@ -1,6 +1,6 @@
-import { clearDeviceAuthToken, storeDeviceAuthToken } from "../device-auth.ts";
-import { loadOrCreateDeviceIdentity } from "../device-identity.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient } from "../gateway";
+import { clearDeviceAuthToken, storeDeviceAuthToken } from "../device-auth";
+import { loadOrCreateDeviceIdentity } from "../device-identity";
 
 export type DeviceTokenSummary = {
   role: string;
@@ -57,10 +57,7 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
     state.devicesError = null;
   }
   try {
-    const res = await state.client.request<{
-      pending?: Array<PendingDevice>;
-      paired?: Array<PendingDevice>;
-    }>("device.pair.list", {});
+    const res = await state.client.request("device.pair.list", {});
     state.devicesList = {
       pending: Array.isArray(res?.pending) ? res.pending : [],
       paired: Array.isArray(res?.paired) ? res.paired : [],
@@ -110,12 +107,7 @@ export async function rotateDeviceToken(
     return;
   }
   try {
-    const res = await state.client.request<{
-      token: string;
-      role?: string;
-      deviceId?: string;
-      scopes?: Array<string>;
-    }>("device.token.rotate", params);
+    const res = await state.client.request("device.token.rotate", params);
     if (res?.token) {
       const identity = await loadOrCreateDeviceIdentity();
       const role = res.role ?? params.role;

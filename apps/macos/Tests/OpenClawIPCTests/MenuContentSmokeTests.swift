@@ -5,28 +5,28 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MenuContentSmokeTests {
-    @Test func `menu content builds body local mode`() {
+    @Test func menuContentBuildsBodyLocalMode() {
         let state = AppState(preview: true)
         state.connectionMode = .local
         let view = MenuContent(state: state, updater: nil)
         _ = view.body
     }
 
-    @Test func `menu content builds body remote mode`() {
+    @Test func menuContentBuildsBodyRemoteMode() {
         let state = AppState(preview: true)
         state.connectionMode = .remote
         let view = MenuContent(state: state, updater: nil)
         _ = view.body
     }
 
-    @Test func `menu content builds body unconfigured mode`() {
+    @Test func menuContentBuildsBodyUnconfiguredMode() {
         let state = AppState(preview: true)
         state.connectionMode = .unconfigured
         let view = MenuContent(state: state, updater: nil)
         _ = view.body
     }
 
-    @Test func `menu content builds body with debug and canvas`() {
+    @Test func menuContentBuildsBodyWithDebugAndCanvas() {
         let state = AppState(preview: true)
         state.connectionMode = .local
         state.debugPaneEnabled = true

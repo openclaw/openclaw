@@ -1,9 +1,9 @@
-import Foundation
 import OpenClawIPC
+import Foundation
 import Testing
 
-struct CanvasIPCTests {
-    @Test func `canvas present codable roundtrip`() throws {
+@Suite struct CanvasIPCTests {
+    @Test func canvasPresentCodableRoundtrip() throws {
         let placement = CanvasPlacement(x: 10, y: 20, width: 640, height: 480)
         let req: Request = .canvasPresent(session: "main", path: "/index.html", placement: placement)
 
@@ -23,7 +23,7 @@ struct CanvasIPCTests {
         }
     }
 
-    @Test func `canvas present decodes nil placement when missing`() throws {
+    @Test func canvasPresentDecodesNilPlacementWhenMissing() throws {
         let json = """
         {"type":"canvasPresent","session":"s","path":"/"}
         """

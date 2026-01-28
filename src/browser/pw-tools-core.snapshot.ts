@@ -1,11 +1,4 @@
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
-import {
-  assertBrowserNavigationAllowed,
-  assertBrowserNavigationRedirectChainAllowed,
-  assertBrowserNavigationResultAllowed,
-  withBrowserNavigationPolicy,
-} from "./navigation-guard.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -15,12 +8,10 @@ import {
 } from "./pw-role-snapshot.js";
 import {
   ensurePageState,
-  forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
@@ -33,21 +24,17 @@ export async function snapshotAriaViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   ensurePageState(page);
-  const res = (await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
-    page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      await send("Accessibility.enable").catch(() => {});
-      return (await send("Accessibility.getFullAXTree")) as {
-        nodes?: RawAXNode[];
-      };
-    },
-  })) as {
-    nodes?: RawAXNode[];
-  };
-  const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-  return { nodes: formatAriaSnapshot(nodes, limit) };
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Accessibility.enable").catch(() => {});
+    const res = (await session.send("Accessibility.getFullAXTree")) as {
+      nodes?: RawAXNode[];
+    };
+    const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+    return { nodes: formatAriaSnapshot(nodes, limit) };
+  } finally {
+    await session.detach().catch(() => {});
+  }
 }
 
 export async function snapshotAiViaPlaywright(opts: {
@@ -171,61 +158,17 @@ export async function navigateViaPlaywright(opts: {
   targetId?: string;
   url: string;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ url: string }> {
-  const isRetryableNavigateError = (err: unknown): boolean => {
-    const msg =
-      typeof err === "string"
-        ? err.toLowerCase()
-        : err instanceof Error
-          ? err.message.toLowerCase()
-          : "";
-    return (
-      msg.includes("frame has been detached") ||
-      msg.includes("target page, context or browser has been closed")
-    );
-  };
-
   const url = String(opts.url ?? "").trim();
   if (!url) {
     throw new Error("url is required");
   }
-  await assertBrowserNavigationAllowed({
-    url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
-  });
-  const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
-  let page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const navigate = async () => await page.goto(url, { timeout });
-  let response;
-  try {
-    response = await navigate();
-  } catch (err) {
-    if (!isRetryableNavigateError(err)) {
-      throw err;
-    }
-    // Extension relays can briefly drop CDP during renderer swaps/navigation.
-    // Force a clean reconnect, then retry once on the refreshed page handle.
-    await forceDisconnectPlaywrightForTarget({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      reason: "retry navigate after detached frame",
-    }).catch(() => {});
-    page = await getPageForTargetId(opts);
-    ensurePageState(page);
-    response = await navigate();
-  }
-  await assertBrowserNavigationRedirectChainAllowed({
-    request: response?.request(),
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+  await page.goto(url, {
+    timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
   });
-  const finalUrl = page.url();
-  await assertBrowserNavigationResultAllowed({
-    url: finalUrl,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
-  });
-  return { url: finalUrl };
+  return { url: page.url() };
 }
 
 export async function resizeViewportViaPlaywright(opts: {

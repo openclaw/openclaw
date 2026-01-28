@@ -1,6 +1,5 @@
 import os from "node:os";
 import path from "node:path";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isValidProfileName } from "./profile-utils.js";
 
 export type CliProfileParseResult =
@@ -88,13 +87,9 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   return { ok: true, profile, argv: out };
 }
 
-function resolveProfileStateDir(
-  profile: string,
-  env: Record<string, string | undefined>,
-  homedir: () => string,
-): string {
+function resolveProfileStateDir(profile: string, homedir: () => string): string {
   const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
-  return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
+  return path.join(homedir(), `.openclaw${suffix}`);
 }
 
 export function applyCliProfileEnv(params: {
@@ -112,7 +107,7 @@ export function applyCliProfileEnv(params: {
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
 
-  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, homedir);
   if (!env.OPENCLAW_STATE_DIR?.trim()) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }

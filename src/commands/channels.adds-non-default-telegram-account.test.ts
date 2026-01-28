@@ -1,11 +1,31 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
-import { configMocks, offsetMocks } from "./channels.mock-harness.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
+import { signalPlugin } from "../../extensions/signal/src/channel.js";
+import { slackPlugin } from "../../extensions/slack/src/channel.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+
+const configMocks = vi.hoisted(() => ({
+  readConfigFileSnapshot: vi.fn(),
+  writeConfigFile: vi.fn().mockResolvedValue(undefined),
+}));
 
 const authMocks = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn(),
 }));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+    writeConfigFile: configMocks.writeConfigFile,
+  };
+});
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
@@ -22,23 +42,28 @@ import {
   formatGatewayChannelsStatusLines,
 } from "./channels.js";
 
-const runtime = createTestRuntime();
-let clackPrompterModule: typeof import("../wizard/clack-prompter.js");
+const runtime: RuntimeEnv = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+};
 
-function formatChannelStatusJoined(channelAccounts: Record<string, unknown>) {
-  return formatGatewayChannelsStatusLines({ channelAccounts }).join("\n");
-}
+const baseSnapshot = {
+  path: "/tmp/openclaw.json",
+  exists: true,
+  raw: "{}",
+  parsed: {},
+  valid: true,
+  config: {},
+  issues: [],
+  legacyIssues: [],
+};
 
 describe("channels command", () => {
-  beforeAll(async () => {
-    clackPrompterModule = await import("../wizard/clack-prompter.js");
-  });
-
   beforeEach(() => {
-    configMocks.readConfigFileSnapshot.mockClear();
+    configMocks.readConfigFileSnapshot.mockReset();
     configMocks.writeConfigFile.mockClear();
-    authMocks.loadAuthProfileStore.mockClear();
-    offsetMocks.deleteTelegramUpdateOffset.mockClear();
+    authMocks.loadAuthProfileStore.mockReset();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -46,135 +71,41 @@ describe("channels command", () => {
       version: 1,
       profiles: {},
     });
-    setDefaultChannelPluginRegistryForTests();
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "discord", plugin: discordPlugin, source: "test" },
+        { pluginId: "slack", plugin: slackPlugin, source: "test" },
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+        { pluginId: "signal", plugin: signalPlugin, source: "test" },
+        { pluginId: "imessage", plugin: imessagePlugin, source: "test" },
+      ]),
+    );
   });
 
-  function getWrittenConfig<T>(): T {
+  it("adds a non-default telegram account", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
+    await channelsAddCommand(
+      { channel: "telegram", account: "alerts", token: "123:abc" },
+      runtime,
+      { hasFlags: true },
+    );
+
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    return configMocks.writeConfigFile.mock.calls[0]?.[0] as T;
-  }
-
-  async function runRemoveWithConfirm(
-    args: Parameters<typeof channelsRemoveCommand>[0],
-  ): Promise<void> {
-    const prompt = { confirm: vi.fn().mockResolvedValue(true) };
-    const promptSpy = vi
-      .spyOn(clackPrompterModule, "createClackPrompter")
-      .mockReturnValue(prompt as never);
-    try {
-      await channelsRemoveCommand(args, runtime, { hasFlags: true });
-    } finally {
-      promptSpy.mockRestore();
-    }
-  }
-
-  async function addTelegramAccount(account: string, token: string): Promise<void> {
-    await channelsAddCommand({ channel: "telegram", account, token }, runtime, {
-      hasFlags: true,
-    });
-  }
-
-  async function addAlertsTelegramAccount(token: string): Promise<{
-    channels?: {
-      telegram?: {
-        enabled?: boolean;
-        accounts?: Record<string, { botToken?: string }>;
-      };
-    };
-  }> {
-    await addTelegramAccount("alerts", token);
-    return getWrittenConfig<{
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: {
         telegram?: {
           enabled?: boolean;
           accounts?: Record<string, { botToken?: string }>;
         };
       };
-    }>();
-  }
-
-  it("adds a non-default telegram account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-    const next = await addAlertsTelegramAccount("123:abc");
+    };
     expect(next.channels?.telegram?.enabled).toBe(true);
     expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("123:abc");
   });
 
-  it("moves single-account telegram config into accounts.default when adding non-default", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          telegram: {
-            enabled: true,
-            botToken: "legacy-token",
-            dmPolicy: "allowlist",
-            allowFrom: ["111"],
-            groupPolicy: "allowlist",
-            streaming: "partial",
-          },
-        },
-      },
-    });
-
-    await addTelegramAccount("alerts", "alerts-token");
-
-    const next = getWrittenConfig<{
-      channels?: {
-        telegram?: {
-          botToken?: string;
-          dmPolicy?: string;
-          allowFrom?: string[];
-          groupPolicy?: string;
-          streaming?: string;
-          accounts?: Record<
-            string,
-            {
-              botToken?: string;
-              dmPolicy?: string;
-              allowFrom?: string[];
-              groupPolicy?: string;
-              streaming?: string;
-            }
-          >;
-        };
-      };
-    }>();
-    expect(next.channels?.telegram?.accounts?.default).toEqual({
-      botToken: "legacy-token",
-      dmPolicy: "allowlist",
-      allowFrom: ["111"],
-      groupPolicy: "allowlist",
-      streaming: "partial",
-    });
-    expect(next.channels?.telegram?.botToken).toBeUndefined();
-    expect(next.channels?.telegram?.dmPolicy).toBeUndefined();
-    expect(next.channels?.telegram?.allowFrom).toBeUndefined();
-    expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
-    expect(next.channels?.telegram?.streaming).toBeUndefined();
-    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
-  });
-
-  it("seeds accounts.default for env-only single-account telegram config when adding non-default", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          telegram: {
-            enabled: true,
-          },
-        },
-      },
-    });
-
-    const next = await addAlertsTelegramAccount("alerts-token");
-    expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.accounts?.default).toEqual({});
-    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
-  });
-
   it("adds a default slack account with tokens", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
     await channelsAddCommand(
       {
         channel: "slack",
@@ -186,11 +117,12 @@ describe("channels command", () => {
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: {
         slack?: { enabled?: boolean; botToken?: string; appToken?: string };
       };
-    }>();
+    };
     expect(next.channels?.slack?.enabled).toBe(true);
     expect(next.channels?.slack?.botToken).toBe("xoxb-1");
     expect(next.channels?.slack?.appToken).toBe("xapp-1");
@@ -198,7 +130,7 @@ describe("channels command", () => {
 
   it("deletes a non-default discord account", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
+      ...baseSnapshot,
       config: {
         channels: {
           discord: {
@@ -215,34 +147,35 @@ describe("channels command", () => {
       hasFlags: true,
     });
 
-    const next = getWrittenConfig<{
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: {
         discord?: { accounts?: Record<string, { token?: string }> };
       };
-    }>();
+    };
     expect(next.channels?.discord?.accounts?.work).toBeUndefined();
     expect(next.channels?.discord?.accounts?.default?.token).toBe("d0");
   });
 
   it("adds a named WhatsApp account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
     await channelsAddCommand(
       { channel: "whatsapp", account: "family", name: "Family Phone" },
       runtime,
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: {
         whatsapp?: { accounts?: Record<string, { name?: string }> };
       };
-    }>();
+    };
     expect(next.channels?.whatsapp?.accounts?.family?.name).toBe("Family Phone");
   });
 
   it("adds a second signal account with a distinct name", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
+      ...baseSnapshot,
       config: {
         channels: {
           signal: {
@@ -265,13 +198,13 @@ describe("channels command", () => {
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: {
         signal?: {
           accounts?: Record<string, { account?: string; name?: string }>;
         };
       };
-    }>();
+    };
     expect(next.channels?.signal?.accounts?.lab?.account).toBe("+15555550123");
     expect(next.channels?.signal?.accounts?.lab?.name).toBe("Lab");
     expect(next.channels?.signal?.accounts?.default?.name).toBe("Primary");
@@ -279,23 +212,32 @@ describe("channels command", () => {
 
   it("disables a default provider account when remove has no delete flag", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
+      ...baseSnapshot,
       config: {
         channels: { discord: { token: "d0", enabled: true } },
       },
     });
 
-    await runRemoveWithConfirm({ channel: "discord", account: "default" });
+    const prompt = { confirm: vi.fn().mockResolvedValue(true) };
+    const prompterModule = await import("../wizard/clack-prompter.js");
+    const promptSpy = vi
+      .spyOn(prompterModule, "createClackPrompter")
+      .mockReturnValue(prompt as never);
 
-    const next = getWrittenConfig<{
+    await channelsRemoveCommand({ channel: "discord", account: "default" }, runtime, {
+      hasFlags: true,
+    });
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: { discord?: { enabled?: boolean } };
-    }>();
+    };
     expect(next.channels?.discord?.enabled).toBe(false);
+    promptSpy.mockRestore();
   });
 
   it("includes external auth profiles in JSON output", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
+      ...baseSnapshot,
       config: {},
     });
     authMocks.loadAuthProfileStore.mockReturnValue({
@@ -321,7 +263,7 @@ describe("channels command", () => {
     });
 
     await channelsListCommand({ json: true, usage: false }, runtime);
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0] ?? "{}")) as {
       auth?: Array<{ id: string }>;
     };
     const ids = payload.auth?.map((entry) => entry.id) ?? [];
@@ -331,7 +273,7 @@ describe("channels command", () => {
 
   it("stores default account names in accounts when multiple accounts exist", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
+      ...baseSnapshot,
       config: {
         channels: {
           telegram: {
@@ -355,21 +297,21 @@ describe("channels command", () => {
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: {
         telegram?: {
           name?: string;
           accounts?: Record<string, { botToken?: string; name?: string }>;
         };
       };
-    }>();
+    };
     expect(next.channels?.telegram?.name).toBeUndefined();
     expect(next.channels?.telegram?.accounts?.default?.name).toBe("Primary Bot");
   });
 
   it("migrates base names when adding non-default accounts", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
+      ...baseSnapshot,
       config: {
         channels: {
           discord: {
@@ -384,14 +326,14 @@ describe("channels command", () => {
       hasFlags: true,
     });
 
-    const next = getWrittenConfig<{
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
       channels?: {
         discord?: {
           name?: string;
           accounts?: Record<string, { name?: string; token?: string }>;
         };
       };
-    }>();
+    };
     expect(next.channels?.discord?.name).toBeUndefined();
     expect(next.channels?.discord?.accounts?.default?.name).toBe("Primary Bot");
     expect(next.channels?.discord?.accounts?.work?.token).toBe("d1");
@@ -412,9 +354,8 @@ describe("channels command", () => {
     expect(telegramIndex).toBeLessThan(whatsappIndex);
   });
 
-  it.each([
-    {
-      name: "surfaces Discord privileged intent issues in channels status output",
+  it("surfaces Discord privileged intent issues in channels status output", () => {
+    const lines = formatGatewayChannelsStatusLines({
       channelAccounts: {
         discord: [
           {
@@ -425,14 +366,14 @@ describe("channels command", () => {
           },
         ],
       },
-      patterns: [
-        /Warnings:/,
-        /Message Content Intent is disabled/i,
-        /Run: (?:openclaw|openclaw)( --profile isolated)? doctor/,
-      ],
-    },
-    {
-      name: "surfaces Discord permission audit issues in channels status output",
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/Message Content Intent is disabled/i);
+    expect(lines.join("\n")).toMatch(/Run: (?:openclaw|openclaw)( --profile isolated)? doctor/);
+  });
+
+  it("surfaces Discord permission audit issues in channels status output", () => {
+    const lines = formatGatewayChannelsStatusLines({
       channelAccounts: {
         discord: [
           {
@@ -452,10 +393,14 @@ describe("channels command", () => {
           },
         ],
       },
-      patterns: [/Warnings:/, /permission audit/i, /Channel 111/i],
-    },
-    {
-      name: "surfaces Telegram privacy-mode hints when allowUnmentionedGroups is enabled",
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/permission audit/i);
+    expect(lines.join("\n")).toMatch(/Channel 111/i);
+  });
+
+  it("surfaces Telegram privacy-mode hints when allowUnmentionedGroups is enabled", () => {
+    const lines = formatGatewayChannelsStatusLines({
       channelAccounts: {
         telegram: [
           {
@@ -466,54 +411,54 @@ describe("channels command", () => {
           },
         ],
       },
-      patterns: [/Warnings:/, /Telegram Bot API privacy mode/i],
-    },
-  ])("$name", ({ channelAccounts, patterns }) => {
-    const joined = formatChannelStatusJoined(channelAccounts);
-    for (const pattern of patterns) {
-      expect(joined).toMatch(pattern);
-    }
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/Telegram Bot API privacy mode/i);
   });
 
   it("includes Telegram bot username from probe data", () => {
-    const joined = formatChannelStatusJoined({
-      telegram: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          probe: { ok: true, bot: { username: "openclaw_bot" } },
-        },
-      ],
+    const lines = formatGatewayChannelsStatusLines({
+      channelAccounts: {
+        telegram: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            probe: { ok: true, bot: { username: "openclaw_bot" } },
+          },
+        ],
+      },
     });
-    expect(joined).toMatch(/bot:@openclaw_bot/);
+    expect(lines.join("\n")).toMatch(/bot:@openclaw_bot/);
   });
 
   it("surfaces Telegram group membership audit issues in channels status output", () => {
-    const joined = formatChannelStatusJoined({
-      telegram: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          audit: {
-            hasWildcardUnmentionedGroups: true,
-            unresolvedGroups: 1,
-            groups: [
-              {
-                chatId: "-1001",
-                ok: false,
-                status: "left",
-                error: "not in group",
-              },
-            ],
+    const lines = formatGatewayChannelsStatusLines({
+      channelAccounts: {
+        telegram: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            audit: {
+              hasWildcardUnmentionedGroups: true,
+              unresolvedGroups: 1,
+              groups: [
+                {
+                  chatId: "-1001",
+                  ok: false,
+                  status: "left",
+                  error: "not in group",
+                },
+              ],
+            },
           },
-        },
-      ],
+        ],
+      },
     });
-    expect(joined).toMatch(/Warnings:/);
-    expect(joined).toMatch(/membership probing is not possible/i);
-    expect(joined).toMatch(/Group -1001/i);
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/membership probing is not possible/i);
+    expect(lines.join("\n")).toMatch(/Group -1001/i);
   });
 
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {
@@ -541,62 +486,5 @@ describe("channels command", () => {
       },
     });
     expect(disconnected.join("\n")).toMatch(/disconnected/i);
-  });
-
-  it("cleans up telegram update offset when deleting a telegram account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          telegram: { botToken: "123:abc", enabled: true },
-        },
-      },
-    });
-
-    await channelsRemoveCommand(
-      { channel: "telegram", account: "default", delete: true },
-      runtime,
-      {
-        hasFlags: true,
-      },
-    );
-
-    expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({ accountId: "default" });
-  });
-
-  it("does not clean up offset when deleting a non-telegram channel", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          discord: {
-            accounts: {
-              default: { token: "d0" },
-            },
-          },
-        },
-      },
-    });
-
-    await channelsRemoveCommand({ channel: "discord", account: "default", delete: true }, runtime, {
-      hasFlags: true,
-    });
-
-    expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
-  });
-
-  it("does not clean up offset when disabling (not deleting) a telegram account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          telegram: { botToken: "123:abc", enabled: true },
-        },
-      },
-    });
-
-    await runRemoveWithConfirm({ channel: "telegram", account: "default" });
-
-    expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
   });
 });

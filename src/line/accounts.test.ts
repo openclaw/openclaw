@@ -1,10 +1,8 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLineAccount,
+  listLineAccountIds,
   resolveDefaultLineAccountId,
   normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
@@ -12,15 +10,6 @@ import {
 
 describe("LINE accounts", () => {
   const originalEnv = { ...process.env };
-  const tempDirs: string[] = [];
-
-  const createSecretFile = (fileName: string, contents: string) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-account-"));
-    tempDirs.push(dir);
-    const filePath = path.join(dir, fileName);
-    fs.writeFileSync(filePath, contents, "utf8");
-    return filePath;
-  };
 
   beforeEach(() => {
     process.env = { ...originalEnv };
@@ -30,9 +19,6 @@ describe("LINE accounts", () => {
 
   afterEach(() => {
     process.env = originalEnv;
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   describe("resolveLineAccount", () => {
@@ -112,153 +98,102 @@ describe("LINE accounts", () => {
       expect(account.channelSecret).toBe("");
       expect(account.tokenSource).toBe("none");
     });
+  });
 
-    it("resolves default account credentials from files", () => {
+  describe("listLineAccountIds", () => {
+    it("returns default account when configured at base level", () => {
       const cfg: OpenClawConfig = {
         channels: {
           line: {
-            tokenFile: createSecretFile("token.txt", "file-token\n"),
-            secretFile: createSecretFile("secret.txt", "file-secret\n"),
+            channelAccessToken: "test-token",
           },
         },
       };
 
-      const account = resolveLineAccount({ cfg });
+      const ids = listLineAccountIds(cfg);
 
-      expect(account.channelAccessToken).toBe("file-token");
-      expect(account.channelSecret).toBe("file-secret");
-      expect(account.tokenSource).toBe("file");
+      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
     });
 
-    it("resolves named account credentials from account-level files", () => {
+    it("returns named accounts", () => {
       const cfg: OpenClawConfig = {
         channels: {
           line: {
             accounts: {
-              business: {
-                tokenFile: createSecretFile("business-token.txt", "business-file-token\n"),
-                secretFile: createSecretFile("business-secret.txt", "business-file-secret\n"),
-              },
+              business: { enabled: true },
+              personal: { enabled: true },
             },
           },
         },
       };
 
-      const account = resolveLineAccount({ cfg, accountId: "business" });
+      const ids = listLineAccountIds(cfg);
 
-      expect(account.channelAccessToken).toBe("business-file-token");
-      expect(account.channelSecret).toBe("business-file-secret");
-      expect(account.tokenSource).toBe("file");
+      expect(ids).toContain("business");
+      expect(ids).toContain("personal");
     });
 
-    it.runIf(process.platform !== "win32")("rejects symlinked token and secret files", () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-account-"));
-      tempDirs.push(dir);
-      const tokenFile = path.join(dir, "token.txt");
-      const tokenLink = path.join(dir, "token-link.txt");
-      const secretFile = path.join(dir, "secret.txt");
-      const secretLink = path.join(dir, "secret-link.txt");
-      fs.writeFileSync(tokenFile, "file-token\n", "utf8");
-      fs.writeFileSync(secretFile, "file-secret\n", "utf8");
-      fs.symlinkSync(tokenFile, tokenLink);
-      fs.symlinkSync(secretFile, secretLink);
+    it("returns default from env", () => {
+      process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
+      const cfg: OpenClawConfig = {};
 
-      const cfg: OpenClawConfig = {
-        channels: {
-          line: {
-            tokenFile: tokenLink,
-            secretFile: secretLink,
-          },
-        },
-      };
+      const ids = listLineAccountIds(cfg);
 
-      const account = resolveLineAccount({ cfg });
-      expect(account.channelAccessToken).toBe("");
-      expect(account.channelSecret).toBe("");
-      expect(account.tokenSource).toBe("none");
+      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
     });
   });
 
   describe("resolveDefaultLineAccountId", () => {
-    it.each([
-      {
-        name: "prefers channels.line.defaultAccount when configured",
-        cfg: {
-          channels: {
-            line: {
-              defaultAccount: "business",
-              accounts: {
-                business: { enabled: true },
-                support: { enabled: true },
-              },
+    it("returns default when configured", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            channelAccessToken: "test-token",
+          },
+        },
+      };
+
+      const id = resolveDefaultLineAccountId(cfg);
+
+      expect(id).toBe(DEFAULT_ACCOUNT_ID);
+    });
+
+    it("returns first named account when default not configured", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            accounts: {
+              business: { enabled: true },
             },
           },
-        } satisfies OpenClawConfig,
-        expected: "business",
-      },
-      {
-        name: "normalizes channels.line.defaultAccount before lookup",
-        cfg: {
-          channels: {
-            line: {
-              defaultAccount: "Business Ops",
-              accounts: {
-                "business-ops": { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expected: "business-ops",
-      },
-      {
-        name: "returns first named account when default not configured",
-        cfg: {
-          channels: {
-            line: {
-              accounts: {
-                business: { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expected: "business",
-      },
-      {
-        name: "falls back when channels.line.defaultAccount is missing",
-        cfg: {
-          channels: {
-            line: {
-              defaultAccount: "missing",
-              accounts: {
-                business: { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expected: "business",
-      },
-      {
-        name: "prefers the default account when base credentials are configured",
-        cfg: {
-          channels: {
-            line: {
-              channelAccessToken: "base-token",
-              accounts: {
-                business: { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expected: DEFAULT_ACCOUNT_ID,
-      },
-    ])("$name", ({ cfg, expected }) => {
-      expect(resolveDefaultLineAccountId(cfg)).toBe(expected);
+        },
+      };
+
+      const id = resolveDefaultLineAccountId(cfg);
+
+      expect(id).toBe("business");
     });
   });
 
   describe("normalizeAccountId", () => {
-    it("trims and lowercases account ids", () => {
-      expect(normalizeAccountId("  Business  ")).toBe("business");
+    it("normalizes undefined to default", () => {
+      expect(normalizeAccountId(undefined)).toBe(DEFAULT_ACCOUNT_ID);
+    });
+
+    it("normalizes 'default' to DEFAULT_ACCOUNT_ID", () => {
+      expect(normalizeAccountId("default")).toBe(DEFAULT_ACCOUNT_ID);
+    });
+
+    it("preserves other account ids", () => {
+      expect(normalizeAccountId("business")).toBe("business");
+    });
+
+    it("lowercases account ids", () => {
+      expect(normalizeAccountId("Business")).toBe("business");
+    });
+
+    it("trims whitespace", () => {
+      expect(normalizeAccountId("  business  ")).toBe("business");
     });
   });
 });

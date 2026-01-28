@@ -5,8 +5,8 @@ import Testing
 import Darwin
 import Foundation
 
-struct RemotePortTunnelTests {
-    @Test func `drain stderr does not crash when handle closed`() {
+@Suite struct RemotePortTunnelTests {
+    @Test func drainStderrDoesNotCrashWhenHandleClosed() {
         let pipe = Pipe()
         let handle = pipe.fileHandleForReading
         try? handle.close()
@@ -15,7 +15,7 @@ struct RemotePortTunnelTests {
         #expect(drained.isEmpty)
     }
 
-    @Test func `port is free detects I pv4 listener`() {
+    @Test func portIsFreeDetectsIPv4Listener() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
         guard fd >= 0 else { return }

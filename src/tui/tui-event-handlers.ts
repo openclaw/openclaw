@@ -1,62 +1,19 @@
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import type { TUI } from "@mariozechner/pi-tui";
+import type { ChatLog } from "./components/chat-log.js";
+import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
-
-type EventHandlerChatLog = {
-  startTool: (toolCallId: string, toolName: string, args: unknown) => void;
-  updateToolResult: (
-    toolCallId: string,
-    result: unknown,
-    options?: { partial?: boolean; isError?: boolean },
-  ) => void;
-  addSystem: (text: string) => void;
-  updateAssistant: (text: string, runId: string) => void;
-  finalizeAssistant: (text: string, runId: string) => void;
-  dropAssistant: (runId: string) => void;
-};
-
-type EventHandlerTui = {
-  requestRender: () => void;
-};
-
-type EventHandlerBtwPresenter = {
-  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
-  clear: () => void;
-};
 
 type EventHandlerContext = {
-  chatLog: EventHandlerChatLog;
-  btw: EventHandlerBtwPresenter;
-  tui: EventHandlerTui;
+  chatLog: ChatLog;
+  tui: TUI;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<void>;
-  isLocalRunId?: (runId: string) => boolean;
-  forgetLocalRunId?: (runId: string) => void;
-  clearLocalRunIds?: () => void;
-  isLocalBtwRunId?: (runId: string) => boolean;
-  forgetLocalBtwRunId?: (runId: string) => void;
-  clearLocalBtwRunIds?: () => void;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
-  const {
-    chatLog,
-    btw,
-    tui,
-    state,
-    setActivityStatus,
-    refreshSessionInfo,
-    loadHistory,
-    isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
-    isLocalBtwRunId,
-    forgetLocalBtwRunId,
-    clearLocalBtwRunIds,
-  } = context;
+  const { chatLog, tui, state, setActivityStatus, refreshSessionInfo } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
@@ -93,9 +50,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
-    clearLocalRunIds?.();
-    clearLocalBtwRunIds?.();
-    btw.clear();
   };
 
   const noteSessionRun = (runId: string) => {
@@ -110,94 +64,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(finalizedRuns);
   };
 
-  const clearActiveRunIfMatch = (runId: string) => {
-    if (state.activeChatRunId === runId) {
-      state.activeChatRunId = null;
-    }
-  };
-
-  const finalizeRun = (params: {
-    runId: string;
-    wasActiveRun: boolean;
-    status: "idle" | "error";
-  }) => {
-    noteFinalizedRun(params.runId);
-    clearActiveRunIfMatch(params.runId);
-    if (params.wasActiveRun) {
-      setActivityStatus(params.status);
-    }
-    void refreshSessionInfo?.();
-  };
-
-  const terminateRun = (params: {
-    runId: string;
-    wasActiveRun: boolean;
-    status: "aborted" | "error";
-  }) => {
-    streamAssembler.drop(params.runId);
-    sessionRuns.delete(params.runId);
-    clearActiveRunIfMatch(params.runId);
-    if (params.wasActiveRun) {
-      setActivityStatus(params.status);
-    }
-    void refreshSessionInfo?.();
-  };
-
-  const hasConcurrentActiveRun = (runId: string) => {
-    const activeRunId = state.activeChatRunId;
-    if (!activeRunId || activeRunId === runId) {
-      return false;
-    }
-    return sessionRuns.has(activeRunId);
-  };
-
-  const maybeRefreshHistoryForRun = (
-    runId: string,
-    opts?: { allowLocalWithoutDisplayableFinal?: boolean },
-  ) => {
-    const isLocalRun = isLocalRunId?.(runId) ?? false;
-    if (isLocalRun) {
-      forgetLocalRunId?.(runId);
-      if (!opts?.allowLocalWithoutDisplayableFinal) {
-        return;
-      }
-    }
-    if (hasConcurrentActiveRun(runId)) {
-      return;
-    }
-    void loadHistory?.();
-  };
-
-  const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
-    const normalizedLeft = (left ?? "").trim().toLowerCase();
-    const normalizedRight = (right ?? "").trim().toLowerCase();
-    if (!normalizedLeft || !normalizedRight) {
-      return false;
-    }
-    if (normalizedLeft === normalizedRight) {
-      return true;
-    }
-    const parsedLeft = parseAgentSessionKey(normalizedLeft);
-    const parsedRight = parseAgentSessionKey(normalizedRight);
-    if (parsedLeft && parsedRight) {
-      return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
-    }
-    if (parsedLeft) {
-      return parsedLeft.rest === normalizedRight;
-    }
-    if (parsedRight) {
-      return normalizedLeft === parsedRight.rest;
-    }
-    return false;
-  };
-
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
     }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+    if (evt.sessionKey !== state.currentSessionKey) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
@@ -209,7 +82,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
+    if (!state.activeChatRunId) {
       state.activeChatRunId = evt.runId;
     }
     if (evt.state === "delta") {
@@ -221,34 +94,19 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus("streaming");
     }
     if (evt.state === "final") {
-      const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
-      const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!evt.message && isLocalBtwRun) {
-        forgetLocalBtwRunId?.(evt.runId);
-        noteFinalizedRun(evt.runId);
-        tui.requestRender();
-        return;
-      }
-      if (!evt.message) {
-        maybeRefreshHistoryForRun(evt.runId, {
-          allowLocalWithoutDisplayableFinal: true,
-        });
-        chatLog.dropAssistant(evt.runId);
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
-        return;
-      }
       if (isCommandMessage(evt.message)) {
-        maybeRefreshHistoryForRun(evt.runId);
         const text = extractTextFromMessage(evt.message);
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
+        streamAssembler.drop(evt.runId);
+        noteFinalizedRun(evt.runId);
+        state.activeChatRunId = null;
+        setActivityStatus("idle");
+        void refreshSessionInfo?.();
         tui.requestRender();
         return;
       }
-      maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
           ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
@@ -256,38 +114,29 @@ export function createEventHandlers(context: EventHandlerContext) {
             : ""
           : "";
 
-      const finalText = streamAssembler.finalize(
-        evt.runId,
-        evt.message,
-        state.showThinking,
-        evt.errorMessage,
-      );
-      const suppressEmptyExternalPlaceholder =
-        finalText === "(no output)" && !isLocalRunId?.(evt.runId);
-      if (suppressEmptyExternalPlaceholder) {
-        chatLog.dropAssistant(evt.runId);
-      } else {
-        chatLog.finalizeAssistant(finalText, evt.runId);
-      }
-      finalizeRun({
-        runId: evt.runId,
-        wasActiveRun,
-        status: stopReason === "error" ? "error" : "idle",
-      });
+      const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      chatLog.finalizeAssistant(finalText, evt.runId);
+      noteFinalizedRun(evt.runId);
+      state.activeChatRunId = null;
+      setActivityStatus(stopReason === "error" ? "error" : "idle");
+      // Refresh session info to update token counts in footer
+      void refreshSessionInfo?.();
     }
     if (evt.state === "aborted") {
-      forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
-      maybeRefreshHistoryForRun(evt.runId);
+      streamAssembler.drop(evt.runId);
+      sessionRuns.delete(evt.runId);
+      state.activeChatRunId = null;
+      setActivityStatus("aborted");
+      void refreshSessionInfo?.();
     }
     if (evt.state === "error") {
-      forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      streamAssembler.drop(evt.runId);
+      sessionRuns.delete(evt.runId);
+      state.activeChatRunId = null;
+      setActivityStatus("error");
+      void refreshSessionInfo?.();
     }
     tui.requestRender();
   };
@@ -299,20 +148,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as AgentEvent;
     syncSessionKey();
     // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
-    // active chat run id, not the session id. Tool results can arrive after the chat
-    // final event, so accept finalized runs for tool updates.
+    // active chat run id, not the session id.
     const isActiveRun = evt.runId === state.activeChatRunId;
-    const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
-    if (!isKnownRun) {
+    if (!isActiveRun && !sessionRuns.has(evt.runId)) {
       return;
     }
     if (evt.stream === "tool") {
-      const verbose = state.sessionInfo.verboseLevel ?? "off";
-      const allowToolEvents = verbose !== "off";
-      const allowToolOutput = verbose === "full";
-      if (!allowToolEvents) {
-        return;
-      }
       const data = evt.data ?? {};
       const phase = asString(data.phase, "");
       const toolCallId = asString(data.toolCallId, "");
@@ -323,20 +164,13 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (phase === "start") {
         chatLog.startTool(toolCallId, toolName, data.args);
       } else if (phase === "update") {
-        if (!allowToolOutput) {
-          return;
-        }
         chatLog.updateToolResult(toolCallId, data.partialResult, {
           partial: true,
         });
       } else if (phase === "result") {
-        if (allowToolOutput) {
-          chatLog.updateToolResult(toolCallId, data.result, {
-            isError: Boolean(data.isError),
-          });
-        } else {
-          chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
-        }
+        chatLog.updateToolResult(toolCallId, data.result, {
+          isError: Boolean(data.isError),
+        });
       }
       tui.requestRender();
       return;
@@ -359,30 +193,5 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  const handleBtwEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as BtwEvent;
-    syncSessionKey();
-    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
-      return;
-    }
-    if (evt.kind !== "btw") {
-      return;
-    }
-    const question = evt.question.trim();
-    const text = evt.text.trim();
-    if (!question || !text) {
-      return;
-    }
-    btw.showResult({
-      question,
-      text,
-      isError: evt.isError,
-    });
-    tui.requestRender();
-  };
-
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent };
+  return { handleChatEvent, handleAgentEvent };
 }

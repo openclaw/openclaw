@@ -5,19 +5,8 @@
  * This is the primary entry point for the Twitch channel integration.
  */
 
-import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawConfig } from "../api.js";
-import { buildChannelConfigSchema } from "../api.js";
-import { twitchMessageActions } from "./actions.js";
-import { removeClientManager } from "./client-manager-registry.js";
-import { TwitchConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, listAccountIds } from "./config.js";
-import { twitchOutbound } from "./outbound.js";
-import { probeTwitch } from "./probe.js";
-import { resolveTwitchTargets } from "./resolver.js";
-import { twitchSetupAdapter, twitchSetupWizard } from "./setup-surface.js";
-import { collectTwitchStatusIssues } from "./status.js";
-import { resolveTwitchToken } from "./token.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
   ChannelCapabilities,
@@ -28,6 +17,16 @@ import type {
   ChannelResolveResult,
   TwitchAccountConfig,
 } from "./types.js";
+import { twitchMessageActions } from "./actions.js";
+import { removeClientManager } from "./client-manager-registry.js";
+import { TwitchConfigSchema } from "./config-schema.js";
+import { DEFAULT_ACCOUNT_ID, getAccountConfig, listAccountIds } from "./config.js";
+import { twitchOnboardingAdapter } from "./onboarding.js";
+import { twitchOutbound } from "./outbound.js";
+import { probeTwitch } from "./probe.js";
+import { resolveTwitchTargets } from "./resolver.js";
+import { collectTwitchStatusIssues } from "./status.js";
+import { resolveTwitchToken } from "./token.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 /**
@@ -51,9 +50,8 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     aliases: ["twitch-chat"],
   } satisfies ChannelMeta,
 
-  /** Setup wizard surface */
-  setup: twitchSetupAdapter,
-  setupWizard: twitchSetupWizard,
+  /** Onboarding adapter */
+  onboarding: twitchOnboardingAdapter,
 
   /** Pairing configuration */
   pairing: {
@@ -136,7 +134,7 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
       accountId?: string | null;
       inputs: string[];
       kind: ChannelResolveKind;
-      runtime: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+      runtime: import("../../../src/runtime.js").RuntimeEnv;
     }): Promise<ChannelResolveResult[]> => {
       const account = getAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
 
@@ -171,8 +169,15 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     },
 
     /** Build channel summary from snapshot */
-    buildChannelSummary: ({ snapshot }: { snapshot: ChannelAccountSnapshot }) =>
-      buildPassiveProbedChannelStatusSummary(snapshot),
+    buildChannelSummary: ({ snapshot }: { snapshot: ChannelAccountSnapshot }) => ({
+      configured: snapshot.configured ?? false,
+      running: snapshot.running ?? false,
+      lastStartAt: snapshot.lastStartAt ?? null,
+      lastStopAt: snapshot.lastStopAt ?? null,
+      lastError: snapshot.lastError ?? null,
+      probe: snapshot.probe,
+      lastProbeAt: snapshot.lastProbeAt ?? null,
+    }),
 
     /** Probe account connection */
     probeAccount: async ({

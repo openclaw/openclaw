@@ -1,64 +1,22 @@
-import { randomUUID } from "node:crypto";
 import type { WebSocket, WebSocketServer } from "ws";
-import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
-import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
-import { upsertPresence } from "../../infra/system-presence.js";
+import { randomUUID } from "node:crypto";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import { truncateUtf16Safe } from "../../utils.js";
-import { isWebchatClient } from "../../utils/message-channel.js";
-import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
+import type { GatewayWsClient } from "./ws-types.js";
+import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
+import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
+import { isWebchatClient } from "../../utils/message-channel.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
-import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
-import { broadcastPresenceSnapshot } from "./presence-events.js";
-import {
-  attachGatewayWsMessageHandler,
-  type WsOriginCheckMetrics,
-} from "./ws-connection/message-handler.js";
-import type { GatewayWsClient } from "./ws-types.js";
+import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
+import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-const LOG_HEADER_MAX_LEN = 300;
-const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
-
-function replaceControlChars(value: string): string {
-  let cleaned = "";
-  for (const char of value) {
-    const codePoint = char.codePointAt(0);
-    if (
-      codePoint !== undefined &&
-      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-    ) {
-      cleaned += " ";
-      continue;
-    }
-    cleaned += char;
-  }
-  return cleaned;
-}
-const sanitizeLogValue = (value: string | undefined): string | undefined => {
-  if (!value) {
-    return undefined;
-  }
-  const cleaned = replaceControlChars(value)
-    .replace(LOG_HEADER_FORMAT_REGEX, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return undefined;
-  }
-  if (cleaned.length <= LOG_HEADER_MAX_LEN) {
-    return cleaned;
-  }
-  return truncateUtf16Safe(cleaned, LOG_HEADER_MAX_LEN);
-};
-
-export type GatewayWsSharedHandlerParams = {
+export function attachGatewayWsConnectionHandler(params: {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   port: number;
@@ -66,15 +24,8 @@ export type GatewayWsSharedHandlerParams = {
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
   resolvedAuth: ResolvedGatewayAuth;
-  /** Optional rate limiter for auth brute-force protection. */
-  rateLimiter?: AuthRateLimiter;
-  /** Browser-origin fallback limiter (loopback is never exempt). */
-  browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
-};
-
-export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParams & {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -88,9 +39,7 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParam
     },
   ) => void;
   buildRequestContext: () => GatewayRequestContext;
-};
-
-export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
+}) {
   const {
     wss,
     clients,
@@ -99,8 +48,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     canvasHostEnabled,
     canvasHostServerPort,
     resolvedAuth,
-    rateLimiter,
-    browserRateLimiter,
     gatewayMethods,
     events,
     logGateway,
@@ -110,7 +57,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     broadcast,
     buildRequestContext,
   } = params;
-  const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
 
   wss.on("connection", (socket, upgradeReq) => {
     let client: GatewayWsClient | null = null;
@@ -206,11 +152,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
-      const logForwardedFor = sanitizeLogValue(forwardedFor);
-      const logOrigin = sanitizeLogValue(requestOrigin);
-      const logHost = sanitizeLogValue(requestHost);
-      const logUserAgent = sanitizeLogValue(requestUserAgent);
-      const logReason = sanitizeLogValue(reason?.toString());
       const closeContext = {
         cause: closeCause,
         handshake: handshakeState,
@@ -218,10 +159,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         lastFrameType,
         lastFrameMethod,
         lastFrameId,
-        host: logHost,
-        origin: logOrigin,
-        userAgent: logUserAgent,
-        forwardedFor: logForwardedFor,
+        host: requestHost,
+        origin: requestOrigin,
+        userAgent: requestUserAgent,
+        forwardedFor,
         ...closeMeta,
       };
       if (!client) {
@@ -229,32 +170,41 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           ? logWsControl.debug
           : logWsControl.warn;
         logFn(
-          `closed before connect conn=${connId} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
+          `closed before connect conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"} code=${code ?? "n/a"} reason=${reason?.toString() || "n/a"}`,
           closeContext,
         );
       }
       if (client && isWebchatClient(client.connect.client)) {
         logWsControl.info(
-          `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
+          `webchat disconnected code=${code} reason=${reason?.toString() || "n/a"} conn=${connId}`,
         );
       }
       if (client?.presenceKey) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
-        broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+        incrementPresenceVersion();
+        broadcast(
+          "presence",
+          { presence: listSystemPresence() },
+          {
+            dropIfSlow: true,
+            stateVersion: {
+              presence: getPresenceVersion(),
+              health: getHealthVersion(),
+            },
+          },
+        );
       }
-      const context = buildRequestContext();
-      context.unsubscribeAllSessionEvents(connId);
       if (client?.connect?.role === "node") {
+        const context = buildRequestContext();
         const nodeId = context.nodeRegistry.unregister(connId);
         if (nodeId) {
-          removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
         }
       }
       logWs("out", "close", {
         connId,
         code,
-        reason: logReason,
+        reason: reason?.toString(),
         durationMs,
         cause: closeCause,
         handshake: handshakeState,
@@ -290,8 +240,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       canvasHostUrl,
       connectNonce,
       resolvedAuth,
-      rateLimiter,
-      browserRateLimiter,
       gatewayMethods,
       events,
       extraHandlers,
@@ -310,7 +258,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       },
       setCloseCause,
       setLastFrameMeta,
-      originCheckMetrics,
       logGateway,
       logHealth,
       logWsControl,

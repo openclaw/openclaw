@@ -1,8 +1,7 @@
+import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
-import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
   baseUrl?: string;
@@ -10,7 +9,6 @@ type NextcloudTalkSendOpts = {
   accountId?: string;
   replyTo?: string;
   verbose?: boolean;
-  cfg?: CoreConfig;
 };
 
 function resolveCredentials(
@@ -35,20 +33,34 @@ function resolveCredentials(
 }
 
 function normalizeRoomToken(to: string): string {
-  const normalized = stripNextcloudTalkTargetPrefix(to);
+  const trimmed = to.trim();
+  if (!trimmed) {
+    throw new Error("Room token is required for Nextcloud Talk sends");
+  }
+
+  let normalized = trimmed;
+  if (normalized.startsWith("nextcloud-talk:")) {
+    normalized = normalized.slice("nextcloud-talk:".length).trim();
+  } else if (normalized.startsWith("nc:")) {
+    normalized = normalized.slice("nc:".length).trim();
+  }
+
+  if (normalized.startsWith("room:")) {
+    normalized = normalized.slice("room:".length).trim();
+  }
+
   if (!normalized) {
     throw new Error("Room token is required for Nextcloud Talk sends");
   }
   return normalized;
 }
 
-function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
-  cfg: CoreConfig;
-  account: ReturnType<typeof resolveNextcloudTalkAccount>;
-  baseUrl: string;
-  secret: string;
-} {
-  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
+export async function sendMessageNextcloudTalk(
+  to: string,
+  text: string,
+  opts: NextcloudTalkSendOpts = {},
+): Promise<NextcloudTalkSendResult> {
+  const cfg = getNextcloudTalkRuntime().config.loadConfig() as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,
@@ -57,15 +69,6 @@ function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
     { baseUrl: opts.baseUrl, secret: opts.secret },
     account,
   );
-  return { cfg, account, baseUrl, secret };
-}
-
-export async function sendMessageNextcloudTalk(
-  to: string,
-  text: string,
-  opts: NextcloudTalkSendOpts = {},
-): Promise<NextcloudTalkSendResult> {
-  const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const roomToken = normalizeRoomToken(to);
 
   if (!text?.trim()) {
@@ -90,12 +93,8 @@ export async function sendMessageNextcloudTalk(
   }
   const bodyStr = JSON.stringify(body);
 
-  // Nextcloud Talk verifies signature against the extracted message text,
-  // not the full JSON body. See ChecksumVerificationService.php:
-  //   hash_hmac('sha256', $random . $data, $secret)
-  // where $data is the "message" parameter, not the raw request body.
   const { random, signature } = generateNextcloudTalkSignature({
-    body: message,
+    body: bodyStr,
     secret,
   });
 
@@ -172,13 +171,20 @@ export async function sendReactionNextcloudTalk(
   reaction: string,
   opts: Omit<NextcloudTalkSendOpts, "replyTo"> = {},
 ): Promise<{ ok: true }> {
-  const { account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
+  const cfg = getNextcloudTalkRuntime().config.loadConfig() as CoreConfig;
+  const account = resolveNextcloudTalkAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const { baseUrl, secret } = resolveCredentials(
+    { baseUrl: opts.baseUrl, secret: opts.secret },
+    account,
+  );
   const normalizedToken = normalizeRoomToken(roomToken);
 
   const body = JSON.stringify({ reaction });
-  // Sign only the reaction string, not the full JSON body
   const { random, signature } = generateNextcloudTalkSignature({
-    body: reaction,
+    body,
     secret,
   });
 

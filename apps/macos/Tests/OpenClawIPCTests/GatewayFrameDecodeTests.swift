@@ -1,9 +1,9 @@
-import Foundation
 import OpenClawProtocol
+import Foundation
 import Testing
 
-struct GatewayFrameDecodeTests {
-    @Test func `decodes event frame with any codable payload`() throws {
+@Suite struct GatewayFrameDecodeTests {
+    @Test func decodesEventFrameWithAnyCodablePayload() throws {
         let json = """
         {
           "type": "event",
@@ -29,7 +29,7 @@ struct GatewayFrameDecodeTests {
         #expect(evt.seq == 7)
     }
 
-    @Test func `decodes request frame with nested params`() throws {
+    @Test func decodesRequestFrameWithNestedParams() throws {
         let json = """
         {
           "type": "req",
@@ -68,7 +68,7 @@ struct GatewayFrameDecodeTests {
         #expect(meta?["count"]?.value as? Int == 2)
     }
 
-    @Test func `decodes unknown frame and preserves raw`() throws {
+    @Test func decodesUnknownFrameAndPreservesRaw() throws {
         let json = """
         {
           "type": "made-up",

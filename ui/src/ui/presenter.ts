@@ -1,5 +1,5 @@
-import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
-import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
+import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types";
+import { formatAgo, formatDurationMs, formatMs } from "./format";
 
 export function formatPresenceSummary(entry: PresenceEntry): string {
   const host = entry.host ?? "unknown";
@@ -11,15 +11,14 @@ export function formatPresenceSummary(entry: PresenceEntry): string {
 
 export function formatPresenceAge(entry: PresenceEntry): string {
   const ts = entry.ts ?? null;
-  return ts ? formatRelativeTimestamp(ts) : "n/a";
+  return ts ? formatAgo(ts) : "n/a";
 }
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
     return "n/a";
   }
-  const weekday = new Date(ms).toLocaleDateString(undefined, { weekday: "short" });
-  return `${weekday}, ${formatMs(ms)} (${formatRelativeTimestamp(ms)})`;
+  return `${formatMs(ms)} (${formatAgo(ms)})`;
 }
 
 export function formatSessionTokens(row: GatewaySessionRow) {
@@ -54,11 +53,10 @@ export function formatCronState(job: CronJob) {
 export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
-    const atMs = Date.parse(s.at);
-    return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
+    return `At ${formatMs(s.atMs)}`;
   }
   if (s.kind === "every") {
-    return `Every ${formatDurationHuman(s.everyMs)}`;
+    return `Every ${formatDurationMs(s.everyMs)}`;
   }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }
@@ -68,18 +66,5 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
   }
-  const base = `Agent: ${p.message}`;
-  const delivery = job.delivery;
-  if (delivery && delivery.mode !== "none") {
-    const target =
-      delivery.mode === "webhook"
-        ? delivery.to
-          ? ` (${delivery.to})`
-          : ""
-        : delivery.channel || delivery.to
-          ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
-          : "";
-    return `${base} · ${delivery.mode}${target}`;
-  }
-  return base;
+  return `Agent: ${p.message}`;
 }

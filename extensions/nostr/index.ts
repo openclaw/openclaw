@@ -1,20 +1,21 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { nostrPlugin } from "./src/channel.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import type { NostrProfile } from "./src/config-schema.js";
+import { nostrPlugin } from "./src/channel.js";
 import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
-import { getNostrRuntime, setNostrRuntime } from "./src/runtime.js";
+import { setNostrRuntime, getNostrRuntime } from "./src/runtime.js";
 import { resolveNostrAccount } from "./src/types.js";
 
-export { nostrPlugin } from "./src/channel.js";
-export { setNostrRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+const plugin = {
   id: "nostr",
   name: "Nostr",
   description: "Nostr DM channel plugin via NIP-04",
-  plugin: nostrPlugin,
-  setRuntime: setNostrRuntime,
-  registerFull(api) {
+  configSchema: emptyPluginConfigSchema(),
+  register(api: OpenClawPluginApi) {
+    setNostrRuntime(api.runtime);
+    api.registerChannel({ plugin: nostrPlugin });
+
+    // Register HTTP handler for profile management
     const httpHandler = createNostrProfileHttpHandler({
       getConfigProfile: (accountId: string) => {
         const runtime = getNostrRuntime();
@@ -26,18 +27,23 @@ export default defineChannelPluginEntry({
         const runtime = getNostrRuntime();
         const cfg = runtime.config.loadConfig();
 
+        // Build the config patch for channels.nostr.profile
         const channels = (cfg.channels ?? {}) as Record<string, unknown>;
         const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
 
+        const updatedNostrConfig = {
+          ...nostrConfig,
+          profile,
+        };
+
+        const updatedChannels = {
+          ...channels,
+          nostr: updatedNostrConfig,
+        };
+
         await runtime.config.writeConfigFile({
           ...cfg,
-          channels: {
-            ...channels,
-            nostr: {
-              ...nostrConfig,
-              profile,
-            },
-          },
+          channels: updatedChannels,
         });
       },
       getAccountInfo: (accountId: string) => {
@@ -55,11 +61,8 @@ export default defineChannelPluginEntry({
       log: api.logger,
     });
 
-    api.registerHttpRoute({
-      path: "/api/channels/nostr",
-      auth: "gateway",
-      match: "prefix",
-      handler: httpHandler,
-    });
+    api.registerHttpHandler(httpHandler);
   },
-});
+};
+
+export default plugin;

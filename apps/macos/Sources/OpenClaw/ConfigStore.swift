@@ -1,8 +1,8 @@
-import Foundation
 import OpenClawProtocol
+import Foundation
 
 enum ConfigStore {
-    struct Overrides {
+    struct Overrides: Sendable {
         var isRemoteMode: (@Sendable () async -> Bool)?
         var loadLocal: (@MainActor @Sendable () -> [String: Any])?
         var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?

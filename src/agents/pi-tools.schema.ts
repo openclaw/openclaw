@@ -1,8 +1,5 @@
-import type { ModelCompatConfig } from "../config/types.models.js";
-import { usesXaiToolSchemaProfile } from "./model-compat.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
-import { stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -65,10 +62,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   return existing;
 }
 
-export function normalizeToolParameters(
-  tool: AnyAgentTool,
-  options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
-): AnyAgentTool {
+export function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
@@ -81,33 +75,15 @@ export function normalizeToolParameters(
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
-  // - Anthropic expects full JSON Schema draft 2020-12 compliance.
-  // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
-  const isGeminiProvider =
-    options?.modelProvider?.toLowerCase().includes("google") ||
-    options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
-  const hasXaiSchemaProfile = usesXaiToolSchemaProfile(options?.modelCompat);
-
-  function applyProviderCleaning(s: unknown): unknown {
-    if (isGeminiProvider && !isAnthropicProvider) {
-      return cleanSchemaForGemini(s);
-    }
-    if (hasXaiSchemaProfile) {
-      return stripXaiUnsupportedKeywords(s);
-    }
-    return s;
-  }
-
   // If schema already has type + properties (no top-level anyOf to merge),
-  // clean it for Gemini/xAI compatibility as appropriate.
+  // still clean it for Gemini compatibility
   if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
     return {
       ...tool,
-      parameters: applyProviderCleaning(schema),
+      parameters: cleanSchemaForGemini(schema),
     };
   }
 
@@ -119,10 +95,9 @@ export function normalizeToolParameters(
     !Array.isArray(schema.anyOf) &&
     !Array.isArray(schema.oneOf)
   ) {
-    const schemaWithType = { ...schema, type: "object" };
     return {
       ...tool,
-      parameters: applyProviderCleaning(schemaWithType),
+      parameters: cleanSchemaForGemini({ ...schema, type: "object" }),
     };
   }
 
@@ -179,31 +154,26 @@ export function normalizeToolParameters(
         : undefined;
 
   const nextSchema: Record<string, unknown> = { ...schema };
-  const flattenedSchema = {
-    type: "object",
-    ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
-    ...(typeof nextSchema.description === "string" ? { description: nextSchema.description } : {}),
-    properties:
-      Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {}),
-    ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
-    additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
-  };
-
   return {
     ...tool,
     // Flatten union schemas into a single object schema:
     // - Gemini doesn't allow top-level `type` together with `anyOf`.
     // - OpenAI rejects schemas without top-level `type: "object"`.
-    // - Anthropic accepts proper JSON Schema with constraints.
     // Merging properties preserves useful enums like `action` while keeping schemas portable.
-    parameters: applyProviderCleaning(flattenedSchema),
+    parameters: cleanSchemaForGemini({
+      type: "object",
+      ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
+      ...(typeof nextSchema.description === "string"
+        ? { description: nextSchema.description }
+        : {}),
+      properties:
+        Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {}),
+      ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
+      additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
+    }),
   };
 }
 
-/**
- * @deprecated Use normalizeToolParameters with modelProvider instead.
- * This function should only be used for Gemini providers.
- */
 export function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
   return cleanSchemaForGemini(schema);
 }

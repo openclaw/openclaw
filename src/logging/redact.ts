@@ -1,9 +1,7 @@
+import { createRequire } from "node:module";
 import type { OpenClawConfig } from "../config/config.js";
-import { compileConfigRegex } from "../security/config-regex.js";
-import { resolveNodeRequireFromMeta } from "./node-require.js";
-import { replacePatternBounded } from "./redact-bounded.js";
 
-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
+const requireConfig = createRequire(import.meta.url);
 
 export type RedactSensitiveMode = "off" | "tools";
 
@@ -34,8 +32,6 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(AIza[0-9A-Za-z\-_]{20,})\b`,
   String.raw`\b(pplx-[A-Za-z0-9_-]{10,})\b`,
   String.raw`\b(npm_[A-Za-z0-9]{10,})\b`,
-  // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
-  String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
 
@@ -53,11 +49,15 @@ function parsePattern(raw: string): RegExp | null {
     return null;
   }
   const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
-  if (match) {
-    const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-    return compileConfigRegex(match[1], flags)?.regex ?? null;
+  try {
+    if (match) {
+      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
+      return new RegExp(match[1], flags);
+    }
+    return new RegExp(raw, "gi");
+  } catch {
+    return null;
   }
-  return compileConfigRegex(raw, "gi")?.regex ?? null;
 }
 
 function resolvePatterns(value?: string[]): RegExp[] {
@@ -98,7 +98,7 @@ function redactMatch(match: string, groups: string[]): string {
 function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
-    next = replacePatternBounded(next, pattern, (...args: string[]) =>
+    next = next.replace(pattern, (...args: string[]) =>
       redactMatch(args[0], args.slice(1, args.length - 2)),
     );
   }
@@ -108,12 +108,10 @@ function redactText(text: string, patterns: RegExp[]): string {
 function resolveConfigRedaction(): RedactOptions {
   let cfg: OpenClawConfig["logging"] | undefined;
   try {
-    const loaded = requireConfig?.("../config/config.js") as
-      | {
-          loadConfig?: () => OpenClawConfig;
-        }
-      | undefined;
-    cfg = loaded?.loadConfig?.().logging;
+    const loaded = requireConfig("../config/config.js") as {
+      loadConfig?: () => OpenClawConfig;
+    };
+    cfg = loaded.loadConfig?.().logging;
   } catch {
     cfg = undefined;
   }

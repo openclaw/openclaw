@@ -5,9 +5,7 @@ private enum GatewayTailscaleMode: String, CaseIterable, Identifiable {
     case serve
     case funnel
 
-    var id: String {
-        self.rawValue
-    }
+    var id: String { self.rawValue }
 
     var label: String {
         switch self {

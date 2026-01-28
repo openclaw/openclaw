@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { generatePkceVerifierChallenge, toFormUrlEncoded } from "./runtime-api.js";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 const QWEN_OAUTH_BASE_URL = "https://chat.qwen.ai";
 const QWEN_OAUTH_DEVICE_CODE_ENDPOINT = `${QWEN_OAUTH_BASE_URL}/api/v1/oauth2/device/code`;
@@ -30,6 +29,18 @@ type DeviceTokenResult =
   | { status: "success"; token: QwenOAuthToken }
   | TokenPending
   | { status: "error"; message: string };
+
+function toFormUrlEncoded(data: Record<string, string>): string {
+  return Object.entries(data)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+}
+
+function generatePkce(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge };
+}
 
 async function requestDeviceCode(params: { challenge: string }): Promise<QwenDeviceAuthorization> {
   const response = await fetch(QWEN_OAUTH_DEVICE_CODE_ENDPOINT, {
@@ -131,7 +142,7 @@ export async function loginQwenPortalOAuth(params: {
   note: (message: string, title?: string) => Promise<void>;
   progress: { update: (message: string) => void; stop: (message?: string) => void };
 }): Promise<QwenOAuthToken> {
-  const { verifier, challenge } = generatePkceVerifierChallenge();
+  const { verifier, challenge } = generatePkce();
   const device = await requestDeviceCode({ challenge });
   const verificationUrl = device.verification_uri_complete || device.verification_uri;
 

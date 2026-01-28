@@ -29,14 +29,10 @@ import { sandboxListCommand, sandboxRecreateCommand } from "./sandbox.js";
 const NOW = Date.now();
 
 function createContainer(overrides: Partial<SandboxContainerInfo> = {}): SandboxContainerInfo {
-  const containerName = overrides.containerName ?? "openclaw-sandbox-test";
   return {
-    containerName,
-    backendId: "docker",
-    runtimeLabel: containerName,
+    containerName: "openclaw-sandbox-test",
     sessionKey: "test-session",
     image: "openclaw/sandbox:latest",
-    configLabelKind: "Image",
     imageMatch: true,
     running: true,
     createdAtMs: NOW - 3600000,
@@ -108,7 +104,7 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
-      expectLogContains(runtime, "📦 Sandbox Runtimes");
+      expectLogContains(runtime, "📦 Sandbox Containers");
       expectLogContains(runtime, container1.containerName);
       expectLogContains(runtime, container2.containerName);
       expectLogContains(runtime, "Total");
@@ -132,14 +128,14 @@ describe("sandboxListCommand", () => {
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
       expectLogContains(runtime, "⚠️");
-      expectLogContains(runtime, "config mismatch");
+      expectLogContains(runtime, "image mismatch");
       expectLogContains(runtime, "sandbox recreate --all");
     });
 
     it("should display message when no containers found", async () => {
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
-      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found.");
+      expect(runtime.log).toHaveBeenCalledWith("No sandbox containers found.");
     });
   });
 
@@ -165,7 +161,7 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
-      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found.");
+      expect(runtime.log).toHaveBeenCalledWith("No sandbox containers found.");
     });
   });
 });
@@ -209,7 +205,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([match, noMatch]);
 
       await sandboxRecreateCommand(
-        { session: "target-session", all: false, browser: false, force: true },
+        { session: "target-session", browser: false, force: true },
         runtime as never,
       );
 
@@ -224,7 +220,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([agent, agentSub, other]);
 
       await sandboxRecreateCommand(
-        { agent: "work", all: false, browser: false, force: true },
+        { agent: "work", browser: false, force: true },
         runtime as never,
       );
 
@@ -254,13 +250,6 @@ describe("sandboxRecreateCommand", () => {
   });
 
   describe("confirmation flow", () => {
-    async function runCancelledConfirmation(confirmResult: boolean | symbol) {
-      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
-      mocks.clackConfirm.mockResolvedValue(confirmResult);
-
-      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
-    }
-
     it("should require confirmation without --force", async () => {
       mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
       mocks.clackConfirm.mockResolvedValue(true);
@@ -272,14 +261,20 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should cancel when user declines", async () => {
-      await runCancelledConfirmation(false);
+      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
+      mocks.clackConfirm.mockResolvedValue(false);
+
+      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
     });
 
     it("should cancel on clack cancel symbol", async () => {
-      await runCancelledConfirmation(Symbol.for("clack:cancel"));
+      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
+      mocks.clackConfirm.mockResolvedValue(Symbol.for("clack:cancel"));
+
+      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
@@ -299,7 +294,7 @@ describe("sandboxRecreateCommand", () => {
     it("should show message when no containers match", async () => {
       await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
-      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found matching the criteria.");
+      expect(runtime.log).toHaveBeenCalledWith("No containers found matching the criteria.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
     });
 

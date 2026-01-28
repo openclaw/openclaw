@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct VoiceWakeOverlayControllerTests {
-    @Test func `overlay controller lifecycle without UI`() async {
+    @Test func overlayControllerLifecycleWithoutUI() async {
         let controller = VoiceWakeOverlayController(enableUI: false)
         let token = controller.startSession(
             source: .wakeWord,
@@ -31,7 +31,7 @@ struct VoiceWakeOverlayControllerTests {
         #expect(controller.snapshot().token == nil)
     }
 
-    @Test func `evaluate token drops mismatch and no active`() {
+    @Test func evaluateTokenDropsMismatchAndNoActive() {
         let active = UUID()
         #expect(VoiceWakeOverlayController.evaluateToken(active: nil, incoming: active) == .dropNoActive)
         #expect(VoiceWakeOverlayController.evaluateToken(active: active, incoming: UUID()) == .dropMismatch)
@@ -39,7 +39,7 @@ struct VoiceWakeOverlayControllerTests {
         #expect(VoiceWakeOverlayController.evaluateToken(active: active, incoming: nil) == .accept)
     }
 
-    @Test func `update level throttles rapid changes`() async {
+    @Test func updateLevelThrottlesRapidChanges() async {
         let controller = VoiceWakeOverlayController(enableUI: false)
         let token = controller.startSession(
             source: .wakeWord,
@@ -62,7 +62,7 @@ struct VoiceWakeOverlayControllerTests {
         #expect(controller.model.level == 0.9)
     }
 
-    @Test func `overlay controller exercises helpers`() async {
+    @Test func overlayControllerExercisesHelpers() async {
         await VoiceWakeOverlayController.exerciseForTesting()
     }
 }

@@ -1,16 +1,15 @@
 {
   "name": "@openclaw/nextcloud-talk",
-  "version": "2026.3.14",
+  "version": "2026.2.1",
   "description": "OpenClaw Nextcloud Talk channel plugin",
   "type": "module",
-  "dependencies": {
-    "zod": "^4.3.6"
+  "devDependencies": {
+    "openclaw": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
-    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "nextcloud-talk",
       "label": "Nextcloud Talk",
@@ -29,9 +28,6 @@
       "npmSpec": "@openclaw/nextcloud-talk",
       "localPath": "extensions/nextcloud-talk",
       "defaultChoice": "npm"
-    },
-    "release": {
-      "publishToNpm": true
     }
   }
 }

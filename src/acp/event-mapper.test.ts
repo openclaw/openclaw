@@ -1,18 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { extractToolCallLocations } from "./event-mapper.js";
+import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 
-describe("extractToolCallLocations", () => {
-  it("enforces the global node visit cap across nested structures", () => {
-    const nested = Array.from({ length: 20 }, (_, outer) =>
-      Array.from({ length: 20 }, (_, inner) =>
-        inner === 19 ? { path: `/tmp/file-${outer}.txt` } : { note: `${outer}-${inner}` },
-      ),
-    );
+describe("acp event mapper", () => {
+  it("extracts text and resource blocks into prompt text", () => {
+    const text = extractTextFromPrompt([
+      { type: "text", text: "Hello" },
+      { type: "resource", resource: { text: "File contents" } },
+      { type: "resource_link", uri: "https://example.com", title: "Spec" },
+      { type: "image", data: "abc", mimeType: "image/png" },
+    ]);
 
-    const locations = extractToolCallLocations(nested);
+    expect(text).toBe("Hello\nFile contents\n[Resource link (Spec)] https://example.com");
+  });
 
-    expect(locations).toBeDefined();
-    expect(locations?.length).toBeLessThan(20);
-    expect(locations).not.toContainEqual({ path: "/tmp/file-19.txt" });
+  it("extracts image blocks into gateway attachments", () => {
+    const attachments = extractAttachmentsFromPrompt([
+      { type: "image", data: "abc", mimeType: "image/png" },
+      { type: "image", data: "", mimeType: "image/png" },
+      { type: "text", text: "ignored" },
+    ]);
+
+    expect(attachments).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        content: "abc",
+      },
+    ]);
   });
 });

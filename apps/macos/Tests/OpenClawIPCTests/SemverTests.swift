@@ -1,8 +1,8 @@
 import Testing
 @testable import OpenClaw
 
-struct SemverTests {
-    @Test func `comparison orders by major minor patch`() {
+@Suite struct SemverTests {
+    @Test func comparisonOrdersByMajorMinorPatch() {
         let a = Semver(major: 1, minor: 0, patch: 0)
         let b = Semver(major: 1, minor: 1, patch: 0)
         let c = Semver(major: 1, minor: 1, patch: 1)
@@ -14,7 +14,7 @@ struct SemverTests {
         #expect(d > a)
     }
 
-    @Test func `description matches parts`() {
+    @Test func descriptionMatchesParts() {
         let v = Semver(major: 3, minor: 2, patch: 1)
         #expect(v.description == "3.2.1")
     }

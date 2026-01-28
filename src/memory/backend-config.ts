@@ -1,18 +1,16 @@
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+
 import { parseDurationMs } from "../cli/parse-duration.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionSendPolicyConfig } from "../config/types.base.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type {
   MemoryBackend,
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
-  MemoryQmdMcporterConfig,
-  MemoryQmdSearchMode,
 } from "../config/types.memory.js";
+import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import { resolveUserPath } from "../utils.js";
-import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
@@ -31,11 +29,7 @@ export type ResolvedQmdUpdateConfig = {
   intervalMs: number;
   debounceMs: number;
   onBoot: boolean;
-  waitForBootSync: boolean;
   embedIntervalMs: number;
-  commandTimeoutMs: number;
-  updateTimeoutMs: number;
-  embedTimeoutMs: number;
 };
 
 export type ResolvedQmdLimitsConfig = {
@@ -51,16 +45,8 @@ export type ResolvedQmdSessionConfig = {
   retentionDays?: number;
 };
 
-export type ResolvedQmdMcporterConfig = {
-  enabled: boolean;
-  serverName: string;
-  startDaemon: boolean;
-};
-
 export type ResolvedQmdConfig = {
   command: string;
-  mcporter: ResolvedQmdMcporterConfig;
-  searchMode: MemoryQmdSearchMode;
   collections: ResolvedQmdCollection[];
   sessions: ResolvedQmdSessionConfig;
   update: ResolvedQmdUpdateConfig;
@@ -74,25 +60,13 @@ const DEFAULT_CITATIONS: MemoryCitationsMode = "auto";
 const DEFAULT_QMD_INTERVAL = "5m";
 const DEFAULT_QMD_DEBOUNCE_MS = 15_000;
 const DEFAULT_QMD_TIMEOUT_MS = 4_000;
-// Defaulting to `query` can be extremely slow on CPU-only systems (query expansion + rerank).
-// Prefer a faster mode for interactive use; users can opt into `query` for best recall.
-const DEFAULT_QMD_SEARCH_MODE: MemoryQmdSearchMode = "search";
 const DEFAULT_QMD_EMBED_INTERVAL = "60m";
-const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
-const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
-const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxResults: 6,
   maxSnippetChars: 700,
   maxInjectedChars: 4_000,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
 };
-const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
-  enabled: false,
-  serverName: "qmd",
-  startDaemon: true,
-};
-
 const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
   default: "deny",
   rules: [
@@ -107,10 +81,6 @@ function sanitizeName(input: string): string {
   const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const trimmed = lower.replace(/^-+|-+$/g, "");
   return trimmed || "collection";
-}
-
-function scopeCollectionBase(base: string, agentId: string): string {
-  return `${base}-${sanitizeName(agentId)}`;
 }
 
 function ensureUniqueName(base: string, existing: Set<string>): string {
@@ -130,9 +100,7 @@ function ensureUniqueName(base: string, existing: Set<string>): string {
 
 function resolvePath(raw: string, workspaceDir: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error("path required");
-  }
+  if (!trimmed) throw new Error("path required");
   if (trimmed.startsWith("~") || path.isAbsolute(trimmed)) {
     return path.normalize(resolveUserPath(trimmed));
   }
@@ -141,9 +109,7 @@ function resolvePath(raw: string, workspaceDir: string): string {
 
 function resolveIntervalMs(raw: string | undefined): number {
   const value = raw?.trim();
-  if (!value) {
-    return parseDurationMs(DEFAULT_QMD_INTERVAL, { defaultUnit: "m" });
-  }
+  if (!value) return parseDurationMs(DEFAULT_QMD_INTERVAL, { defaultUnit: "m" });
   try {
     return parseDurationMs(value, { defaultUnit: "m" });
   } catch {
@@ -153,9 +119,7 @@ function resolveIntervalMs(raw: string | undefined): number {
 
 function resolveEmbedIntervalMs(raw: string | undefined): number {
   const value = raw?.trim();
-  if (!value) {
-    return parseDurationMs(DEFAULT_QMD_EMBED_INTERVAL, { defaultUnit: "m" });
-  }
+  if (!value) return parseDurationMs(DEFAULT_QMD_EMBED_INTERVAL, { defaultUnit: "m" });
   try {
     return parseDurationMs(value, { defaultUnit: "m" });
   } catch {
@@ -170,18 +134,9 @@ function resolveDebounceMs(raw: number | undefined): number {
   return DEFAULT_QMD_DEBOUNCE_MS;
 }
 
-function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return fallback;
-}
-
 function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
   const parsed: ResolvedQmdLimitsConfig = { ...DEFAULT_QMD_LIMITS };
-  if (raw?.maxResults && raw.maxResults > 0) {
-    parsed.maxResults = Math.floor(raw.maxResults);
-  }
+  if (raw?.maxResults && raw.maxResults > 0) parsed.maxResults = Math.floor(raw.maxResults);
   if (raw?.maxSnippetChars && raw.maxSnippetChars > 0) {
     parsed.maxSnippetChars = Math.floor(raw.maxSnippetChars);
   }
@@ -192,13 +147,6 @@ function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig
     parsed.timeoutMs = Math.floor(raw.timeoutMs);
   }
   return parsed;
-}
-
-function resolveSearchMode(raw?: MemoryQmdConfig["searchMode"]): MemoryQmdSearchMode {
-  if (raw === "search" || raw === "vsearch" || raw === "query") {
-    return raw;
-  }
-  return DEFAULT_QMD_SEARCH_MODE;
 }
 
 function resolveSessionConfig(
@@ -221,17 +169,12 @@ function resolveCustomPaths(
   rawPaths: MemoryQmdIndexPath[] | undefined,
   workspaceDir: string,
   existing: Set<string>,
-  agentId: string,
 ): ResolvedQmdCollection[] {
-  if (!rawPaths?.length) {
-    return [];
-  }
+  if (!rawPaths?.length) return [];
   const collections: ResolvedQmdCollection[] = [];
   rawPaths.forEach((entry, index) => {
     const trimmedPath = entry?.path?.trim();
-    if (!trimmedPath) {
-      return;
-    }
+    if (!trimmedPath) return;
     let resolved: string;
     try {
       resolved = resolvePath(trimmedPath, workspaceDir);
@@ -239,7 +182,7 @@ function resolveCustomPaths(
       return;
     }
     const pattern = entry.pattern?.trim() || "**/*.md";
-    const baseName = scopeCollectionBase(entry.name?.trim() || `custom-${index + 1}`, agentId);
+    const baseName = entry.name?.trim() || `custom-${index + 1}`;
     const name = ensureUniqueName(baseName, existing);
     collections.push({
       name,
@@ -251,43 +194,19 @@ function resolveCustomPaths(
   return collections;
 }
 
-function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcporterConfig {
-  const parsed: ResolvedQmdMcporterConfig = { ...DEFAULT_QMD_MCPORTER };
-  if (!raw) {
-    return parsed;
-  }
-  if (raw.enabled !== undefined) {
-    parsed.enabled = raw.enabled;
-  }
-  if (typeof raw.serverName === "string" && raw.serverName.trim()) {
-    parsed.serverName = raw.serverName.trim();
-  }
-  if (raw.startDaemon !== undefined) {
-    parsed.startDaemon = raw.startDaemon;
-  }
-  // When enabled, default startDaemon to true.
-  if (parsed.enabled && raw.startDaemon === undefined) {
-    parsed.startDaemon = true;
-  }
-  return parsed;
-}
-
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
   existing: Set<string>,
-  agentId: string,
 ): ResolvedQmdCollection[] {
-  if (!include) {
-    return [];
-  }
+  if (!include) return [];
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
     { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
-    name: ensureUniqueName(scopeCollectionBase(entry.base, agentId), existing),
+    name: ensureUniqueName(entry.base, existing),
     path: entry.path,
     pattern: entry.pattern,
     kind: "memory",
@@ -295,7 +214,7 @@ function resolveDefaultCollections(
 }
 
 export function resolveMemoryBackendConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: MoltbotConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
@@ -309,17 +228,12 @@ export function resolveMemoryBackendConfig(params: {
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
   const collections = [
-    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
-    ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
+    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet),
+    ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet),
   ];
 
-  const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
-    command,
-    mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
-    searchMode: resolveSearchMode(qmdCfg?.searchMode),
+    command: (qmdCfg?.command?.trim() || "qmd").split(/\s+/)[0] || "qmd",
     collections,
     includeDefaultMemory,
     sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),
@@ -327,20 +241,7 @@ export function resolveMemoryBackendConfig(params: {
       intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),
       debounceMs: resolveDebounceMs(qmdCfg?.update?.debounceMs),
       onBoot: qmdCfg?.update?.onBoot !== false,
-      waitForBootSync: qmdCfg?.update?.waitForBootSync === true,
       embedIntervalMs: resolveEmbedIntervalMs(qmdCfg?.update?.embedInterval),
-      commandTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.commandTimeoutMs,
-        DEFAULT_QMD_COMMAND_TIMEOUT_MS,
-      ),
-      updateTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.updateTimeoutMs,
-        DEFAULT_QMD_UPDATE_TIMEOUT_MS,
-      ),
-      embedTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.embedTimeoutMs,
-        DEFAULT_QMD_EMBED_TIMEOUT_MS,
-      ),
     },
     limits: resolveLimits(qmdCfg?.limits),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,

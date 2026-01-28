@@ -2,10 +2,8 @@ import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Foundation
-import OSLog
 
 struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "ios.chat.transport")
     private let gateway: GatewayNodeSession
 
     init(gateway: GatewayNodeSession) {
@@ -35,15 +33,10 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {
-        // Operator clients receive chat events without node-style subscriptions.
-        // (chat.subscribe is a node event, not an operator RPC method.)
-    }
-
-    func resetSession(sessionKey: String) async throws {
-        struct Params: Codable { var key: String }
-        let data = try JSONEncoder().encode(Params(key: sessionKey))
+        struct Subscribe: Codable { var sessionKey: String }
+        let data = try JSONEncoder().encode(Subscribe(sessionKey: sessionKey))
         let json = String(data: data, encoding: .utf8)
-        _ = try await self.gateway.request(method: "sessions.reset", paramsJSON: json, timeoutSeconds: 10)
+        await self.gateway.sendEvent(event: "chat.subscribe", payloadJSON: json)
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -61,12 +54,6 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        let startLogMessage =
-            "chat.send start sessionKey=\(sessionKey) "
-            + "len=\(message.count) attachments=\(attachments.count)"
-        Self.logger.info(
-            "\(startLogMessage, privacy: .public)"
-        )
         struct Params: Codable {
             var sessionKey: String
             var message: String
@@ -85,15 +72,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
             idempotencyKey: idempotencyKey)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
-        do {
-            let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
-            let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
-            Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
-            return decoded
-        } catch {
-            Self.logger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
-            throw error
-        }
+        let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
+        return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {

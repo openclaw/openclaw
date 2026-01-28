@@ -15,8 +15,6 @@ export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
-  /** Whether control UI clients should receive chat/agent updates for this run. */
-  isControlUiVisible?: boolean;
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -39,9 +37,6 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
   }
-  if (context.isControlUiVisible !== undefined) {
-    existing.isControlUiVisible = context.isControlUiVisible;
-  }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
@@ -63,10 +58,10 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const nextSeq = (seqByRun.get(event.runId) ?? 0) + 1;
   seqByRun.set(event.runId, nextSeq);
   const context = runContextById.get(event.runId);
-  const isControlUiVisible = context?.isControlUiVisible ?? true;
-  const eventSessionKey =
-    typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
-  const sessionKey = isControlUiVisible ? (eventSessionKey ?? context?.sessionKey) : undefined;
+  const sessionKey =
+    typeof event.sessionKey === "string" && event.sessionKey.trim()
+      ? event.sessionKey
+      : context?.sessionKey;
   const enriched: AgentEventPayload = {
     ...event,
     sessionKey,

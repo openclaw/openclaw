@@ -1,5 +1,5 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
-import { resolveOutboundSendDep, type ChannelOutboundAdapter } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
@@ -7,16 +7,13 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId }) => {
-    const send =
-      resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
+  sendText: async ({ to, text, deps, replyToId, threadId }) => {
+    const send = deps?.sendMatrix ?? sendMessageMatrix;
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const result = await send(to, text, {
-      cfg,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
-      accountId: accountId ?? undefined,
     });
     return {
       channel: "matrix",
@@ -24,28 +21,14 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       roomId: result.roomId,
     };
   },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    deps,
-    replyToId,
-    threadId,
-    accountId,
-  }) => {
-    const send =
-      resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
+  sendMedia: async ({ to, text, mediaUrl, deps, replyToId, threadId }) => {
+    const send = deps?.sendMatrix ?? sendMessageMatrix;
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const result = await send(to, text, {
-      cfg,
       mediaUrl,
-      mediaLocalRoots,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
-      accountId: accountId ?? undefined,
     });
     return {
       channel: "matrix",
@@ -53,13 +36,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       roomId: result.roomId,
     };
   },
-  sendPoll: async ({ cfg, to, poll, threadId, accountId }) => {
+  sendPoll: async ({ to, poll, threadId }) => {
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const result = await sendPollMatrix(to, poll, {
-      cfg,
       threadId: resolvedThreadId,
-      accountId: accountId ?? undefined,
     });
     return {
       channel: "matrix",

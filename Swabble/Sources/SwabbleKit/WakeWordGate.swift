@@ -101,19 +101,25 @@ public enum WakeWordGate {
     }
 
     public static func commandText(
-        transcript _: String,
+        transcript: String,
         segments: [WakeWordSegment],
         triggerEndTime: TimeInterval)
     -> String {
         let threshold = triggerEndTime + 0.001
-        var commandWords: [String] = []
-        commandWords.reserveCapacity(segments.count)
         for segment in segments where segment.start >= threshold {
-            let normalized = normalizeToken(segment.text)
-            if normalized.isEmpty { continue }
-            commandWords.append(segment.text)
+            if normalizeToken(segment.text).isEmpty { continue }
+            if let range = segment.range {
+                let slice = transcript[range.lowerBound...]
+                return String(slice).trimmingCharacters(in: Self.whitespaceAndPunctuation)
+            }
+            break
         }
-        return commandWords.joined(separator: " ").trimmingCharacters(in: Self.whitespaceAndPunctuation)
+
+        let text = segments
+            .filter { $0.start >= threshold && !normalizeToken($0.text).isEmpty }
+            .map(\.text)
+            .joined(separator: " ")
+        return text.trimmingCharacters(in: Self.whitespaceAndPunctuation)
     }
 
     public static func matchesTextOnly(text: String, triggers: [String]) -> Bool {

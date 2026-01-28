@@ -19,5 +19,4 @@ Channel notes:
 - **Google Chat**: empty `emoji` removes the app's reactions on the message; `remove: true` removes just that emoji.
 - **Telegram**: empty `emoji` removes the bot's reactions; `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
 - **WhatsApp**: empty `emoji` removes the bot reaction; `remove: true` maps to empty emoji (still requires `emoji`).
-- **Zalo Personal (`zalouser`)**: requires non-empty `emoji`; `remove: true` removes that specific emoji reaction.
 - **Signal**: inbound reaction notifications emit system events when `channels.signal.reactionNotifications` is enabled.

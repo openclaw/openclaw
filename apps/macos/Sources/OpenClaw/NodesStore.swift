@@ -18,17 +18,9 @@ struct NodeInfo: Identifiable, Codable {
     let paired: Bool?
     let connected: Bool?
 
-    var id: String {
-        self.nodeId
-    }
-
-    var isConnected: Bool {
-        self.connected ?? false
-    }
-
-    var isPaired: Bool {
-        self.paired ?? false
-    }
+    var id: String { self.nodeId }
+    var isConnected: Bool { self.connected ?? false }
+    var isPaired: Bool { self.paired ?? false }
 }
 
 private struct NodeListResponse: Codable {
@@ -54,8 +46,14 @@ final class NodesStore {
     func start() {
         self.startCount += 1
         guard self.startCount == 1 else { return }
-        SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in
-            await self?.refresh()
+        guard self.task == nil else { return }
+        self.task = Task.detached { [weak self] in
+            guard let self else { return }
+            await self.refresh()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+                await self.refresh()
+            }
         }
     }
 

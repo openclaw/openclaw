@@ -9,90 +9,6 @@ extension ChannelsSettings {
         self.store.snapshot?.decodeChannel(id, as: type)
     }
 
-    private func configuredChannelTint(configured: Bool, running: Bool, hasError: Bool, probeOk: Bool?) -> Color {
-        if !configured { return .secondary }
-        if hasError { return .orange }
-        if probeOk == false { return .orange }
-        if running { return .green }
-        return .orange
-    }
-
-    private func configuredChannelSummary(configured: Bool, running: Bool) -> String {
-        if !configured { return "Not configured" }
-        if running { return "Running" }
-        return "Configured"
-    }
-
-    private func appendProbeDetails(
-        lines: inout [String],
-        probeOk: Bool?,
-        probeStatus: Int?,
-        probeElapsedMs: Double?,
-        probeVersion: String? = nil,
-        probeError: String? = nil,
-        lastProbeAtMs: Double?,
-        lastError: String?)
-    {
-        if let probeOk {
-            if probeOk {
-                if let version = probeVersion, !version.isEmpty {
-                    lines.append("Version \(version)")
-                }
-                if let elapsed = probeElapsedMs {
-                    lines.append("Probe \(Int(elapsed))ms")
-                }
-            } else if let probeError, !probeError.isEmpty {
-                lines.append("Probe error: \(probeError)")
-            } else {
-                let code = probeStatus.map { String($0) } ?? "unknown"
-                lines.append("Probe failed (\(code))")
-            }
-        }
-        if let last = self.date(fromMs: lastProbeAtMs) {
-            lines.append("Last probe \(relativeAge(from: last))")
-        }
-        if let lastError, !lastError.isEmpty {
-            lines.append("Error: \(lastError)")
-        }
-    }
-
-    private func finishDetails(
-        lines: inout [String],
-        probeOk: Bool?,
-        probeStatus: Int?,
-        probeElapsedMs: Double?,
-        probeVersion: String? = nil,
-        probeError: String? = nil,
-        lastProbeAtMs: Double?,
-        lastError: String?) -> String?
-    {
-        self.appendProbeDetails(
-            lines: &lines,
-            probeOk: probeOk,
-            probeStatus: probeStatus,
-            probeElapsedMs: probeElapsedMs,
-            probeVersion: probeVersion,
-            probeError: probeError,
-            lastProbeAtMs: lastProbeAtMs,
-            lastError: lastError)
-        return lines.isEmpty ? nil : lines.joined(separator: " · ")
-    }
-
-    private func finishProbeDetails(
-        lines: inout [String],
-        probe: (ok: Bool?, status: Int?, elapsedMs: Double?),
-        lastProbeAtMs: Double?,
-        lastError: String?) -> String?
-    {
-        self.finishDetails(
-            lines: &lines,
-            probeOk: probe.ok,
-            probeStatus: probe.status,
-            probeElapsedMs: probe.elapsedMs,
-            lastProbeAtMs: lastProbeAtMs,
-            lastError: lastError)
-    }
-
     var whatsAppTint: Color {
         guard let status = self.channelStatus("whatsapp", as: ChannelsStatusSnapshot.WhatsAppStatus.self)
         else { return .secondary }
@@ -107,51 +23,51 @@ extension ChannelsSettings {
     var telegramTint: Color {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else { return .secondary }
-        return self.configuredChannelTint(
-            configured: status.configured,
-            running: status.running,
-            hasError: status.lastError != nil,
-            probeOk: status.probe?.ok)
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
     }
 
     var discordTint: Color {
         guard let status = self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)
         else { return .secondary }
-        return self.configuredChannelTint(
-            configured: status.configured,
-            running: status.running,
-            hasError: status.lastError != nil,
-            probeOk: status.probe?.ok)
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
     }
 
     var googlechatTint: Color {
         guard let status = self.channelStatus("googlechat", as: ChannelsStatusSnapshot.GoogleChatStatus.self)
         else { return .secondary }
-        return self.configuredChannelTint(
-            configured: status.configured,
-            running: status.running,
-            hasError: status.lastError != nil,
-            probeOk: status.probe?.ok)
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
     }
 
     var signalTint: Color {
         guard let status = self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)
         else { return .secondary }
-        return self.configuredChannelTint(
-            configured: status.configured,
-            running: status.running,
-            hasError: status.lastError != nil,
-            probeOk: status.probe?.ok)
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
     }
 
     var imessageTint: Color {
         guard let status = self.channelStatus("imessage", as: ChannelsStatusSnapshot.IMessageStatus.self)
         else { return .secondary }
-        return self.configuredChannelTint(
-            configured: status.configured,
-            running: status.running,
-            hasError: status.lastError != nil,
-            probeOk: status.probe?.ok)
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
     }
 
     var whatsAppSummary: String {
@@ -166,31 +82,41 @@ extension ChannelsSettings {
     var telegramSummary: String {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else { return "Checking…" }
-        return self.configuredChannelSummary(configured: status.configured, running: status.running)
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
     }
 
     var discordSummary: String {
         guard let status = self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)
         else { return "Checking…" }
-        return self.configuredChannelSummary(configured: status.configured, running: status.running)
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
     }
 
     var googlechatSummary: String {
         guard let status = self.channelStatus("googlechat", as: ChannelsStatusSnapshot.GoogleChatStatus.self)
         else { return "Checking…" }
-        return self.configuredChannelSummary(configured: status.configured, running: status.running)
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
     }
 
     var signalSummary: String {
         guard let status = self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)
         else { return "Checking…" }
-        return self.configuredChannelSummary(configured: status.configured, running: status.running)
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
     }
 
     var imessageSummary: String {
         guard let status = self.channelStatus("imessage", as: ChannelsStatusSnapshot.IMessageStatus.self)
         else { return "Checking…" }
-        return self.configuredChannelSummary(configured: status.configured, running: status.running)
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
     }
 
     var whatsAppDetails: String? {
@@ -242,15 +168,18 @@ extension ChannelsSettings {
                 if let url = probe.webhook?.url, !url.isEmpty {
                     lines.append("Webhook: \(url)")
                 }
+            } else {
+                let code = probe.status.map { String($0) } ?? "unknown"
+                lines.append("Probe failed (\(code))")
             }
         }
-        return self.finishDetails(
-            lines: &lines,
-            probeOk: status.probe?.ok,
-            probeStatus: status.probe?.status,
-            probeElapsedMs: nil,
-            lastProbeAtMs: status.lastProbeAt,
-            lastError: status.lastError)
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     var discordDetails: String? {
@@ -260,17 +189,26 @@ extension ChannelsSettings {
         if let source = status.tokenSource {
             lines.append("Token source: \(source)")
         }
-        if let name = status.probe?.bot?.username, !name.isEmpty {
-            lines.append("Bot: @\(name)")
+        if let probe = status.probe {
+            if probe.ok {
+                if let name = probe.bot?.username {
+                    lines.append("Bot: @\(name)")
+                }
+                if let elapsed = probe.elapsedMs {
+                    lines.append("Probe \(Int(elapsed))ms")
+                }
+            } else {
+                let code = probe.status.map { String($0) } ?? "unknown"
+                lines.append("Probe failed (\(code))")
+            }
         }
-        return self.finishProbeDetails(
-            lines: &lines,
-            probe: (
-                ok: status.probe?.ok,
-                status: status.probe?.status,
-                elapsedMs: status.probe?.elapsedMs),
-            lastProbeAtMs: status.lastProbeAt,
-            lastError: status.lastError)
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     var googlechatDetails: String? {
@@ -285,14 +223,23 @@ extension ChannelsSettings {
             let label = audience.isEmpty ? audienceType : "\(audienceType) \(audience)"
             lines.append("Audience: \(label)")
         }
-        return self.finishProbeDetails(
-            lines: &lines,
-            probe: (
-                ok: status.probe?.ok,
-                status: status.probe?.status,
-                elapsedMs: status.probe?.elapsedMs),
-            lastProbeAtMs: status.lastProbeAt,
-            lastError: status.lastError)
+        if let probe = status.probe {
+            if probe.ok {
+                if let elapsed = probe.elapsedMs {
+                    lines.append("Probe \(Int(elapsed))ms")
+                }
+            } else {
+                let code = probe.status.map { String($0) } ?? "unknown"
+                lines.append("Probe failed (\(code))")
+            }
+        }
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     var signalDetails: String? {
@@ -300,14 +247,26 @@ extension ChannelsSettings {
         else { return nil }
         var lines: [String] = []
         lines.append("Base URL: \(status.baseUrl)")
-        return self.finishDetails(
-            lines: &lines,
-            probeOk: status.probe?.ok,
-            probeStatus: status.probe?.status,
-            probeElapsedMs: status.probe?.elapsedMs,
-            probeVersion: status.probe?.version,
-            lastProbeAtMs: status.lastProbeAt,
-            lastError: status.lastError)
+        if let probe = status.probe {
+            if probe.ok {
+                if let version = probe.version, !version.isEmpty {
+                    lines.append("Version \(version)")
+                }
+                if let elapsed = probe.elapsedMs {
+                    lines.append("Probe \(Int(elapsed))ms")
+                }
+            } else {
+                let code = probe.status.map { String($0) } ?? "unknown"
+                lines.append("Probe failed (\(code))")
+            }
+        }
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     var imessageDetails: String? {
@@ -320,14 +279,17 @@ extension ChannelsSettings {
         if let dbPath = status.dbPath, !dbPath.isEmpty {
             lines.append("DB: \(dbPath)")
         }
-        return self.finishDetails(
-            lines: &lines,
-            probeOk: status.probe?.ok,
-            probeStatus: nil,
-            probeElapsedMs: nil,
-            probeError: status.probe?.error,
-            lastProbeAtMs: status.lastProbeAt,
-            lastError: status.lastError)
+        if let probe = status.probe, !probe.ok {
+            let err = probe.error ?? "probe failed"
+            lines.append("Probe error: \(err)")
+        }
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     var orderedChannels: [ChannelItem] {

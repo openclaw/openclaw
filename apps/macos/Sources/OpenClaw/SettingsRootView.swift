@@ -1,4 +1,3 @@
-import AppKit
 import Observation
 import SwiftUI
 
@@ -99,10 +98,6 @@ struct SettingsRootView: View {
         .onChange(of: self.selectedTab) { _, newValue in
             self.updatePermissionMonitoring(for: newValue)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            guard self.selectedTab == .permissions else { return }
-            Task { await self.refreshPerms() }
-        }
         .onDisappear { self.stopPermissionMonitoring() }
         .task {
             guard !self.isPreview else { return }
@@ -163,11 +158,20 @@ struct SettingsRootView: View {
 
     private func updatePermissionMonitoring(for tab: SettingsTab) {
         guard !self.isPreview else { return }
-        PermissionMonitoringSupport.setMonitoring(tab == .permissions, monitoring: &self.monitoringPermissions)
+        let shouldMonitor = tab == .permissions
+        if shouldMonitor, !self.monitoringPermissions {
+            self.monitoringPermissions = true
+            PermissionMonitor.shared.register()
+        } else if !shouldMonitor, self.monitoringPermissions {
+            self.monitoringPermissions = false
+            PermissionMonitor.shared.unregister()
+        }
     }
 
     private func stopPermissionMonitoring() {
-        PermissionMonitoringSupport.stopMonitoring(&self.monitoringPermissions)
+        guard self.monitoringPermissions else { return }
+        self.monitoringPermissions = false
+        PermissionMonitor.shared.unregister()
     }
 }
 

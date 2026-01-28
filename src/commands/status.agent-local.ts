@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { listAgentsForGateway } from "../gateway/session-utils.js";
 
 export type AgentLocalStatus = {
   id: string;
@@ -17,13 +16,6 @@ export type AgentLocalStatus = {
   lastActiveAgeMs: number | null;
 };
 
-type AgentLocalStatusesResult = {
-  defaultId: string;
-  agents: AgentLocalStatus[];
-  totalSessions: number;
-  bootstrapPendingCount: number;
-};
-
 async function fileExists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
@@ -33,10 +25,14 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-export async function getAgentLocalStatuses(
-  cfg: OpenClawConfig,
-): Promise<AgentLocalStatusesResult> {
-  const agentList = listGatewayAgentsBasic(cfg);
+export async function getAgentLocalStatuses(): Promise<{
+  defaultId: string;
+  agents: AgentLocalStatus[];
+  totalSessions: number;
+  bootstrapPendingCount: number;
+}> {
+  const cfg = loadConfig();
+  const agentList = listAgentsForGateway(cfg);
   const now = Date.now();
 
   const statuses: AgentLocalStatus[] = [];
@@ -54,7 +50,13 @@ export async function getAgentLocalStatuses(
     const bootstrapPending = bootstrapPath != null ? await fileExists(bootstrapPath) : null;
 
     const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = readSessionStoreReadOnly(sessionsPath);
+    const store = (() => {
+      try {
+        return loadSessionStore(sessionsPath);
+      } catch {
+        return {};
+      }
+    })();
     const sessions = Object.entries(store)
       .filter(([key]) => key !== "global" && key !== "unknown")
       .map(([, entry]) => entry);

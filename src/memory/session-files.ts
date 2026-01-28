@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
@@ -14,8 +14,6 @@ export type SessionFileEntry = {
   size: number;
   hash: string;
   content: string;
-  /** Maps each content line (0-indexed) to its 1-indexed JSONL source line. */
-  lineMap: number[];
 };
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -77,9 +75,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
     const raw = await fs.readFile(absPath, "utf-8");
     const lines = raw.split("\n");
     const collected: string[] = [];
-    const lineMap: number[] = [];
-    for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
-      const line = lines[jsonlIdx];
+    for (const line of lines) {
       if (!line.trim()) {
         continue;
       }
@@ -112,7 +108,6 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       const safe = redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
       collected.push(`${label}: ${safe}`);
-      lineMap.push(jsonlIdx + 1);
     }
     const content = collected.join("\n");
     return {
@@ -120,9 +115,8 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       absPath,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
-      hash: hashText(content + "\n" + lineMap.join(",")),
+      hash: hashText(content),
       content,
-      lineMap,
     };
   } catch (err) {
     log.debug(`Failed reading session file ${absPath}: ${String(err)}`);

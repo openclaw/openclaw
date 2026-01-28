@@ -1,14 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import {
-  createDirectoryTestRuntime,
-  expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.js";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 
 describe("msteams directory", () => {
-  const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
-
   it("lists peers and groups from config", async () => {
     const cfg = {
       channels: {
@@ -27,15 +21,12 @@ describe("msteams directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const directory = expectDirectorySurface(msteamsPlugin.directory);
+    expect(msteamsPlugin.directory).toBeTruthy();
+    expect(msteamsPlugin.directory?.listPeers).toBeTruthy();
+    expect(msteamsPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      directory.listPeers({
-        cfg,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
+      msteamsPlugin.directory!.listPeers({ cfg, query: undefined, limit: undefined }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "user", id: "user:alice" },
@@ -46,12 +37,7 @@ describe("msteams directory", () => {
     );
 
     await expect(
-      directory.listGroups({
-        cfg,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
+      msteamsPlugin.directory!.listGroups({ cfg, query: undefined, limit: undefined }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "group", id: "conversation:chan1" },

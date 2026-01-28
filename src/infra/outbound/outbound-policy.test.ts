@@ -1,13 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { discordPlugin } from "../../../extensions/discord/src/channel.js";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
   enforceCrossContextPolicy,
-  shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 
 const slackConfig = {
@@ -25,11 +21,17 @@ const discordConfig = {
   },
 } as OpenClawConfig;
 
-describe("outbound policy helpers", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
-    );
+describe("outbound policy", () => {
+  it("blocks cross-provider sends by default", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg: slackConfig,
+        channel: "telegram",
+        action: "send",
+        args: { to: "telegram:@ops" },
+        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      }),
+    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("allows cross-provider sends when enabled", () => {
@@ -51,24 +53,10 @@ describe("outbound policy helpers", () => {
     ).not.toThrow();
   });
 
-  it("blocks cross-provider sends when not allowed", () => {
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg: slackConfig,
-        channel: "telegram",
-        action: "send",
-        args: { to: "telegram:@ops" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/target provider "telegram" while bound to "slack"/);
-  });
-
-  it("blocks same-provider cross-context sends when allowWithinProvider is false", () => {
+  it("blocks same-provider cross-context when disabled", () => {
     const cfg = {
       ...slackConfig,
-      tools: {
-        message: { crossContext: { allowWithinProvider: false } },
-      },
+      tools: { message: { crossContext: { allowWithinProvider: false } } },
     } as OpenClawConfig;
 
     expect(() =>
@@ -76,13 +64,13 @@ describe("outbound policy helpers", () => {
         cfg,
         channel: "slack",
         action: "send",
-        args: { to: "C999" },
-        toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
+        args: { to: "C99999999" },
+        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       }),
-    ).toThrow(/target="C999" while bound to "C123"/);
+    ).toThrow(/Cross-context messaging denied/);
   });
 
-  it("uses components when available and preferred", async () => {
+  it("uses embeds when available and preferred", async () => {
     const decoration = await buildCrossContextDecoration({
       cfg: discordConfig,
       channel: "discord",
@@ -94,43 +82,11 @@ describe("outbound policy helpers", () => {
     const applied = applyCrossContextDecoration({
       message: "hello",
       decoration: decoration!,
-      preferComponents: true,
+      preferEmbeds: true,
     });
 
-    expect(applied.usedComponents).toBe(true);
-    expect(applied.componentsBuilder).toBeDefined();
-    expect(applied.componentsBuilder?.("hello").length).toBeGreaterThan(0);
+    expect(applied.usedEmbeds).toBe(true);
+    expect(applied.embeds?.length).toBeGreaterThan(0);
     expect(applied.message).toBe("hello");
-  });
-
-  it("returns null when decoration is skipped and falls back to text markers", async () => {
-    await expect(
-      buildCrossContextDecoration({
-        cfg: discordConfig,
-        channel: "discord",
-        target: "123",
-        toolContext: {
-          currentChannelId: "C12345678",
-          currentChannelProvider: "discord",
-          skipCrossContextDecoration: true,
-        },
-      }),
-    ).resolves.toBeNull();
-
-    const applied = applyCrossContextDecoration({
-      message: "hello",
-      decoration: { prefix: "[from ops] ", suffix: " [cc]" },
-      preferComponents: true,
-    });
-    expect(applied).toEqual({
-      message: "[from ops] hello [cc]",
-      usedComponents: false,
-    });
-  });
-
-  it("marks only supported cross-context actions", () => {
-    expect(shouldApplyCrossContextMarker("send")).toBe(true);
-    expect(shouldApplyCrossContextMarker("thread-reply")).toBe(true);
-    expect(shouldApplyCrossContextMarker("thread-create")).toBe(false);
   });
 });

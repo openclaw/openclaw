@@ -3,56 +3,34 @@ import { describe, expect, it } from "vitest";
 import { sanitizeToolsForGoogle } from "./google.js";
 
 describe("sanitizeToolsForGoogle", () => {
-  const createTool = (parameters: Record<string, unknown>) =>
-    ({
+  it("strips unsupported schema keywords for Google providers", () => {
+    const tool = {
       name: "test",
       description: "test",
-      parameters,
-      execute: async () => ({ ok: true, content: [] }),
-    }) as unknown as AgentTool;
-
-  const createSchemaToolWithFormat = () =>
-    createTool({
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        foo: {
-          type: "string",
-          format: "uuid",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          foo: {
+            type: "string",
+            format: "uuid",
+          },
         },
       },
-    });
+      execute: async () => ({ ok: true, content: [] }),
+    } as unknown as AgentTool;
 
-  const expectFormatRemoved = (
-    sanitized: AgentTool,
-    key: "additionalProperties" | "patternProperties",
-  ) => {
-    const params = sanitized.parameters as {
-      additionalProperties?: unknown;
-      patternProperties?: unknown;
-      properties?: Record<string, { format?: unknown }>;
-    };
-    expect(params[key]).toBeUndefined();
-    expect(params.properties?.foo?.format).toBeUndefined();
-  };
-
-  it("strips unsupported schema keywords for Google providers", () => {
-    const tool = createSchemaToolWithFormat();
     const [sanitized] = sanitizeToolsForGoogle({
       tools: [tool],
       provider: "google-gemini-cli",
     });
-    expectFormatRemoved(sanitized, "additionalProperties");
-  });
 
-  it("returns original tools for non-google providers", () => {
-    const tool = createSchemaToolWithFormat();
-    const sanitized = sanitizeToolsForGoogle({
-      tools: [tool],
-      provider: "openai",
-    });
+    const params = sanitized.parameters as {
+      additionalProperties?: unknown;
+      properties?: Record<string, { format?: unknown }>;
+    };
 
-    expect(sanitized).toEqual([tool]);
-    expect(sanitized[0]).toBe(tool);
+    expect(params.additionalProperties).toBeUndefined();
+    expect(params.properties?.foo?.format).toBeUndefined();
   });
 });

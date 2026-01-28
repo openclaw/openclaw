@@ -1,13 +1,6 @@
 import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 
-type BaileysExports = typeof import("@whiskeysockets/baileys");
-type FetchLatestBaileysVersionFn = BaileysExports["fetchLatestBaileysVersion"];
-type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore"];
-type MakeWASocketFn = BaileysExports["makeWASocket"];
-type UseMultiFileAuthStateFn = BaileysExports["useMultiFileAuthState"];
-type DownloadMediaMessageFn = BaileysExports["downloadMediaMessage"];
-
 export type MockBaileysSocket = {
   ev: EventEmitter;
   ws: { close: ReturnType<typeof vi.fn> };
@@ -19,13 +12,13 @@ export type MockBaileysSocket = {
 
 export type MockBaileysModule = {
   DisconnectReason: { loggedOut: number };
-  fetchLatestBaileysVersion: ReturnType<typeof vi.fn<FetchLatestBaileysVersionFn>>;
-  makeCacheableSignalKeyStore: ReturnType<typeof vi.fn<MakeCacheableSignalKeyStoreFn>>;
-  makeWASocket: ReturnType<typeof vi.fn<MakeWASocketFn>>;
-  useMultiFileAuthState: ReturnType<typeof vi.fn<UseMultiFileAuthStateFn>>;
+  fetchLatestBaileysVersion: ReturnType<typeof vi.fn>;
+  makeCacheableSignalKeyStore: ReturnType<typeof vi.fn>;
+  makeWASocket: ReturnType<typeof vi.fn>;
+  useMultiFileAuthState: ReturnType<typeof vi.fn>;
   jidToE164?: (jid: string) => string | null;
   proto?: unknown;
-  downloadMediaMessage?: ReturnType<typeof vi.fn<DownloadMediaMessageFn>>;
+  downloadMediaMessage?: ReturnType<typeof vi.fn>;
 };
 
 export function createMockBaileys(): {
@@ -33,7 +26,7 @@ export function createMockBaileys(): {
   lastSocket: () => MockBaileysSocket;
 } {
   const sockets: MockBaileysSocket[] = [];
-  const makeWASocket = vi.fn<MakeWASocketFn>((_opts) => {
+  const makeWASocket = vi.fn((_opts: unknown) => {
     const ev = new EventEmitter();
     const sock: MockBaileysSocket = {
       ev,
@@ -45,22 +38,20 @@ export function createMockBaileys(): {
     };
     setImmediate(() => ev.emit("connection.update", { connection: "open" }));
     sockets.push(sock);
-    return sock as unknown as ReturnType<MakeWASocketFn>;
+    return sock;
   });
 
   const mod: MockBaileysModule = {
     DisconnectReason: { loggedOut: 401 },
-    fetchLatestBaileysVersion: vi
-      .fn<FetchLatestBaileysVersionFn>()
-      .mockResolvedValue({ version: [1, 2, 3], isLatest: true }),
-    makeCacheableSignalKeyStore: vi.fn<MakeCacheableSignalKeyStoreFn>((keys) => keys),
+    fetchLatestBaileysVersion: vi.fn().mockResolvedValue({ version: [1, 2, 3] }),
+    makeCacheableSignalKeyStore: vi.fn((keys: unknown) => keys),
     makeWASocket,
-    useMultiFileAuthState: vi.fn<UseMultiFileAuthStateFn>(async () => ({
-      state: { creds: {}, keys: {} } as Awaited<ReturnType<UseMultiFileAuthStateFn>>["state"],
+    useMultiFileAuthState: vi.fn(async () => ({
+      state: { creds: {}, keys: {} },
       saveCreds: vi.fn(),
     })),
     jidToE164: (jid: string) => jid.replace(/@.*$/, "").replace(/^/, "+"),
-    downloadMediaMessage: vi.fn<DownloadMediaMessageFn>().mockResolvedValue(Buffer.from("img")),
+    downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("img")),
   };
 
   return {

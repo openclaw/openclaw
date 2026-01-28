@@ -1,8 +1,15 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { RateLimitError } from "@buape/carbon";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
+
+export const DISCORD_RETRY_DEFAULTS = {
+  attempts: 3,
+  minDelayMs: 500,
+  maxDelayMs: 30_000,
+  jitter: 0.1,
+};
 
 export const TELEGRAM_RETRY_DEFAULTS = {
   attempts: 3,
@@ -12,21 +19,6 @@ export const TELEGRAM_RETRY_DEFAULTS = {
 };
 
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
-const log = createSubsystemLogger("retry-policy");
-
-function resolveTelegramShouldRetry(params: {
-  shouldRetry?: (err: unknown) => boolean;
-  strictShouldRetry?: boolean;
-}) {
-  if (!params.shouldRetry) {
-    return (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
-  }
-  if (params.strictShouldRetry) {
-    return params.shouldRetry;
-  }
-  return (err: unknown) =>
-    params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
-}
 
 function getTelegramRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
@@ -50,16 +42,12 @@ function getTelegramRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
-export function createRateLimitRetryRunner(params: {
+export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
-  defaults: Required<RetryConfig>;
-  logLabel: string;
-  shouldRetry: (err: unknown) => boolean;
-  retryAfterMs?: (err: unknown) => number | undefined;
 }): RetryRunner {
-  const retryConfig = resolveRetryConfig(params.defaults, {
+  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
   });
@@ -67,14 +55,14 @@ export function createRateLimitRetryRunner(params: {
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: params.shouldRetry,
-      retryAfterMs: params.retryAfterMs,
+      shouldRetry: (err) => err instanceof RateLimitError,
+      retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
       onRetry: params.verbose
         ? (info) => {
             const labelText = info.label ?? "request";
             const maxRetries = Math.max(1, info.maxAttempts - 1);
-            log.warn(
-              `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
+            console.warn(
+              `discord ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
             );
           }
         : undefined,
@@ -86,19 +74,14 @@ export function createTelegramRetryRunner(params: {
   configRetry?: RetryConfig;
   verbose?: boolean;
   shouldRetry?: (err: unknown) => boolean;
-  /**
-   * When true, the custom shouldRetry predicate is used exclusively —
-   * the default TELEGRAM_RETRY_RE fallback regex is NOT OR'd in.
-   * Use this for non-idempotent operations (e.g. sendMessage) where
-   * the regex fallback would cause duplicate message delivery.
-   */
-  strictShouldRetry?: boolean;
 }): RetryRunner {
   const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
   });
-  const shouldRetry = resolveTelegramShouldRetry(params);
+  const shouldRetry = params.shouldRetry
+    ? (err: unknown) => params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
+    : (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
 
   return <T>(fn: () => Promise<T>, label?: string) =>
     retryAsync(fn, {
@@ -109,7 +92,7 @@ export function createTelegramRetryRunner(params: {
       onRetry: params.verbose
         ? (info) => {
             const maxRetries = Math.max(1, info.maxAttempts - 1);
-            log.warn(
+            console.warn(
               `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
             );
           }

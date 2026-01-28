@@ -1,9 +1,5 @@
 import type { Command } from "commander";
 import type { BrowserFormField } from "../../browser/client-actions-core.js";
-import {
-  normalizeBrowserFormField,
-  normalizeBrowserFormFieldValue,
-} from "../../browser/form-fields.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
@@ -40,18 +36,6 @@ export async function callBrowserAct<T = unknown>(params: {
   );
 }
 
-export function logBrowserActionResult(
-  parent: BrowserParentOpts,
-  result: unknown,
-  successMessage: string,
-) {
-  if (parent?.json) {
-    defaultRuntime.log(JSON.stringify(result, null, 2));
-    return;
-  }
-  defaultRuntime.log(successMessage);
-}
-
 export function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {
@@ -84,16 +68,20 @@ export async function readFields(opts: {
       throw new Error(`fields[${index}] must be an object`);
     }
     const rec = entry as Record<string, unknown>;
-    const parsedField = normalizeBrowserFormField(rec);
-    if (!parsedField) {
-      throw new Error(`fields[${index}] must include ref`);
+    const ref = typeof rec.ref === "string" ? rec.ref.trim() : "";
+    const type = typeof rec.type === "string" ? rec.type.trim() : "";
+    if (!ref || !type) {
+      throw new Error(`fields[${index}] must include ref and type`);
     }
     if (
-      rec.value === undefined ||
-      rec.value === null ||
-      normalizeBrowserFormFieldValue(rec.value) !== undefined
+      typeof rec.value === "string" ||
+      typeof rec.value === "number" ||
+      typeof rec.value === "boolean"
     ) {
-      return parsedField;
+      return { ref, type, value: rec.value };
+    }
+    if (rec.value === undefined || rec.value === null) {
+      return { ref, type };
     }
     throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
   });

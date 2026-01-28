@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import OSLog
 
-enum VoiceWakeChime: Codable, Equatable {
+enum VoiceWakeChime: Codable, Equatable, Sendable {
     case none
     case system(name: String)
     case custom(displayName: String, bookmark: Data)
@@ -28,9 +28,7 @@ enum VoiceWakeChime: Codable, Equatable {
 
 enum VoiceWakeChimeCatalog {
     /// Options shown in the picker.
-    static var systemOptions: [String] {
-        SoundEffectCatalog.systemOptions
-    }
+    static var systemOptions: [String] { SoundEffectCatalog.systemOptions }
 
     static func displayName(for raw: String) -> String {
         SoundEffectCatalog.displayName(for: raw)

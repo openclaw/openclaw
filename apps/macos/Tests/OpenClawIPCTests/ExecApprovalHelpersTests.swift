@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-struct ExecApprovalHelpersTests {
-    @Test func `parse decision trims and rejects invalid`() {
+@Suite struct ExecApprovalHelpersTests {
+    @Test func parseDecisionTrimsAndRejectsInvalid() {
         #expect(ExecApprovalHelpers.parseDecision("allow-once") == .allowOnce)
         #expect(ExecApprovalHelpers.parseDecision(" allow-always ") == .allowAlways)
         #expect(ExecApprovalHelpers.parseDecision("deny") == .deny)
@@ -11,7 +11,7 @@ struct ExecApprovalHelpersTests {
         #expect(ExecApprovalHelpers.parseDecision("nope") == nil)
     }
 
-    @Test func `allowlist pattern prefers resolution`() {
+    @Test func allowlistPatternPrefersResolution() {
         let resolved = ExecCommandResolution(
             rawExecutable: "rg",
             resolvedPath: "/opt/homebrew/bin/rg",
@@ -29,25 +29,7 @@ struct ExecApprovalHelpersTests {
         #expect(ExecApprovalHelpers.allowlistPattern(command: [], resolution: nil) == nil)
     }
 
-    @Test func `validate allowlist pattern returns reasons`() {
-        #expect(ExecApprovalHelpers.isPathPattern("/usr/bin/rg"))
-        #expect(ExecApprovalHelpers.isPathPattern(" ~/bin/rg "))
-        #expect(!ExecApprovalHelpers.isPathPattern("rg"))
-
-        if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern("  ") {
-            #expect(reason == .empty)
-        } else {
-            Issue.record("Expected empty pattern rejection")
-        }
-
-        if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern("echo") {
-            #expect(reason == .missingPathComponent)
-        } else {
-            Issue.record("Expected basename pattern rejection")
-        }
-    }
-
-    @Test func `requires ask matches policy`() {
+    @Test func requiresAskMatchesPolicy() {
         let entry = ExecAllowlistEntry(pattern: "/bin/ls", lastUsedAt: nil, lastUsedCommand: nil, lastResolvedPath: nil)
         #expect(ExecApprovalHelpers.requiresAsk(
             ask: .always,

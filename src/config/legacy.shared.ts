@@ -2,9 +2,6 @@ export type LegacyConfigRule = {
   path: string[];
   message: string;
   match?: (value: unknown, root: Record<string, unknown>) => boolean;
-  // If true, only report when the legacy value is present in the original parsed
-  // source (not only after include/env resolution).
-  requireSourceLiteral?: boolean;
 };
 
 export type LegacyConfigMigration = {
@@ -13,10 +10,8 @@ export type LegacyConfigMigration = {
   apply: (raw: Record<string, unknown>, changes: string[]) => void;
 };
 
-import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { isRecord } from "../utils.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
-export { isRecord };
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
 
 export const getRecord = (value: unknown): Record<string, unknown> | null =>
   isRecord(value) ? value : null;
@@ -36,7 +31,7 @@ export const ensureRecord = (
 
 export const mergeMissing = (target: Record<string, unknown>, source: Record<string, unknown>) => {
   for (const [key, value] of Object.entries(source)) {
-    if (value === undefined || isBlockedObjectKey(key)) {
+    if (value === undefined) {
       continue;
     }
     const existing = target[key];
@@ -50,27 +45,24 @@ export const mergeMissing = (target: Record<string, unknown>, source: Record<str
   }
 };
 
+const AUDIO_TRANSCRIPTION_CLI_ALLOWLIST = new Set(["whisper"]);
+
 export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {
   const transcriber = getRecord(value);
   const command = Array.isArray(transcriber?.command) ? transcriber?.command : null;
   if (!command || command.length === 0) {
     return null;
   }
-  if (typeof command[0] !== "string") {
-    return null;
-  }
-  if (!command.every((part) => typeof part === "string")) {
-    return null;
-  }
-  const rawExecutable = command[0].trim();
+  const rawExecutable = String(command[0] ?? "").trim();
   if (!rawExecutable) {
     return null;
   }
-  if (!isSafeExecutableValue(rawExecutable)) {
+  const executableName = rawExecutable.split(/[\\/]/).pop() ?? rawExecutable;
+  if (!AUDIO_TRANSCRIPTION_CLI_ALLOWLIST.has(executableName)) {
     return null;
   }
 
-  const args = command.slice(1);
+  const args = command.slice(1).map((part) => String(part));
   const timeoutSeconds =
     typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
 

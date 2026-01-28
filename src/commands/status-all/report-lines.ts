@@ -1,9 +1,8 @@
 import type { ProgressReporter } from "../../cli/progress.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
+import { renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
-import { groupChannelIssuesByChannel } from "./channel-issues.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
-import { formatTimeAgo } from "./format.js";
+import { formatAge } from "./format.js";
 
 type OverviewRow = { Item: string; Value: string };
 
@@ -57,7 +56,7 @@ export async function buildStatusAllReportLines(params: {
   const fail = (text: string) => (rich ? theme.error(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
 
-  const tableWidth = getTerminalTableWidth();
+  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
 
   const overview = renderTable({
     width: tableWidth,
@@ -82,7 +81,19 @@ export async function buildStatusAllReportLines(params: {
             : theme.accentDim("SETUP"),
     Detail: row.detail,
   }));
-  const channelIssuesByChannel = groupChannelIssuesByChannel(params.channelIssues);
+  const channelIssuesByChannel = (() => {
+    const map = new Map<string, ChannelIssueLike[]>();
+    for (const issue of params.channelIssues) {
+      const key = issue.channel;
+      const list = map.get(key);
+      if (list) {
+        list.push(issue);
+      } else {
+        map.set(key, [issue]);
+      }
+    }
+    return map;
+  })();
   const channelRowsWithIssues = channelRows.map((row) => {
     const issues = channelIssuesByChannel.get(row.channelId) ?? [];
     if (issues.length === 0) {
@@ -110,14 +121,14 @@ export async function buildStatusAllReportLines(params: {
 
   const agentRows = params.agentStatus.agents.map((a) => ({
     Agent: a.name?.trim() ? `${a.id} (${a.name.trim()})` : a.id,
-    BootstrapFile:
+    Bootstrap:
       a.bootstrapPending === true
-        ? warn("PRESENT")
+        ? warn("PENDING")
         : a.bootstrapPending === false
-          ? ok("ABSENT")
+          ? ok("OK")
           : "unknown",
     Sessions: String(a.sessionsCount),
-    Active: a.lastActiveAgeMs != null ? formatTimeAgo(a.lastActiveAgeMs) : "unknown",
+    Active: a.lastActiveAgeMs != null ? formatAge(a.lastActiveAgeMs) : "unknown",
     Store: a.sessionsPath,
   }));
 
@@ -125,7 +136,7 @@ export async function buildStatusAllReportLines(params: {
     width: tableWidth,
     columns: [
       { key: "Agent", header: "Agent", minWidth: 12 },
-      { key: "BootstrapFile", header: "Bootstrap file", minWidth: 14 },
+      { key: "Bootstrap", header: "Bootstrap", minWidth: 10 },
       { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
       { key: "Active", header: "Active", minWidth: 10 },
       { key: "Store", header: "Store", flex: true, minWidth: 34 },

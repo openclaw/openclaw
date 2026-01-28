@@ -1,5 +1,5 @@
 ---
-summary: "Android app (node): connection runbook + Connect/Chat/Voice/Canvas command surface"
+summary: "Android app (node): connection runbook + Canvas/Chat/Camera"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
@@ -9,13 +9,11 @@ title: "Android App"
 
 # Android App (Node)
 
-> **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assembleDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
-
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
-- Install: [Getting Started](/start/getting-started) + [Pairing](/channels/pairing).
+- Install: [Getting Started](/start/getting-started) + [Pairing](/gateway/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 
@@ -27,7 +25,7 @@ System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gatew
 
 Android node app ⇄ (mDNS/NSD + WebSocket) ⇄ **Gateway**
 
-Android connects directly to the Gateway WebSocket (default `ws://<host>:18789`) and uses device pairing (`role: node`).
+Android connects directly to the Gateway WebSocket (default `ws://<host>:18789`) and uses Gateway-owned pairing.
 
 ### Prerequisites
 
@@ -77,9 +75,9 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 In the Android app:
 
 - The app keeps its gateway connection alive via a **foreground service** (persistent notification).
-- Open the **Connect** tab.
-- Use **Setup Code** or **Manual** mode.
-- If discovery is blocked, use manual host/port (and TLS/token/password when required) in **Advanced controls**.
+- Open **Settings**.
+- Under **Discovered Gateways**, select your gateway and hit **Connect**.
+- If mDNS is blocked, use **Advanced → Manual Gateway** (host + port) and **Connect (Manual)**.
 
 After the first successful pairing, Android auto-reconnects on launch:
 
@@ -91,30 +89,26 @@ After the first successful pairing, Android auto-reconnects on launch:
 On the gateway machine:
 
 ```bash
-openclaw devices list
-openclaw devices approve <requestId>
-openclaw devices reject <requestId>
+openclaw nodes pending
+openclaw nodes approve <requestId>
 ```
 
-Pairing details: [Pairing](/channels/pairing).
+Pairing details: [Gateway pairing](/gateway/pairing).
 
 ### 5) Verify the node is connected
 
 - Via nodes status:
-
   ```bash
   openclaw nodes status
   ```
-
 - Via Gateway:
-
   ```bash
   openclaw gateway call node.list --params "{}"
   ```
 
 ### 6) Chat + history
 
-The Android Chat tab supports session selection (default `main`, plus other existing sessions):
+The Android node’s Chat sheet uses the gateway’s **primary session key** (`main`), so history and replies are shared with WebChat and other clients:
 
 - History: `chat.history`
 - Send: `chat.send`
@@ -126,20 +120,20 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 
-Note: nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
+Note: nodes use the standalone canvas host on `canvasHost.port` (default `18793`).
 
 1. Create `~/.openclaw/workspace/canvas/index.html` on the gateway host.
 
 2. Navigate the node to it (LAN):
 
 ```bash
-openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18789/__openclaw__/canvas/"}'
+openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/__openclaw__/canvas/"}'
 ```
 
-Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18789/__openclaw__/canvas/`.
+Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18793/__openclaw__/canvas/`.
 
 This server injects a live-reload client into HTML and reloads on file changes.
-The A2UI host lives at `http://<gateway-host>:18789/__openclaw__/a2ui/`.
+The A2UI host lives at `http://<gateway-host>:18793/__openclaw__/a2ui/`.
 
 Canvas commands (foreground only):
 
@@ -152,17 +146,3 @@ Camera commands (foreground only; permission-gated):
 - `camera.clip` (mp4)
 
 See [Camera node](/nodes/camera) for parameters and CLI helpers.
-
-### 8) Voice + expanded Android command surface
-
-- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and TTS playback (ElevenLabs when configured, system TTS fallback). Voice stops when the app leaves the foreground.
-- Voice wake/talk-mode toggles are currently removed from Android UX/runtime.
-- Additional Android command families (availability depends on device + permissions):
-  - `device.status`, `device.info`, `device.permissions`, `device.health`
-  - `notifications.list`, `notifications.actions`
-  - `photos.latest`
-  - `contacts.search`, `contacts.add`
-  - `calendar.events`, `calendar.add`
-  - `callLog.search`
-  - `sms.search`
-  - `motion.activity`, `motion.pedometer`

@@ -4,7 +4,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ConfigStoreTests {
-    @Test func `load uses remote in remote mode`() async {
+    @Test func loadUsesRemoteInRemoteMode() async {
         var localHit = false
         var remoteHit = false
         await ConfigStore._testSetOverrides(.init(
@@ -20,7 +20,7 @@ struct ConfigStoreTests {
         #expect(result["remote"] as? Bool == true)
     }
 
-    @Test func `load uses local in local mode`() async {
+    @Test func loadUsesLocalInLocalMode() async {
         var localHit = false
         var remoteHit = false
         await ConfigStore._testSetOverrides(.init(
@@ -36,7 +36,7 @@ struct ConfigStoreTests {
         #expect(result["local"] as? Bool == true)
     }
 
-    @Test func `save routes to remote in remote mode`() async throws {
+    @Test func saveRoutesToRemoteInRemoteMode() async throws {
         var localHit = false
         var remoteHit = false
         await ConfigStore._testSetOverrides(.init(
@@ -51,7 +51,7 @@ struct ConfigStoreTests {
         #expect(!localHit)
     }
 
-    @Test func `save routes to local in local mode`() async throws {
+    @Test func saveRoutesToLocalInLocalMode() async throws {
         var localHit = false
         var remoteHit = false
         await ConfigStore._testSetOverrides(.init(

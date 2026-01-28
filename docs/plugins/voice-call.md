@@ -70,14 +70,6 @@ Set config under `plugins.entries.voice-call.config`:
             authToken: "...",
           },
 
-          telnyx: {
-            apiKey: "...",
-            connectionId: "...",
-            // Telnyx webhook public key from the Telnyx Mission Control Portal
-            // (Base64 string; can also be set via TELNYX_PUBLIC_KEY).
-            publicKey: "...",
-          },
-
           plivo: {
             authId: "MAxxxxxxxxxxxxxxxxxxxx",
             authToken: "...",
@@ -87,12 +79,6 @@ Set config under `plugins.entries.voice-call.config`:
           serve: {
             port: 3334,
             path: "/voice/webhook",
-          },
-
-          // Webhook security (recommended for tunnels/proxies)
-          webhookSecurity: {
-            allowedHosts: ["voice.example.com"],
-            trustedProxyIPs: ["100.64.0.1"],
           },
 
           // Public exposure (pick one)
@@ -107,10 +93,6 @@ Set config under `plugins.entries.voice-call.config`:
           streaming: {
             enabled: true,
             streamPath: "/voice/stream",
-            preStartTimeoutMs: 5000,
-            maxPendingConnections: 32,
-            maxPendingConnectionsPerIp: 4,
-            maxConnections: 128,
           },
         },
       },
@@ -124,87 +106,14 @@ Notes:
 - Twilio/Telnyx require a **publicly reachable** webhook URL.
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
-- Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - `skipSignatureVerification` is for local testing only.
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
 - Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
-- Streaming security defaults:
-  - `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
-  - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
-  - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
-  - `streaming.maxConnections` caps total open media stream sockets (pending + active).
-
-## Stale call reaper
-
-Use `staleCallReaperSeconds` to end calls that never receive a terminal webhook
-(for example, notify-mode calls that never complete). The default is `0`
-(disabled).
-
-Recommended ranges:
-
-- **Production:** `120`–`300` seconds for notify-style flows.
-- Keep this value **higher than `maxDurationSeconds`** so normal calls can
-  finish. A good starting point is `maxDurationSeconds + 30–60` seconds.
-
-Example:
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          maxDurationSeconds: 300,
-          staleCallReaperSeconds: 360,
-        },
-      },
-    },
-  },
-}
-```
-
-## Webhook Security
-
-When a proxy or tunnel sits in front of the Gateway, the plugin reconstructs the
-public URL for signature verification. These options control which forwarded
-headers are trusted.
-
-`webhookSecurity.allowedHosts` allowlists hosts from forwarding headers.
-
-`webhookSecurity.trustForwardingHeaders` trusts forwarded headers without an allowlist.
-
-`webhookSecurity.trustedProxyIPs` only trusts forwarded headers when the request
-remote IP matches the list.
-
-Webhook replay protection is enabled for Twilio and Plivo. Replayed valid webhook
-requests are acknowledged but skipped for side effects.
-
-Twilio conversation turns include a per-turn token in `<Gather>` callbacks, so
-stale/replayed speech callbacks cannot satisfy a newer pending transcript turn.
-
-Example with a stable public host:
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          publicUrl: "https://voice.example.com/voice/webhook",
-          webhookSecurity: {
-            allowedHosts: ["voice.example.com"],
-          },
-        },
-      },
-    },
-  },
-}
-```
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
 streaming speech on calls. You can override it under the plugin config with the
 **same shape** — it deep‑merges with `messages.tts`.
 
@@ -222,7 +131,7 @@ streaming speech on calls. You can override it under the plugin config with the
 
 Notes:
 
-- **Microsoft speech is ignored for voice calls** (telephony audio needs PCM; the current Microsoft transport does not expose telephony PCM output).
+- **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 
 ### More examples
@@ -296,12 +205,6 @@ Inbound policy defaults to `disabled`. To enable inbound calls, set:
 }
 ```
 
-`inboundPolicy: "allowlist"` is a low-assurance caller-ID screen. The plugin
-normalizes the provider-supplied `From` value and compares it to `allowFrom`.
-Webhook verification authenticates provider delivery and payload integrity, but
-it does not prove PSTN/VoIP caller-number ownership. Treat `allowFrom` as
-caller-ID filtering, not strong caller identity.
-
 Auto-responses use the agent system. Tune with:
 
 - `responseModel`
@@ -312,20 +215,13 @@ Auto-responses use the agent system. Tune with:
 
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
-openclaw voicecall start --to "+15555550123"   # alias for call
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall end --call-id <id>
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
-openclaw voicecall latency                     # summarize turn latency from logs
 openclaw voicecall expose --mode funnel
 ```
-
-`latency` reads `calls.jsonl` from the default voice-call storage path. Use
-`--file <path>` to point at a different log and `--last <n>` to limit analysis
-to the last N records (default 200). Output includes p50/p90/p99 for turn
-latency and listen-wait times.
 
 ## Agent tool
 

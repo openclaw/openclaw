@@ -1,52 +1,103 @@
 # @openclaw/zalouser
 
-OpenClaw extension for Zalo Personal Account messaging via native `zca-js` integration.
+OpenClaw extension for Zalo Personal Account messaging via [zca-cli](https://zca-cli.dev).
 
 > **Warning:** Using Zalo automation may result in account suspension or ban. Use at your own risk. This is an unofficial integration.
 
 ## Features
 
-- Channel plugin integration with setup wizard + QR login
-- In-process listener/sender via `zca-js` (no external CLI)
-- Multi-account support
-- Agent tool integration (`zalouser`)
-- DM/group policy support
+- **Channel Plugin Integration**: Appears in onboarding wizard with QR login
+- **Gateway Integration**: Real-time message listening via the gateway
+- **Multi-Account Support**: Manage multiple Zalo personal accounts
+- **CLI Commands**: Full command-line interface for messaging
+- **Agent Tool**: AI agent integration for automated messaging
 
 ## Prerequisites
 
-- OpenClaw Gateway
-- Zalo mobile app (for QR login)
+Install `zca` CLI and ensure it's in your PATH:
 
-No external `zca`, `openzca`, or `zca-cli` binary is required.
-
-## Install
-
-### Option A: npm
+**macOS / Linux:**
 
 ```bash
-openclaw plugins install @openclaw/zalouser
+curl -fsSL https://get.zca-cli.dev/install.sh | bash
+
+# Or with custom install directory
+ZCA_INSTALL_DIR=~/.local/bin curl -fsSL https://get.zca-cli.dev/install.sh | bash
+
+# Install specific version
+curl -fsSL https://get.zca-cli.dev/install.sh | bash -s v1.0.0
+
+# Uninstall
+curl -fsSL https://get.zca-cli.dev/install.sh | bash -s uninstall
 ```
 
-### Option B: local source checkout
+**Windows (PowerShell):**
+
+```powershell
+irm https://get.zca-cli.dev/install.ps1 | iex
+
+# Or with custom install directory
+$env:ZCA_INSTALL_DIR = "C:\Tools\zca"; irm https://get.zca-cli.dev/install.ps1 | iex
+
+# Install specific version
+iex "& { $(irm https://get.zca-cli.dev/install.ps1) } -Version v1.0.0"
+
+# Uninstall
+iex "& { $(irm https://get.zca-cli.dev/install.ps1) } -Uninstall"
+```
+
+### Manual Download
+
+Download binary directly:
+
+**macOS / Linux:**
 
 ```bash
-openclaw plugins install ./extensions/zalouser
-cd ./extensions/zalouser && pnpm install
+curl -fsSL https://get.zca-cli.dev/latest/zca-darwin-arm64 -o zca && chmod +x zca
 ```
 
-Restart the Gateway after install.
+**Windows (PowerShell):**
 
-## Quick start
+```powershell
+Invoke-WebRequest -Uri https://get.zca-cli.dev/latest/zca-windows-x64.exe -OutFile zca.exe
+```
 
-### Login (QR)
+Available binaries:
+
+- `zca-darwin-arm64` - macOS Apple Silicon
+- `zca-darwin-x64` - macOS Intel
+- `zca-linux-arm64` - Linux ARM64
+- `zca-linux-x64` - Linux x86_64
+- `zca-windows-x64.exe` - Windows
+
+See [zca-cli](https://zca-cli.dev) for manual download (binaries for macOS/Linux/Windows) or building from source.
+
+## Quick Start
+
+### Option 1: Onboarding Wizard (Recommended)
+
+```bash
+openclaw onboard
+# Select "Zalo Personal" from channel list
+# Follow QR code login flow
+```
+
+### Option 2: Login (QR, on the Gateway machine)
 
 ```bash
 openclaw channels login --channel zalouser
+# Scan QR code with Zalo app
 ```
 
-Scan the QR code with the Zalo app on your phone.
+### Send a Message
 
-### Enable channel
+```bash
+openclaw message send --channel zalouser --target <threadId> --message "Hello from OpenClaw!"
+```
+
+## Configuration
+
+After onboarding, your config will include:
 
 ```yaml
 channels:
@@ -55,24 +106,7 @@ channels:
     dmPolicy: pairing # pairing | allowlist | open | disabled
 ```
 
-### Send a message
-
-```bash
-openclaw message send --channel zalouser --target <threadId> --message "Hello from OpenClaw"
-```
-
-## Configuration
-
-Basic:
-
-```yaml
-channels:
-  zalouser:
-    enabled: true
-    dmPolicy: pairing
-```
-
-Multi-account:
+For multi-account:
 
 ```yaml
 channels:
@@ -88,32 +122,104 @@ channels:
         profile: work
 ```
 
-## Useful commands
+## Commands
+
+### Authentication
 
 ```bash
-openclaw channels login --channel zalouser
+openclaw channels login --channel zalouser              # Login via QR
 openclaw channels login --channel zalouser --account work
 openclaw channels status --probe
 openclaw channels logout --channel zalouser
+```
 
+### Directory (IDs, contacts, groups)
+
+```bash
 openclaw directory self --channel zalouser
 openclaw directory peers list --channel zalouser --query "name"
 openclaw directory groups list --channel zalouser --query "work"
 openclaw directory groups members --channel zalouser --group-id <id>
 ```
 
-## Agent tool
+### Account Management
 
-The extension registers a `zalouser` tool for AI agents.
+```bash
+zca account list      # List all profiles
+zca account current   # Show active profile
+zca account switch <profile>
+zca account remove <profile>
+zca account label <profile> "Work Account"
+```
+
+### Messaging
+
+```bash
+# Text
+openclaw message send --channel zalouser --target <threadId> --message "message"
+
+# Media (URL)
+openclaw message send --channel zalouser --target <threadId> --message "caption" --media-url "https://example.com/img.jpg"
+```
+
+### Listener
+
+The listener runs inside the Gateway when the channel is enabled. For debugging,
+use `openclaw channels logs --channel zalouser` or run `zca listen` directly.
+
+### Data Access
+
+```bash
+# Friends
+zca friend list
+zca friend list -j    # JSON output
+zca friend find "name"
+zca friend online
+
+# Groups
+zca group list
+zca group info <groupId>
+zca group members <groupId>
+
+# Profile
+zca me info
+zca me id
+```
+
+## Multi-Account Support
+
+Use `--profile` or `-p` to work with multiple accounts:
+
+```bash
+openclaw channels login --channel zalouser --account work
+openclaw message send --channel zalouser --account work --target <id> --message "Hello"
+ZCA_PROFILE=work zca listen
+```
+
+Profile resolution order: `--profile` flag > `ZCA_PROFILE` env > default
+
+## Agent Tool
+
+The extension registers a `zalouser` tool for AI agents:
+
+```json
+{
+  "action": "send",
+  "threadId": "123456",
+  "message": "Hello from AI!",
+  "isGroup": false,
+  "profile": "default"
+}
+```
 
 Available actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
 
 ## Troubleshooting
 
-- Login not persisted: `openclaw channels logout --channel zalouser && openclaw channels login --channel zalouser`
-- Probe status: `openclaw channels status --probe`
-- Name resolution issues (allowlist/groups): use numeric IDs or exact Zalo names
+- **Login Issues:** Run `zca auth logout` then `zca auth login`
+- **API Errors:** Try `zca auth cache-refresh` or re-login
+- **File Uploads:** Check size (max 100MB) and path accessibility
 
 ## Credits
 
-Built on [zca-js](https://github.com/RFS-ADRENO/zca-js).
+Built on [zca-cli](https://zca-cli.dev) which uses [zca-js](https://github.com/RFS-ADRENO/zca-js).

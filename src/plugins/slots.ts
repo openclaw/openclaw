@@ -11,12 +11,10 @@ type SlotPluginRecord = {
 
 const SLOT_BY_KIND: Record<PluginKind, PluginSlotKey> = {
   memory: "memory",
-  "context-engine": "contextEngine",
 };
 
 const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
   memory: "memory-core",
-  contextEngine: "legacy",
 };
 
 export function slotKeyForPluginKind(kind?: PluginKind): PluginSlotKey | null {

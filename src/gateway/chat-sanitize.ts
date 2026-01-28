@@ -1,43 +1,54 @@
-import {
-  extractInboundSenderLabel,
-  stripInboundMetadata,
-} from "../auto-reply/reply/strip-inbound-meta.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
+const ENVELOPE_CHANNELS = [
+  "WebChat",
+  "WhatsApp",
+  "Telegram",
+  "Signal",
+  "Slack",
+  "Discord",
+  "Google Chat",
+  "iMessage",
+  "Teams",
+  "Matrix",
+  "Zalo",
+  "Zalo Personal",
+  "BlueBubbles",
+];
 
-export { stripEnvelope };
+const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
 
-function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
-  if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
-    return entry.senderLabel.trim();
+function looksLikeEnvelopeHeader(header: string): boolean {
+  if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) {
+    return true;
   }
-  if (typeof entry.content === "string") {
-    return extractInboundSenderLabel(entry.content);
+  if (/\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b/.test(header)) {
+    return true;
   }
-  if (Array.isArray(entry.content)) {
-    for (const item of entry.content) {
-      if (!item || typeof item !== "object") {
-        continue;
-      }
-      const text = (item as { text?: unknown }).text;
-      if (typeof text !== "string") {
-        continue;
-      }
-      const senderLabel = extractInboundSenderLabel(text);
-      if (senderLabel) {
-        return senderLabel;
-      }
-    }
-  }
-  if (typeof entry.text === "string") {
-    return extractInboundSenderLabel(entry.text);
-  }
-  return null;
+  return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
 }
 
-function stripEnvelopeFromContentWithRole(
-  content: unknown[],
-  stripUserEnvelope: boolean,
-): { content: unknown[]; changed: boolean } {
+export function stripEnvelope(text: string): string {
+  const match = text.match(ENVELOPE_PREFIX);
+  if (!match) {
+    return text;
+  }
+  const header = match[1] ?? "";
+  if (!looksLikeEnvelopeHeader(header)) {
+    return text;
+  }
+  return text.slice(match[0].length);
+}
+
+function stripMessageIdHints(text: string): string {
+  if (!text.includes("[message_id:")) {
+    return text;
+  }
+  const lines = text.split(/\r?\n/);
+  const filtered = lines.filter((line) => !MESSAGE_ID_LINE.test(line));
+  return filtered.length === lines.length ? text : filtered.join("\n");
+}
+
+function stripEnvelopeFromContent(content: unknown[]): { content: unknown[]; changed: boolean } {
   let changed = false;
   const next = content.map((item) => {
     if (!item || typeof item !== "object") {
@@ -47,10 +58,7 @@ function stripEnvelopeFromContentWithRole(
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
-    const inboundStripped = stripInboundMetadata(entry.text);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+    const stripped = stripMessageIdHints(stripEnvelope(entry.text));
     if (stripped === entry.text) {
       return item;
     }
@@ -69,36 +77,27 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   }
   const entry = message as Record<string, unknown>;
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-  const stripUserEnvelope = role === "user";
+  if (role !== "user") {
+    return message;
+  }
 
   let changed = false;
   const next: Record<string, unknown> = { ...entry };
-  const senderLabel = stripUserEnvelope ? extractMessageSenderLabel(entry) : null;
-  if (senderLabel && entry.senderLabel !== senderLabel) {
-    next.senderLabel = senderLabel;
-    changed = true;
-  }
 
   if (typeof entry.content === "string") {
-    const inboundStripped = stripInboundMetadata(entry.content);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+    const stripped = stripMessageIdHints(stripEnvelope(entry.content));
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
     }
   } else if (Array.isArray(entry.content)) {
-    const updated = stripEnvelopeFromContentWithRole(entry.content, stripUserEnvelope);
+    const updated = stripEnvelopeFromContent(entry.content);
     if (updated.changed) {
       next.content = updated.content;
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const inboundStripped = stripInboundMetadata(entry.text);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+    const stripped = stripMessageIdHints(stripEnvelope(entry.text));
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;

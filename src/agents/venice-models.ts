@@ -1,11 +1,7 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
-import { retryAsync } from "../infra/retry.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-
-const log = createSubsystemLogger("venice-models");
 
 export const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
-export const VENICE_DEFAULT_MODEL_ID = "kimi-k2-5";
+export const VENICE_DEFAULT_MODEL_ID = "llama-3.3-70b";
 export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
 
 // Venice uses credit-based pricing, not per-token costs.
@@ -16,27 +12,6 @@ export const VENICE_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
-
-const VENICE_DEFAULT_CONTEXT_WINDOW = 128_000;
-const VENICE_DEFAULT_MAX_TOKENS = 4096;
-const VENICE_DISCOVERY_HARD_MAX_TOKENS = 131_072;
-const VENICE_DISCOVERY_TIMEOUT_MS = 10_000;
-const VENICE_DISCOVERY_RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
-const VENICE_DISCOVERY_RETRYABLE_NETWORK_CODES = new Set([
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EAI_AGAIN",
-  "ENETDOWN",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_CONNECT_ERROR",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
 
 /**
  * Complete catalog of Venice AI models.
@@ -62,8 +37,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Llama 3.3 70B",
     reasoning: false,
     input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 4096,
+    contextWindow: 131072,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -71,8 +46,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Llama 3.2 3B",
     reasoning: false,
     input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 4096,
+    contextWindow: 131072,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -80,9 +55,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Hermes 3 Llama 3.1 405B",
     reasoning: false,
     input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 16384,
-    supportsTools: false,
+    contextWindow: 131072,
+    maxTokens: 8192,
     privacy: "private",
   },
 
@@ -92,8 +66,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Qwen3 235B Thinking",
     reasoning: true,
     input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 16384,
+    contextWindow: 131072,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -101,8 +75,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Qwen3 235B Instruct",
     reasoning: false,
     input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 16384,
+    contextWindow: 131072,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -110,26 +84,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Qwen3 Coder 480B",
     reasoning: false,
     input: ["text"],
-    contextWindow: 256000,
-    maxTokens: 65536,
-    privacy: "private",
-  },
-  {
-    id: "qwen3-coder-480b-a35b-instruct-turbo",
-    name: "Qwen3 Coder 480B Turbo",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 256000,
-    maxTokens: 65536,
-    privacy: "private",
-  },
-  {
-    id: "qwen3-5-35b-a3b",
-    name: "Qwen3.5 35B A3B",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 256000,
-    maxTokens: 65536,
+    contextWindow: 262144,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -137,8 +93,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Qwen3 Next 80B",
     reasoning: false,
     input: ["text"],
-    contextWindow: 256000,
-    maxTokens: 16384,
+    contextWindow: 262144,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -146,8 +102,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Qwen3 VL 235B (Vision)",
     reasoning: false,
     input: ["text", "image"],
-    contextWindow: 256000,
-    maxTokens: 16384,
+    contextWindow: 262144,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -155,8 +111,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Venice Small (Qwen3 4B)",
     reasoning: true,
     input: ["text"],
-    contextWindow: 32000,
-    maxTokens: 4096,
+    contextWindow: 32768,
+    maxTokens: 8192,
     privacy: "private",
   },
 
@@ -166,9 +122,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "DeepSeek V3.2",
     reasoning: true,
     input: ["text"],
-    contextWindow: 160000,
-    maxTokens: 32768,
-    supportsTools: false,
+    contextWindow: 163840,
+    maxTokens: 8192,
     privacy: "private",
   },
 
@@ -178,9 +133,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Venice Uncensored (Dolphin-Mistral)",
     reasoning: false,
     input: ["text"],
-    contextWindow: 32000,
-    maxTokens: 4096,
-    supportsTools: false,
+    contextWindow: 32768,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -188,8 +142,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Venice Medium (Mistral)",
     reasoning: false,
     input: ["text", "image"],
-    contextWindow: 128000,
-    maxTokens: 4096,
+    contextWindow: 131072,
+    maxTokens: 8192,
     privacy: "private",
   },
 
@@ -199,8 +153,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Google Gemma 3 27B Instruct",
     reasoning: false,
     input: ["text", "image"],
-    contextWindow: 198000,
-    maxTokens: 16384,
+    contextWindow: 202752,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -208,35 +162,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "OpenAI GPT OSS 120B",
     reasoning: false,
     input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 16384,
-    privacy: "private",
-  },
-  {
-    id: "nvidia-nemotron-3-nano-30b-a3b",
-    name: "NVIDIA Nemotron 3 Nano 30B",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 16384,
-    privacy: "private",
-  },
-  {
-    id: "olafangensan-glm-4.7-flash-heretic",
-    name: "GLM 4.7 Flash Heretic",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 24000,
-    privacy: "private",
-  },
-  {
-    id: "zai-org-glm-4.6",
-    name: "GLM 4.6",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 198000,
-    maxTokens: 16384,
+    contextWindow: 131072,
+    maxTokens: 8192,
     privacy: "private",
   },
   {
@@ -244,62 +171,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "GLM 4.7",
     reasoning: true,
     input: ["text"],
-    contextWindow: 198000,
-    maxTokens: 16384,
-    privacy: "private",
-  },
-  {
-    id: "zai-org-glm-4.7-flash",
-    name: "GLM 4.7 Flash",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 16384,
-    privacy: "private",
-  },
-  {
-    id: "zai-org-glm-5",
-    name: "GLM 5",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 198000,
-    maxTokens: 32000,
-    privacy: "private",
-  },
-  {
-    id: "kimi-k2-5",
-    name: "Kimi K2.5",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 256000,
-    maxTokens: 65536,
-    privacy: "private",
-  },
-  {
-    id: "kimi-k2-thinking",
-    name: "Kimi K2 Thinking",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 256000,
-    maxTokens: 65536,
-    privacy: "private",
-  },
-  {
-    id: "minimax-m21",
-    name: "MiniMax M2.1",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 198000,
-    maxTokens: 32768,
-    privacy: "private",
-  },
-  {
-    id: "minimax-m25",
-    name: "MiniMax M2.5",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 198000,
-    maxTokens: 32768,
+    contextWindow: 202752,
+    maxTokens: 8192,
     privacy: "private",
   },
 
@@ -310,39 +183,21 @@ export const VENICE_MODEL_CATALOG = [
 
   // Anthropic (via Venice)
   {
-    id: "claude-opus-4-5",
+    id: "claude-opus-45",
     name: "Claude Opus 4.5 (via Venice)",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 198000,
-    maxTokens: 32768,
+    contextWindow: 202752,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
   {
-    id: "claude-opus-4-6",
-    name: "Claude Opus 4.6 (via Venice)",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 1000000,
-    maxTokens: 128000,
-    privacy: "anonymized",
-  },
-  {
-    id: "claude-sonnet-4-5",
+    id: "claude-sonnet-45",
     name: "Claude Sonnet 4.5 (via Venice)",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 198000,
-    maxTokens: 64000,
-    privacy: "anonymized",
-  },
-  {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6 (via Venice)",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 1000000,
-    maxTokens: 64000,
+    contextWindow: 202752,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
 
@@ -352,8 +207,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "GPT-5.2 (via Venice)",
     reasoning: true,
     input: ["text"],
-    contextWindow: 256000,
-    maxTokens: 65536,
+    contextWindow: 262144,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
   {
@@ -361,44 +216,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "GPT-5.2 Codex (via Venice)",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 256000,
-    maxTokens: 65536,
-    privacy: "anonymized",
-  },
-  {
-    id: "openai-gpt-53-codex",
-    name: "GPT-5.3 Codex (via Venice)",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 400000,
-    maxTokens: 128000,
-    privacy: "anonymized",
-  },
-  {
-    id: "openai-gpt-54",
-    name: "GPT-5.4 (via Venice)",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 1000000,
-    maxTokens: 131072,
-    privacy: "anonymized",
-  },
-  {
-    id: "openai-gpt-4o-2024-11-20",
-    name: "GPT-4o (via Venice)",
-    reasoning: false,
-    input: ["text", "image"],
-    contextWindow: 128000,
-    maxTokens: 16384,
-    privacy: "anonymized",
-  },
-  {
-    id: "openai-gpt-4o-mini-2024-07-18",
-    name: "GPT-4o Mini (via Venice)",
-    reasoning: false,
-    input: ["text", "image"],
-    contextWindow: 128000,
-    maxTokens: 16384,
+    contextWindow: 262144,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
 
@@ -408,17 +227,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Gemini 3 Pro (via Venice)",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 198000,
-    maxTokens: 32768,
-    privacy: "anonymized",
-  },
-  {
-    id: "gemini-3-1-pro-preview",
-    name: "Gemini 3.1 Pro (via Venice)",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 1000000,
-    maxTokens: 32768,
+    contextWindow: 202752,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
   {
@@ -426,8 +236,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Gemini 3 Flash (via Venice)",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 256000,
-    maxTokens: 65536,
+    contextWindow: 262144,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
 
@@ -437,8 +247,8 @@ export const VENICE_MODEL_CATALOG = [
     name: "Grok 4.1 Fast (via Venice)",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 1000000,
-    maxTokens: 30000,
+    contextWindow: 262144,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
   {
@@ -446,8 +256,28 @@ export const VENICE_MODEL_CATALOG = [
     name: "Grok Code Fast 1 (via Venice)",
     reasoning: true,
     input: ["text"],
-    contextWindow: 256000,
-    maxTokens: 10000,
+    contextWindow: 262144,
+    maxTokens: 8192,
+    privacy: "anonymized",
+  },
+
+  // Other anonymized models
+  {
+    id: "kimi-k2-thinking",
+    name: "Kimi K2 Thinking (via Venice)",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 8192,
+    privacy: "anonymized",
+  },
+  {
+    id: "minimax-m21",
+    name: "MiniMax M2.1 (via Venice)",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 8192,
     privacy: "anonymized",
   },
 ] as const;
@@ -470,12 +300,6 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     cost: VENICE_DEFAULT_COST,
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxTokens,
-    // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
-    // See: https://github.com/openclaw/openclaw/issues/15819
-    compat: {
-      supportsUsageInStreaming: false,
-      ...("supportsTools" in entry && !entry.supportsTools ? { supportsTools: false } : {}),
-    },
   };
 }
 
@@ -483,113 +307,21 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
 interface VeniceModelSpec {
   name: string;
   privacy: "private" | "anonymized";
-  availableContextTokens?: number;
-  maxCompletionTokens?: number;
-  capabilities?: {
-    supportsReasoning?: boolean;
-    supportsVision?: boolean;
-    supportsFunctionCalling?: boolean;
+  availableContextTokens: number;
+  capabilities: {
+    supportsReasoning: boolean;
+    supportsVision: boolean;
+    supportsFunctionCalling: boolean;
   };
 }
 
 interface VeniceModel {
   id: string;
-  model_spec?: VeniceModelSpec;
+  model_spec: VeniceModelSpec;
 }
 
 interface VeniceModelsResponse {
   data: VeniceModel[];
-}
-
-class VeniceDiscoveryHttpError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super(`HTTP ${status}`);
-    this.name = "VeniceDiscoveryHttpError";
-    this.status = status;
-  }
-}
-
-function staticVeniceModelDefinitions(): ModelDefinitionConfig[] {
-  return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
-}
-
-function hasRetryableNetworkCode(err: unknown): boolean {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current || typeof current !== "object" || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    const candidate = current as {
-      cause?: unknown;
-      errors?: unknown;
-      code?: unknown;
-      errno?: unknown;
-    };
-    const code =
-      typeof candidate.code === "string"
-        ? candidate.code
-        : typeof candidate.errno === "string"
-          ? candidate.errno
-          : undefined;
-    if (code && VENICE_DISCOVERY_RETRYABLE_NETWORK_CODES.has(code)) {
-      return true;
-    }
-    if (candidate.cause) {
-      queue.push(candidate.cause);
-    }
-    if (Array.isArray(candidate.errors)) {
-      queue.push(...candidate.errors);
-    }
-  }
-  return false;
-}
-
-function isRetryableVeniceDiscoveryError(err: unknown): boolean {
-  if (err instanceof VeniceDiscoveryHttpError) {
-    return true;
-  }
-  if (err instanceof Error && err.name === "AbortError") {
-    return true;
-  }
-  if (err instanceof TypeError && err.message.toLowerCase() === "fetch failed") {
-    return true;
-  }
-  return hasRetryableNetworkCode(err);
-}
-
-function normalizePositiveInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
-function resolveApiMaxCompletionTokens(params: {
-  apiModel: VeniceModel;
-  knownMaxTokens?: number;
-}): number | undefined {
-  const raw = normalizePositiveInt(params.apiModel.model_spec?.maxCompletionTokens);
-  if (!raw) {
-    return undefined;
-  }
-  const contextWindow = normalizePositiveInt(params.apiModel.model_spec?.availableContextTokens);
-  const knownMaxTokens =
-    typeof params.knownMaxTokens === "number" && Number.isFinite(params.knownMaxTokens)
-      ? Math.floor(params.knownMaxTokens)
-      : undefined;
-  const hardCap = knownMaxTokens ?? VENICE_DISCOVERY_HARD_MAX_TOKENS;
-  const fallbackContextWindow = knownMaxTokens ?? VENICE_DEFAULT_CONTEXT_WINDOW;
-  return Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
-}
-
-function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
-  const supportsFunctionCalling = apiModel.model_spec?.capabilities?.supportsFunctionCalling;
-  return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
 /**
@@ -599,45 +331,25 @@ function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
 export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
   // Skip API discovery in test environment
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
-    return staticVeniceModelDefinitions();
+    return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   }
 
   try {
-    const response = await retryAsync(
-      async () => {
-        const currentResponse = await fetch(`${VENICE_BASE_URL}/models`, {
-          signal: AbortSignal.timeout(VENICE_DISCOVERY_TIMEOUT_MS),
-          headers: {
-            Accept: "application/json",
-          },
-        });
-        if (
-          !currentResponse.ok &&
-          VENICE_DISCOVERY_RETRYABLE_HTTP_STATUS.has(currentResponse.status)
-        ) {
-          throw new VeniceDiscoveryHttpError(currentResponse.status);
-        }
-        return currentResponse;
-      },
-      {
-        attempts: 3,
-        minDelayMs: 300,
-        maxDelayMs: 2000,
-        jitter: 0.2,
-        label: "venice-model-discovery",
-        shouldRetry: isRetryableVeniceDiscoveryError,
-      },
-    );
+    const response = await fetch(`${VENICE_BASE_URL}/models`, {
+      signal: AbortSignal.timeout(5000),
+    });
 
     if (!response.ok) {
-      log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
-      return staticVeniceModelDefinitions();
+      console.warn(
+        `[venice-models] Failed to discover models: HTTP ${response.status}, using static catalog`,
+      );
+      return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 
     const data = (await response.json()) as VeniceModelsResponse;
     if (!Array.isArray(data.data) || data.data.length === 0) {
-      log.warn("No models found from API, using static catalog");
-      return staticVeniceModelDefinitions();
+      console.warn("[venice-models] No models found from API, using static catalog");
+      return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 
     // Merge discovered models with catalog metadata
@@ -648,62 +360,34 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
 
     for (const apiModel of data.data) {
       const catalogEntry = catalogById.get(apiModel.id);
-      const apiMaxTokens = resolveApiMaxCompletionTokens({
-        apiModel,
-        knownMaxTokens: catalogEntry?.maxTokens,
-      });
-      const apiSupportsTools = resolveApiSupportsTools(apiModel);
       if (catalogEntry) {
-        const definition = buildVeniceModelDefinition(catalogEntry);
-        if (apiMaxTokens !== undefined) {
-          definition.maxTokens = apiMaxTokens;
-        }
-        // We only let live discovery disable tools. Re-enabling tool support still
-        // requires a catalog update so a transient/bad /models response cannot
-        // silently expand the tool execution surface for known models.
-        if (apiSupportsTools === false) {
-          definition.compat = {
-            ...definition.compat,
-            supportsTools: false,
-          };
-        }
-        models.push(definition);
+        // Use catalog metadata for known models
+        models.push(buildVeniceModelDefinition(catalogEntry));
       } else {
         // Create definition for newly discovered models not in catalog
-        const apiSpec = apiModel.model_spec;
         const isReasoning =
-          apiSpec?.capabilities?.supportsReasoning ||
+          apiModel.model_spec.capabilities.supportsReasoning ||
           apiModel.id.toLowerCase().includes("thinking") ||
           apiModel.id.toLowerCase().includes("reason") ||
           apiModel.id.toLowerCase().includes("r1");
 
-        const hasVision = apiSpec?.capabilities?.supportsVision === true;
+        const hasVision = apiModel.model_spec.capabilities.supportsVision;
 
         models.push({
           id: apiModel.id,
-          name: apiSpec?.name || apiModel.id,
+          name: apiModel.model_spec.name || apiModel.id,
           reasoning: isReasoning,
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
-          contextWindow:
-            normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
-          // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
-          compat: {
-            supportsUsageInStreaming: false,
-            ...(apiSupportsTools === false ? { supportsTools: false } : {}),
-          },
+          contextWindow: apiModel.model_spec.availableContextTokens || 128000,
+          maxTokens: 8192,
         });
       }
     }
 
-    return models.length > 0 ? models : staticVeniceModelDefinitions();
+    return models.length > 0 ? models : VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   } catch (error) {
-    if (error instanceof VeniceDiscoveryHttpError) {
-      log.warn(`Failed to discover models: HTTP ${error.status}, using static catalog`);
-      return staticVeniceModelDefinitions();
-    }
-    log.warn(`Discovery failed: ${String(error)}, using static catalog`);
-    return staticVeniceModelDefinitions();
+    console.warn(`[venice-models] Discovery failed: ${String(error)}, using static catalog`);
+    return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   }
 }

@@ -1,13 +1,13 @@
 import Foundation
 
-enum EffectiveConnectionModeSource: Equatable {
+enum EffectiveConnectionModeSource: Sendable, Equatable {
     case configMode
     case configRemoteURL
     case userDefaults
     case onboarding
 }
 
-struct EffectiveConnectionMode: Equatable {
+struct EffectiveConnectionMode: Sendable, Equatable {
     let mode: AppState.ConnectionMode
     let source: EffectiveConnectionModeSource
 }

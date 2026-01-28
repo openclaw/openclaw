@@ -1,12 +1,4 @@
-import type { CoreConfig } from "../../types.js";
-import {
-  MATRIX_ANNOTATION_RELATION_TYPE,
-  MATRIX_REACTION_EVENT_TYPE,
-  type MatrixReactionEventContent,
-} from "../reaction-common.js";
-import type { MatrixClient, MessageEventContent } from "../sdk.js";
-export type { MatrixRawEvent } from "../sdk.js";
-export type { MatrixReactionSummary } from "../reaction-common.js";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 
 export const MsgType = {
   Text: "m.text",
@@ -14,17 +6,17 @@ export const MsgType = {
 
 export const RelationType = {
   Replace: "m.replace",
-  Annotation: MATRIX_ANNOTATION_RELATION_TYPE,
+  Annotation: "m.annotation",
 } as const;
 
 export const EventType = {
   RoomMessage: "m.room.message",
   RoomPinnedEvents: "m.room.pinned_events",
   RoomTopic: "m.room.topic",
-  Reaction: MATRIX_REACTION_EVENT_TYPE,
+  Reaction: "m.reaction",
 } as const;
 
-export type RoomMessageEventContent = MessageEventContent & {
+export type RoomMessageEventContent = {
   msgtype: string;
   body: string;
   "m.new_content"?: RoomMessageEventContent;
@@ -35,7 +27,13 @@ export type RoomMessageEventContent = MessageEventContent & {
   };
 };
 
-export type ReactionEventContent = MatrixReactionEventContent;
+export type ReactionEventContent = {
+  "m.relates_to": {
+    rel_type: string;
+    event_id: string;
+    key: string;
+  };
+};
 
 export type RoomPinnedEventsEventContent = {
   pinned: string[];
@@ -45,13 +43,20 @@ export type RoomTopicEventContent = {
   topic?: string;
 };
 
+export type MatrixRawEvent = {
+  event_id: string;
+  sender: string;
+  type: string;
+  origin_server_ts: number;
+  content: Record<string, unknown>;
+  unsigned?: {
+    redacted_because?: unknown;
+  };
+};
+
 export type MatrixActionClientOpts = {
   client?: MatrixClient;
-  cfg?: CoreConfig;
-  mediaLocalRoots?: readonly string[];
   timeoutMs?: number;
-  accountId?: string | null;
-  readiness?: "none" | "prepared" | "started";
 };
 
 export type MatrixMessageSummary = {
@@ -59,7 +64,6 @@ export type MatrixMessageSummary = {
   sender?: string;
   body?: string;
   msgtype?: string;
-  attachment?: MatrixMessageAttachmentSummary;
   timestamp?: number;
   relatesTo?: {
     relType?: string;
@@ -68,12 +72,10 @@ export type MatrixMessageSummary = {
   };
 };
 
-export type MatrixMessageAttachmentKind = "audio" | "file" | "image" | "sticker" | "video";
-
-export type MatrixMessageAttachmentSummary = {
-  kind: MatrixMessageAttachmentKind;
-  caption?: string;
-  filename?: string;
+export type MatrixReactionSummary = {
+  key: string;
+  count: number;
+  users: string[];
 };
 
 export type MatrixActionClient = {

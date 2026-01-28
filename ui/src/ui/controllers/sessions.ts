@@ -1,6 +1,6 @@
-import { toNumber } from "../format.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsListResult } from "../types.ts";
+import type { GatewayBrowserClient } from "../gateway";
+import type { SessionsListResult } from "../types";
+import { toNumber } from "../format";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -13,17 +13,6 @@ export type SessionsState = {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
 };
-
-export async function subscribeSessions(state: SessionsState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  try {
-    await state.client.request("sessions.subscribe", {});
-  } catch (err) {
-    state.sessionsError = String(err);
-  }
-}
 
 export async function loadSessions(
   state: SessionsState,
@@ -57,7 +46,7 @@ export async function loadSessions(
     if (limit > 0) {
       params.limit = limit;
     }
-    const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
+    const res = await state.client.request("sessions.list", params);
     if (res) {
       state.sessionsResult = res;
     }
@@ -74,7 +63,6 @@ export async function patchSession(
   patch: {
     label?: string | null;
     thinkingLevel?: string | null;
-    fastMode?: boolean | null;
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
@@ -88,9 +76,6 @@ export async function patchSession(
   }
   if ("thinkingLevel" in patch) {
     params.thinkingLevel = patch.thinkingLevel;
-  }
-  if ("fastMode" in patch) {
-    params.fastMode = patch.fastMode;
   }
   if ("verboseLevel" in patch) {
     params.verboseLevel = patch.verboseLevel;
@@ -106,37 +91,27 @@ export async function patchSession(
   }
 }
 
-export async function deleteSession(state: SessionsState, key: string): Promise<boolean> {
+export async function deleteSession(state: SessionsState, key: string) {
   if (!state.client || !state.connected) {
-    return false;
+    return;
   }
   if (state.sessionsLoading) {
-    return false;
+    return;
   }
   const confirmed = window.confirm(
     `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
   );
   if (!confirmed) {
-    return false;
+    return;
   }
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
     await state.client.request("sessions.delete", { key, deleteTranscript: true });
-    return true;
+    await loadSessions(state);
   } catch (err) {
     state.sessionsError = String(err);
-    return false;
   } finally {
     state.sessionsLoading = false;
   }
-}
-
-export async function deleteSessionAndRefresh(state: SessionsState, key: string): Promise<boolean> {
-  const deleted = await deleteSession(state, key);
-  if (!deleted) {
-    return false;
-  }
-  await loadSessions(state);
-  return true;
 }

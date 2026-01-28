@@ -1,18 +1,12 @@
+import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { logVerbose, shouldLogVerbose } from "../../globals.js";
-import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
-import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
-import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const CANVAS_ACTIONS = [
@@ -26,29 +20,6 @@ const CANVAS_ACTIONS = [
 ] as const;
 
 const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
-
-async function readJsonlFromPath(jsonlPath: string): Promise<string> {
-  const trimmed = jsonlPath.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const resolved = path.resolve(trimmed);
-  const roots = getDefaultMediaLocalRoots();
-  if (!isInboundPathAllowed({ filePath: resolved, roots })) {
-    if (shouldLogVerbose()) {
-      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${resolved}`);
-    }
-    throw new Error("jsonlPath outside allowed roots");
-  }
-  const canonical = await fs.realpath(resolved).catch(() => resolved);
-  if (!isInboundPathAllowed({ filePath: canonical, roots })) {
-    if (shouldLogVerbose()) {
-      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${canonical}`);
-    }
-    throw new Error("jsonlPath outside allowed roots");
-  }
-  return await fs.readFile(canonical, "utf8");
-}
 
 // Flattened schema: runtime validates per-action requirements.
 const CanvasToolSchema = Type.Object({
@@ -77,8 +48,7 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
-export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
-  const imageSanitization = resolveImageSanitizationLimits(options?.config);
+export function createCanvasTool(): AnyAgentTool {
   return {
     label: "Canvas",
     name: "canvas",
@@ -88,7 +58,11 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const gatewayOpts = readGatewayCallOptions(params);
+      const gatewayOpts: GatewayCallOptions = {
+        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+      };
 
       const nodeId = await resolveNodeId(
         gatewayOpts,
@@ -113,13 +87,8 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
             height: typeof params.height === "number" ? params.height : undefined,
           };
           const invokeParams: Record<string, unknown> = {};
-          // Accept both `target` and `url` for present to match common caller expectations.
-          // `target` remains the canonical field for CLI compatibility.
-          const presentTarget =
-            readStringParam(params, "target", { trim: true }) ??
-            readStringParam(params, "url", { trim: true });
-          if (presentTarget) {
-            invokeParams.url = presentTarget;
+          if (typeof params.target === "string" && params.target.trim()) {
+            invokeParams.url = params.target.trim();
           }
           if (
             Number.isFinite(placement.x) ||
@@ -136,10 +105,7 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           await invoke("canvas.hide", undefined);
           return jsonResult({ ok: true });
         case "navigate": {
-          // Support `target` as an alias so callers can reuse the same field across present/navigate.
-          const url =
-            readStringParam(params, "url", { trim: true }) ??
-            readStringParam(params, "target", { required: true, trim: true, label: "url" });
+          const url = readStringParam(params, "url", { required: true });
           await invoke("canvas.navigate", { url });
           return jsonResult({ ok: true });
         }
@@ -188,7 +154,6 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
             base64: payload.base64,
             mimeType,
             details: { format: payload.format },
-            imageSanitization,
           });
         }
         case "a2ui_push": {
@@ -196,7 +161,7 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
             typeof params.jsonl === "string" && params.jsonl.trim()
               ? params.jsonl
               : typeof params.jsonlPath === "string" && params.jsonlPath.trim()
-                ? await readJsonlFromPath(params.jsonlPath)
+                ? await fs.readFile(params.jsonlPath.trim(), "utf8")
                 : "";
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");

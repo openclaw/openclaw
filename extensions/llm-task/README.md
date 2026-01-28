@@ -69,7 +69,6 @@ outside the list is rejected.
 - `schema` (object, optional JSON Schema)
 - `provider` (string, optional)
 - `model` (string, optional)
-- `thinking` (string, optional)
 - `authProfileId` (string, optional)
 - `temperature` (number, optional)
 - `maxTokens` (number, optional)

@@ -1,5 +1,3 @@
-import { coerceIdentityValue } from "../../../src/shared/assistant-identity-values.js";
-
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
 
@@ -12,6 +10,27 @@ export type AssistantIdentity = {
   avatar: string | null;
 };
 
+declare global {
+  interface Window {
+    __OPENCLAW_ASSISTANT_NAME__?: string;
+    __OPENCLAW_ASSISTANT_AVATAR__?: string;
+  }
+}
+
+function coerceIdentityValue(value: string | undefined, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  return trimmed.slice(0, maxLength);
+}
+
 export function normalizeAssistantIdentity(
   input?: Partial<AssistantIdentity> | null,
 ): AssistantIdentity {
@@ -20,4 +39,14 @@ export function normalizeAssistantIdentity(
   const agentId =
     typeof input?.agentId === "string" && input.agentId.trim() ? input.agentId.trim() : null;
   return { agentId, name, avatar };
+}
+
+export function resolveInjectedAssistantIdentity(): AssistantIdentity {
+  if (typeof window === "undefined") {
+    return normalizeAssistantIdentity({});
+  }
+  return normalizeAssistantIdentity({
+    name: window.__OPENCLAW_ASSISTANT_NAME__,
+    avatar: window.__OPENCLAW_ASSISTANT_AVATAR__,
+  });
 }

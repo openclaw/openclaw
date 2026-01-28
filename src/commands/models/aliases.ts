@@ -1,6 +1,6 @@
-import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { loadModelsConfig } from "./load-config.js";
+import { loadConfig } from "../../config/config.js";
+import { logConfigUpdated } from "../../config/logging.js";
 import {
   ensureFlagCompatibility,
   normalizeAlias,
@@ -13,7 +13,7 @@ export async function modelsAliasesListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = await loadModelsConfig({ commandName: "models aliases list", runtime });
+  const cfg = loadConfig();
   const models = cfg.agents?.defaults?.models ?? {};
   const aliases = Object.entries(models).reduce<Record<string, string>>(
     (acc, [modelKey, entry]) => {
@@ -53,8 +53,7 @@ export async function modelsAliasesAddCommand(
   runtime: RuntimeEnv,
 ) {
   const alias = normalizeAlias(aliasRaw);
-  const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
-  const resolved = resolveModelTarget({ raw: modelRaw, cfg });
+  const resolved = resolveModelTarget({ raw: modelRaw, cfg: loadConfig() });
   const _updated = await updateConfig((cfg) => {
     const modelKey = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agents?.defaults?.models };

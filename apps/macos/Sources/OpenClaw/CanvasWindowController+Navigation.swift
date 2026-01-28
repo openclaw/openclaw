@@ -19,8 +19,7 @@ extension CanvasWindowController {
         // Deep links: allow local Canvas content to invoke the agent without bouncing through NSWorkspace.
         if scheme == "openclaw" {
             if let currentScheme = self.webView.url?.scheme,
-               CanvasScheme.allSchemes.contains(currentScheme)
-            {
+               CanvasScheme.allSchemes.contains(currentScheme) {
                 Task { await DeepLinkHandler.shared.handle(url: url) }
             } else {
                 canvasWindowLogger

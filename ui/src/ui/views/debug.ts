@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import type { EventLogEntry } from "../app-events.ts";
-import { formatEventPayload } from "../presenter.ts";
+import type { EventLogEntry } from "../app-events";
+import { formatEventPayload } from "../presenter";
 
 export type DebugProps = {
   loading: boolean;
@@ -9,7 +9,6 @@ export type DebugProps = {
   models: unknown[];
   heartbeat: unknown;
   eventLog: EventLogEntry[];
-  methods: string[];
   callMethod: string;
   callParams: string;
   callResult: string | null;
@@ -34,7 +33,7 @@ export function renderDebug(props: DebugProps) {
     critical > 0 ? `${critical} critical` : warn > 0 ? `${warn} warnings` : "No critical issues";
 
   return html`
-    <section class="grid">
+    <section class="grid grid-cols-2">
       <div class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -72,22 +71,14 @@ export function renderDebug(props: DebugProps) {
       <div class="card">
         <div class="card-title">Manual RPC</div>
         <div class="card-sub">Send a raw gateway method with JSON params.</div>
-        <div class="stack" style="margin-top: 16px;">
+        <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
             <span>Method</span>
-            <select
+            <input
               .value=${props.callMethod}
-              @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
-            >
-              ${
-                !props.callMethod
-                  ? html`
-                      <option value="" disabled>Select a method…</option>
-                    `
-                  : nothing
-              }
-              ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
-            </select>
+              @input=${(e: Event) => props.onCallMethodChange((e.target as HTMLInputElement).value)}
+              placeholder="system-presence"
+            />
           </label>
           <label class="field">
             <span>Params (JSON)</span>
@@ -136,18 +127,16 @@ export function renderDebug(props: DebugProps) {
               <div class="muted" style="margin-top: 12px">No events yet.</div>
             `
           : html`
-            <div class="list debug-event-log" style="margin-top: 12px;">
+            <div class="list" style="margin-top: 12px;">
               ${props.eventLog.map(
                 (evt) => html`
-                  <div class="list-item debug-event-log__item">
+                  <div class="list-item">
                     <div class="list-main">
                       <div class="list-title">${evt.event}</div>
                       <div class="list-sub">${new Date(evt.ts).toLocaleTimeString()}</div>
                     </div>
-                    <div class="list-meta debug-event-log__meta">
-                      <pre class="code-block debug-event-log__payload">${formatEventPayload(
-                        evt.payload,
-                      )}</pre>
+                    <div class="list-meta">
+                      <pre class="code-block">${formatEventPayload(evt.payload)}</pre>
                     </div>
                   </div>
                 `,

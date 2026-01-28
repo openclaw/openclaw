@@ -100,8 +100,17 @@ final class HoverHUDController {
             return
         }
 
-        OverlayPanelFactory.animateDismissAndHide(window: window, offsetX: 0, offsetY: 6, duration: 0.14) {
-            self.model.isVisible = false
+        let target = window.frame.offsetBy(dx: 0, dy: 6)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.14
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().setFrame(target, display: true)
+            window.animator().alphaValue = 0
+        } completionHandler: {
+            Task { @MainActor in
+                window.orderOut(nil)
+                self.model.isVisible = false
+            }
         }
     }
 
@@ -131,7 +140,15 @@ final class HoverHUDController {
         if !self.model.isVisible {
             self.model.isVisible = true
             let start = target.offsetBy(dx: 0, dy: 8)
-            OverlayPanelFactory.animatePresent(window: window, from: start, to: target)
+            window.setFrame(start, display: true)
+            window.alphaValue = 0
+            window.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(target, display: true)
+                window.animator().alphaValue = 1
+            }
         } else {
             window.orderFrontRegardless()
             self.updateWindowFrame(animate: true)
@@ -140,10 +157,22 @@ final class HoverHUDController {
 
     private func ensureWindow() {
         if self.window != nil { return }
-        let panel = OverlayPanelFactory.makePanel(
+        let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: self.width, height: self.height),
-            level: .statusBar,
-            hasShadow: true)
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
 
         let host = NSHostingView(rootView: HoverHUDView(controller: self))
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -172,7 +201,17 @@ final class HoverHUDController {
     }
 
     private func updateWindowFrame(animate: Bool = false) {
-        OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: animate)
+        guard let window else { return }
+        let frame = self.targetFrame()
+        if animate {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(frame, display: true)
+            }
+        } else {
+            window.setFrame(frame, display: true)
+        }
     }
 
     private func installDismissMonitor() {
@@ -192,7 +231,10 @@ final class HoverHUDController {
     }
 
     private func removeDismissMonitor() {
-        OverlayPanelFactory.clearGlobalEventMonitor(&self.dismissMonitor)
+        if let monitor = self.dismissMonitor {
+            NSEvent.removeMonitor(monitor)
+            self.dismissMonitor = nil
+        }
     }
 }
 

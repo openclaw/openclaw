@@ -1,14 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import {
-  createDirectoryTestRuntime,
-  expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.js";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
-  const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
-
   it("lists peers from allowFrom", async () => {
     const cfg = {
       channels: {
@@ -18,15 +12,16 @@ describe("zalo directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const directory = expectDirectorySurface(zaloPlugin.directory);
+    expect(zaloPlugin.directory).toBeTruthy();
+    expect(zaloPlugin.directory?.listPeers).toBeTruthy();
+    expect(zaloPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      directory.listPeers({
+      zaloPlugin.directory!.listPeers({
         cfg,
         accountId: undefined,
         query: undefined,
         limit: undefined,
-        runtime: runtimeEnv,
       }),
     ).resolves.toEqual(
       expect.arrayContaining([
@@ -37,12 +32,11 @@ describe("zalo directory", () => {
     );
 
     await expect(
-      directory.listGroups({
+      zaloPlugin.directory!.listGroups({
         cfg,
         accountId: undefined,
         query: undefined,
         limit: undefined,
-        runtime: runtimeEnv,
       }),
     ).resolves.toEqual([]);
   });

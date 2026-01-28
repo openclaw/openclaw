@@ -33,7 +33,6 @@ struct OpenClawApp: App {
 
     init() {
         OpenClawLogging.bootstrapIfNeeded()
-
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
     }
@@ -228,7 +227,17 @@ private final class StatusItemMouseHandlerView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        TrackingAreaSupport.resetMouseTracking(on: self, tracking: &self.tracking, owner: self)
+        if let tracking {
+            self.removeTrackingArea(tracking)
+        }
+        let options: NSTrackingArea.Options = [
+            .mouseEnteredAndExited,
+            .activeAlways,
+            .inVisibleRect,
+        ]
+        let area = NSTrackingArea(rect: self.bounds, options: options, owner: self, userInfo: nil)
+        self.addTrackingArea(area)
+        self.tracking = area
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -335,7 +344,7 @@ protocol UpdaterProviding: AnyObject {
     func checkForUpdates(_ sender: Any?)
 }
 
-/// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
+// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
 final class DisabledUpdaterController: UpdaterProviding {
     var automaticallyChecksForUpdates: Bool = false
     var automaticallyDownloadsUpdates: Bool = false
@@ -384,9 +393,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         set { self.controller.updater.automaticallyDownloadsUpdates = newValue }
     }
 
-    var isAvailable: Bool {
-        true
-    }
+    var isAvailable: Bool { true }
 
     func checkForUpdates(_ sender: Any?) {
         self.controller.checkForUpdates(sender)
@@ -421,7 +428,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 }
 
-extension SparkleUpdaterController: SPUUpdaterDelegate {}
+extension SparkleUpdaterController: @preconcurrency SPUUpdaterDelegate {}
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     var staticCode: SecStaticCode?

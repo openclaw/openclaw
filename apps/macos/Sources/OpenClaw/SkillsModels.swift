@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawProtocol
+import Foundation
 
 struct SkillsStatusReport: Codable {
     let workspaceDir: String
@@ -25,9 +25,7 @@ struct SkillStatus: Codable, Identifiable {
     let configChecks: [SkillStatusConfigCheck]
     let install: [SkillInstallOption]
 
-    var id: String {
-        self.name
-    }
+    var id: String { self.name }
 }
 
 struct SkillRequirements: Codable {
@@ -47,9 +45,7 @@ struct SkillStatusConfigCheck: Codable, Identifiable {
     let value: AnyCodable?
     let satisfied: Bool
 
-    var id: String {
-        self.path
-    }
+    var id: String { self.path }
 }
 
 struct SkillInstallOption: Codable, Identifiable {

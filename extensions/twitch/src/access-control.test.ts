@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { checkTwitchAccessControl, extractMentions } from "./access-control.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import { checkTwitchAccessControl, extractMentions } from "./access-control.js";
 
 describe("checkTwitchAccessControl", () => {
   const mockAccount: TwitchAccountConfig = {
     username: "testbot",
-    accessToken: "test",
-    clientId: "test-client-id",
-    channel: "testchannel",
+    token: "oauth:test",
   };
 
   const mockMessage: TwitchChatMessage = {
@@ -17,79 +15,16 @@ describe("checkTwitchAccessControl", () => {
     channel: "testchannel",
   };
 
-  function runAccessCheck(params: {
-    account?: Partial<TwitchAccountConfig>;
-    message?: Partial<TwitchChatMessage>;
-  }) {
-    return checkTwitchAccessControl({
-      message: {
-        ...mockMessage,
-        ...params.message,
-      },
-      account: {
-        ...mockAccount,
-        ...params.account,
-      },
-      botUsername: "testbot",
-    });
-  }
-
-  function expectSingleRoleAllowed(params: {
-    role: NonNullable<TwitchAccountConfig["allowedRoles"]>[number];
-    message: Partial<TwitchChatMessage>;
-  }) {
-    const result = runAccessCheck({
-      account: { allowedRoles: [params.role] },
-      message: {
-        message: "@testbot hello",
-        ...params.message,
-      },
-    });
-    expect(result.allowed).toBe(true);
-    return result;
-  }
-
-  function expectAllowedAccessCheck(params: {
-    account?: Partial<TwitchAccountConfig>;
-    message?: Partial<TwitchChatMessage>;
-  }) {
-    const result = runAccessCheck({
-      account: params.account,
-      message: {
-        message: "@testbot hello",
-        ...params.message,
-      },
-    });
-    expect(result.allowed).toBe(true);
-    return result;
-  }
-
-  function expectAllowFromBlocked(params: {
-    allowFrom: string[];
-    allowedRoles?: NonNullable<TwitchAccountConfig["allowedRoles"]>;
-    message?: Partial<TwitchChatMessage>;
-    reason: string;
-  }) {
-    const result = runAccessCheck({
-      account: {
-        allowFrom: params.allowFrom,
-        allowedRoles: params.allowedRoles,
-      },
-      message: {
-        message: "@testbot hello",
-        ...params.message,
-      },
-    });
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain(params.reason);
-  }
-
   describe("when no restrictions are configured", () => {
     it("allows messages that mention the bot (default requireMention)", () => {
-      const result = runAccessCheck({
-        message: {
-          message: "@testbot hello",
-        },
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+      const result = checkTwitchAccessControl({
+        message,
+        account: mockAccount,
+        botUsername: "testbot",
       });
       expect(result.allowed).toBe(true);
     });
@@ -97,20 +32,30 @@ describe("checkTwitchAccessControl", () => {
 
   describe("requireMention default", () => {
     it("defaults to true when undefined", () => {
-      const result = runAccessCheck({
-        message: {
-          message: "hello bot",
-        },
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "hello bot",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account: mockAccount,
+        botUsername: "testbot",
       });
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("does not mention the bot");
     });
 
     it("allows mention when requireMention is undefined", () => {
-      const result = runAccessCheck({
-        message: {
-          message: "@testbot hello",
-        },
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account: mockAccount,
+        botUsername: "testbot",
       });
       expect(result.allowed).toBe(true);
     });
@@ -118,25 +63,52 @@ describe("checkTwitchAccessControl", () => {
 
   describe("requireMention", () => {
     it("allows messages that mention the bot", () => {
-      const result = runAccessCheck({
-        account: { requireMention: true },
-        message: { message: "@testbot hello" },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        requireMention: true,
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
       expect(result.allowed).toBe(true);
     });
 
     it("blocks messages that don't mention the bot", () => {
-      const result = runAccessCheck({
-        account: { requireMention: true },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        requireMention: true,
+      };
+
+      const result = checkTwitchAccessControl({
+        message: mockMessage,
+        account,
+        botUsername: "testbot",
       });
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("does not mention the bot");
     });
 
     it("is case-insensitive for bot username", () => {
-      const result = runAccessCheck({
-        account: { requireMention: true },
-        message: { message: "@TestBot hello" },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        requireMention: true,
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@TestBot hello",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
       expect(result.allowed).toBe(true);
     });
@@ -144,35 +116,62 @@ describe("checkTwitchAccessControl", () => {
 
   describe("allowFrom allowlist", () => {
     it("allows users in the allowlist", () => {
-      const result = expectAllowedAccessCheck({
-        account: {
-          allowFrom: ["123456", "789012"],
-        },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowFrom: ["123456", "789012"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(true);
       expect(result.matchKey).toBe("123456");
       expect(result.matchSource).toBe("allowlist");
     });
 
     it("blocks users not in allowlist when allowFrom is set", () => {
-      expectAllowFromBlocked({
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
         allowFrom: ["789012"],
-        reason: "allowFrom",
-      });
-    });
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
 
-    it("blocks everyone when allowFrom is explicitly empty", () => {
-      expectAllowFromBlocked({
-        allowFrom: [],
-        reason: "allowFrom",
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("allowFrom");
     });
 
     it("blocks messages without userId", () => {
-      expectAllowFromBlocked({
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
         allowFrom: ["123456"],
-        message: { userId: undefined },
-        reason: "user ID not available",
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        userId: undefined,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("user ID not available");
     });
 
     it("bypasses role checks when user is in allowlist", () => {
@@ -196,30 +195,68 @@ describe("checkTwitchAccessControl", () => {
     });
 
     it("blocks user with role when not in allowlist", () => {
-      expectAllowFromBlocked({
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
         allowFrom: ["789012"],
         allowedRoles: ["moderator"],
-        message: { userId: "123456", isMod: true },
-        reason: "allowFrom",
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        userId: "123456",
+        isMod: true,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("allowFrom");
     });
 
     it("blocks user not in allowlist even when roles configured", () => {
-      expectAllowFromBlocked({
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
         allowFrom: ["789012"],
         allowedRoles: ["moderator"],
-        message: { userId: "123456", isMod: false },
-        reason: "allowFrom",
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        userId: "123456",
+        isMod: false,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("allowFrom");
     });
   });
 
   describe("allowedRoles", () => {
     it("allows users with matching role", () => {
-      const result = expectSingleRoleAllowed({
-        role: "moderator",
-        message: { isMod: true },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowedRoles: ["moderator"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        isMod: true,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(true);
       expect(result.matchSource).toBe("role");
     });
 
@@ -265,40 +302,98 @@ describe("checkTwitchAccessControl", () => {
     });
 
     it("allows all users when role is 'all'", () => {
-      const result = expectAllowedAccessCheck({
-        account: {
-          allowedRoles: ["all"],
-        },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowedRoles: ["all"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(true);
       expect(result.matchKey).toBe("all");
     });
 
     it("handles moderator role", () => {
-      expectSingleRoleAllowed({
-        role: "moderator",
-        message: { isMod: true },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowedRoles: ["moderator"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        isMod: true,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(true);
     });
 
     it("handles subscriber role", () => {
-      expectSingleRoleAllowed({
-        role: "subscriber",
-        message: { isSub: true },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowedRoles: ["subscriber"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        isSub: true,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(true);
     });
 
     it("handles owner role", () => {
-      expectSingleRoleAllowed({
-        role: "owner",
-        message: { isOwner: true },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowedRoles: ["owner"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        isOwner: true,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(true);
     });
 
     it("handles vip role", () => {
-      expectSingleRoleAllowed({
-        role: "vip",
-        message: { isVip: true },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowedRoles: ["vip"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        isVip: true,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
+      expect(result.allowed).toBe(true);
     });
   });
 
@@ -324,15 +419,21 @@ describe("checkTwitchAccessControl", () => {
     });
 
     it("checks allowlist before allowedRoles", () => {
-      const result = runAccessCheck({
-        account: {
-          allowFrom: ["123456"],
-          allowedRoles: ["owner"],
-        },
-        message: {
-          message: "@testbot hello",
-          isOwner: false,
-        },
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowFrom: ["123456"],
+        allowedRoles: ["owner"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+        isOwner: false,
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
       });
       expect(result.allowed).toBe(true);
       expect(result.matchSource).toBe("allowlist");

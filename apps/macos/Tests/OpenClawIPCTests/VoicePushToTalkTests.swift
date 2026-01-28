@@ -1,23 +1,23 @@
 import Testing
 @testable import OpenClaw
 
-struct VoicePushToTalkTests {
-    @Test func `delta trims committed prefix`() {
+@Suite struct VoicePushToTalkTests {
+    @Test func deltaTrimsCommittedPrefix() {
         let delta = VoicePushToTalk._testDelta(committed: "hello ", current: "hello world again")
         #expect(delta == "world again")
     }
 
-    @Test func `delta falls back when prefix differs`() {
+    @Test func deltaFallsBackWhenPrefixDiffers() {
         let delta = VoicePushToTalk._testDelta(committed: "goodbye", current: "hello world")
         #expect(delta == "hello world")
     }
 
-    @Test func `attributed colors differ when not final`() {
+    @Test func attributedColorsDifferWhenNotFinal() {
         let colors = VoicePushToTalk._testAttributedColors(isFinal: false)
         #expect(colors.0 != colors.1)
     }
 
-    @Test func `attributed colors match when final`() {
+    @Test func attributedColorsMatchWhenFinal() {
         let colors = VoicePushToTalk._testAttributedColors(isFinal: true)
         #expect(colors.0 == colors.1)
     }

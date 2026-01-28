@@ -1,5 +1,3 @@
-import { writeViaSiblingTempPath } from "./output-atomic.js";
-import { DEFAULT_TRACE_DIR } from "./paths.js";
 import { ensureContextState, getPageForTargetId } from "./pw-session.js";
 
 export async function traceStartViaPlaywright(opts: {
@@ -34,12 +32,6 @@ export async function traceStopViaPlaywright(opts: {
   if (!ctxState.traceActive) {
     throw new Error("No active trace. Start a trace before stopping it.");
   }
-  await writeViaSiblingTempPath({
-    rootDir: DEFAULT_TRACE_DIR,
-    targetPath: opts.path,
-    writeTemp: async (tempPath) => {
-      await context.tracing.stop({ path: tempPath });
-    },
-  });
+  await context.tracing.stop({ path: opts.path });
   ctxState.traceActive = false;
 }

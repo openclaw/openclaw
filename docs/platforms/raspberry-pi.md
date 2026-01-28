@@ -33,7 +33,7 @@ Perfect for:
 **Minimum specs:** 1GB RAM, 1 core, 500MB disk  
 **Recommended:** 2GB+ RAM, 64-bit OS, 16GB+ SD card (or USB SSD)
 
-## What you need
+## What You'll Need
 
 - Raspberry Pi 4 or 5 (2GB+ recommended)
 - MicroSD card (16GB+) or USB SSD (better performance)
@@ -76,15 +76,15 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Install Node.js 24 (ARM64)
+## 4) Install Node.js 22 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # Verify
-node --version  # Should show v24.x.x
+node --version  # Should show v22.x.x
 npm --version
 ```
 
@@ -153,32 +153,29 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Access the OpenClaw Dashboard
+## 9) Access the Dashboard
 
-Replace `user@gateway-host` with your Pi username and hostname or IP address.
-
-On your computer, ask the Pi to print a fresh dashboard URL:
+Since the Pi is headless, use an SSH tunnel:
 
 ```bash
-ssh user@gateway-host 'openclaw dashboard --no-open'
+# From your laptop/desktop
+ssh -L 18789:localhost:18789 user@gateway-host
+
+# Then open in browser
+open http://localhost:18789
 ```
 
-The command prints `Dashboard URL:`. Depending on how `gateway.auth.token`
-is configured, the URL may be a plain `http://127.0.0.1:18789/` link or one
-that includes `#token=...`.
-
-In another terminal on your computer, create the SSH tunnel:
+Or use Tailscale for always-on access:
 
 ```bash
-ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
+# On the Pi
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# Update config
+openclaw config set gateway.bind tailnet
+sudo systemctl restart openclaw
 ```
-
-Then open the printed Dashboard URL in your local browser.
-
-If the UI asks for auth, paste the token from `gateway.auth.token`
-(or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
-
-For always-on remote access, see [Tailscale](/gateway/tailscale).
 
 ---
 
@@ -194,57 +191,6 @@ lsblk
 ```
 
 See [Pi USB boot guide](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#usb-mass-storage-boot) for setup.
-
-### Speed up CLI startup (module compile cache)
-
-On lower-power Pi hosts, enable Node's module compile cache so repeated CLI runs are faster:
-
-```bash
-grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
-export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
-mkdir -p /var/tmp/openclaw-compile-cache
-export OPENCLAW_NO_RESPAWN=1
-EOF
-source ~/.bashrc
-```
-
-Notes:
-
-- `NODE_COMPILE_CACHE` speeds up subsequent runs (`status`, `health`, `--help`).
-- `/var/tmp` survives reboots better than `/tmp`.
-- `OPENCLAW_NO_RESPAWN=1` avoids extra startup cost from CLI self-respawn.
-- First run warms the cache; later runs benefit most.
-
-### systemd startup tuning (optional)
-
-If this Pi is mostly running OpenClaw, add a service drop-in to reduce restart
-jitter and keep startup env stable:
-
-```bash
-sudo systemctl edit openclaw
-```
-
-```ini
-[Service]
-Environment=OPENCLAW_NO_RESPAWN=1
-Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
-Restart=always
-RestartSec=2
-TimeoutStartSec=90
-```
-
-Then apply:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart openclaw
-```
-
-If possible, keep OpenClaw state/cache on SSD-backed storage to avoid SD-card
-random-I/O bottlenecks during cold starts.
-
-How `Restart=` policies help automated recovery:
-[systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
 
 ### Reduce Memory Usage
 
@@ -321,7 +267,7 @@ Since the Pi is just the Gateway (models run in the cloud), use API-based models
 
 ## Auto-Start on Boot
 
-Onboarding sets this up, but to verify:
+The onboarding wizard sets this up, but to verify:
 
 ```bash
 # Check service is enabled
@@ -354,7 +300,7 @@ free -h
 - Disable unused services: `sudo systemctl disable cups bluetooth avahi-daemon`
 - Check CPU throttling: `vcgencmd get_throttled` (should return `0x0`)
 
-### Service will not start
+### Service Won't Start
 
 ```bash
 # Check logs
@@ -407,6 +353,6 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 - [Linux guide](/platforms/linux) — general Linux setup
 - [DigitalOcean guide](/platforms/digitalocean) — cloud alternative
-- [Hetzner guide](/install/hetzner) — Docker setup
+- [Hetzner guide](/platforms/hetzner) — Docker setup
 - [Tailscale](/gateway/tailscale) — remote access
 - [Nodes](/nodes) — pair your laptop/phone with the Pi gateway

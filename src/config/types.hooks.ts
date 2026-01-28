@@ -14,8 +14,6 @@ export type HookMappingConfig = {
   action?: "wake" | "agent";
   wakeMode?: "now" | "next-heartbeat";
   name?: string;
-  /** Route this hook to a specific agent (unknown ids fall back to the default agent). */
-  agentId?: string;
   sessionKey?: string;
   messageTemplate?: string;
   textTemplate?: string;
@@ -27,7 +25,6 @@ export type HookMappingConfig = {
     | "whatsapp"
     | "telegram"
     | "discord"
-    | "irc"
     | "googlechat"
     | "slack"
     | "signal"
@@ -73,9 +70,9 @@ export type HooksGmailConfig = {
 };
 
 export type InternalHookHandlerConfig = {
-  /** Event key to listen for (e.g., 'command:new', 'message:received', 'message:transcribed', 'session:start') */
+  /** Event key to listen for (e.g., 'command:new', 'session:start') */
   event: string;
-  /** Path to handler module (workspace-relative) */
+  /** Path to handler module (absolute or relative to cwd) */
   module: string;
   /** Export name from module (default: 'default') */
   export?: string;
@@ -87,7 +84,13 @@ export type HookConfig = {
   [key: string]: unknown;
 };
 
-export type HookInstallRecord = InstallRecordBase & {
+export type HookInstallRecord = {
+  source: "npm" | "archive" | "path";
+  spec?: string;
+  sourcePath?: string;
+  installPath?: string;
+  version?: string;
+  installedAt?: string;
   hooks?: string[];
 };
 
@@ -111,26 +114,6 @@ export type HooksConfig = {
   enabled?: boolean;
   path?: string;
   token?: string;
-  /**
-   * Default session key used for hook agent runs when no request/mapping session key is used.
-   * If omitted, OpenClaw generates `hook:<uuid>` per request.
-   */
-  defaultSessionKey?: string;
-  /**
-   * Allow `sessionKey` from external `/hooks/agent` request payloads.
-   * Default: false.
-   */
-  allowRequestSessionKey?: boolean;
-  /**
-   * Optional allowlist for explicit session keys (request + mapping). Example: ["hook:"].
-   * Empty/omitted means no prefix restriction.
-   */
-  allowedSessionKeyPrefixes?: string[];
-  /**
-   * Restrict explicit hook `agentId` routing to these agent ids.
-   * Omit or include `*` to allow any agent. Set `[]` to deny all explicit `agentId` routing.
-   */
-  allowedAgentIds?: string[];
   maxBodyBytes?: number;
   presets?: string[];
   transformsDir?: string;
@@ -139,4 +122,3 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
-import type { InstallRecordBase } from "./types.installs.js";

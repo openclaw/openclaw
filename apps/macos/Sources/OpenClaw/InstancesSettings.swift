@@ -43,8 +43,16 @@ struct InstancesSettings: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            SettingsRefreshButton(isLoading: self.store.isLoading) {
-                Task { await self.store.refresh() }
+            if self.store.isLoading {
+                ProgressView()
+            } else {
+                Button {
+                    Task { await self.store.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .help("Refresh")
             }
         }
     }
@@ -268,7 +276,7 @@ struct InstancesSettings: View {
     }
 
     private func platformIcon(_ raw: String) -> String {
-        let (prefix, _) = PlatformLabelFormatter.parse(raw)
+        let (prefix, _) = self.parsePlatform(raw)
         switch prefix {
         case "macos":
             return "laptopcomputer"
@@ -286,7 +294,31 @@ struct InstancesSettings: View {
     }
 
     private func prettyPlatform(_ raw: String) -> String? {
-        PlatformLabelFormatter.pretty(raw)
+        let (prefix, version) = self.parsePlatform(raw)
+        if prefix.isEmpty { return nil }
+        let name: String = switch prefix {
+        case "macos": "macOS"
+        case "ios": "iOS"
+        case "ipados": "iPadOS"
+        case "tvos": "tvOS"
+        case "watchos": "watchOS"
+        default: prefix.prefix(1).uppercased() + prefix.dropFirst()
+        }
+        guard let version, !version.isEmpty else { return name }
+        let parts = version.split(separator: ".").map(String.init)
+        if parts.count >= 2 {
+            return "\(name) \(parts[0]).\(parts[1])"
+        }
+        return "\(name) \(version)"
+    }
+
+    private func parsePlatform(_ raw: String) -> (prefix: String, version: String?) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return ("", nil) }
+        let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        let prefix = parts.first?.lowercased() ?? ""
+        let versionToken = parts.dropFirst().first
+        return (prefix, versionToken)
     }
 
     private func presenceUpdateSourceShortText(_ reason: String) -> String? {
@@ -418,8 +450,8 @@ extension InstancesSettings {
         _ = view.prettyPlatform("ipados 17.1")
         _ = view.prettyPlatform("linux")
         _ = view.prettyPlatform("   ")
-        _ = PlatformLabelFormatter.parse("macOS 14.1")
-        _ = PlatformLabelFormatter.parse(" ")
+        _ = view.parsePlatform("macOS 14.1")
+        _ = view.parsePlatform(" ")
         _ = view.presenceUpdateSourceShortText("self")
         _ = view.presenceUpdateSourceShortText("instances-refresh")
         _ = view.presenceUpdateSourceShortText("seq gap")

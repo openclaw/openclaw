@@ -1,14 +1,17 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { msteamsPlugin } from "./src/channel.js";
 import { setMSTeamsRuntime } from "./src/runtime.js";
 
-export { msteamsPlugin } from "./src/channel.js";
-export { setMSTeamsRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+const plugin = {
   id: "msteams",
   name: "Microsoft Teams",
   description: "Microsoft Teams channel plugin (Bot Framework)",
-  plugin: msteamsPlugin,
-  setRuntime: setMSTeamsRuntime,
-});
+  configSchema: emptyPluginConfigSchema(),
+  register(api: OpenClawPluginApi) {
+    setMSTeamsRuntime(api.runtime);
+    api.registerChannel({ plugin: msteamsPlugin });
+  },
+};
+
+export default plugin;

@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TailscaleIntegrationSectionTests {
-    @Test func `tailscale section builds body when not installed`() {
+    @Test func tailscaleSectionBuildsBodyWhenNotInstalled() {
         let service = TailscaleService(isInstalled: false, isRunning: false, statusError: "not installed")
         var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
         view.setTestingService(service)
@@ -13,7 +13,7 @@ struct TailscaleIntegrationSectionTests {
         _ = view.body
     }
 
-    @Test func `tailscale section builds body for serve mode`() {
+    @Test func tailscaleSectionBuildsBodyForServeMode() {
         let service = TailscaleService(
             isInstalled: true,
             isRunning: true,
@@ -29,7 +29,7 @@ struct TailscaleIntegrationSectionTests {
         _ = view.body
     }
 
-    @Test func `tailscale section builds body for funnel mode`() {
+    @Test func tailscaleSectionBuildsBodyForFunnelMode() {
         let service = TailscaleService(
             isInstalled: true,
             isRunning: false,

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import type { MemoryIndexManager } from "./index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import { buildFileEntry } from "./internal.js";
 
 vi.mock("./embeddings.js", () => {
   return {
@@ -19,47 +19,23 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
-type MemoryInternalModule = typeof import("./internal.js");
-type TestManagerModule = typeof import("./test-manager.js");
-type MemoryIndexModule = typeof import("./index.js");
-
-let buildFileEntry: MemoryInternalModule["buildFileEntry"];
-let createMemoryManagerOrThrow: TestManagerModule["createMemoryManagerOrThrow"];
-let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
-
 describe("memory vector dedupe", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
-  async function seedMemoryWorkspace(rootDir: string) {
-    await fs.mkdir(path.join(rootDir, "memory"));
-    await fs.writeFile(path.join(rootDir, "MEMORY.md"), "Hello memory.");
-  }
-
-  async function closeManagerIfOpen() {
-    if (!manager) {
-      return;
-    }
-    await manager.close();
-    manager = null;
-  }
-
-  beforeAll(async () => {
-    ({ buildFileEntry } = await import("./internal.js"));
-    ({ createMemoryManagerOrThrow } = await import("./test-manager.js"));
-    ({ closeAllMemorySearchManagers } = await import("./index.js"));
-  });
-
   beforeEach(async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
-    await seedMemoryWorkspace(workspaceDir);
+    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
   });
 
   afterEach(async () => {
-    await closeManagerIfOpen();
-    await closeAllMemorySearchManagers();
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
@@ -78,9 +54,14 @@ describe("memory vector dedupe", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    };
 
-    manager = await createMemoryManagerOrThrow(cfg);
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
 
     const db = (
       manager as unknown as {
@@ -103,9 +84,6 @@ describe("memory vector dedupe", () => {
     ).ensureVectorReady = async () => true;
 
     const entry = await buildFileEntry(path.join(workspaceDir, "MEMORY.md"), workspaceDir);
-    if (!entry) {
-      throw new Error("entry missing");
-    }
     await (
       manager as unknown as {
         indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;
