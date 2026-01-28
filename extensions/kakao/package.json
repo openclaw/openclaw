@@ -1,0 +1,33 @@
+{
+  "name": "@moltbot/kakao",
+  "version": "2026.1.28",
+  "type": "module",
+  "description": "Moltbot KakaoWork channel plugin",
+  "moltbot": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "kakao",
+      "label": "KakaoWork",
+      "selectionLabel": "KakaoWork (Bot API)",
+      "docsPath": "/channels/kakao",
+      "docsLabel": "kakao",
+      "blurb": "Korea-focused enterprise messaging with KakaoWork Bot API.",
+      "aliases": [
+        "kw"
+      ],
+      "order": 85,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@moltbot/kakao",
+      "localPath": "extensions/kakao",
+      "defaultChoice": "npm"
+    }
+  },
+  "dependencies": {
+    "moltbot": "workspace:*",
+    "undici": "7.19.0"
+  }
+}
