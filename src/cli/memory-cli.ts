@@ -257,13 +257,16 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
       onCloseError: (err) =>
         defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
-      close: (manager) => manager.close(),
+      close: async (manager) => {
+        await manager.close?.();
+      },
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
         let embeddingProbe:
           | Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>>
           | undefined;
         let indexError: string | undefined;
+        const syncFn = manager.sync;
         if (deep) {
           await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
             progress.setLabel("Probing vector…");
@@ -273,7 +276,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
             embeddingProbe = await manager.probeEmbeddingAvailability();
             progress.tick();
           });
-          if (opts.index) {
+          if (opts.index && syncFn) {
             await withProgressTotals(
               {
                 label: "Indexing memory…",
@@ -282,7 +285,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
               },
               async (update, progress) => {
                 try {
-                  await manager.sync({
+                  await syncFn({
                     reason: "cli",
                     force: true,
                     progress: (syncUpdate) => {
@@ -303,6 +306,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
                 }
               },
             );
+          } else if (opts.index && !syncFn) {
+            defaultRuntime.log("Memory backend does not support manual reindex.");
           }
         } else {
           await manager.probeVectorAvailability();
@@ -311,12 +316,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         const sources = (
           status.sources?.length ? status.sources : ["memory"]
         ) as MemorySourceName[];
-        const scan = await scanMemorySources({
-          workspaceDir: status.workspaceDir,
-          agentId,
-          sources,
-          extraPaths: status.extraPaths,
-        });
+        const workspaceDir = status.workspaceDir;
+        const scan = workspaceDir
+          ? await scanMemorySources({ workspaceDir, agentId, sources, extraPaths: status.extraPaths })
+          : undefined;
         allResults.push({ agentId, status, embeddingProbe, indexError, scan });
       },
     });
@@ -338,28 +341,35 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
 
   for (const result of allResults) {
     const { agentId, status, embeddingProbe, indexError, scan } = result;
+    const filesIndexed = status.files ?? 0;
+    const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
     const indexedLabel =
       totalFiles === null
-        ? `${status.files}/? files · ${status.chunks} chunks`
-        : `${status.files}/${totalFiles} files · ${status.chunks} chunks`;
+        ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
+        : `${filesIndexed}/${totalFiles} files · ${chunksIndexed} chunks`;
     if (opts.index) {
       const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
       defaultRuntime.log(line);
     }
-    const extraPaths = formatExtraPaths(status.workspaceDir, status.extraPaths ?? []);
+    const requestedProvider = status.requestedProvider ?? status.provider;
+    const modelLabel = status.model ?? status.provider;
+    const storePath = status.dbPath ? shortenHomePath(status.dbPath) : "<unknown>";
+    const workspacePath = status.workspaceDir ? shortenHomePath(status.workspaceDir) : "<unknown>";
+    const sourceList = status.sources?.length ? status.sources.join(", ") : null;
+    const extraPaths = status.workspaceDir
+      ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
+      : [];
     const lines = [
       `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
-      `${label("Provider")} ${info(status.provider)} ${muted(
-        `(requested: ${status.requestedProvider})`,
-      )}`,
-      `${label("Model")} ${info(status.model)}`,
-      status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
+      `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
+      `${label("Model")} ${info(modelLabel)}`,
+      sourceList ? `${label("Sources")} ${info(sourceList)}` : null,
       extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
-      `${label("Store")} ${info(shortenHomePath(status.dbPath))}`,
-      `${label("Workspace")} ${info(shortenHomePath(status.workspaceDir))}`,
+      `${label("Store")} ${info(storePath)}`,
+      `${label("Workspace")} ${info(workspacePath)}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
@@ -372,7 +382,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
       for (const entry of status.sourceCounts) {
-        const total = scan?.sources.find(
+        const total = scan?.sources?.find(
           (scanEntry) => scanEntry.source === entry.source,
         )?.totalFiles;
         const counts =
@@ -504,9 +514,12 @@ export function registerMemoryCli(program: Command) {
           onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
           onCloseError: (err) =>
             defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
-          close: (manager) => manager.close(),
+          close: async (manager) => {
+            await manager.close?.();
+          },
           run: async (manager) => {
             try {
+              const syncFn = manager.sync;
               if (opts.verbose) {
                 const status = manager.status();
                 const rich = isRich();
@@ -515,16 +528,20 @@ export function registerMemoryCli(program: Command) {
                 const info = (text: string) => colorize(rich, theme.info, text);
                 const warn = (text: string) => colorize(rich, theme.warn, text);
                 const label = (text: string) => muted(`${text}:`);
-                const sourceLabels = status.sources.map((source) =>
-                  formatSourceLabel(source, status.workspaceDir, agentId),
+                const sourceLabels = (status.sources ?? []).map((source) =>
+                  formatSourceLabel(source, status.workspaceDir ?? "", agentId),
                 );
-                const extraPaths = formatExtraPaths(status.workspaceDir, status.extraPaths ?? []);
+                const extraPaths = status.workspaceDir
+                  ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
+                  : [];
+                const requestedProvider = status.requestedProvider ?? status.provider;
+                const modelLabel = status.model ?? status.provider;
                 const lines = [
                   `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
                   `${label("Provider")} ${info(status.provider)} ${muted(
-                    `(requested: ${status.requestedProvider})`,
+                    `(requested: ${requestedProvider})`,
                   )}`,
-                  `${label("Model")} ${info(status.model)}`,
+                  `${label("Model")} ${info(modelLabel)}`,
                   sourceLabels.length
                     ? `${label("Sources")} ${info(sourceLabels.join(", "))}`
                     : null,
@@ -571,6 +588,10 @@ export function registerMemoryCli(program: Command) {
                   ? `${lastLabel} · elapsed ${elapsed} · eta ${eta}`
                   : `${lastLabel} · elapsed ${elapsed}`;
               };
+              if (!syncFn) {
+                defaultRuntime.log("Memory backend does not support manual reindex.");
+                return;
+              }
               await withProgressTotals(
                 {
                   label: "Indexing memory…",
@@ -582,7 +603,7 @@ export function registerMemoryCli(program: Command) {
                     progress.setLabel(buildLabel());
                   }, 1000);
                   try {
-                    await manager.sync({
+                    await syncFn({
                       reason: "cli",
                       force: true,
                       progress: (syncUpdate) => {
@@ -638,7 +659,9 @@ export function registerMemoryCli(program: Command) {
           onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
           onCloseError: (err) =>
             defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
-          close: (manager) => manager.close(),
+          close: async (manager) => {
+            await manager.close?.();
+          },
           run: async (manager) => {
             let results: Awaited<ReturnType<typeof manager.search>>;
             try {
