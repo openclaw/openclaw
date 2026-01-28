@@ -139,7 +139,7 @@ const x402Plugin = {
                     [PROVIDER_ID]: {
                       baseUrl,
                       apiKey: "x402-wallet",
-                      api: "openai-completions",
+                      api: "anthropic-messages",
                       authHeader: false,
                       models: [
                         {

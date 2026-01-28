@@ -131,7 +131,7 @@ It lets you pay for inference with USDC.
 
 - Provider: `x402`
 - Auth: wallet private key (stored in auth profiles)
-- Example model: `x402/anthropic/opus-4.5`
+- Example model: `x402/anthropic:claude-opus-4-5`
 - CLI: `clawdbot onboard --auth-choice x402`
 
 ```json5
@@ -140,10 +140,10 @@ It lets you pay for inference with USDC.
     mode: "merge",
     providers: {
       x402: {
-        baseUrl: "https://router.example.com/v1",
-        api: "openai-completions",
+        baseUrl: "https://ai.xgate.run/v1",
+        api: "anthropic-messages",
         authHeader: false,
-        models: [{ id: "anthropic/opus-4.5", name: "Anthropic Opus 4.5" }]
+        models: [{ id: "anthropic:claude-opus-4-5", name: "Claude Opus 4.5" }]
       }
     }
   },
