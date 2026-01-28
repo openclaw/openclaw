@@ -23,6 +23,8 @@ import type {
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./types.js";
+
+type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-config.js";
 
 const log = createSubsystemLogger("memory");
@@ -85,7 +87,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private closed = false;
-  private db: import("node:sqlite").DatabaseSync | null = null;
+  private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
 
   private constructor(params: {
@@ -379,10 +381,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private ensureDb() {
+  private ensureDb(): SqliteDatabase {
     if (this.db) return this.db;
-    const sqlite = requireNodeSqlite();
-    this.db = sqlite.open(this.indexPath, { readonly: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    this.db = new DatabaseSync(this.indexPath, { readOnly: true });
     return this.db;
   }
 
