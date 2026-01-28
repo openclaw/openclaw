@@ -1,6 +1,9 @@
 # Evolution Queue
 
-> Liam: Propose improvements here. Simon reviews and implements approved items.
+> System improvements — how Liam works, multi-agent coordination, tools, infra.
+> For Liam's projects and ventures, see `PROJECTS.md`.
+
+---
 
 ## How to Submit
 
@@ -25,7 +28,7 @@
 
 **RULE:** If grep FINDS the feature, DO NOT create the entry (it's a ghost bug).
 
-**IMPORTANT:** ALL entries (including external reports from Simon/Telegram) should be verified before implementation. Don't assume external reports are accurate - always verify with commands first.
+---
 
 ## Queue Hygiene Rules
 
@@ -45,9 +48,9 @@ Items with these statuses must be moved to `EVOLUTION-QUEUE-ARCHIVE.md`:
 - **DUPLICATE** - Already covered by another item
 - **GHOST BUG** - Feature already exists
 
-**When marking RESOLVED:** Move the entire entry to the archive immediately. Do not leave [RESOLVED] tags in the main queue.
+---
 
-## Pending
+## Pending (System)
 
 ### [2026-01-28-049] Telegram Liam Identity/Tool Access Failure
 - **Proposed by:** Liam (Discord)
@@ -66,22 +69,6 @@ Items with these statuses must be moved to `EVOLUTION-QUEUE-ARCHIVE.md`:
 - **Scheduled for:** 2026-02-10
 - **Description:** Revert debug mode frequencies to normal after 2-week dev period. Actions: disable Evening-Self-Audit + Model-Health-Check cron jobs, revert self-evaluation/Queue-Cleanup to Sunday only.
 - **Status:** SCHEDULED
-
-### [2026-01-25-016] PuenteWorks Documentation Import
-- **Proposed by:** Simon (via email)
-- **Date:** 2026-01-25
-- **Category:** memory
-- **Description:** Import PuenteWorks documentation from Simon's Mac/Claude account into Liam's memory.
-- **Impact:** High - Critical business context
-- **Status:** WAITING ON SIMON (needs to provide files)
-
-### [2026-01-25-007] Low-Friction Capture Methods
-- **Proposed by:** Liam
-- **Date:** 2026-01-25
-- **Category:** tools
-- **Description:** NeuroSecond <2 second capture via natural language (Telegram) and email (clawdbot@puenteworks.com).
-- **Impact:** High - Critical for NeuroSecond methodology
-- **Status:** IN PROGRESS (natural-capture skill)
 
 ### [2026-01-27-046] Dashboard Chat Window
 - **Proposed by:** Simon (via Telegram)
@@ -110,6 +97,20 @@ Items with these statuses must be moved to `EVOLUTION-QUEUE-ARCHIVE.md`:
 - **Impact:** Medium - Visibility into subagent orchestration
 - **Status:** PENDING
 
+---
+
+## In Progress
+
+### [2026-01-25-007] Low-Friction Capture Methods
+- **Proposed by:** Liam
+- **Date:** 2026-01-25
+- **Category:** tools
+- **Description:** NeuroSecond <2 second capture via natural language (Telegram) and email (clawdbot@puenteworks.com).
+- **Impact:** High - Critical for NeuroSecond methodology
+- **Status:** IN PROGRESS (natural-capture skill)
+
+---
+
 ## Paused
 
 ### [2026-01-28-043] GLM-4.7-Flash vs Kimi K2.5 Model Comparison [TESTED]
@@ -125,16 +126,7 @@ Items with these statuses must be moved to `EVOLUTION-QUEUE-ARCHIVE.md`:
 - **Recommendation:** Monitor for rate limit issues; consider switching to local GLM-4.7-Flash if identity conflict is problematic
 - **Status:** TESTED - monitoring
 
-### [2026-01-25-019] Digital Download Business Research
-- **Date:** 2026-01-25
-- **Description:** Research digital download business ideas as secondary income. Full analysis delivered with 7+ ideas.
-- **Status:** [RESOLVED] Merged into sticker business — strategic elements (pricing benchmarks, GTM strategy, validation experiments) integrated into `progress/sticker-business.txt`. Raw research archived to `plans/archive/`.
-- **Resolution Date:** 2026-01-28
-
-### [2026-01-25-018] Edison Learning Operations Job
-- **Date:** 2026-01-25
-- **Description:** Track Edison Learning Operations Senior Specialist opportunity (interviewed 2026-01-23).
-- **Status:** PAUSED per Simon
+---
 
 ## Approved
 
@@ -142,4 +134,4 @@ Items with these statuses must be moved to `EVOLUTION-QUEUE-ARCHIVE.md`:
 
 ---
 
-*Implemented and rejected items moved to EVOLUTION-QUEUE-ARCHIVE.md*
+*For Liam's projects and ventures, see PROJECTS.md*
