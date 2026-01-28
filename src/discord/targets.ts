@@ -81,10 +81,13 @@ export async function resolveDiscordTarget(
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
 
-  // If already a known format, parse directly
-  const directParse = parseDiscordTarget(trimmed, options);
-  if (directParse && directParse.kind !== "channel" && !isLikelyUsername(trimmed)) {
+  const shouldLookup = isExplicitUserLookup(trimmed, options);
+  const directParse = safeParseDiscordTarget(trimmed, options);
+  if (directParse && directParse.kind !== "channel") {
     return directParse;
+  }
+  if (!shouldLookup) {
+    return directParse ?? parseDiscordTarget(trimmed, options);
   }
 
   // Try to resolve as a username via directory lookup
@@ -110,15 +113,29 @@ export async function resolveDiscordTarget(
   return parseDiscordTarget(trimmed, options);
 }
 
-/**
- * Check if a string looks like a Discord username (not a mention, prefix, or ID).
- * Usernames typically don't start with special characters except underscore.
- */
-function isLikelyUsername(input: string): boolean {
-  // Skip if it's already a known format
-  if (/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(input)) {
-    return false;
+function safeParseDiscordTarget(
+  input: string,
+  options: DiscordTargetParseOptions,
+): MessagingTarget | undefined {
+  try {
+    return parseDiscordTarget(input, options);
+  } catch {
+    return undefined;
   }
-  // Likely a username if it doesn't match known patterns
-  return true;
+}
+
+function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions): boolean {
+  if (/^<@!?(\d+)>$/.test(input)) {
+    return true;
+  }
+  if (/^(user:|discord:)/.test(input)) {
+    return true;
+  }
+  if (input.startsWith("@")) {
+    return true;
+  }
+  if (/^\d+$/.test(input)) {
+    return options.defaultKind === "user";
+  }
+  return false;
 }
