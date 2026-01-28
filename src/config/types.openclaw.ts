@@ -24,6 +24,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { WorkspaceConfig } from "./types.workspace.js";
 
 export type OpenClawConfig = {
   meta?: {
@@ -97,6 +98,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  workspace?: WorkspaceConfig;
 };
 
 export type ConfigValidationIssue = {

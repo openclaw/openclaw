@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
 import type { ProgramContext } from "./context.js";
+import { registerWorkspaceCli } from "../workspace-cli.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 type CommandRegisterParams = {
@@ -200,6 +201,10 @@ const coreEntries: CoreCliEntry[] = [
       const mod = await import("../browser-cli.js");
       mod.registerBrowserCli(program);
     },
+  },
+  {
+    id: "workspace",
+    register: ({ program }) => registerWorkspaceCli(program),
   },
 ];
 

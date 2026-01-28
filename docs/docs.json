@@ -1163,7 +1163,7 @@
               },
               {
                 "group": "Remote access",
-                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
+                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale", "gateway/workspace-sync"]
               },
               {
                 "group": "Security",
