@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { resolveSyncConfig, generateRcloneConfig, isRcloneConfigured } from "./rclone.js";
@@ -6,14 +7,14 @@ describe("rclone helpers", () => {
   describe("resolveSyncConfig", () => {
     it("uses defaults when config is minimal", () => {
       const config = { provider: "dropbox" as const, remotePath: "test-folder" };
-      const workspaceDir = "/home/user/workspace";
-      const stateDir = "/home/user/.moltbot";
+      const workspaceDir = path.join("/home", "user", "workspace");
+      const stateDir = path.join("/home", "user", ".moltbot");
 
       const resolved = resolveSyncConfig(config, workspaceDir, stateDir);
 
       expect(resolved.provider).toBe("dropbox");
       expect(resolved.remotePath).toBe("test-folder");
-      expect(resolved.localPath).toBe("/home/user/workspace/shared");
+      expect(resolved.localPath).toBe(path.join(workspaceDir, "shared"));
       expect(resolved.remoteName).toBe("cloud");
       expect(resolved.conflictResolve).toBe("newer");
       expect(resolved.interval).toBe(0);
@@ -27,12 +28,12 @@ describe("rclone helpers", () => {
         remotePath: "test-folder",
         localPath: "sync",
       };
-      const workspaceDir = "/home/user/workspace";
-      const stateDir = "/home/user/.moltbot";
+      const workspaceDir = path.join("/home", "user", "workspace");
+      const stateDir = path.join("/home", "user", ".moltbot");
 
       const resolved = resolveSyncConfig(config, workspaceDir, stateDir);
 
-      expect(resolved.localPath).toBe("/home/user/workspace/sync");
+      expect(resolved.localPath).toBe(path.join(workspaceDir, "sync"));
     });
 
     it("respects custom remoteName", () => {
@@ -41,8 +42,8 @@ describe("rclone helpers", () => {
         remotePath: "test-folder",
         remoteName: "my-dropbox",
       };
-      const workspaceDir = "/home/user/workspace";
-      const stateDir = "/home/user/.moltbot";
+      const workspaceDir = path.join("/home", "user", "workspace");
+      const stateDir = path.join("/home", "user", ".moltbot");
 
       const resolved = resolveSyncConfig(config, workspaceDir, stateDir);
 
@@ -57,8 +58,8 @@ describe("rclone helpers", () => {
         onSessionStart: true,
         onSessionEnd: true,
       };
-      const workspaceDir = "/home/user/workspace";
-      const stateDir = "/home/user/.moltbot";
+      const workspaceDir = path.join("/home", "user", "workspace");
+      const stateDir = path.join("/home", "user", ".moltbot");
 
       const resolved = resolveSyncConfig(config, workspaceDir, stateDir);
 
