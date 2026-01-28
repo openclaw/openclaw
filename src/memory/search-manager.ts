@@ -3,7 +3,11 @@ import type { MoltbotConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import type { MemoryIndexManager } from "./manager.js";
-import type { MemorySearchManager, MemorySyncProgressUpdate } from "./types.js";
+import type {
+  MemoryEmbeddingProbeResult,
+  MemorySearchManager,
+  MemorySyncProgressUpdate,
+} from "./types.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
@@ -146,6 +150,17 @@ class FallbackMemoryManager implements MemorySearchManager {
     }
     const fallback = await this.ensureFallback();
     await fallback?.sync?.(params);
+  }
+
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    if (!this.primaryFailed) {
+      return await this.deps.primary.probeEmbeddingAvailability();
+    }
+    const fallback = await this.ensureFallback();
+    if (fallback) {
+      return await fallback.probeEmbeddingAvailability();
+    }
+    return { ok: false, error: this.lastError ?? "memory embeddings unavailable" };
   }
 
   async probeVectorAvailability() {

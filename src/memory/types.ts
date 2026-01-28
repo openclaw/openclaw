@@ -10,6 +10,11 @@ export type MemorySearchResult = {
   citation?: string;
 };
 
+export type MemoryEmbeddingProbeResult = {
+  ok: boolean;
+  error?: string;
+};
+
 export type MemorySyncProgressUpdate = {
   completed: number;
   total: number;
@@ -68,6 +73,7 @@ export interface MemorySearchManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
+  probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;
 }
