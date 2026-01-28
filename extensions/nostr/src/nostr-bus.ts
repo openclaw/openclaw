@@ -41,6 +41,23 @@ import {
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
 // ============================================================================
+// Shared Pool (singleton for bunker tools)
+// ============================================================================
+
+let sharedPool: SimplePool | null = null;
+
+/**
+ * Get a shared SimplePool instance for bunker tools.
+ * Uses a singleton pattern to reuse connections.
+ */
+export function getSharedPool(): SimplePool {
+  if (!sharedPool) {
+    sharedPool = new SimplePool();
+  }
+  return sharedPool;
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -855,8 +872,13 @@ export function normalizePubkey(input: string): string {
     if (decoded.type !== "npub") {
       throw new Error("Invalid npub key");
     }
-    // Convert Uint8Array to hex string
-    return Array.from(decoded.data)
+    // In nostr-tools v2+, decoded.data is already a hex string
+    // In older versions, it was a Uint8Array
+    if (typeof decoded.data === "string") {
+      return decoded.data.toLowerCase();
+    }
+    // Fallback for Uint8Array (older nostr-tools)
+    return Array.from(decoded.data as Uint8Array)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   }

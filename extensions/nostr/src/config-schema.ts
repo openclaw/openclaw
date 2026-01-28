@@ -54,6 +54,22 @@ export const NostrProfileSchema = z.object({
 export type NostrProfile = z.infer<typeof NostrProfileSchema>;
 
 /**
+ * Bunker account entry for NIP-46 remote signing
+ */
+export const BunkerAccountSchema = z.object({
+  /** Display name for this bunker account */
+  name: z.string().optional(),
+  /** bunker:// URL (secret stripped after connection) */
+  bunkerUrl: z.string(),
+  /** Cached user pubkey after successful connection */
+  userPubkey: z.string().optional(),
+  /** Connection timestamp */
+  connectedAt: z.number().optional(),
+});
+
+export type BunkerAccountConfig = z.infer<typeof BunkerAccountSchema>;
+
+/**
  * Zod schema for channels.nostr.* configuration
  */
 export const NostrConfigSchema = z.object({
@@ -71,6 +87,9 @@ export const NostrConfigSchema = z.object({
 
   /** WebSocket relay URLs to connect to */
   relays: z.array(z.string()).optional(),
+
+  /** Bunker accounts for NIP-46 remote signing */
+  bunkerAccounts: z.array(BunkerAccountSchema).optional(),
 
   /** DM access policy: pairing, allowlist, open, or disabled */
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
