@@ -14,11 +14,7 @@ const FATAL_ERROR_CODES = new Set([
   "ERR_WORKER_INITIALIZATION_FAILED",
 ]);
 
-const CONFIG_ERROR_CODES = new Set([
-  "INVALID_CONFIG",
-  "MISSING_API_KEY",
-  "MISSING_CREDENTIALS",
-]);
+const CONFIG_ERROR_CODES = new Set(["INVALID_CONFIG", "MISSING_API_KEY", "MISSING_CREDENTIALS"]);
 
 // Network error codes that indicate transient failures (shouldn't crash the gateway)
 const TRANSIENT_NETWORK_CODES = new Set([
@@ -145,10 +141,7 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     if (isConfigError(reason)) {
-      console.error(
-        "[moltbot] CONFIGURATION ERROR - requires fix:",
-        formatUncaughtError(reason),
-      );
+      console.error("[moltbot] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
       process.exit(1);
       return;
     }
