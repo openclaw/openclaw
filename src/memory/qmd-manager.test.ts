@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => {
-  const spawn = vi.fn((cmd: string, _args: string[]) => {
+  const spawn = vi.fn((_cmd: string, _args: string[]) => {
     const stdout = new EventEmitter();
     const stderr = new EventEmitter();
     const child = new EventEmitter() as {
