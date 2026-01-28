@@ -3,8 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import YAML from "yaml";
-
 import type { MoltbotConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -72,10 +70,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly qmdDir: string;
   private readonly xdgConfigHome: string;
   private readonly xdgCacheHome: string;
-  private readonly collectionsFile: string;
   private readonly indexPath: string;
-  private readonly legacyCollectionsFile: string;
-  private readonly legacyIndexPath: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
@@ -102,18 +97,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.stateDir = resolveStateDir(process.env, os.homedir);
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");
-    // QMD respects XDG base dirs:
-    // - config:  $XDG_CONFIG_HOME/qmd/index.yml
+    // QMD uses XDG base dirs for its internal state.
+    // Collections are managed via `qmd collection add` and stored inside the index DB.
+    // - config:  $XDG_CONFIG_HOME (contexts, etc.)
     // - cache:   $XDG_CACHE_HOME/qmd/index.sqlite
     this.xdgConfigHome = path.join(this.qmdDir, "xdg-config");
     this.xdgCacheHome = path.join(this.qmdDir, "xdg-cache");
-    this.collectionsFile = path.join(this.xdgConfigHome, "qmd", "index.yml");
     this.indexPath = path.join(this.xdgCacheHome, "qmd", "index.sqlite");
-
-    // Legacy locations (older builds wrote here). Keep them in sync via symlinks
-    // so upgrades don't strand an empty index.
-    this.legacyCollectionsFile = path.join(this.qmdDir, "config", "index.yml");
-    this.legacyIndexPath = path.join(this.qmdDir, "cache", "index.sqlite");
 
     this.env = {
       ...process.env,
@@ -146,16 +136,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async initialize(): Promise<void> {
     await fs.mkdir(this.xdgConfigHome, { recursive: true });
     await fs.mkdir(this.xdgCacheHome, { recursive: true });
-    await fs.mkdir(path.dirname(this.collectionsFile), { recursive: true });
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
 
-    // Legacy dirs
-    await fs.mkdir(path.dirname(this.legacyCollectionsFile), { recursive: true });
-    await fs.mkdir(path.dirname(this.legacyIndexPath), { recursive: true });
-
     this.bootstrapCollections();
-    await this.writeCollectionsConfig();
-    await this.ensureLegacyCompatSymlinks();
+    await this.ensureCollections();
 
     if (this.qmd.update.onBoot) {
       await this.runUpdate("boot", true);
@@ -179,52 +163,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async writeCollectionsConfig(): Promise<void> {
-    const collections: Record<string, { path: string; pattern: string }> = {};
+  private async ensureCollections(): Promise<void> {
+    // QMD collections are persisted inside the index database and must be created
+    // via the CLI. The YAML file format is not supported by the QMD builds we
+    // target, so we ensure collections exist by running `qmd collection add`.
     for (const collection of this.qmd.collections) {
-      collections[collection.name] = {
-        path: collection.path,
-        pattern: collection.pattern,
-      };
-    }
-    const yaml = YAML.stringify({ collections }, { indent: 2, lineWidth: 0 });
-    await fs.writeFile(this.collectionsFile, yaml, "utf-8");
-
-    // Also write legacy path so older qmd homes remain usable.
-    await fs.writeFile(this.legacyCollectionsFile, yaml, "utf-8");
-  }
-
-  private async ensureLegacyCompatSymlinks(): Promise<void> {
-    // Best-effort: keep legacy locations pointing at the XDG locations.
-    // This helps when users have old state dirs on disk.
-    try {
-      await fs.rm(this.legacyCollectionsFile, { force: true });
-    } catch {}
-    try {
-      await fs.symlink(this.collectionsFile, this.legacyCollectionsFile);
-    } catch {}
-
-    try {
-      // If a legacy index already exists (from an older version), prefer it by
-      // linking the XDG path to the legacy DB.
-      const legacyExists = await fs
-        .stat(this.legacyIndexPath)
-        .then(() => true)
-        .catch(() => false);
-      const xdgExists = await fs
-        .stat(this.indexPath)
-        .then(() => true)
-        .catch(() => false);
-
-      if (legacyExists && !xdgExists) {
-        await fs.symlink(this.legacyIndexPath, this.indexPath);
-      } else if (!legacyExists && xdgExists) {
-        // nothing to do
-      } else if (!legacyExists && !xdgExists) {
-        // Create an empty file so the path exists for read-only opens later.
-        await fs.writeFile(this.indexPath, "");
+      try {
+        await this.runQmd([
+          "collection",
+          "add",
+          collection.path,
+          "--name",
+          collection.name,
+          "--mask",
+          collection.pattern,
+        ]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // Idempotency: qmd exits non-zero if the collection name already exists.
+        if (message.includes("already exists")) continue;
+        log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
-    } catch {}
+    }
   }
 
   async search(
