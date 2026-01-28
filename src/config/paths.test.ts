@@ -70,6 +70,9 @@ describe("state + config path candidates", () => {
   it("CONFIG_PATH prefers existing legacy filename when present", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-config-"));
     const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    const previousHomeDrive = process.env.HOMEDRIVE;
+    const previousHomePath = process.env.HOMEPATH;
     const previousMoltbotConfig = process.env.MOLTBOT_CONFIG_PATH;
     const previousClawdbotConfig = process.env.CLAWDBOT_CONFIG_PATH;
     const previousMoltbotState = process.env.MOLTBOT_STATE_DIR;
@@ -81,6 +84,12 @@ describe("state + config path candidates", () => {
       await fs.writeFile(legacyPath, "{}", "utf-8");
 
       process.env.HOME = root;
+      if (process.platform === "win32") {
+        process.env.USERPROFILE = root;
+        const parsed = path.win32.parse(root);
+        process.env.HOMEDRIVE = parsed.root.replace(/\\$/, "");
+        process.env.HOMEPATH = root.slice(parsed.root.length - 1);
+      }
       delete process.env.MOLTBOT_CONFIG_PATH;
       delete process.env.CLAWDBOT_CONFIG_PATH;
       delete process.env.MOLTBOT_STATE_DIR;
@@ -95,6 +104,12 @@ describe("state + config path candidates", () => {
       } else {
         process.env.HOME = previousHome;
       }
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+      if (previousHomeDrive === undefined) delete process.env.HOMEDRIVE;
+      else process.env.HOMEDRIVE = previousHomeDrive;
+      if (previousHomePath === undefined) delete process.env.HOMEPATH;
+      else process.env.HOMEPATH = previousHomePath;
       if (previousMoltbotConfig === undefined) delete process.env.MOLTBOT_CONFIG_PATH;
       else process.env.MOLTBOT_CONFIG_PATH = previousMoltbotConfig;
       if (previousClawdbotConfig === undefined) delete process.env.CLAWDBOT_CONFIG_PATH;
