@@ -1,8 +1,8 @@
-# Clawd IDE 🐾
+# DNA IDE 🧬
 
 **An AI-Native Development Environment**
 
-Clawd IDE is a modern, browser-based IDE built from the ground up with AI as a first-class citizen. Unlike traditional IDEs that bolt on AI features, every aspect of Clawd IDE is designed for intelligent, conversational development.
+DNA IDE is a modern, browser-based IDE built from the ground up with AI as a first-class citizen. Unlike traditional IDEs that bolt on AI features, every aspect of DNA IDE is designed for intelligent, conversational development.
 
 ![Status](https://img.shields.io/badge/status-98%25%20complete-brightgreen)
 ![Version](https://img.shields.io/badge/version-1.0.2--beta-blue)
