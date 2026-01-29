@@ -58,10 +58,12 @@ Note: Some references to "clawdbot" remain in older code/docs during transition.
 - **Droplet**: dbh-ventures (DO ID: 547817710, nyc1, $6/mo)
 - **Your login**: dbhurley / DBHVentures2026!
 - **My login**: steve / SteveAgent2026!
+- **Rule**: Always create projects under David's account (dbhurley), not steve
 - **Projects**:
   - ID 3: 🚀 DBH Ventures - Incubation Template (standard playbook)
   - ID 4: 🛡️ MeshGuard (launched)
   - ID 5: 💾 SaveState (launched Jan 27, 2026)
+  - ID 7: 🎨 NotHockney (paused - foundation complete)
 - **Incubation phases**: Idea → Foundation → MVP → Launch → Growth
 - **Usage**: Clone template project for each new venture
 
@@ -74,7 +76,7 @@ Note: Some references to "clawdbot" remain in older code/docs during transition.
   - Digital downloads: ~$80 (instant high-res download)
 - **Features**: Browse curated gallery + generate your own in same style
 - **Tech stack**: Next.js, Midjourney API, Stripe, Printful integration
-- **Vikunja project**: ID 6
+- **Vikunja project**: ID 7
 - **Aesthetic**: Elegant, minimal, gallery-like
 - **Legal**: Style-inspired only, no copyright infringement
 - **Gallery images**: 6 AI-generated pieces via Gemini (Nano Banana Pro)
