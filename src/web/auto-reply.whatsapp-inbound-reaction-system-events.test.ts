@@ -189,6 +189,7 @@ describe("web auto-reply – inbound reaction system events", () => {
     setLoadConfigMock(() => ({
       channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {},
+      session: { dmScope: "per-peer" },
     }));
 
     let capturedOnReaction: ((reaction: WebInboundReaction) => void) | undefined;
@@ -202,7 +203,11 @@ describe("web auto-reply – inbound reaction system events", () => {
 
     await monitorWebChannel(false, listenerFactory, false);
 
-    const cfg = { channels: { whatsapp: { allowFrom: ["*"] } }, messages: {} };
+    const cfg = {
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {},
+      session: { dmScope: "per-peer" },
+    };
 
     // For DM reactions with senderE164, the peer ID should be normalized to E.164
     // to match how messages are routed (via resolvePeerId).
