@@ -41,7 +41,7 @@ describe("applyMediaUnderstanding", () => {
     mockedResolveApiKey.mockClear();
     mockedFetchRemoteMedia.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("audio-bytes"),
+      buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
@@ -51,7 +51,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -94,7 +94,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
 
     const ctx: MsgContext = {
       Body: "<media:audio> /capture status",
@@ -176,7 +176,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "large.wav");
-    await fs.writeFile(audioPath, "0123456789");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -211,7 +211,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -352,7 +352,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "fallback.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -390,8 +390,8 @@ describe("applyMediaUnderstanding", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
-    await fs.writeFile(audioPathA, "hello");
-    await fs.writeFile(audioPathB, "world");
+    await fs.writeFile(audioPathA, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
+    await fs.writeFile(audioPathB, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -435,7 +435,7 @@ describe("applyMediaUnderstanding", () => {
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
     await fs.writeFile(imagePath, "image-bytes");
-    await fs.writeFile(audioPath, "audio-bytes");
+    await fs.writeFile(audioPath, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
@@ -486,5 +486,64 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBe("audio ok");
     expect(ctx.CommandBody).toBe("audio ok");
     expect(ctx.BodyForCommands).toBe("audio ok");
+  });
+
+  it("treats text-like audio attachments as CSV (comma wins over tabs)", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const csvPath = path.join(dir, "data.mp3");
+    const csvText = '"a","b"\t"c"\n"1","2"\t"3"';
+    const csvBuffer = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(csvText, "utf16le")]);
+    await fs.writeFile(csvPath, csvBuffer);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: csvPath,
+      MediaType: "audio/mpeg",
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain('<file name="data.mp3" mime="text/csv">');
+    expect(ctx.Body).toContain('"a","b"\t"c"');
+  });
+
+  it("infers TSV when tabs are present without commas", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const tsvPath = path.join(dir, "report.mp3");
+    const tsvText = "a\tb\tc\n1\t2\t3";
+    await fs.writeFile(tsvPath, tsvText);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: tsvPath,
+      MediaType: "audio/mpeg",
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain('<file name="report.mp3" mime="text/tab-separated-values">');
+    expect(ctx.Body).toContain("a\tb\tc");
   });
 });
