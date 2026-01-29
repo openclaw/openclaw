@@ -8,6 +8,8 @@ import {
 } from "./response-prefix-template.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
   /** Context for template variable interpolation in responsePrefix */
@@ -15,6 +17,7 @@ export type NormalizeReplyOptions = {
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
   silentToken?: string;
+  onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
 export function normalizeReplyPayload(
@@ -26,12 +29,18 @@ export function normalizeReplyPayload(
     payload.channelData && Object.keys(payload.channelData).length > 0,
   );
   const trimmed = payload.text?.trim() ?? "";
-  if (!trimmed && !hasMedia && !hasChannelData) return null;
+  if (!trimmed && !hasMedia && !hasChannelData) {
+    opts.onSkip?.("empty");
+    return null;
+  }
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyText(text, silentToken)) {
-    if (!hasMedia && !hasChannelData) return null;
+    if (!hasMedia && !hasChannelData) {
+      opts.onSkip?.("silent");
+      return null;
+    }
     text = "";
   }
   if (text && !trimmed) {
@@ -43,14 +52,20 @@ export function normalizeReplyPayload(
   if (shouldStripHeartbeat && text?.includes(HEARTBEAT_TOKEN)) {
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     if (stripped.didStrip) opts.onHeartbeatStrip?.();
-    if (stripped.shouldSkip && !hasMedia && !hasChannelData) return null;
+    if (stripped.shouldSkip && !hasMedia && !hasChannelData) {
+      opts.onSkip?.("heartbeat");
+      return null;
+    }
     text = stripped.text;
   }
 
   if (text) {
     text = sanitizeUserFacingText(text);
   }
-  if (!text?.trim() && !hasMedia && !hasChannelData) return null;
+  if (!text?.trim() && !hasMedia && !hasChannelData) {
+    opts.onSkip?.("empty");
+    return null;
+  }
 
   // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
   let enrichedPayload: ReplyPayload = { ...payload, text };

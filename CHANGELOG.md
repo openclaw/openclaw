@@ -73,6 +73,7 @@ Status: beta.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)
 - Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.
 - Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
 - Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
