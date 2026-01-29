@@ -401,7 +401,7 @@ export async function sendImageFeishu(params: {
   to: string;
   image: Buffer | Uint8Array;
   accountId?: string | null;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   runtime?: RuntimeEnv;
   receiveIdType?: "chat_id" | "open_id" | "user_id" | "union_id" | "email";
 }): Promise<SendFeishuMessageResult> {
