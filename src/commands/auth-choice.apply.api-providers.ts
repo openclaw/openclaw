@@ -27,7 +27,14 @@ import {
   applyVeniceProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
+  applyZaiCodingConfig,
+  applyZaiCodingProviderConfig,
   applyZaiConfig,
+  applyZaiProviderConfig,
+  applyZhipuCodingConfig,
+  applyZhipuCodingProviderConfig,
+  applyZhipuConfig,
+  applyZhipuProviderConfig,
   KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -43,7 +50,13 @@ import {
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setZaiApiKey,
+  setZaiCodingApiKey,
+  setZhipuApiKey,
+  setZhipuCodingApiKey,
+  ZAI_CODING_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
+  ZHIPU_CODING_DEFAULT_MODEL_REF,
+  ZHIPU_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 
@@ -79,6 +92,12 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "gemini-api-key";
     } else if (params.opts.tokenProvider === "zai") {
       authChoice = "zai-api-key";
+    } else if (params.opts.tokenProvider === "zai-coding") {
+      authChoice = "zai-coding-api-key";
+    } else if (params.opts.tokenProvider === "zhipu") {
+      authChoice = "zhipu-api-key";
+    } else if (params.opts.tokenProvider === "zhipu-coding") {
+      authChoice = "zhipu-coding-api-key";
     } else if (params.opts.tokenProvider === "synthetic") {
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
@@ -178,15 +197,17 @@ export async function applyAuthChoiceApiProviders(
       hasCredential = true;
     }
 
-    const envKey = resolveEnvApiKey("vercel-ai-gateway");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing AI_GATEWAY_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setVercelAiGatewayApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("vercel-ai-gateway");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing AI_GATEWAY_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setVercelAiGatewayApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
       }
     }
     if (!hasCredential) {
@@ -226,15 +247,17 @@ export async function applyAuthChoiceApiProviders(
       hasCredential = true;
     }
 
-    const envKey = resolveEnvApiKey("moonshot");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("moonshot");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setMoonshotApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
       }
     }
     if (!hasCredential) {
@@ -281,15 +304,17 @@ export async function applyAuthChoiceApiProviders(
         "Kimi Code",
       );
     }
-    const envKey = resolveEnvApiKey("kimi-code");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing KIMICODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setKimiCodeApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("kimi-code");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing KIMICODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setKimiCodeApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
       }
     }
     if (!hasCredential) {
@@ -329,15 +354,17 @@ export async function applyAuthChoiceApiProviders(
       hasCredential = true;
     }
 
-    const envKey = resolveEnvApiKey("google");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing GEMINI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setGeminiApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("google");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing GEMINI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setGeminiApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
       }
     }
     if (!hasCredential) {
@@ -376,15 +403,17 @@ export async function applyAuthChoiceApiProviders(
       hasCredential = true;
     }
 
-    const envKey = resolveEnvApiKey("zai");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing ZAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setZaiApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("zai");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing ZAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setZaiApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
       }
     }
     if (!hasCredential) {
@@ -405,23 +434,158 @@ export async function applyAuthChoiceApiProviders(
         setDefaultModel: params.setDefaultModel,
         defaultModel: ZAI_DEFAULT_MODEL_REF,
         applyDefaultConfig: applyZaiConfig,
-        applyProviderConfig: (config) => ({
-          ...config,
-          agents: {
-            ...config.agents,
-            defaults: {
-              ...config.agents?.defaults,
-              models: {
-                ...config.agents?.defaults?.models,
-                [ZAI_DEFAULT_MODEL_REF]: {
-                  ...config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF],
-                  alias: config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
-                },
-              },
-            },
-          },
-        }),
+        applyProviderConfig: applyZaiProviderConfig,
         noteDefault: ZAI_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "zai-coding-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zai-coding") {
+      await setZaiCodingApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("zai-coding");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing API key (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setZaiCodingApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Z.AI Coding Plan API key",
+        validate: validateApiKeyInput,
+      });
+      await setZaiCodingApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zai-coding:default",
+      provider: "zai-coding",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: ZAI_CODING_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyZaiCodingConfig,
+        applyProviderConfig: applyZaiCodingProviderConfig,
+        noteDefault: ZAI_CODING_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "zhipu-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zhipu") {
+      await setZhipuApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("zhipu");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing ZHIPU_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setZhipuApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Zhipu AI API key",
+        validate: validateApiKeyInput,
+      });
+      await setZhipuApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zhipu:default",
+      provider: "zhipu",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: ZHIPU_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyZhipuConfig,
+        applyProviderConfig: applyZhipuProviderConfig,
+        noteDefault: ZHIPU_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "zhipu-coding-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zhipu-coding") {
+      await setZhipuCodingApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("zhipu-coding");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing API key (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setZhipuCodingApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Zhipu AI Coding Plan API key",
+        validate: validateApiKeyInput,
+      });
+      await setZhipuCodingApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zhipu-coding:default",
+      provider: "zhipu-coding",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: ZHIPU_CODING_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyZhipuCodingConfig,
+        applyProviderConfig: applyZhipuCodingProviderConfig,
+        noteDefault: ZHIPU_CODING_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });
@@ -482,15 +646,17 @@ export async function applyAuthChoiceApiProviders(
       );
     }
 
-    const envKey = resolveEnvApiKey("venice");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing VENICE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setVeniceApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("venice");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing VENICE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setVeniceApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
       }
     }
     if (!hasCredential) {
@@ -539,15 +705,17 @@ export async function applyAuthChoiceApiProviders(
         "OpenCode Zen",
       );
     }
-    const envKey = resolveEnvApiKey("opencode");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing OPENCODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setOpencodeZenApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("opencode");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing OPENCODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setOpencodeZenApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
       }
     }
     if (!hasCredential) {

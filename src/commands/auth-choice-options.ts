@@ -16,6 +16,7 @@ export type AuthChoiceGroupId =
   | "ai-gateway"
   | "moonshot"
   | "zai"
+  | "zhipu"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
@@ -103,9 +104,15 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
   {
     value: "zai",
-    label: "Z.AI (GLM 4.7)",
-    hint: "API key",
-    choices: ["zai-api-key"],
+    label: "Z.AI (International)",
+    hint: "GLM models via api.z.ai",
+    choices: ["zai-api-key", "zai-coding-api-key"],
+  },
+  {
+    value: "zhipu",
+    label: "Zhipu AI (China)",
+    hint: "GLM models via bigmodel.cn",
+    choices: ["zhipu-api-key", "zhipu-coding-api-key"],
   },
   {
     value: "opencode-zen",
@@ -163,7 +170,18 @@ export function buildAuthChoiceOptions(params: {
     label: "Google Gemini CLI OAuth",
     hint: "Uses the bundled Gemini CLI auth plugin",
   });
-  options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
+  options.push({ value: "zai-api-key", label: "Z.AI API key (pay-as-you-go)" });
+  options.push({
+    value: "zai-coding-api-key",
+    label: "Z.AI Coding Plan API key",
+    hint: "Subscription-based, optimized for coding tools",
+  });
+  options.push({ value: "zhipu-api-key", label: "Zhipu AI API key (pay-as-you-go)" });
+  options.push({
+    value: "zhipu-coding-api-key",
+    label: "Zhipu AI Coding Plan API key",
+    hint: "China mainland, subscription-based",
+  });
   options.push({ value: "qwen-portal", label: "Qwen OAuth" });
   options.push({
     value: "copilot-proxy",
