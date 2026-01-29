@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="icon-title">
+  <title id="icon-title">DNA Icon</title>
+  <defs>
+    <linearGradient id="dnaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="50%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- DNA Double Helix -->
+  <g transform="translate(20, 10)">
+    <!-- Left strand -->
+    <path d="M15,5 C30,18 30,32 15,45 C0,58 0,72 15,85" 
+          stroke="url(#dnaGrad)" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <!-- Right strand -->
+    <path d="M45,5 C30,18 30,32 45,45 C60,58 60,72 45,85" 
+          stroke="url(#dnaGrad)" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <!-- Base pairs -->
+    <line x1="18" y1="14" x2="42" y2="14" stroke="url(#dnaGrad)" stroke-width="4" stroke-linecap="round" opacity="0.85"/>
+    <line x1="8" y1="30" x2="52" y2="30" stroke="url(#dnaGrad)" stroke-width="4" stroke-linecap="round" opacity="0.85"/>
+    <line x1="15" y1="45" x2="45" y2="45" stroke="url(#dnaGrad)" stroke-width="4" stroke-linecap="round" opacity="0.85"/>
+    <line x1="8" y1="60" x2="52" y2="60" stroke="url(#dnaGrad)" stroke-width="4" stroke-linecap="round" opacity="0.85"/>
+    <line x1="18" y1="76" x2="42" y2="76" stroke="url(#dnaGrad)" stroke-width="4" stroke-linecap="round" opacity="0.85"/>
+  </g>
+</svg>

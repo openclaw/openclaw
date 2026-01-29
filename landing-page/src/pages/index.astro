@@ -6,7 +6,10 @@ import Layout from '../layouts/Layout.astro';
   <!-- Header -->
   <header class="fixed top-0 left-0 right-0 z-50 backdrop-blur-md bg-[#0F0D15]/80 border-b border-white/5">
     <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-      <a href="/" class="text-2xl font-bold gradient-text">DNA</a>
+      <a href="/" class="flex items-center gap-2">
+        <img src="/favicon.svg" alt="DNA" class="w-10 h-10" />
+        <span class="text-2xl font-bold gradient-text">DNA</span>
+      </a>
       <nav class="hidden md:flex items-center gap-8">
         <a href="#features" class="text-sm text-gray-400 hover:text-white transition">Features</a>
         <a href="#demo" class="text-sm text-gray-400 hover:text-white transition">Demo</a>
@@ -267,7 +270,10 @@ import Layout from '../layouts/Layout.astro';
     <div class="max-w-6xl mx-auto">
       <div class="grid md:grid-cols-4 gap-8 mb-12">
         <div>
-          <div class="text-2xl font-bold gradient-text mb-4">DNA</div>
+          <div class="flex items-center gap-2 mb-4">
+            <img src="/favicon.svg" alt="DNA" class="w-8 h-8" />
+            <span class="text-2xl font-bold gradient-text">DNA</span>
+          </div>
           <p class="text-sm text-gray-500">Your AI, everywhere you chat.</p>
         </div>
         <div>

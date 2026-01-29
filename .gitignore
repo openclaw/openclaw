@@ -71,3 +71,6 @@ USER.md
 
 # local tooling
 .serena/
+
+# Local Netlify folder
+.netlify

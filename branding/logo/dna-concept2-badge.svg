@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="badge-title">
+  <title id="badge-title">DNA Badge Logo</title>
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="100%" style="stop-color:#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="helixGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF"/>
+      <stop offset="100%" style="stop-color:#E0E7FF"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="60" cy="60" r="56" fill="url(#bgGrad)"/>
+  
+  <!-- Inner glow ring -->
+  <circle cx="60" cy="60" r="48" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.2"/>
+  
+  <!-- DNA Helix (white on purple) -->
+  <g transform="translate(35, 22)">
+    <!-- Left strand -->
+    <path d="M12,5 C24,16 24,28 12,39 C0,50 0,62 12,73" 
+          stroke="url(#helixGrad)" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <!-- Right strand -->
+    <path d="M38,5 C26,16 26,28 38,39 C50,50 50,62 38,73" 
+          stroke="url(#helixGrad)" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <!-- Base pairs -->
+    <line x1="15" y1="12" x2="35" y2="12" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+    <line x1="6" y1="26" x2="44" y2="26" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+    <line x1="12" y1="39" x2="38" y2="39" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+    <line x1="6" y1="52" x2="44" y2="52" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+    <line x1="15" y1="66" x2="35" y2="66" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+  </g>
+</svg>

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 180" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">DNA Logo Vertical</title>
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="100%" style="stop-color:#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="50%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Badge Icon (centered) -->
+  <g transform="translate(20, 10)">
+    <circle cx="50" cy="50" r="50" fill="url(#bgGrad)"/>
+    <circle cx="50" cy="50" r="43" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.2"/>
+    
+    <!-- DNA Helix -->
+    <g transform="translate(22, 15)">
+      <path d="M12,5 C24,16 24,28 12,39 C0,50 0,62 12,73" 
+            stroke="#FFFFFF" stroke-width="5" fill="none" stroke-linecap="round"/>
+      <path d="M44,5 C32,16 32,28 44,39 C56,50 56,62 44,73" 
+            stroke="#FFFFFF" stroke-width="5" fill="none" stroke-linecap="round"/>
+      <line x1="15" y1="12" x2="41" y2="12" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+      <line x1="6" y1="26" x2="50" y2="26" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+      <line x1="12" y1="39" x2="44" y2="39" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+      <line x1="6" y1="52" x2="50" y2="52" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+      <line x1="15" y1="66" x2="41" y2="66" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+    </g>
+  </g>
+  
+  <!-- Wordmark (centered) -->
+  <text x="70" y="145" text-anchor="middle" font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif" font-weight="700" font-size="36" fill="url(#textGrad)" letter-spacing="3">DNA</text>
+  
+  <!-- Tagline -->
+  <text x="70" y="165" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" fill="#6366F1" opacity="0.7" letter-spacing="1.5">YOUR AI, EVERYWHERE</text>
+</svg>

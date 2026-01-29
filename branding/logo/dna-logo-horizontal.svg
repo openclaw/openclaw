@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 100" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">DNA Logo</title>
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="100%" style="stop-color:#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="50%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Badge Icon -->
+  <g transform="translate(10, 10)">
+    <circle cx="40" cy="40" r="40" fill="url(#bgGrad)"/>
+    <circle cx="40" cy="40" r="34" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.2"/>
+    
+    <!-- DNA Helix -->
+    <g transform="translate(18, 12)">
+      <path d="M10,4 C20,13 20,22 10,31 C0,40 0,49 10,58" 
+            stroke="#FFFFFF" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <path d="M34,4 C24,13 24,22 34,31 C44,40 44,49 34,58" 
+            stroke="#FFFFFF" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <line x1="12" y1="10" x2="32" y2="10" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+      <line x1="5" y1="21" x2="39" y2="21" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+      <line x1="10" y1="31" x2="34" y2="31" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+      <line x1="5" y1="41" x2="39" y2="41" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+      <line x1="12" y1="52" x2="32" y2="52" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+    </g>
+  </g>
+  
+  <!-- Wordmark -->
+  <text x="115" y="62" font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif" font-weight="700" font-size="48" fill="url(#textGrad)" letter-spacing="2">DNA</text>
+  
+  <!-- Tagline -->
+  <text x="117" y="82" font-family="Inter, sans-serif" font-size="12" fill="#6366F1" opacity="0.7" letter-spacing="2.5">YOUR AI, EVERYWHERE</text>
+</svg>

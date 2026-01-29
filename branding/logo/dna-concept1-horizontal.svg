@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 80" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">DNA Logo</title>
+  <defs>
+    <linearGradient id="dnaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="50%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+    <style>
+      .wordmark { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; font-weight: 700; }
+    </style>
+  </defs>
+  
+  <!-- DNA Helix Icon -->
+  <g id="icon" transform="translate(10, 10)">
+    <!-- Left strand -->
+    <path d="M15,5 C25,15 25,25 15,35 C5,45 5,55 15,65" 
+          stroke="url(#dnaGrad)" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <!-- Right strand -->
+    <path d="M45,5 C35,15 35,25 45,35 C55,45 55,55 45,65" 
+          stroke="url(#dnaGrad)" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <!-- Base pairs (connecting rungs) -->
+    <line x1="18" y1="12" x2="42" y2="12" stroke="url(#dnaGrad)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+    <line x1="12" y1="24" x2="48" y2="24" stroke="url(#dnaGrad)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+    <line x1="15" y1="35" x2="45" y2="35" stroke="url(#dnaGrad)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+    <line x1="12" y1="46" x2="48" y2="46" stroke="url(#dnaGrad)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+    <line x1="18" y1="58" x2="42" y2="58" stroke="url(#dnaGrad)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+  </g>
+  
+  <!-- Wordmark -->
+  <text x="85" y="55" class="wordmark" font-size="48" fill="url(#dnaGrad)" letter-spacing="2">DNA</text>
+  
+  <!-- Tagline -->
+  <text x="86" y="72" font-family="Inter, sans-serif" font-size="11" fill="#6366F1" opacity="0.7" letter-spacing="3">YOUR AI, EVERYWHERE</text>
+</svg>
