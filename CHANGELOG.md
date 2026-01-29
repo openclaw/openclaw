@@ -15,6 +15,7 @@ Status: beta.
 
 ### Changes
 - Providers: add Venice AI integration; update Moonshot Kimi references to kimi-k2.5; update MiniMax API endpoint/format. (#2762, #3064)
+- Providers: add Xiaomi MiMo (mimo-v2-flash) support and onboarding flow. (#3454) Thanks @WqyJh.
 - Telegram: quote replies, edit-message action, silent sends, sticker support + vision caching, linkPreview toggle, plugin sendPayload support. (#2900, #2394, #2382, #2548, #1700, #1917)
 - Discord: configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.
 - Browser: route browser control via gateway/node; fallback URL matching for relay targets. (#1999)

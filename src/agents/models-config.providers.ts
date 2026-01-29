@@ -31,7 +31,7 @@ const MINIMAX_API_COST = {
 };
 
 const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
-const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
+export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
 const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
 const XIAOMI_DEFAULT_MAX_TOKENS = 8192;
 const XIAOMI_DEFAULT_COST = {
