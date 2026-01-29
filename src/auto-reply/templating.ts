@@ -69,6 +69,8 @@ export type MsgContext = {
   ForwardedFromMessageId?: number;
   ForwardedDate?: number;
   ThreadStarterBody?: string;
+  /** Thread replies context (recent messages in the thread, excluding starter and current). */
+  ThreadRepliesBody?: string;
   ThreadLabel?: string;
   MediaPath?: string;
   MediaUrl?: string;
