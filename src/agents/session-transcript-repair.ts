@@ -56,8 +56,99 @@ function makeMissingToolResult(params: {
 
 export { makeMissingToolResult };
 
+export type ToolUseSanitizationReport = {
+  messages: AgentMessage[];
+  sanitizedCount: number;
+  changed: boolean;
+};
+
+export function sanitizeToolUseArgs(messages: AgentMessage[]): ToolUseSanitizationReport {
+  // Creates new message objects only when sanitization is needed; otherwise
+  // returns the original messages to avoid unnecessary copying, while guarding
+  // against corrupt JSON in tool arguments that could break the session.
+  const out: AgentMessage[] = [];
+  let changed = false;
+  let sanitizedCount = 0;
+
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const content = msg.content;
+    const nextContent: any[] = [];
+    let msgChanged = false;
+
+    for (const block of content) {
+      const anyBlock = block as any;
+      if (
+        anyBlock &&
+        typeof anyBlock === "object" &&
+        (anyBlock.type === "toolUse" ||
+          anyBlock.type === "toolCall" ||
+          anyBlock.type === "functionCall")
+      ) {
+        const toolBlock = block as any;
+        // Handle both 'input' and 'arguments' fields (some providers use arguments)
+        const inputField =
+          "input" in toolBlock ? "input" : "arguments" in toolBlock ? "arguments" : null;
+
+        if (inputField && typeof toolBlock[inputField] === "string") {
+          try {
+            // Consistency: Always parse valid JSON strings into objects
+            const parsed = JSON.parse(toolBlock[inputField]);
+            nextContent.push({
+              ...toolBlock,
+              [inputField]: parsed,
+            });
+            msgChanged = true;
+          } catch {
+            // Invalid JSON found in tool args.
+            // Replace with empty object to prevent downstream crashes.
+            sanitizedCount += 1;
+            const original = String(toolBlock[inputField]);
+            const sample = original.length > 100 ? `${original.slice(0, 100)}...` : original;
+            console.warn(
+              `[SessionRepair] Sanitized malformed JSON in tool use '${toolBlock.name || "unknown"}'. Original: ${sample}`,
+            );
+            nextContent.push({
+              ...toolBlock,
+              [inputField]: {},
+              _sanitized: true,
+              _originalInput: toolBlock[inputField],
+            });
+            msgChanged = true;
+          }
+        } else {
+          nextContent.push(block);
+        }
+      } else {
+        nextContent.push(block);
+      }
+    }
+
+    if (msgChanged) {
+      out.push({
+        ...msg,
+        content: nextContent,
+      } as AgentMessage);
+      changed = true;
+    } else {
+      out.push(msg);
+    }
+  }
+
+  return {
+    messages: changed ? out : messages,
+    sanitizedCount,
+    changed,
+  };
+}
+
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
-  return repairToolUseResultPairing(messages).messages;
+  const sanitized = sanitizeToolUseArgs(messages);
+  return repairToolUseResultPairing(sanitized.messages).messages;
 }
 
 export type ToolUseRepairReport = {
