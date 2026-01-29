@@ -124,6 +124,7 @@ export const SandboxBrowserSchema = z
     enabled: z.boolean().optional(),
     image: z.string().optional(),
     containerPrefix: z.string().optional(),
+    cdpHost: z.string().optional(),
     cdpPort: z.number().int().positive().optional(),
     vncPort: z.number().int().positive().optional(),
     noVncPort: z.number().int().positive().optional(),

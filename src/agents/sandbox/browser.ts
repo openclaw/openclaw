@@ -1,3 +1,4 @@
+import dns from "node:dns/promises";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
@@ -17,9 +18,38 @@ import { slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 
-async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
+/**
+ * Resolve a hostname to an IPv4 address for CDP connections.
+ * Chrome's CDP HTTP endpoints reject non-IP Host headers, so we resolve
+ * hostnames like "host.docker.internal" to their IP addresses.
+ */
+async function resolveHostToIp(host: string): Promise<string> {
+  // If already an IP address (v4 or v6), return as-is
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(":")) {
+    return host;
+  }
+  // localhost is special-cased by Chrome
+  if (host === "localhost") {
+    return host;
+  }
+  try {
+    const result = await dns.lookup(host, { family: 4 });
+    return result.address;
+  } catch {
+    // If DNS resolution fails, return original host and let caller handle the error
+    return host;
+  }
+}
+
+async function waitForSandboxCdp(params: {
+  cdpHost: string;
+  cdpPort: number;
+  timeoutMs: number;
+}): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
-  const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
+  // Resolve hostname to IP for Chrome CDP compatibility
+  const resolvedHost = await resolveHostToIp(params.cdpHost);
+  const url = `http://${resolvedHost}:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
     try {
       const ctrl = new AbortController();
@@ -40,18 +70,20 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
 
 function buildSandboxBrowserResolvedConfig(params: {
   controlPort: number;
+  cdpHost: string;
   cdpPort: number;
   headless: boolean;
   evaluateEnabled: boolean;
 }): ResolvedBrowserConfig {
-  const cdpHost = "127.0.0.1";
+  const isLoopback =
+    params.cdpHost === "127.0.0.1" || params.cdpHost === "localhost" || params.cdpHost === "::1";
   return {
     enabled: true,
     evaluateEnabled: params.evaluateEnabled,
     controlPort: params.controlPort,
     cdpProtocol: "http",
-    cdpHost,
-    cdpIsLoopback: true,
+    cdpHost: params.cdpHost,
+    cdpIsLoopback: isLoopback,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
     color: DEFAULT_CLAWD_BROWSER_COLOR,
@@ -153,6 +185,9 @@ export async function ensureSandboxBrowser(params: {
   const ensureBridge = async () => {
     if (bridge) return bridge;
 
+    // Resolve hostname to IP for Chrome CDP compatibility
+    const resolvedCdpHost = await resolveHostToIp(params.cfg.browser.cdpHost);
+
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
           const state = await dockerContainerState(containerName);
@@ -160,12 +195,13 @@ export async function ensureSandboxBrowser(params: {
             await execDocker(["start", containerName]);
           }
           const ok = await waitForSandboxCdp({
+            cdpHost: resolvedCdpHost,
             cdpPort: mappedCdp,
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
           });
           if (!ok) {
             throw new Error(
-              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
+              `Sandbox browser CDP did not become reachable on ${resolvedCdpHost}:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
             );
           }
         }
@@ -174,6 +210,7 @@ export async function ensureSandboxBrowser(params: {
     return await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
+        cdpHost: resolvedCdpHost,
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
@@ -203,7 +240,7 @@ export async function ensureSandboxBrowser(params: {
 
   const noVncUrl =
     mappedNoVnc && params.cfg.browser.enableNoVnc && !params.cfg.browser.headless
-      ? `http://127.0.0.1:${mappedNoVnc}/vnc.html?autoconnect=1&resize=remote`
+      ? `http://${params.cfg.browser.cdpHost}:${mappedNoVnc}/vnc.html?autoconnect=1&resize=remote`
       : undefined;
 
   return {

@@ -2,6 +2,7 @@ import type { MoltbotConfig } from "../../config/config.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
+  DEFAULT_SANDBOX_BROWSER_CDP_HOST,
   DEFAULT_SANDBOX_BROWSER_CDP_PORT,
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
@@ -93,6 +94,7 @@ export function resolveSandboxBrowserConfig(params: {
       agentBrowser?.containerPrefix ??
       globalBrowser?.containerPrefix ??
       DEFAULT_SANDBOX_BROWSER_PREFIX,
+    cdpHost: agentBrowser?.cdpHost ?? globalBrowser?.cdpHost ?? DEFAULT_SANDBOX_BROWSER_CDP_HOST,
     cdpPort: agentBrowser?.cdpPort ?? globalBrowser?.cdpPort ?? DEFAULT_SANDBOX_BROWSER_CDP_PORT,
     vncPort: agentBrowser?.vncPort ?? globalBrowser?.vncPort ?? DEFAULT_SANDBOX_BROWSER_VNC_PORT,
     noVncPort:

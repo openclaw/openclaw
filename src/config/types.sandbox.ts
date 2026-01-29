@@ -48,6 +48,12 @@ export type SandboxBrowserSettings = {
   enabled?: boolean;
   image?: string;
   containerPrefix?: string;
+  /**
+   * Host to connect to for CDP (Chrome DevTools Protocol).
+   * Default: "127.0.0.1".
+   * Set to "host.docker.internal" when running gateway inside Docker.
+   */
+  cdpHost?: string;
   cdpPort?: number;
   vncPort?: number;
   noVncPort?: number;

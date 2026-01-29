@@ -34,6 +34,7 @@ fi
 CHROME_ARGS+=(
   "--remote-debugging-address=127.0.0.1"
   "--remote-debugging-port=${CHROME_CDP_PORT}"
+  "--remote-allow-origins=*"
   "--user-data-dir=${HOME}/.chrome"
   "--no-first-run"
   "--no-default-browser-check"

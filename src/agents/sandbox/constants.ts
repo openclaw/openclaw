@@ -41,6 +41,7 @@ export const DEFAULT_SANDBOX_BROWSER_IMAGE = "moltbot-sandbox-browser:bookworm-s
 export const DEFAULT_SANDBOX_COMMON_IMAGE = "moltbot-sandbox-common:bookworm-slim";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "moltbot-sbx-browser-";
+export const DEFAULT_SANDBOX_BROWSER_CDP_HOST = "127.0.0.1";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
 export const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 export const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
