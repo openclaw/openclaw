@@ -101,6 +101,116 @@ Mapping options (summary):
 - `moltbot webhooks gmail setup` writes `hooks.gmail` config for `moltbot webhooks gmail run`.
 See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
 
+## Transform Functions
+
+When templates aren't flexible enough, use a transform function to process webhook
+payloads with code.
+
+### Basic Example
+
+```yaml
+hooks:
+  enabled: true
+  token: "secret"
+  transformsDir: ./hooks  # relative to config file
+  mappings:
+    - id: github
+      match:
+        path: github
+      action: agent
+      transform:
+        module: github.js      # resolves to ./hooks/github.js
+        export: handleWebhook  # optional, defaults to "default" or "transform"
+```
+
+The transform function receives a context object:
+
+```typescript
+type HookMappingContext = {
+  payload: Record<string, unknown>;  // Parsed JSON body
+  headers: Record<string, string>;   // Lowercase header names
+  url: URL;                          // Parsed request URL
+  path: string;                      // Subpath after /hooks/ (e.g., "github")
+};
+```
+
+```javascript
+// hooks/github.js
+export function handleWebhook(ctx) {
+  const event = ctx.headers["x-github-event"];
+  
+  // Return null to skip this webhook entirely (no agent run)
+  if (event === "ping") return null;
+  
+  // Return fields to override the mapping defaults
+  return {
+    message: `GitHub ${event}: ${ctx.payload.action} on ${ctx.payload.repository?.full_name}`,
+    name: "GitHub",
+    sessionKey: `github:${ctx.payload.repository?.id}`,
+  };
+}
+```
+
+### Return Values
+
+Return an object with fields to override, or `null` to skip:
+
+```typescript
+// For action: "agent" (default)
+return {
+  message: string;           // Required if not set in mapping
+  name?: string;             // Display name for the hook
+  sessionKey?: string;       // Session identifier
+  wakeMode?: "now" | "next-heartbeat";
+  deliver?: boolean;         // Send response to chat
+  channel?: string;          // Target channel
+  to?: string;               // Recipient
+  model?: string;            // Model override
+  thinking?: string;         // Thinking level
+  timeoutSeconds?: number;
+};
+
+// For action: "wake"
+return {
+  text: string;              // Required
+  mode?: "now" | "next-heartbeat";
+};
+
+// Skip this webhook (no action taken, returns 204)
+return null;
+```
+
+### Async Transforms
+
+Transforms can be async:
+
+```javascript
+export default async function(ctx) {
+  const extra = await fetchAdditionalContext(ctx.payload.id);
+  return {
+    message: `Event: ${ctx.payload.type}\nContext: ${extra}`,
+  };
+}
+```
+
+### TypeScript
+
+JavaScript (`.js` / `.mjs`) transforms work out of the box with no extra setup.
+
+TypeScript transforms require a loader at runtime:
+
+```bash
+# Run gateway with tsx
+npx tsx node_modules/.bin/moltbot gateway start
+
+# Or use bun
+bun run moltbot gateway start
+
+# Or precompile to .js
+tsc hooks/*.ts --outDir hooks-dist
+# then reference hooks-dist/github.js in config
+```
+
 ## Responses
 
 - `200` for `/hooks/wake`
