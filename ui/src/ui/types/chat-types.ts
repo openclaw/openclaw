@@ -40,4 +40,5 @@ export type ToolCard = {
   name: string;
   args?: unknown;
   text?: string;
+  isError?: boolean;
 };

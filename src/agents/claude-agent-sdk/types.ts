@@ -214,14 +214,6 @@ export type SdkRunnerParams = {
   mcpServerName?: string;
 
   /**
-   * Custom Claude Code config directory for session storage.
-   * When provided, sets CLAUDE_CONFIG_DIR environment variable to ensure
-   * Moltbot agent sessions are stored separately from standard Claude Code
-   * CLI sessions. Typically: ~/.clawdbot/agents/{agentId}/ccsdk/
-   */
-  ccsdkConfigDir?: string;
-
-  /**
    * Prior conversation history to serialize into the SDK prompt.
    * Since the SDK is stateless, prior turns are injected as context
    * in the system prompt or user message to simulate multi-turn behavior.

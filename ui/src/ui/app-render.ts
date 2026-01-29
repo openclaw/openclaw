@@ -433,6 +433,8 @@ export function renderApp(state: AppViewState) {
                 state.chatMessage = "";
                 state.chatAttachments = [];
                 state.chatStream = null;
+                state.chatThinkingStream = null;
+                state.chatStreamPhases = [];
                 state.chatStreamStartedAt = null;
                 state.chatRunId = null;
                 state.chatQueue = [];
@@ -456,6 +458,8 @@ export function renderApp(state: AppViewState) {
               messages: state.chatMessages,
               toolMessages: state.chatToolMessages,
               stream: state.chatStream,
+              thinkingStream: state.chatThinkingStream,
+              streamPhases: state.chatStreamPhases,
               streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
               queue: state.chatQueue,

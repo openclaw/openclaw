@@ -1,7 +1,12 @@
-import { extractText } from "../chat/message-extract";
+import { extractText, extractThinking } from "../chat/message-extract";
 import type { GatewayBrowserClient } from "../gateway";
 import { generateUUID } from "../uuid";
 import type { ChatAttachment } from "../ui-types";
+
+export type StreamPhase = {
+  type: "thinking" | "text";
+  content: string;
+};
 
 export type ChatState = {
   client: GatewayBrowserClient | null;
@@ -15,6 +20,8 @@ export type ChatState = {
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
   chatStream: string | null;
+  chatThinkingStream: string | null;
+  chatStreamPhases: StreamPhase[];
   chatStreamStartedAt: number | null;
   lastError: string | null;
 };
@@ -155,6 +162,23 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
 }
 
+function parseStreamPhases(message: unknown): StreamPhase[] | null {
+  const m = message as { content?: unknown[] } | undefined;
+  if (!m?.content || !Array.isArray(m.content)) return null;
+
+  const phases: StreamPhase[] = [];
+  for (const block of m.content) {
+    if (typeof block !== "object" || block === null) continue;
+    const b = block as { type?: string; thinking?: string; text?: string };
+    if (b.type === "thinking" && typeof b.thinking === "string") {
+      phases.push({ type: "thinking", content: b.thinking });
+    } else if (b.type === "text" && typeof b.text === "string") {
+      phases.push({ type: "text", content: b.text });
+    }
+  }
+  return phases.length > 0 ? phases : null;
+}
+
 export function handleChatEvent(
   state: ChatState,
   payload?: ChatEventPayload,
@@ -174,23 +198,57 @@ export function handleChatEvent(
   }
 
   if (payload.state === "delta") {
-    const next = extractText(payload.message);
-    if (typeof next === "string") {
-      const current = state.chatStream ?? "";
-      if (!current || next.length >= current.length) {
-        state.chatStream = next;
+    // Try to parse phase-aware content first
+    const phases = parseStreamPhases(payload.message);
+    if (phases) {
+      state.chatStreamPhases = phases;
+      // Also update legacy fields for backward compat
+      const textPhases = phases.filter((p) => p.type === "text");
+      const thinkingPhases = phases.filter((p) => p.type === "thinking");
+      if (textPhases.length > 0) {
+        const combinedText = textPhases.map((p) => p.content).join("");
+        const current = state.chatStream ?? "";
+        if (!current || combinedText.length >= current.length) {
+          state.chatStream = combinedText;
+        }
+      }
+      if (thinkingPhases.length > 0) {
+        state.chatThinkingStream = thinkingPhases.map((p) => p.content).join("");
+      }
+    } else {
+      // Fallback to legacy extraction
+      const nextText = extractText(payload.message);
+      const nextThinking = extractThinking(payload.message);
+
+      // Update text if present and longer
+      if (typeof nextText === "string") {
+        const current = state.chatStream ?? "";
+        if (!current || nextText.length >= current.length) {
+          state.chatStream = nextText;
+        }
+      }
+
+      // Update thinking if present
+      if (typeof nextThinking === "string") {
+        state.chatThinkingStream = nextThinking;
       }
     }
   } else if (payload.state === "final") {
     state.chatStream = null;
+    state.chatThinkingStream = null;
+    state.chatStreamPhases = [];
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     state.chatStream = null;
+    state.chatThinkingStream = null;
+    state.chatStreamPhases = [];
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
+    state.chatThinkingStream = null;
+    state.chatStreamPhases = [];
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";

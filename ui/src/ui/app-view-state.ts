@@ -53,6 +53,8 @@ export type AppViewState = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
+  chatThinkingStream: string | null;
+  chatStreamPhases: Array<{ type: "thinking" | "text"; content: string }>;
   chatRunId: string | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;

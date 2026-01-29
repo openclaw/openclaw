@@ -24,7 +24,6 @@ import type { SdkConversationTurn, SdkRunnerResult } from "./types.js";
 import { createMoltbotCodingTools } from "../pi-tools.js";
 import { resolveMoltbotAgentDir } from "../agent-paths.js";
 import { resolveModelAuthMode } from "../model-auth.js";
-import { resolveCcSdkConfigDirForAgent } from "../../config/sessions/paths.js";
 import { convertClientToolsForSdk } from "./client-tool-bridge.js";
 
 const log = createSubsystemLogger("agents/ccsdk-runtime");
@@ -210,7 +209,7 @@ export function createCcSdkAgentRuntime(context?: CcSdkAgentRuntimeContext): Age
       const ccsdkOpts = params.ccsdkOptions ?? {};
 
       // Resolve effective model (from params or provider config)
-      const effectiveModel = params.model
+      const _effectiveModel = params.model
         ? `${params.provider ?? "anthropic"}/${params.model}`
         : (ccsdkOpts.modelTiers?.sonnet ?? context?.ccsdkConfig?.models?.sonnet ?? "default");
 
@@ -266,10 +265,6 @@ export function createCcSdkAgentRuntime(context?: CcSdkAgentRuntimeContext): Age
       // Combine built-in tools with client tools
       const tools: AnyAgentTool[] = [...builtInTools, ...clientToolsConverted];
 
-      // Resolve CCSDK config directory for this agent's session storage.
-      // This ensures Moltbot sessions are stored separately from CLI sessions.
-      const ccsdkConfigDir = resolveCcSdkConfigDirForAgent(agentId);
-
       const sdkResult = await runSdkAgent({
         // ─── Core shared params (spread) ────────────────────────────────────────
         runId: params.runId,
@@ -284,7 +279,6 @@ export function createCcSdkAgentRuntime(context?: CcSdkAgentRuntimeContext): Age
         timeoutMs: params.timeoutMs,
         abortSignal: params.abortSignal,
         extraSystemPrompt: params.extraSystemPrompt,
-        ccsdkConfigDir,
 
         // ─── Messaging & sender context (shared) ────────────────────────────────
         messageChannel: params.messageChannel,

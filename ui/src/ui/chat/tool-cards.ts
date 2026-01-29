@@ -35,7 +35,8 @@ export function extractToolCards(message: unknown): ToolCard[] {
     if (kind !== "toolresult" && kind !== "tool_result") continue;
     const text = extractToolText(item);
     const name = typeof item.name === "string" ? item.name : "tool";
-    cards.push({ kind: "result", name, text });
+    const isError = item.isError === true;
+    cards.push({ kind: "result", name, text, isError });
   }
 
   if (
@@ -60,17 +61,22 @@ export function renderToolCardSidebar(
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
+  const isError = card.isError === true;
 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
         if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          const prefix = isError ? "## Error\n\n" : "";
+          onOpenSidebar!(prefix + formatToolOutputForSidebar(card.text!));
           return;
         }
+        const status = isError
+          ? "*Tool failed with no error message.*"
+          : "*No output — tool completed successfully.*";
         const info = `## ${display.label}\n\n${
           detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
+        }${status}`;
         onOpenSidebar!(info);
       }
     : undefined;
@@ -80,9 +86,12 @@ export function renderToolCardSidebar(
   const showInline = hasText && isShort;
   const isEmpty = !hasText;
 
+  const statusIcon = isError ? icons.x : icons.check;
+  const statusClass = isError ? "chat-tool-card--error" : "";
+
   return html`
     <div
-      class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
+      class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""} ${statusClass}"
       @click=${handleClick}
       role=${canClick ? "button" : nothing}
       tabindex=${canClick ? "0" : nothing}
@@ -100,21 +109,21 @@ export function renderToolCardSidebar(
           <span>${display.label}</span>
         </div>
         ${canClick
-          ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
+          ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${statusIcon}</span>`
           : nothing}
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
+        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${statusIcon}</span>` : nothing}
       </div>
       ${detail
         ? html`<div class="chat-tool-card__detail">${detail}</div>`
         : nothing}
       ${isEmpty
-        ? html`<div class="chat-tool-card__status-text muted">Completed</div>`
+        ? html`<div class="chat-tool-card__status-text ${isError ? "error" : "muted"}">${isError ? "Failed" : "Completed"}</div>`
         : nothing}
       ${showCollapsed
-        ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+        ? html`<div class="chat-tool-card__preview mono ${isError ? "error" : ""}">${getTruncatedPreview(card.text!)}</div>`
         : nothing}
       ${showInline
-        ? html`<div class="chat-tool-card__inline mono">${card.text}</div>`
+        ? html`<div class="chat-tool-card__inline mono ${isError ? "error" : ""}">${card.text}</div>`
         : nothing}
     </div>
   `;

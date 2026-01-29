@@ -71,25 +71,3 @@ export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
   if (store.startsWith("~")) return path.resolve(store.replace(/^~(?=$|[\\/])/, os.homedir()));
   return path.resolve(store);
 }
-
-/**
- * Resolve the Claude Code SDK config directory for a given agent.
- *
- * This directory is passed to the SDK via the CLAUDE_CONFIG_DIR environment
- * variable to ensure Moltbot agent sessions are stored separately from
- * standard Claude Code CLI sessions.
- *
- * Using `.claude/` allows per-agent customization of other Claude Code
- * features like settings.json, CLAUDE.md, skills, commands, etc.
- *
- * Structure: ~/.clawdbot/agents/{agentId}/.claude/
- */
-export function resolveCcSdkConfigDirForAgent(
-  agentId?: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  const root = resolveStateDir(env, homedir);
-  const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
-  return path.join(root, "agents", id, ".claude");
-}

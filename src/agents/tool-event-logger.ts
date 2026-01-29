@@ -12,8 +12,8 @@ export function logToolEvent(evt: AgentEventData, runId?: string): void {
   if (evt.stream !== "tool") return;
 
   const phase = evt.data.phase as string | undefined;
-  const toolName = String(evt.data.name ?? "unknown");
-  const toolCallId = String(evt.data.toolCallId ?? "");
+  const toolName = (evt.data.name as string | undefined) ?? "unknown";
+  const toolCallId = (evt.data.toolCallId as string | undefined) ?? "";
 
   switch (phase) {
     case "start":

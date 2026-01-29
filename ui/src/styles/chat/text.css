@@ -122,3 +122,36 @@
   border-top: 1px solid var(--border);
   margin: 1em 0;
 }
+
+/* =============================================
+   PHASE SEPARATORS
+   Visual separation between thinking and text phases
+   ============================================= */
+
+.chat-thinking-phase {
+  border-left: 2px solid var(--accent);
+  padding-left: 0.75rem;
+  margin-bottom: 0.5rem;
+  opacity: 0.85;
+}
+
+.chat-text-phase {
+  margin-bottom: 0.5rem;
+}
+
+/* Add visual separator between phases of different types */
+.chat-thinking-phase + .chat-text-phase,
+.chat-text-phase + .chat-thinking-phase {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+:root[data-theme="light"] .chat-thinking-phase {
+  border-left-color: var(--accent);
+}
+
+:root[data-theme="light"] .chat-thinking-phase + .chat-text-phase,
+:root[data-theme="light"] .chat-text-phase + .chat-thinking-phase {
+  border-top-color: var(--border);
+}

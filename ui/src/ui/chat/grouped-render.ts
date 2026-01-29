@@ -70,17 +70,56 @@ export function renderReadingIndicatorGroup(assistant?: AssistantIdentity) {
   `;
 }
 
+export type StreamPhase = {
+  type: "thinking" | "text";
+  content: string;
+};
+
+export type StreamingGroupOptions = {
+  phases?: StreamPhase[];
+  thinking?: string | null;
+  showReasoning?: boolean;
+  startedAt: number;
+};
+
 export function renderStreamingGroup(
   text: string,
-  startedAt: number,
+  opts: StreamingGroupOptions,
   onOpenSidebar?: (content: string) => void,
   assistant?: AssistantIdentity,
 ) {
-  const timestamp = new Date(startedAt).toLocaleTimeString([], {
+  const timestamp = new Date(opts.startedAt).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });
   const name = assistant?.name ?? "Assistant";
+  const showReasoning = opts.showReasoning ?? false;
+
+  // Build content array - prefer phases if available for proper visual separation
+  const content: Array<{ type: string; thinking?: string; text?: string }> = [];
+  if (opts.phases && opts.phases.length > 0) {
+    // Use phase-aware rendering
+    for (const phase of opts.phases) {
+      if (phase.type === "thinking" && showReasoning) {
+        content.push({ type: "thinking", thinking: phase.content });
+      } else if (phase.type === "text") {
+        content.push({ type: "text", text: phase.content });
+      }
+    }
+  } else {
+    // Fallback to legacy behavior
+    if (opts.thinking && showReasoning) {
+      content.push({ type: "thinking", thinking: opts.thinking });
+    }
+    if (text) {
+      content.push({ type: "text", text });
+    }
+  }
+
+  // If we have no content at all, show reading indicator
+  if (content.length === 0) {
+    return renderReadingIndicatorGroup(assistant);
+  }
 
   return html`
     <div class="chat-group assistant">
@@ -89,10 +128,10 @@ export function renderStreamingGroup(
         ${renderGroupedMessage(
           {
             role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: startedAt,
+            content,
+            timestamp: opts.startedAt,
           },
-          { isStreaming: true, showReasoning: false },
+          { isStreaming: true, showReasoning },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">
@@ -224,6 +263,47 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
+function hasMultiplePhaseTypes(content: unknown[]): boolean {
+  let hasThinking = false;
+  let hasText = false;
+  for (const item of content) {
+    if (typeof item !== "object" || item === null) continue;
+    const c = item as { type?: string };
+    if (c.type === "thinking") hasThinking = true;
+    if (c.type === "text") hasText = true;
+    if (hasThinking && hasText) return true;
+  }
+  return false;
+}
+
+function renderPhaseContent(
+  content: unknown[],
+  opts: { showReasoning: boolean },
+) {
+  // Check if we have multiple phase types for visual separation
+  const usePhaseClasses = hasMultiplePhaseTypes(content);
+
+  return content.map((item) => {
+    if (typeof item !== "object" || item === null) return nothing;
+    const c = item as { type?: string; thinking?: string; text?: string };
+
+    if (c.type === "thinking" && typeof c.thinking === "string" && opts.showReasoning) {
+      const reasoningMarkdown = formatReasoningMarkdown(c.thinking);
+      const className = usePhaseClasses ? "chat-thinking-phase" : "chat-thinking";
+      return html`<div class="${className}">${unsafeHTML(
+        toSanitizedMarkdownHtml(reasoningMarkdown),
+      )}</div>`;
+    }
+
+    if (c.type === "text" && typeof c.text === "string") {
+      const className = usePhaseClasses ? "chat-text-phase" : "chat-text";
+      return html`<div class="${className}">${unsafeHTML(toSanitizedMarkdownHtml(c.text))}</div>`;
+    }
+
+    return nothing;
+  });
+}
+
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
@@ -242,6 +322,19 @@ function renderGroupedMessage(
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
+
+  // Check if content is already phase-structured (for streaming)
+  const content = m.content;
+  const isPhaseStructured =
+    Array.isArray(content) &&
+    content.length > 0 &&
+    content.some(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        ((item as { type?: string }).type === "thinking" ||
+          (item as { type?: string }).type === "text"),
+    );
 
   const extractedText = extractTextCached(message);
   const extractedThinking =
@@ -272,6 +365,19 @@ function renderGroupedMessage(
 
   if (!markdown && !hasToolCards && !hasImages) return nothing;
 
+  // Use phase-aware rendering when content is structured with phases
+  if (isPhaseStructured && Array.isArray(content)) {
+    return html`
+      <div class="${bubbleClasses}">
+        ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
+        ${renderMessageImages(images)}
+        ${renderPhaseContent(content, { showReasoning: opts.showReasoning })}
+        ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
+      </div>
+    `;
+  }
+
+  // Fallback to legacy rendering
   return html`
     <div class="${bubbleClasses}">
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}

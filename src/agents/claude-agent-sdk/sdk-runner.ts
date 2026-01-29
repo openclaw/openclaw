@@ -938,7 +938,8 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
           ...(normalizedName.rawName ? { rawName: normalizedName.rawName } : {}),
           ...(argsForEvent ? { args: argsForEvent } : {}),
           isError,
-          ...(toolText ? { resultText: toolText } : {}),
+          // Use `result` to match Pi runtime event shape (UI expects `data.result`).
+          ...(toolText ? { result: toolText } : {}),
         });
 
         // Emit tool result via callback (using toolText already extracted above).

@@ -13,6 +13,7 @@ import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
+  type StreamPhase,
 } from "../chat/grouped-render";
 import { renderMarkdownSidebar } from "./markdown-sidebar";
 import "../components/resizable-divider";
@@ -35,6 +36,8 @@ export type ChatProps = {
   messages: unknown[];
   toolMessages: unknown[];
   stream: string | null;
+  thinkingStream: string | null;
+  streamPhases?: StreamPhase[];
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -219,7 +222,12 @@ export function renderChat(props: ChatProps) {
         if (item.kind === "stream") {
           return renderStreamingGroup(
             item.text,
-            item.startedAt,
+            {
+              phases: props.streamPhases,
+              thinking: props.thinkingStream,
+              showReasoning,
+              startedAt: item.startedAt,
+            },
             props.onOpenSidebar,
             assistantIdentity,
           );
@@ -456,7 +464,9 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    const hasTextContent = props.stream.trim().length > 0;
+    const hasPhaseContent = props.streamPhases && props.streamPhases.length > 0;
+    if (hasTextContent || hasPhaseContent) {
       items.push({
         kind: "stream",
         key,

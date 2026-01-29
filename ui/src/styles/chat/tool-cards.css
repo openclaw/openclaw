@@ -114,6 +114,36 @@
   margin-top: 4px;
 }
 
+.chat-tool-card__status-text.error {
+  color: var(--danger);
+}
+
+/* Error state for tool cards */
+.chat-tool-card--error {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 5%, var(--card));
+}
+
+.chat-tool-card--error:hover {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--card));
+}
+
+.chat-tool-card--error .chat-tool-card__status {
+  color: var(--danger);
+}
+
+.chat-tool-card--error .chat-tool-card__action {
+  color: var(--danger);
+}
+
+.chat-tool-card--error .chat-tool-card__preview.error,
+.chat-tool-card--error .chat-tool-card__inline.error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--secondary));
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+
 .chat-tool-card__detail {
   font-size: 12px;
   color: var(--muted);

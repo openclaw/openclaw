@@ -20,6 +20,7 @@ export type ToolStreamEntry = {
   name: string;
   args?: unknown;
   output?: string;
+  isError?: boolean;
   startedAt: number;
   updatedAt: number;
   message: Record<string, unknown>;
@@ -82,11 +83,12 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     name: entry.name,
     arguments: entry.args ?? {},
   });
-  if (entry.output) {
+  if (entry.output || entry.isError) {
     content.push({
       type: "toolresult",
       name: entry.name,
-      text: entry.output,
+      text: entry.output ?? (entry.isError ? "Error (no message)" : undefined),
+      isError: entry.isError,
     });
   }
   return {
@@ -205,12 +207,18 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
   const args = phase === "start" ? data.args : undefined;
-  const output =
-    phase === "update"
-      ? formatToolOutput(data.partialResult)
-      : phase === "result"
-        ? formatToolOutput(data.result)
-        : undefined;
+  const isError = data.isError === true;
+
+  // Extract output: check for error first (failed tools), then result/partialResult
+  // Supports both `result` (Pi runtime) and `resultText` (CCSDK) field names.
+  let output: string | null | undefined;
+  if (phase === "result" && isError && typeof data.error === "string") {
+    output = data.error;
+  } else if (phase === "update") {
+    output = formatToolOutput(data.partialResult);
+  } else if (phase === "result") {
+    output = formatToolOutput(data.result ?? data.resultText);
+  }
 
   const now = Date.now();
   let entry = host.toolStreamById.get(toolCallId);
@@ -221,7 +229,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       sessionKey,
       name,
       args,
-      output,
+      output: output ?? undefined,
+      isError,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       updatedAt: now,
       message: {},
@@ -231,7 +240,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   } else {
     entry.name = name;
     if (args !== undefined) entry.args = args;
-    if (output !== undefined) entry.output = output;
+    if (output !== undefined) entry.output = output ?? undefined;
+    if (isError) entry.isError = true;
     entry.updatedAt = now;
   }
 

@@ -131,6 +131,8 @@ export function connectGateway(host: GatewayHost) {
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
+      (host as unknown as { chatThinkingStream: string | null }).chatThinkingStream = null;
+      (host as unknown as { chatStreamPhases: Array<{ type: "thinking" | "text"; content: string }> }).chatStreamPhases = [];
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as MoltbotApp);

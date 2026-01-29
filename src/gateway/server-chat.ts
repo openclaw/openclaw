@@ -28,6 +28,16 @@ export type ChatRunEntry = {
   clientRunId: string;
 };
 
+export type StreamPhase = {
+  type: "thinking" | "text";
+  content: string;
+};
+
+export type PhaseBuffer = {
+  phases: StreamPhase[];
+  lastPhaseType: "thinking" | "text" | null;
+};
+
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunEntry) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
@@ -80,27 +90,114 @@ export function createChatRunRegistry(): ChatRunRegistry {
 
 export type ChatRunState = {
   registry: ChatRunRegistry;
+  phaseBuffers: Map<string, PhaseBuffer>;
+  /** @deprecated Use phaseBuffers for phase-aware rendering. This provides combined text for backward compatibility. */
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
 
+function createPhaseBuffer(): PhaseBuffer {
+  return { phases: [], lastPhaseType: null };
+}
+
+function appendToPhaseBuffer(
+  buffer: PhaseBuffer,
+  type: "thinking" | "text",
+  content: string,
+): void {
+  if (buffer.lastPhaseType === type && buffer.phases.length > 0) {
+    // Same phase - append
+    buffer.phases[buffer.phases.length - 1].content += content;
+  } else {
+    // New phase
+    buffer.phases.push({ type, content });
+    buffer.lastPhaseType = type;
+  }
+}
+
+function getPhaseBufferText(buffer: PhaseBuffer): string {
+  return buffer.phases
+    .filter((p) => p.type === "text")
+    .map((p) => p.content)
+    .join("");
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for future use
+function _getPhaseBufferThinking(buffer: PhaseBuffer): string {
+  return buffer.phases
+    .filter((p) => p.type === "thinking")
+    .map((p) => p.content)
+    .join("");
+}
+
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
-  const buffers = new Map<string, string>();
+  const phaseBuffers = new Map<string, PhaseBuffer>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
+  // Compatibility layer: buffers provides combined text from phaseBuffers
+  // This allows existing code that expects Map<string, string> to continue working.
+  const buffers = new Proxy(new Map<string, string>(), {
+    get(target, prop, receiver) {
+      if (prop === "get") {
+        return (key: string) => {
+          const buffer = phaseBuffers.get(key);
+          return buffer ? getPhaseBufferText(buffer) : undefined;
+        };
+      }
+      if (prop === "has") {
+        return (key: string) => phaseBuffers.has(key);
+      }
+      if (prop === "delete") {
+        return (key: string) => phaseBuffers.delete(key);
+      }
+      if (prop === "clear") {
+        return () => phaseBuffers.clear();
+      }
+      if (prop === "size") {
+        return phaseBuffers.size;
+      }
+      if (prop === "keys") {
+        return () => phaseBuffers.keys();
+      }
+      if (prop === "values") {
+        return function* () {
+          for (const buffer of phaseBuffers.values()) {
+            yield getPhaseBufferText(buffer);
+          }
+        };
+      }
+      if (prop === "entries") {
+        return function* () {
+          for (const [key, buffer] of phaseBuffers.entries()) {
+            yield [key, getPhaseBufferText(buffer)] as [string, string];
+          }
+        };
+      }
+      if (prop === Symbol.iterator) {
+        return function* () {
+          for (const [key, buffer] of phaseBuffers.entries()) {
+            yield [key, getPhaseBufferText(buffer)] as [string, string];
+          }
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
   const clear = () => {
     registry.clear();
-    buffers.clear();
+    phaseBuffers.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
   };
 
   return {
     registry,
+    phaseBuffers,
     buffers,
     deltaSentAt,
     abortedRuns,
@@ -133,12 +230,30 @@ export function createAgentEventHandler({
   resolveSessionKeyForRun,
   clearAgentRunContext,
 }: AgentEventHandlerOptions) {
+  const buildPhaseContent = (
+    buffer: PhaseBuffer,
+  ): Array<{ type: string; thinking?: string; text?: string; phaseIndex?: number }> => {
+    return buffer.phases.map((phase, idx) => ({
+      type: phase.type,
+      [phase.type === "thinking" ? "thinking" : "text"]: phase.content,
+      phaseIndex: idx,
+    }));
+  };
+
   const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
-    chatRunState.buffers.set(clientRunId, text);
+    let buffer = chatRunState.phaseBuffers.get(clientRunId);
+    if (!buffer) {
+      buffer = createPhaseBuffer();
+      chatRunState.phaseBuffers.set(clientRunId, buffer);
+    }
+    appendToPhaseBuffer(buffer, "text", text);
+
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) return;
     chatRunState.deltaSentAt.set(clientRunId, now);
+
+    const content = buildPhaseContent(buffer);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -146,7 +261,34 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content,
+        timestamp: now,
+      },
+    };
+    // Suppress webchat broadcast for heartbeat runs when showOk is false
+    if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
+      broadcast("chat", payload, { dropIfSlow: true });
+    }
+    nodeSendToSession(sessionKey, "chat", payload);
+  };
+
+  const emitThinkingDelta = (sessionKey: string, clientRunId: string, seq: number) => {
+    const buffer = chatRunState.phaseBuffers.get(clientRunId);
+    if (!buffer || buffer.phases.length === 0) return;
+    const now = Date.now();
+    const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
+    if (now - last < 150) return;
+    chatRunState.deltaSentAt.set(clientRunId, now);
+
+    const content = buildPhaseContent(buffer);
+    const payload = {
+      runId: clientRunId,
+      sessionKey,
+      seq,
+      state: "delta" as const,
+      message: {
+        role: "assistant",
+        content,
         timestamp: now,
       },
     };
@@ -164,19 +306,40 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
-    const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
-    chatRunState.buffers.delete(clientRunId);
+    const buffer = chatRunState.phaseBuffers.get(clientRunId);
+    chatRunState.phaseBuffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+
     if (jobState === "done") {
+      // Build final content from phases, trimming each phase's content
+      const content: Array<{
+        type: string;
+        thinking?: string;
+        text?: string;
+        phaseIndex?: number;
+      }> = [];
+      if (buffer) {
+        for (let idx = 0; idx < buffer.phases.length; idx++) {
+          const phase = buffer.phases[idx];
+          const trimmed = phase.content.trim();
+          if (!trimmed) continue;
+          content.push({
+            type: phase.type,
+            [phase.type === "thinking" ? "thinking" : "text"]: trimmed,
+            phaseIndex: idx,
+          });
+        }
+      }
+      const hasContent = content.length > 0;
       const payload = {
         runId: clientRunId,
         sessionKey,
         seq,
         state: "final" as const,
-        message: text
+        message: hasContent
           ? {
               role: "assistant",
-              content: [{ type: "text", text }],
+              content,
               timestamp: Date.now(),
             }
           : undefined,
@@ -224,8 +387,12 @@ export function createAgentEventHandler({
     // Include sessionKey so Control UI can filter tool streams per session.
     const agentPayload = sessionKey ? { ...evt, sessionKey } : evt;
     const last = agentRunSeq.get(evt.runId) ?? 0;
-    if (evt.stream === "tool" && !shouldEmitToolEvents(evt.runId, sessionKey)) {
+    const emitToolToNode = shouldEmitToolEvents(evt.runId, sessionKey);
+    if (evt.stream === "tool" && !emitToolToNode) {
       agentRunSeq.set(evt.runId, evt.seq);
+      // Always broadcast tool events to webchat clients - let UI decide visibility.
+      // Only skip nodeSendToSession for external channels when verbose is off.
+      broadcast("agent", agentPayload);
       return;
     }
     if (evt.seq !== last + 1) {
@@ -249,7 +416,17 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       nodeSendToSession(sessionKey, "agent", agentPayload);
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
+      // Accumulate thinking events and emit thinking-only delta when no text yet
+      if (!isAborted && evt.stream === "thinking" && typeof evt.data?.text === "string") {
+        let buffer = chatRunState.phaseBuffers.get(clientRunId);
+        if (!buffer) {
+          buffer = createPhaseBuffer();
+          chatRunState.phaseBuffers.set(clientRunId, buffer);
+        }
+        appendToPhaseBuffer(buffer, "thinking", evt.data.text);
+        // Emit thinking delta
+        emitThinkingDelta(sessionKey, clientRunId, evt.seq);
+      } else if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         if (chatLink) {
@@ -277,7 +454,7 @@ export function createAgentEventHandler({
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         chatRunState.abortedRuns.delete(clientRunId);
         chatRunState.abortedRuns.delete(evt.runId);
-        chatRunState.buffers.delete(clientRunId);
+        chatRunState.phaseBuffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);

@@ -123,6 +123,8 @@ export class MoltbotApp extends LitElement {
   @state() chatMessages: unknown[] = [];
   @state() chatToolMessages: unknown[] = [];
   @state() chatStream: string | null = null;
+  @state() chatThinkingStream: string | null = null;
+  @state() chatStreamPhases: Array<{ type: "thinking" | "text"; content: string }> = [];
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
   @state() compactionStatus: import("./app-tool-stream").CompactionStatus | null = null;

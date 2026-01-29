@@ -19,7 +19,6 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
 import * as z from "zod/v4-mini";
 
 import { createSubsystemLogger } from "../../logging/subsystem.js";
