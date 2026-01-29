@@ -18,32 +18,6 @@ import {
 import { PowerMemClient } from "./client.js";
 
 // ============================================================================
-// Rule-based capture filter (same idea as memory-lancedb)
-// ============================================================================
-
-const MEMORY_TRIGGERS = [
-  /zapamatuj si|pamatuj|remember/i,
-  /preferuji|radši|nechci|prefer/i,
-  /rozhodli jsme|budeme používat/i,
-  /\+\d{10,}/,
-  /[\w.-]+@[\w.-]+\.\w+/,
-  /můj\s+\w+\s+je|je\s+můj/i,
-  /my\s+\w+\s+is|is\s+my/i,
-  /i (like|prefer|hate|love|want|need)/i,
-  /always|never|important/i,
-];
-
-function shouldCapture(text: string): boolean {
-  if (text.length < 10 || text.length > 500) return false;
-  if (text.includes("<relevant-memories>")) return false;
-  if (text.startsWith("<") && text.includes("</")) return false;
-  if (text.includes("**") && text.includes("\n-")) return false;
-  const emojiCount = (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
-  if (emojiCount > 3) return false;
-  return MEMORY_TRIGGERS.some((r) => r.test(text));
-}
-
-// ============================================================================
 // Plugin Definition
 // ============================================================================
 
@@ -309,6 +283,24 @@ const memoryPlugin = {
               process.exitCode = 1;
             }
           });
+
+        ltm
+          .command("add")
+          .description("Manually add a memory (for testing or one-off storage)")
+          .argument("<text>", "Content to store")
+          .action(async (text: string) => {
+            try {
+              const created = await client.add(text.trim(), { infer: cfg.inferOnAdd });
+              if (created.length === 0) {
+                console.log("Stored (no inferred items).");
+              } else {
+                console.log(`Stored ${created.length} item(s):`, created.map((c) => c.memory_id));
+              }
+            } catch (err) {
+              console.error("PowerMem add failed:", err);
+              process.exitCode = 1;
+            }
+          });
       },
       { commands: ["ltm"] },
     );
@@ -372,16 +364,34 @@ const memoryPlugin = {
             }
           }
 
-          const toCapture = texts.filter((t) => t && shouldCapture(t));
-          if (toCapture.length === 0) return;
+          // Use all conversation content; PowerMem infers memories (no trigger-phrase filter)
+          const MIN_LEN = 10;
+          const MAX_CHUNK_LEN = 6000;
+          const MAX_CHUNKS_PER_SESSION = 3;
+          const sanitized = texts
+            .filter((t): t is string => typeof t === "string" && t.trim().length >= MIN_LEN)
+            .map((t) => t.trim())
+            .filter(
+              (t) =>
+                !t.includes("<relevant-memories>") &&
+                !(t.startsWith("<") && t.includes("</")),
+            );
+          if (sanitized.length === 0) return;
+
+          const combined = sanitized.join("\n\n");
+          const chunks: string[] = [];
+          for (let i = 0; i < combined.length; i += MAX_CHUNK_LEN) {
+            if (chunks.length >= MAX_CHUNKS_PER_SESSION) break;
+            chunks.push(combined.slice(i, i + MAX_CHUNK_LEN));
+          }
 
           let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const created = await client.add(text, { infer: cfg.inferOnAdd });
+          for (const chunk of chunks) {
+            const created = await client.add(chunk, { infer: cfg.inferOnAdd });
             stored += created.length;
           }
           if (stored > 0) {
-            api.logger.info?.(`memory-powermem: auto-captured ${stored} memories`);
+            api.logger.info?.(`memory-powermem: auto-captured ${stored} memories from conversation`);
           }
         } catch (err) {
           api.logger.warn?.(`memory-powermem: capture failed: ${String(err)}`);

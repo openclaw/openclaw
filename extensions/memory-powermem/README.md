@@ -21,24 +21,32 @@ Moltbot long-term memory plugin backed by [PowerMem](https://github.com/oceanbas
 
 ## Moltbot configuration
 
-1. Set the memory slot to this plugin:
+1. Enable the plugin and set the memory slot to this plugin. Edit your Moltbot config (e.g. `~/.clawdbot/config.json` or `moltbot.json` in your state dir):
 
-   ```yaml
-   plugins:
-     slots:
-       memory: memory-powermem
-     config:
-       memory-powermem:
-         baseUrl: "http://localhost:8000"
-         # apiKey: "optional-if-auth-enabled"
-         autoCapture: true
-         autoRecall: true
-         inferOnAdd: true
-         # userId: "optional-override"
-         # agentId: "optional-override"
+   ```json
+   {
+     "plugins": {
+       "slots": { "memory": "memory-powermem" },
+       "entries": {
+         "memory-powermem": {
+           "enabled": true,
+           "config": {
+             "baseUrl": "http://localhost:8000",
+             "autoCapture": true,
+             "autoRecall": true,
+             "inferOnAdd": true
+           }
+         }
+       }
+     }
+   }
    ```
 
+   Optional: `apiKey` (if PowerMem server has auth), `userId`, `agentId` — see Options below.
+
 2. Ensure PowerMem server is running before starting the gateway.
+
+**Auto-capture:** When a conversation ends, the full user/assistant text is sent to PowerMem with `infer: true`; PowerMem extracts and stores memories (no trigger phrases) (e.g. “remember …”, “I like …”, “important”, or Chinese “记得/记住/我喜欢/重要/偏好”). At most 3 chunks per session (each up to 6000 chars). To test: run `moltbot ltm health`, then `moltbot ltm add "User prefers dark mode"` and `moltbot ltm search "dark mode"`. In chat, ask the agent to “remember that I prefer tea” or say “我喜欢用 Python” so a message is auto-captured.
 
 ## Options
 
@@ -62,6 +70,7 @@ Moltbot long-term memory plugin backed by [PowerMem](https://github.com/oceanbas
 
 - `moltbot ltm search <query> [--limit n]` — Search memories.
 - `moltbot ltm health` — Check PowerMem server health.
+- `moltbot ltm add "<text>"` — Manually store one memory (for testing or one-off storage).
 
 ## Running tests
 
