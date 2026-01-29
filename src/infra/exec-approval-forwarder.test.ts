@@ -1,7 +1,61 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MoltbotConfig } from "../config/config.js";
-import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
+import {
+  buildTelegramExecApprovalCallbackData,
+  createExecApprovalForwarder,
+  parseTelegramExecApprovalCallbackData,
+} from "./exec-approval-forwarder.js";
+
+describe("telegram exec approval callback data", () => {
+  it("builds callback data with correct format", () => {
+    const data = buildTelegramExecApprovalCallbackData("uuid-123", "allow-once");
+    expect(data).toBe("execapproval:uuid-123:allow-once");
+  });
+
+  it("builds callback data for all decision types", () => {
+    expect(buildTelegramExecApprovalCallbackData("id", "allow-once")).toBe(
+      "execapproval:id:allow-once",
+    );
+    expect(buildTelegramExecApprovalCallbackData("id", "allow-always")).toBe(
+      "execapproval:id:allow-always",
+    );
+    expect(buildTelegramExecApprovalCallbackData("id", "deny")).toBe("execapproval:id:deny");
+  });
+
+  it("parses valid callback data", () => {
+    const result = parseTelegramExecApprovalCallbackData("execapproval:uuid-123:allow-once");
+    expect(result).toEqual({ approvalId: "uuid-123", action: "allow-once" });
+  });
+
+  it("parses all decision types", () => {
+    expect(parseTelegramExecApprovalCallbackData("execapproval:id:allow-once")).toEqual({
+      approvalId: "id",
+      action: "allow-once",
+    });
+    expect(parseTelegramExecApprovalCallbackData("execapproval:id:allow-always")).toEqual({
+      approvalId: "id",
+      action: "allow-always",
+    });
+    expect(parseTelegramExecApprovalCallbackData("execapproval:id:deny")).toEqual({
+      approvalId: "id",
+      action: "deny",
+    });
+  });
+
+  it("returns null for invalid format", () => {
+    expect(parseTelegramExecApprovalCallbackData("invalid")).toBeNull();
+    expect(parseTelegramExecApprovalCallbackData("other:id:deny")).toBeNull();
+    expect(parseTelegramExecApprovalCallbackData("execapproval:id")).toBeNull();
+    expect(parseTelegramExecApprovalCallbackData("execapproval:id:invalid-action")).toBeNull();
+  });
+
+  it("roundtrips callback data correctly", () => {
+    const original = buildTelegramExecApprovalCallbackData("my-approval-id", "allow-always");
+    const parsed = parseTelegramExecApprovalCallbackData(original);
+    expect(parsed).toEqual({ approvalId: "my-approval-id", action: "allow-always" });
+  });
+});
 
 const baseRequest = {
   id: "req-1",

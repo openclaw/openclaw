@@ -369,6 +369,71 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      const execApprovalParsed = await (async () => {
+        const { parseTelegramExecApprovalCallbackData } =
+          await import("../infra/exec-approval-forwarder.js");
+        return parseTelegramExecApprovalCallbackData(data);
+      })().catch(() => null);
+
+      if (execApprovalParsed) {
+        const { callGateway } = await import("../gateway/call.js");
+        const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
+          await import("../utils/message-channel.js");
+
+        const senderId = callback.from?.id ? String(callback.from.id) : "unknown";
+        const senderUsername = callback.from?.username ?? "";
+        const resolvedBy = `telegram:${senderUsername || senderId}`;
+
+        const decisionLabel =
+          execApprovalParsed.action === "allow-once"
+            ? "Allowed (once)"
+            : execApprovalParsed.action === "allow-always"
+              ? "Allowed (always)"
+              : "Denied";
+
+        try {
+          await callGateway({
+            method: "exec.approval.resolve",
+            params: { id: execApprovalParsed.approvalId, decision: execApprovalParsed.action },
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            clientDisplayName: `Telegram approval (${resolvedBy})`,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          });
+
+          // Update the original message to show the decision and remove buttons
+          const decisionEmoji = execApprovalParsed.action === "deny" ? "❌" : "✅";
+          const updatedText = `${decisionEmoji} Exec approval: ${decisionLabel}\nResolved by ${resolvedBy}\nID: ${execApprovalParsed.approvalId}`;
+
+          try {
+            await bot.api.editMessageText(
+              callbackMessage.chat.id,
+              callbackMessage.message_id,
+              updatedText,
+              { reply_markup: { inline_keyboard: [] } },
+            );
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (!errStr.includes("message is not modified")) {
+              runtime.error?.(danger(`exec approval: failed to update message: ${errStr}`));
+            }
+          }
+        } catch (err) {
+          runtime.error?.(danger(`exec approval: failed to resolve: ${String(err)}`));
+          // Update message with error
+          try {
+            await bot.api.editMessageText(
+              callbackMessage.chat.id,
+              callbackMessage.message_id,
+              `❌ Failed to submit approval: ${String(err)}\nID: ${execApprovalParsed.approvalId}`,
+              { reply_markup: { inline_keyboard: [] } },
+            );
+          } catch {
+            // Ignore edit errors on failure path
+          }
+        }
+        return;
+      }
+
       const syntheticMessage: TelegramMessage = {
         ...callbackMessage,
         from: callback.from,
