@@ -49,6 +49,14 @@ See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 - Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
+## Community plugins
+
+Community-contributed plugins that extend Moltbot:
+
+- **[ClawdBoost](https://github.com/NikeGunn/clawdboost)** — `clawdboost` — Smart context injection plugin. Automatically boosts AI conversations with pattern-matched, time-aware context snippets. [npm](https://www.npmjs.com/package/clawdboost)
+
+> Want your plugin listed? Open a PR adding it to this section!
+
 Moltbot plugins are **TypeScript modules** loaded at runtime via jiti. **Config
 validation does not execute plugin code**; it uses the plugin manifest and JSON
 Schema instead. See [Plugin manifest](/plugins/manifest).
