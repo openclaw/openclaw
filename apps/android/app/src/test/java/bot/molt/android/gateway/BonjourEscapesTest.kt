@@ -8,6 +8,7 @@ class BonjourEscapesTest {
   fun decodeNoop() {
     assertEquals("", BonjourEscapes.decode(""))
     assertEquals("hello", BonjourEscapes.decode("hello"))
+    assertEquals("hello world", BonjourEscapes.decode("hello world"))
   }
 
   @Test
