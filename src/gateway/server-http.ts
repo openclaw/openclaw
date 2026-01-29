@@ -47,6 +47,8 @@ type HookDispatchers = {
     thinking?: string;
     timeoutSeconds?: number;
     allowUnsafeExternalContent?: boolean;
+    cleanup?: "delete" | "keep";
+    cleanupDelayMinutes?: number;
   }) => string;
 };
 
