@@ -35,8 +35,8 @@ function isAlive(pid: number): boolean {
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
     try {
-      if (typeof held.handle.fd === "number") {
-        fsSync.closeSync(held.handle.fd);
+      if (typeof held.handle.close === "function") {
+        void held.handle.close().catch(() => {});
       }
     } catch {
       // Ignore errors during cleanup - best effort
