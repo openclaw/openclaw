@@ -210,8 +210,9 @@ function formatToolResults(results: MinimaxToolExecutionResult[]): string {
 
 /**
  * Extract assistant text from a message.
+ * @internal Currently unused but kept for future MiniMax enhancements
  */
-function getAssistantText(message: AgentMessage | undefined): string {
+function _getAssistantText(message: AgentMessage | undefined): string {
   if (!message || (message as { role?: string }).role !== "assistant") return "";
   const assistant = message as AssistantMessage;
   if (typeof assistant.content === "string") return assistant.content;

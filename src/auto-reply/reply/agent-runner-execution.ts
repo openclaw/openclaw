@@ -26,7 +26,6 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
   recordSessionReset,
-  setAgentState,
 } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
