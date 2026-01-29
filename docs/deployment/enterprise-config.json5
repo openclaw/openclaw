@@ -1,0 +1,110 @@
+{
+  // ===== 网关配置 =====
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",  // 绑定到所有网络接口
+    "port": 18789,
+    "auth": {
+      "mode": "token",  // 推荐: token 认证
+      "token": "${CLAWDBOT_GATEWAY_TOKEN}"  // 从环境变量读取
+    },
+    "trustedProxies": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]  // 公司内网
+  },
+
+  // ===== 模型配置 =====
+  "models": {
+    "mode": "merge",  // 合并内置模型
+    "providers": {
+      "anthropic": {
+        "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+        "apiKey": "${ANTHROPIC_API_KEY}",  // 必须使用环境变量
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "claude-opus-4-5",
+            "name": "Claude Opus 4.5",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 15,
+              "output": 75,
+              "cacheRead": 1.5,
+              "cacheWrite": 3.75
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+
+  // ===== Agent 配置 =====
+  "agents": {
+    "defaults": {
+      "workspace": "/var/lib/moltbot/workspace",
+      "model": {
+        "primary": "anthropic/claude-opus-4-5"
+      },
+      "maxConcurrent": 8,  // 根据服务器资源调整
+      "subagents": {
+        "maxConcurrent": 16
+      },
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "1h"
+      },
+      "heartbeat": {
+        "every": "30m"
+      },
+      "models": {
+        "anthropic/claude-opus-4-5": {
+          "params": {
+            "cacheControlTtl": "1h"
+          },
+          "alias": "opus"
+        }
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      // 生产环境：禁用自动引导文件，使用 Git 管理的工作区
+      "skipBootstrap": true
+    }
+  },
+
+  // ===== 会话隔离 (多用户关键配置) =====
+  "session": {
+    "dmScope": "per-channel-peer",  // 每个用户独立会话
+    "reset": {
+      "mode": "idle",  // 空闲时重置，而非固定时间
+      "idleMinutes": 120
+    }
+  },
+
+  // ===== 日志配置 =====
+  "logging": {
+    "level": "info",
+    "redactSensitive": "tools",  // 过滤敏感信息
+    "file": {
+      "enabled": true,
+      "path": "/var/log/moltbot/gateway.log",
+      "maxSize": "100M",
+      "maxFiles": 10
+    }
+  },
+
+  // ===== 安全配置 =====
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "useAccessGroups": ["operators"]  // 只有操作员可以执行命令
+  },
+
+  // ===== 消息配置 =====
+  "messages": {
+    "responsePrefix": "[{model}] ",
+    "ackReaction": "👀",
+    "ackReactionScope": "group-mentions"
+  }
+}

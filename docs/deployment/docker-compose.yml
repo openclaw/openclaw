@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  moltbot:
+    image: moltbot:latest
+    container_name: moltbot-gateway
+    restart: unless-stopped
+
+    # 环境变量
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAWDBOT_GATEWAY_TOKEN=${CLAWDBOT_GATEWAY_TOKEN}
+      - CLAWDBOT_STATE_DIR=/app/data
+      - NODE_ENV=production
+
+    # 端口映射
+    ports:
+      - "18789:18789"
+
+    # 卷挂载
+    volumes:
+      - ./config:/app/config:ro
+      - moltbot-data:/app/data
+      - moltbot-logs:/app/logs
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+    # 网络模式
+    network_mode: "bridge"
+
+  # Nginx 反向代理 (可选)
+  nginx:
+    image: nginx:alpine
+    container_name: moltbot-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx
+    depends_on:
+      - moltbot
+    networks:
+      - moltbot-network
+
+  # Redis (可选，用于高可用部署)
+  redis:
+    image: redis:alpine
+    container_name: moltbot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - moltbot-network
+
+networks:
+  moltbot-network:
+    driver: bridge
+
+volumes:
+  moltbot-data:
+    driver: local
+  moltbot-logs:
+    driver: local
+  redis-data:
+    driver: local
