@@ -81,8 +81,8 @@ targets:
       properties:
         CFBundleDisplayName: Moltbot
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2026.1.27-beta.1"
-        CFBundleVersion: "20260126"
+        CFBundleShortVersionString: "2026.1.29"
+        CFBundleVersion: "20260129"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -130,5 +130,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: MoltbotTests
-        CFBundleShortVersionString: "2026.1.27-beta.1"
-        CFBundleVersion: "20260126"
+        CFBundleShortVersionString: "2026.1.29"
+        CFBundleVersion: "20260129"

@@ -185,7 +185,7 @@ cat > /data/moltbot.json << 'EOF'
     "bind": "auto"
   },
   "meta": {
-    "lastTouchedVersion": "2026.1.27-beta.1"
+    "lastTouchedVersion": "2026.1.29"
   }
 }
 EOF
