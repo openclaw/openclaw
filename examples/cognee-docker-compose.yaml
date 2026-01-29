@@ -11,8 +11,6 @@
 # - Vector DB: LanceDB (file-based)
 # - Graph DB: Kuzu (file-based)
 
-version: "3.8"
-
 services:
   cognee:
     image: cognee/cognee:latest
@@ -21,6 +19,7 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       - LLM_API_KEY=${LLM_API_KEY}
+      - ENABLE_BACKEND_ACCESS_CONTROL=false
     volumes:
       - cognee_data:/app/cognee/.cognee_system
     restart: unless-stopped

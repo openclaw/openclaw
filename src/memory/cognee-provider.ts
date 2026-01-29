@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { MoltbotConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { MemorySearchResult } from "./index.js";
@@ -24,6 +26,12 @@ const DEFAULT_TIMEOUT_SECONDS = 30;
 const DEFAULT_AUTO_COGNIFY = true;
 const DEFAULT_COGNIFY_BATCH_SIZE = 100;
 const SNIPPET_MAX_CHARS = 700;
+
+type CogneeSyncIndex = {
+  datasetId?: string;
+  datasetName?: string;
+  files: Record<string, { hash: string; dataId?: string }>;
+};
 
 export type CogneeProviderConfig = {
   baseUrl?: string;
@@ -51,6 +59,10 @@ export class CogneeMemoryProvider {
   private readonly sources: Set<CogneeMemorySource>;
   private datasetId?: string;
   private syncedFiles = new Map<string, string>(); // path -> hash
+  private readonly syncIndexPath: string;
+  private syncIndexLoaded = false;
+  private syncIndex: CogneeSyncIndex = { files: {} };
+  private syncIndexDirty = false;
 
   constructor(
     cfg: MoltbotConfig,
@@ -75,6 +87,12 @@ export class CogneeMemoryProvider {
     this.autoCognify = config.autoCognify ?? DEFAULT_AUTO_COGNIFY;
     this.cognifyBatchSize = config.cognifyBatchSize || DEFAULT_COGNIFY_BATCH_SIZE;
     this.sources = new Set(sources);
+    this.syncIndexPath = path.join(
+      resolveStateDir(process.env, os.homedir),
+      "memory",
+      "cognee",
+      `${agentId}.json`,
+    );
 
     log.info("Cognee memory provider initialized", {
       agentId,
@@ -91,28 +109,36 @@ export class CogneeMemoryProvider {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    update?: boolean;
     progress?: (update: { completed: number; total: number; label?: string }) => void;
   }): Promise<void> {
     log.info("Starting Cognee memory sync", { agentId: this.agentId });
 
     let addedCount = 0;
+    await this.loadSyncIndex();
+    const force = Boolean(params?.force);
+    const update = Boolean(params?.update);
 
     // Sync memory files
     if (this.sources.has("memory")) {
       const memoryFiles = await this.collectMemoryFiles();
-      addedCount += await this.syncFiles(memoryFiles, "memory");
+      addedCount += await this.syncFiles(memoryFiles, "memory", { update });
     }
 
     // Sync session transcripts
     if (this.sources.has("sessions")) {
       const sessionFiles = await this.collectSessionFiles();
-      addedCount += await this.syncFiles(sessionFiles, "sessions");
+      addedCount += await this.syncFiles(sessionFiles, "sessions", { update });
     }
 
     // Run cognify if auto-enabled and files were added
-    if (this.autoCognify && addedCount > 0) {
+    if ((this.autoCognify && addedCount > 0) || (this.autoCognify && force)) {
       log.info("Running cognify after sync", { addedCount });
       await this.cognify();
+    }
+
+    if (this.syncIndexDirty) {
+      await this.saveSyncIndex();
     }
 
     log.info("Cognee memory sync completed", {
@@ -288,6 +314,60 @@ export class CogneeMemoryProvider {
 
   async close(): Promise<void> {}
 
+  private async loadSyncIndex(): Promise<void> {
+    if (this.syncIndexLoaded) return;
+    this.syncIndexLoaded = true;
+    try {
+      const raw = await fs.readFile(this.syncIndexPath, "utf-8");
+      const parsed = JSON.parse(raw) as CogneeSyncIndex;
+      if (!parsed || typeof parsed !== "object") return;
+      this.syncIndex = {
+        datasetId: parsed.datasetId,
+        datasetName: parsed.datasetName,
+        files: parsed.files && typeof parsed.files === "object" ? parsed.files : {},
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        log.warn("Failed to load Cognee sync index", { error });
+      }
+    }
+
+    if (this.syncIndex.datasetName && this.syncIndex.datasetName !== this.datasetName) {
+      log.info("Resetting Cognee sync index (dataset name changed)", {
+        from: this.syncIndex.datasetName,
+        to: this.datasetName,
+      });
+      this.syncIndex = { files: {} };
+      this.syncIndexDirty = true;
+    }
+
+    if (this.syncIndex.datasetId && this.datasetId && this.syncIndex.datasetId !== this.datasetId) {
+      log.info("Resetting Cognee sync index (dataset id changed)", {
+        from: this.syncIndex.datasetId,
+        to: this.datasetId,
+      });
+      this.syncIndex = { files: {} };
+      this.syncIndexDirty = true;
+    }
+
+    if (!this.datasetId && this.syncIndex.datasetId) {
+      this.datasetId = this.syncIndex.datasetId;
+    }
+  }
+
+  private async saveSyncIndex(): Promise<void> {
+    const dir = path.dirname(this.syncIndexPath);
+    await fs.mkdir(dir, { recursive: true });
+    const payload: CogneeSyncIndex = {
+      datasetId: this.datasetId ?? this.syncIndex.datasetId,
+      datasetName: this.datasetName,
+      files: this.syncIndex.files,
+    };
+    await fs.writeFile(this.syncIndexPath, JSON.stringify(payload, null, 2), "utf-8");
+    this.syncIndexDirty = false;
+  }
+
   private async collectMemoryFiles(): Promise<MemoryFileEntry[]> {
     const files: MemoryFileEntry[] = [];
     const memoryPaths = await listMemoryFiles(this.workspaceDir);
@@ -337,9 +417,14 @@ export class CogneeMemoryProvider {
     return files;
   }
 
-  private async syncFiles(files: MemoryFileEntry[], source: CogneeMemorySource): Promise<number> {
+  private async syncFiles(
+    files: MemoryFileEntry[],
+    source: CogneeMemorySource,
+    opts?: { update?: boolean },
+  ): Promise<number> {
     let addedCount = 0;
     const batchSize = this.cognifyBatchSize;
+    const update = Boolean(opts?.update);
 
     for (let i = 0; i < files.length; i += batchSize) {
       const batch = files.slice(i, i + batchSize);
@@ -363,24 +448,62 @@ export class CogneeMemoryProvider {
 
           const dataWithMetadata = `# ${file.path}\n\n${content}\n\n---\nMetadata: ${JSON.stringify(metadata)}`;
 
-          const response = await this.client.add({
-            data: dataWithMetadata,
-            datasetName: this.datasetName,
-          });
+          const record = this.syncIndex.files[file.path];
+          const datasetId = this.datasetId ?? this.syncIndex.datasetId;
+          const canUpdate = update && record?.dataId && datasetId;
 
-          if (!this.datasetId) {
-            this.datasetId = response.datasetId;
+          if (canUpdate && datasetId && record?.dataId) {
+            await this.client.update({
+              dataId: record.dataId,
+              datasetId,
+              data: dataWithMetadata,
+            });
+            addedCount++;
+            log.debug("Updated file in Cognee", {
+              path: file.path,
+              datasetId,
+              dataId: record.dataId,
+            });
+          } else {
+            const response = await this.client.add({
+              data: dataWithMetadata,
+              datasetName: this.datasetName,
+              datasetId,
+            });
+
+            if (!this.datasetId) {
+              this.datasetId = response.datasetId;
+            }
+            if (response.dataId) {
+              this.syncIndex.files[file.path] = {
+                hash: file.hash,
+                dataId: response.dataId,
+              };
+            } else {
+              this.syncIndex.files[file.path] = { hash: file.hash };
+            }
+            this.syncIndex.datasetId = this.datasetId ?? this.syncIndex.datasetId;
+            this.syncIndex.datasetName = this.datasetName;
+            this.syncIndexDirty = true;
+
+            this.syncedFiles.set(file.path, file.hash);
+            addedCount++;
+
+            log.debug("Added file to Cognee", {
+              path: file.path,
+              datasetId: response.datasetId,
+            });
+            continue;
           }
 
+          const dataId = record?.dataId;
+          this.syncIndex.files[file.path] = { hash: file.hash, dataId };
+          this.syncIndex.datasetId = datasetId ?? this.syncIndex.datasetId;
+          this.syncIndex.datasetName = this.datasetName;
+          this.syncIndexDirty = true;
           this.syncedFiles.set(file.path, file.hash);
-          addedCount++;
-
-          log.debug("Added file to Cognee", {
-            path: file.path,
-            datasetId: response.datasetId,
-          });
         } catch (error) {
-          log.error("Failed to add file to Cognee", { path: file.path, error });
+          log.error("Failed to sync file to Cognee", { path: file.path, error });
         }
       }
     }

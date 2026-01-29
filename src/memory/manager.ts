@@ -384,6 +384,7 @@ export class MemoryIndexManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    update?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (this.syncing) return this.syncing;

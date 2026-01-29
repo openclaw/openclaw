@@ -24,6 +24,21 @@ export type CogneeAddResponse = {
   datasetId: string;
   datasetName: string;
   message: string;
+  dataId?: string;
+};
+
+export type CogneeUpdateRequest = {
+  dataId: string;
+  datasetId: string;
+  data: string;
+};
+
+export type CogneeUpdateResponse = {
+  datasetId?: string;
+  datasetName?: string;
+  message?: string;
+  status?: string;
+  dataId?: string;
 };
 
 export type CogneeCognifyRequest = {
@@ -119,17 +134,77 @@ export class CogneeClient {
         dataset_id: string;
         dataset_name: string;
         message: string;
+        data_id?: unknown;
+        data_ingestion_info?: unknown;
       };
 
       return {
         datasetId: data.dataset_id,
         datasetName: data.dataset_name,
         message: data.message,
+        dataId: this.extractDataId(data.data_id ?? data.data_ingestion_info),
       };
     } catch (error) {
       log.error("Failed to add data to Cognee", { error });
       throw new Error(
         `Cognee add request failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async update(req: CogneeUpdateRequest): Promise<CogneeUpdateResponse> {
+    const url = new URL(`${this.baseUrl}${API_PREFIX}/update`);
+    url.searchParams.set("data_id", req.dataId);
+    url.searchParams.set("dataset_id", req.datasetId);
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+      headers["X-Api-Key"] = this.apiKey;
+    }
+
+    log.debug("Updating data in Cognee", {
+      url: url.toString(),
+      dataLength: req.data.length,
+    });
+
+    try {
+      const formData = new FormData();
+      const blob = new Blob([req.data], { type: "text/plain" });
+      formData.append("data", blob, "clawdbot-memory.txt");
+
+      const response = await request(url.toString(), {
+        method: "PATCH",
+        headers,
+        body: formData,
+        bodyTimeout: this.timeoutMs,
+        headersTimeout: this.timeoutMs,
+      });
+
+      if (response.statusCode !== 200) {
+        const errorText = await response.body.text();
+        throw new Error(`Cognee update failed with status ${response.statusCode}: ${errorText}`);
+      }
+
+      const data = (await response.body.json()) as {
+        status?: string;
+        message?: string;
+        dataset_id?: string;
+        dataset_name?: string;
+        data_id?: unknown;
+        data_ingestion_info?: unknown;
+      };
+
+      return {
+        status: data.status,
+        message: data.message,
+        datasetId: data.dataset_id ?? req.datasetId,
+        datasetName: data.dataset_name,
+        dataId: this.extractDataId(data.data_id ?? data.data_ingestion_info) ?? req.dataId,
+      };
+    } catch (error) {
+      log.error("Failed to update data in Cognee", { error });
+      throw new Error(
+        `Cognee update request failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -263,6 +338,22 @@ export class CogneeClient {
         `Cognee status request failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  private extractDataId(value: unknown): string | undefined {
+    if (!value) return undefined;
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const id = this.extractDataId(entry);
+        if (id) return id;
+      }
+      return undefined;
+    }
+    if (typeof value !== "object") return undefined;
+    const record = value as { data_id?: unknown; data_ingestion_info?: unknown };
+    if (typeof record.data_id === "string") return record.data_id;
+    return this.extractDataId(record.data_ingestion_info);
   }
 
   async healthCheck(): Promise<boolean> {

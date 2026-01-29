@@ -24,6 +24,7 @@ type MemoryCommandOptions = {
   json?: boolean;
   deep?: boolean;
   index?: boolean;
+  updateCognee?: boolean;
   verbose?: boolean;
 };
 
@@ -197,6 +198,7 @@ async function scanMemorySources(params: {
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
+  const updateCognee = opts.updateCognee ?? process.argv.includes("--update-cognee");
   const cfg = loadConfig();
   const agentIds = resolveAgentIds(cfg, opts.agent);
   const allResults: Array<{
@@ -205,6 +207,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
     indexError?: string;
     scan?: MemorySourceScan;
+    cogneeUpdate?: boolean;
   }> = [];
 
   for (const agentId of agentIds) {
@@ -240,6 +243,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
                 try {
                   await manager.sync({
                     reason: "cli",
+                    update: updateCognee,
                     progress: (syncUpdate) => {
                       update({
                         completed: syncUpdate.completed,
@@ -269,7 +273,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           agentId,
           sources,
         });
-        allResults.push({ agentId, status, embeddingProbe, indexError, scan });
+        allResults.push({
+          agentId,
+          status,
+          embeddingProbe,
+          indexError,
+          scan,
+          cogneeUpdate: Boolean(updateCognee),
+        });
       },
     });
   }
@@ -434,6 +445,7 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--deep", "Probe embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
+    .option("--update-cognee", "Use Cognee update when file data ids are known", false)
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       await runMemoryStatus(opts);
