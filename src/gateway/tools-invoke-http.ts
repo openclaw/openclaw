@@ -7,6 +7,8 @@ import {
   resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
 } from "../agents/pi-tools.policy.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import { isToolAllowed } from "../agents/sandbox/tool-policy.js";
 import {
   buildPluginToolGroups,
   collectExplicitAllowlist,
@@ -26,6 +28,7 @@ import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
 import {
   readJsonBodyOrError,
+  sendForbidden,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
@@ -115,6 +118,18 @@ export async function handleToolsInvokeHttpRequest(
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =
     !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
+
+  // Check sandbox policy before proceeding. Sandboxed sessions have restricted tool access.
+  const sandboxRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+  if (sandboxRuntime.sandboxed) {
+    if (!isToolAllowed(sandboxRuntime.toolPolicy, toolName)) {
+      sendForbidden(
+        res,
+        `Tool "${toolName}" is blocked by sandbox policy (mode=${sandboxRuntime.mode}, session=${sessionKey})`,
+      );
+      return true;
+    }
+  }
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(getHeader(req, "x-moltbot-message-channel") ?? "");
