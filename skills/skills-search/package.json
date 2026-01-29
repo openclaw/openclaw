@@ -1,0 +1,16 @@
+{
+  "name": "@thesethrose/skills-search",
+  "version": "1.0.0",
+  "description": "Search skills.sh registry from CLI",
+  "main": "cli.js",
+  "bin": {
+    "skills-search": "./cli.js"
+  },
+  "scripts": {
+    "test": "node cli.js --help"
+  },
+  "keywords": ["skills", "skills.sh", "agent-skills", "search", "cli"],
+  "author": "Seth Rose",
+  "license": "MIT",
+  "repository": "https://github.com/TheSethRose/skills-search"
+}

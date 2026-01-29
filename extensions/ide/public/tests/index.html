@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clawd IDE - Self-Improvement System Tests</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      background: #0d1117;
+      color: #c9d1d9;
+      padding: 24px;
+      line-height: 1.6;
+    }
+    
+    h1 {
+      color: #58a6ff;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      color: #8b949e;
+      margin-bottom: 24px;
+    }
+    
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    
+    button {
+      padding: 10px 20px;
+      background: #238636;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background: #2ea043;
+    }
+    
+    button:disabled {
+      background: #21262d;
+      cursor: not-allowed;
+    }
+    
+    button.secondary {
+      background: #21262d;
+      border: 1px solid #30363d;
+    }
+    
+    button.secondary:hover {
+      background: #30363d;
+    }
+    
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    
+    .summary-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+    
+    .summary-card .value {
+      font-size: 32px;
+      font-weight: 700;
+    }
+    
+    .summary-card .label {
+      font-size: 12px;
+      color: #8b949e;
+    }
+    
+    .summary-card.passed .value { color: #3fb950; }
+    .summary-card.failed .value { color: #f85149; }
+    .summary-card.time .value { color: #58a6ff; }
+    .summary-card.rate .value { color: #d29922; }
+    
+    .results {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #21262d;
+      border-bottom: 1px solid #30363d;
+    }
+    
+    .results-header h2 {
+      font-size: 14px;
+    }
+    
+    .results-list {
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    
+    .result-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      border-bottom: 1px solid #21262d;
+    }
+    
+    .result-item:last-child {
+      border-bottom: none;
+    }
+    
+    .result-status {
+      font-size: 18px;
+    }
+    
+    .result-name {
+      flex: 1;
+      font-size: 13px;
+    }
+    
+    .result-time {
+      font-size: 12px;
+      color: #6e7681;
+    }
+    
+    .result-item.pass {
+      border-left: 3px solid #3fb950;
+    }
+    
+    .result-item.fail {
+      border-left: 3px solid #f85149;
+      background: #f8514911;
+    }
+    
+    .result-error {
+      margin-top: 4px;
+      font-size: 12px;
+      color: #f85149;
+    }
+    
+    .module-section {
+      margin-bottom: 24px;
+    }
+    
+    .module-header {
+      padding: 8px 16px;
+      background: #1f6feb22;
+      border-left: 3px solid #58a6ff;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    
+    .console-output {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 24px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    
+    .console-output pre {
+      white-space: pre-wrap;
+    }
+    
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 40px;
+      color: #8b949e;
+    }
+    
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid #30363d;
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .performance-chart {
+      margin-top: 24px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+    }
+    
+    .perf-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    
+    .perf-label {
+      width: 200px;
+      font-size: 12px;
+      color: #8b949e;
+    }
+    
+    .perf-bar-bg {
+      flex: 1;
+      height: 20px;
+      background: #21262d;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    
+    .perf-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #238636, #3fb950);
+      border-radius: 4px;
+    }
+    
+    .perf-bar-fill.warning {
+      background: linear-gradient(90deg, #9e6a03, #d29922);
+    }
+    
+    .perf-bar-fill.error {
+      background: linear-gradient(90deg, #b62324, #f85149);
+    }
+    
+    .perf-value {
+      width: 80px;
+      font-size: 12px;
+      text-align: right;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 Self-Improvement System Tests</h1>
+  <p class="subtitle">Comprehensive test suite for all 9 self-improvement modules</p>
+  
+  <div class="controls">
+    <button id="runAllBtn" onclick="runAllTests()">▶️ Run All Tests</button>
+    <button class="secondary" onclick="runModuleTests('SelfCritique')">Test Self-Critique</button>
+    <button class="secondary" onclick="runModuleTests('LearningMemory')">Test Learning Memory</button>
+    <button class="secondary" onclick="runModuleTests('Calibration')">Test Calibration</button>
+    <button class="secondary" onclick="clearResults()">Clear Results</button>
+  </div>
+  
+  <div class="summary" id="summary" style="display: none;">
+    <div class="summary-card">
+      <div class="value" id="totalTests">0</div>
+      <div class="label">Total Tests</div>
+    </div>
+    <div class="summary-card passed">
+      <div class="value" id="passedTests">0</div>
+      <div class="label">Passed</div>
+    </div>
+    <div class="summary-card failed">
+      <div class="value" id="failedTests">0</div>
+      <div class="label">Failed</div>
+    </div>
+    <div class="summary-card time">
+      <div class="value" id="totalTime">0ms</div>
+      <div class="label">Total Time</div>
+    </div>
+    <div class="summary-card rate">
+      <div class="value" id="passRate">0%</div>
+      <div class="label">Pass Rate</div>
+    </div>
+  </div>
+  
+  <div class="results" id="results" style="display: none;">
+    <div class="results-header">
+      <h2>Test Results</h2>
+      <span id="resultCount"></span>
+    </div>
+    <div class="results-list" id="resultsList"></div>
+  </div>
+  
+  <div class="loading" id="loading" style="display: none;">
+    <div class="spinner"></div>
+    <span>Running tests...</span>
+  </div>
+  
+  <div class="performance-chart" id="perfChart" style="display: none;">
+    <h3 style="margin-bottom: 16px;">⚡ Performance Analysis</h3>
+    <div id="perfBars"></div>
+  </div>
+  
+  <!-- Load all modules -->
+  <script src="../modules/self-critique.js"></script>
+  <script src="../modules/learning-memory.js"></script>
+  <script src="../modules/confidence-calibration.js"></script>
+  <script src="../modules/reflexion-engine.js"></script>
+  <script src="../modules/pattern-recognition.js"></script>
+  <script src="../modules/style-analyzer.js"></script>
+  <script src="../modules/adaptive-completions.js"></script>
+  <script src="../modules/capability-tracker.js"></script>
+  <script src="../modules/metacognitive-dashboard.js"></script>
+  <script src="self-improvement-tests.js"></script>
+  
+  <script>
+    let currentResults = null;
+    
+    async function runAllTests() {
+      const btn = document.getElementById('runAllBtn');
+      btn.disabled = true;
+      
+      document.getElementById('loading').style.display = 'flex';
+      document.getElementById('summary').style.display = 'none';
+      document.getElementById('results').style.display = 'none';
+      document.getElementById('perfChart').style.display = 'none';
+      
+      await new Promise(r => setTimeout(r, 100)); // Let UI update
+      
+      try {
+        currentResults = await SelfImprovementTests.runAll();
+        displayResults(currentResults);
+      } catch (e) {
+        console.error('Test error:', e);
+        alert('Test error: ' + e.message);
+      }
+      
+      document.getElementById('loading').style.display = 'none';
+      btn.disabled = false;
+    }
+    
+    async function runModuleTests(module) {
+      document.getElementById('loading').style.display = 'flex';
+      
+      await new Promise(r => setTimeout(r, 100));
+      
+      try {
+        SelfImprovementTests.results = [];
+        SelfImprovementTests.startTime = performance.now();
+        
+        switch (module) {
+          case 'SelfCritique':
+            await SelfImprovementTests.testSelfCritique();
+            break;
+          case 'LearningMemory':
+            await SelfImprovementTests.testLearningMemory();
+            break;
+          case 'Calibration':
+            await SelfImprovementTests.testConfidenceCalibration();
+            break;
+        }
+        
+        const totalTime = performance.now() - SelfImprovementTests.startTime;
+        const passed = SelfImprovementTests.results.filter(r => r.status === 'PASS').length;
+        const failed = SelfImprovementTests.results.filter(r => r.status === 'FAIL').length;
+        
+        currentResults = {
+          total: SelfImprovementTests.results.length,
+          passed,
+          failed,
+          passRate: passed / SelfImprovementTests.results.length,
+          totalTime,
+          results: SelfImprovementTests.results
+        };
+        
+        displayResults(currentResults);
+      } catch (e) {
+        console.error('Test error:', e);
+      }
+      
+      document.getElementById('loading').style.display = 'none';
+    }
+    
+    function displayResults(results) {
+      // Summary
+      document.getElementById('summary').style.display = 'grid';
+      document.getElementById('totalTests').textContent = results.total;
+      document.getElementById('passedTests').textContent = results.passed;
+      document.getElementById('failedTests').textContent = results.failed;
+      document.getElementById('totalTime').textContent = results.totalTime.toFixed(0) + 'ms';
+      document.getElementById('passRate').textContent = (results.passRate * 100).toFixed(1) + '%';
+      
+      // Results list
+      document.getElementById('results').style.display = 'block';
+      document.getElementById('resultCount').textContent = `${results.passed}/${results.total} passed`;
+      
+      const list = document.getElementById('resultsList');
+      let currentModule = '';
+      list.innerHTML = '';
+      
+      for (const r of results.results) {
+        // Extract module name
+        const moduleName = r.name.split(':')[0];
+        if (moduleName !== currentModule) {
+          currentModule = moduleName;
+          list.innerHTML += `<div class="module-header">${moduleName}</div>`;
+        }
+        
+        const testName = r.name.split(':')[1]?.trim() || r.name;
+        
+        list.innerHTML += `
+          <div class="result-item ${r.status.toLowerCase()}">
+            <span class="result-status">${r.status === 'PASS' ? '✅' : '❌'}</span>
+            <div class="result-name">
+              ${testName}
+              ${r.error ? `<div class="result-error">${r.error}</div>` : ''}
+            </div>
+            <span class="result-time">${r.duration.toFixed(2)}ms</span>
+          </div>
+        `;
+      }
+      
+      // Performance chart
+      displayPerformanceChart(results.results);
+    }
+    
+    function displayPerformanceChart(results) {
+      const perfTests = results.filter(r => r.name.includes('Performance:'));
+      if (perfTests.length === 0) return;
+      
+      document.getElementById('perfChart').style.display = 'block';
+      const container = document.getElementById('perfBars');
+      container.innerHTML = '';
+      
+      const maxTime = Math.max(...perfTests.map(t => t.duration), 100);
+      
+      for (const test of perfTests) {
+        const name = test.name.replace('Performance: ', '');
+        const pct = (test.duration / maxTime) * 100;
+        const status = test.status === 'PASS' ? '' : test.duration > 50 ? 'warning' : 'error';
+        
+        container.innerHTML += `
+          <div class="perf-bar">
+            <span class="perf-label">${name}</span>
+            <div class="perf-bar-bg">
+              <div class="perf-bar-fill ${status}" style="width: ${pct}%"></div>
+            </div>
+            <span class="perf-value">${test.duration.toFixed(2)}ms</span>
+          </div>
+        `;
+      }
+    }
+    
+    function clearResults() {
+      document.getElementById('summary').style.display = 'none';
+      document.getElementById('results').style.display = 'none';
+      document.getElementById('perfChart').style.display = 'none';
+      currentResults = null;
+    }
+  </script>
+</body>
+</html>

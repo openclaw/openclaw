@@ -1,0 +1,977 @@
+/* ============================================
+   UI/UX POLISH - 2026 Trends Implementation
+   ============================================
+   Quick Wins: Calm UI, Transitions, Better Colors
+   Based on: ide/UI-UX-ANALYSIS.md
+*/
+
+/* Global utility classes */
+.hidden {
+  display: none !important;
+}
+
+/* ============================================
+   1. REFINED COLOR PALETTE
+   ============================================ */
+
+:root {
+  /* Backgrounds - softer, warmer dark mode */
+  --bg-primary: #1a1b1e;
+  --bg-secondary: #22242a;
+  --bg-tertiary: #2a2d35;
+  --bg-elevated: #32363f;
+  --bg-hover: #3a3f4b;
+  --bg-active: #0d4a6f;
+  
+  /* Text - improved contrast */
+  --text-primary: #e4e4e7;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  
+  /* Accent - softer emerald */
+  --accent: #34d399;
+  --accent-hover: #6ee7b7;
+  --accent-muted: rgba(52, 211, 153, 0.15);
+  
+  /* Borders - more subtle */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.15);
+  --border-focus: var(--accent);
+  
+  /* Semantic */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #3b82f6;
+}
+
+/* ============================================
+   2. GLOBAL TRANSITIONS
+   ============================================ */
+
+/* Smooth transitions everywhere */
+*, *::before, *::after {
+  transition-property: background-color, border-color, color, opacity, transform, box-shadow;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+
+/* Disable transitions for code/editor (performance) */
+.monaco-editor *, 
+.xterm *, 
+code *, 
+pre * {
+  transition: none !important;
+}
+
+/* Panel resize transitions */
+.sidebar,
+.panel,
+.bottom-panel {
+  transition: width 200ms ease-out, height 200ms ease-out, opacity 150ms ease;
+}
+
+/* Button active state */
+button:active,
+.btn:active,
+[role="button"]:active {
+  transform: scale(0.98);
+  transition: transform 50ms ease;
+}
+
+/* ============================================
+   3. FILE TREE IMPROVEMENTS
+   ============================================ */
+
+/* Indentation guides */
+.file-item {
+  position: relative;
+}
+
+.file-item[data-depth="1"]::before,
+.file-item[data-depth="2"]::before,
+.file-item[data-depth="3"]::before,
+.file-item[data-depth="4"]::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--depth, 0) * 12px + 8px);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.5;
+}
+
+/* Smoother hover */
+.file-item:hover {
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+/* Selected state */
+.file-item.selected {
+  background: var(--accent-muted);
+  border-left: 2px solid var(--accent);
+}
+
+/* ============================================
+   4. CHAT PANEL - MESSAGE BUBBLES
+   ============================================ */
+
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 95%;
+  animation: messageAppear 200ms ease-out;
+}
+
+@keyframes messageAppear {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Message header */
+.chat-message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chat-message-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.chat-message.assistant .chat-message-avatar {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.chat-message.user .chat-message-avatar {
+  background: var(--bg-active);
+  color: var(--info);
+}
+
+.chat-message-sender {
+  color: var(--text-primary);
+}
+
+.chat-message-time {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+/* Message content bubble */
+.chat-message-content {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  border-top-left-radius: 4px;
+  padding: 12px 16px;
+  line-height: 1.5;
+}
+
+.chat-message.user .chat-message-content {
+  background: var(--bg-active);
+  border-color: transparent;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 4px;
+  margin-left: auto;
+}
+
+/* Code blocks in chat */
+.chat-message-content pre {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.chat-message-content code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+}
+
+/* Code block actions */
+.chat-code-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-code-btn {
+  padding: 4px 12px;
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chat-code-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+.chat-code-btn.primary {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-code-btn.primary:hover {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+/* Chat input area */
+.chat-input-area {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  padding: 12px;
+}
+
+.chat-input-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  transition: border-color 150ms ease;
+}
+
+.chat-input-wrapper:focus-within {
+  border-color: var(--accent);
+}
+
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  min-height: 24px;
+  max-height: 120px;
+}
+
+.chat-input:focus {
+  outline: none;
+}
+
+.chat-input::placeholder {
+  color: var(--text-muted);
+}
+
+.chat-quick-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.chat-quick-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.chat-quick-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.chat-send-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent);
+  border: none;
+  color: var(--bg-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.chat-send-btn:hover {
+  background: var(--accent-hover);
+}
+
+.chat-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================
+   5. AGENT MODE - CLEAN EMPTY STATE
+   ============================================ */
+
+.agent-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  text-align: center;
+  gap: 16px;
+}
+
+.agent-empty-icon {
+  font-size: 48px;
+  opacity: 0.8;
+}
+
+.agent-empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agent-empty-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+.agent-start-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: var(--bg-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+.agent-start-button:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.agent-start-button:active {
+  transform: translateY(0);
+}
+
+/* Agent input in empty state */
+.agent-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.agent-input-wrapper textarea {
+  width: 100%;
+  padding: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  resize: none;
+  transition: border-color 150ms ease;
+}
+
+.agent-input-wrapper textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.agent-input-wrapper textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.agent-input-wrapper .agent-start-button {
+  align-self: center;
+}
+
+.agent-examples {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+}
+
+.agent-examples-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.agent-example-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.agent-example-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.agent-example-icon {
+  color: var(--text-muted);
+}
+
+/* Agent Active State - Improved */
+.agent-active-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-task-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.agent-status-indicator.paused {
+  background: var(--warning);
+  animation: none;
+}
+
+.agent-status-indicator.error {
+  background: var(--error);
+  animation: none;
+}
+
+.agent-task-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.agent-control-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.agent-control-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.agent-control-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* Progress bar */
+.agent-progress {
+  height: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.agent-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  transition: width 300ms ease-out;
+}
+
+/* Plan steps */
+.agent-plan {
+  padding: 12px;
+}
+
+.agent-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.agent-plan-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.agent-plan-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.agent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: all 150ms ease;
+}
+
+.agent-step.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+}
+
+.agent-step.complete {
+  opacity: 0.7;
+}
+
+.agent-step-status {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.agent-step.active .agent-step-status {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: pulse 1.5s infinite;
+}
+
+.agent-step.complete .agent-step-status {
+  background: var(--success);
+  border-color: var(--success);
+  color: white;
+}
+
+.agent-step.error .agent-step-status {
+  background: var(--error);
+  border-color: var(--error);
+  color: white;
+}
+
+.agent-step-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-step-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.agent-step-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ============================================
+   6. TABS - REFINED
+   ============================================ */
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 35px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+  background: var(--bg-tertiary);
+}
+
+.tab-icon {
+  font-size: 14px;
+}
+
+.tab-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  opacity: 0;
+  transition: all 100ms ease;
+}
+
+.tab:hover .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tab.modified .tab-close::before {
+  content: '●';
+  color: var(--accent);
+}
+
+/* ============================================
+   7. SIDEBAR SECTIONS - COLLAPSIBLE
+   ============================================ */
+
+.sidebar-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background 150ms ease;
+}
+
+.sidebar-section-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.sidebar-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-section-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 200ms ease;
+}
+
+.sidebar-section.collapsed .sidebar-section-chevron {
+  transform: rotate(-90deg);
+}
+
+.sidebar-section-content {
+  overflow: hidden;
+  transition: max-height 200ms ease-out;
+  max-height: 1000px;
+}
+
+.sidebar-section.collapsed .sidebar-section-content {
+  max-height: 0;
+}
+
+/* ============================================
+   8. STATUS BAR - ENHANCED
+   ============================================ */
+
+.status-bar {
+  height: 24px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.status-bar-left,
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 100ms ease;
+}
+
+.status-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.status-item-icon {
+  font-size: 12px;
+}
+
+.status-ai {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.status-ai-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.status-ai.thinking .status-ai-dot {
+  animation: pulse 1s infinite;
+}
+
+.status-ai.offline {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error);
+}
+
+.status-ai.offline .status-ai-dot {
+  background: var(--error);
+}
+
+/* ============================================
+   9. CONTEXT METER
+   ============================================ */
+
+.context-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.context-meter:hover {
+  background: var(--bg-tertiary);
+}
+
+.context-meter-bar {
+  width: 60px;
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.context-meter-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 300ms ease, background 300ms ease;
+}
+
+.context-meter-fill.warning {
+  background: var(--warning);
+}
+
+.context-meter-fill.danger {
+  background: var(--error);
+}
+
+.context-meter-text {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ============================================
+   10. NOTIFICATIONS
+   ============================================ */
+
+.notification {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  max-width: 400px;
+  animation: notificationAppear 200ms ease-out;
+}
+
+@keyframes notificationAppear {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.notification-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.notification.success .notification-icon {
+  color: var(--success);
+}
+
+.notification.error .notification-icon {
+  color: var(--error);
+}
+
+.notification.warning .notification-icon {
+  color: var(--warning);
+}
+
+.notification.info .notification-icon {
+  color: var(--info);
+}
+
+.notification-content {
+  flex: 1;
+}
+
+.notification-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.notification-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.notification-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  margin: -4px;
+}
+
+.notification-close:hover {
+  color: var(--text-primary);
+}

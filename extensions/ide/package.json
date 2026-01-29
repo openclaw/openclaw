@@ -1,0 +1,30 @@
+{
+  "name": "clawd-ide",
+  "version": "1.0.0",
+  "description": "AI-powered IDE for DNA",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "keywords": [
+    "ide",
+    "dna",
+    "ai"
+  ],
+  "author": "Clawd",
+  "license": "MIT",
+  "dependencies": {
+    "@vscode/debugadapter": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "better-sqlite3": "^12.6.2",
+    "chokidar": "^3.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "node-pty": "^1.1.0",
+    "openai": "^6.17.0",
+    "sqlite-vec": "^0.1.7-alpha.2",
+    "ws": "^8.14.2",
+    "xterm": "^5.3.0"
+  }
+}

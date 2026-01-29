@@ -1,0 +1,69 @@
+{
+  "name": "@dna/skill-update",
+  "version": "1.0.0",
+  "description": "Comprehensive backup, update, and restore workflow for DNA with dynamic workspace detection",
+  "type": "module",
+  "keywords": [
+    "dna",
+    "skill",
+    "backup",
+    "restore",
+    "update",
+    "multi-agent",
+    "workspace",
+    "git"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dna/dna.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dna/dna/issues"
+  },
+  "homepage": "https://clawdhub.com",
+  "license": "MIT",
+  "author": {
+    "name": "Pascal Schott",
+    "github": "pasogott"
+  },
+  "files": [
+    "*.sh",
+    "*.md",
+    "*.json",
+    "!package.json"
+  ],
+  "scripts": {
+    "dryrun": "./backup-dna-dryrun.sh",
+    "backup": "./backup-dna-full.sh",
+    "restore": "./restore-dna.sh",
+    "validate": "./validate-setup.sh",
+    "check": "./check-upstream.sh"
+  },
+  "dna": {
+    "type": "skill",
+    "category": "system",
+    "tags": [
+      "backup",
+      "update",
+      "restore",
+      "multi-agent",
+      "maintenance"
+    ],
+    "requirements": {
+      "bash": ">=4.0",
+      "jq": ">=1.6",
+      "tar": "*",
+      "git": "*"
+    },
+    "features": {
+      "dynamicWorkspaces": true,
+      "multiAgent": true,
+      "dryRun": true,
+      "gitIntegration": true,
+      "validation": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

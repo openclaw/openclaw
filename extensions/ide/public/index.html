@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clawd IDE 🐾</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <link rel="stylesheet" href="styles.css?v=20260129">
+  <link rel="stylesheet" href="sprint3.css">
+  <link rel="stylesheet" href="browser.css">
+  <link rel="stylesheet" href="ui-polish.css">
+  <link rel="stylesheet" href="ui-phase2-4.css">
+  <link rel="stylesheet" href="agent-features.css">
+  <link rel="stylesheet" href="phase6-features.css">
+  <link rel="stylesheet" href="self-improvement.css">
+  <!-- Google Fonts for better typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app">
+    <!-- Title Bar -->
+    <div class="titlebar">
+      <div class="titlebar-left">
+        <span class="logo">🐾 Clawd IDE</span>
+      </div>
+      <div class="titlebar-center">
+        <div class="command-palette-trigger" onclick="toggleCommandPalette()">
+          <span>Search files, commands...</span>
+          <kbd>⌘K</kbd>
+        </div>
+      </div>
+      <div class="titlebar-right">
+        <span class="status-indicator online"></span>
+        <span id="connectionStatus">Connected</span>
+      </div>
+    </div>
+
+    <!-- Main Layout -->
+    <div class="main-container">
+      <!-- Activity Bar -->
+      <div class="activity-bar">
+        <div class="activity-item active" data-panel="explorer" onclick="switchPanel('explorer')" title="Explorer">
+          <svg viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h6v2H7v-2z"/></svg>
+        </div>
+        <div class="activity-item" data-panel="search" onclick="switchPanel('search')" title="Search">
+          <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        </div>
+        <div class="activity-item" data-panel="git" onclick="switchPanel('git')" title="Source Control">
+          <svg viewBox="0 0 24 24"><path d="M17.5 4.5c-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5-1.45 0-2.99.22-4.28.79C1.49 5.62 1 6.33 1 7.14v11.28c0 1.3 1.22 2.26 2.48 1.94.98-.25 2.02-.36 3.02-.36 1.56 0 3.22.26 4.56.92.6.3 1.28.3 1.88 0 1.34-.67 3-.92 4.56-.92 1 0 2.04.11 3.02.36 1.26.33 2.48-.63 2.48-1.94V7.14c0-.81-.49-1.52-1.22-1.85-1.29-.57-2.83-.79-4.28-.79zM21 17.23c0 .63-.58 1.09-1.2.98-.75-.14-1.53-.2-2.3-.2-1.7 0-4.15.65-5.5 1.5V8c1.35-.85 3.8-1.5 5.5-1.5.92 0 1.83.09 2.7.28.46.1.8.51.8.98v9.47z"/></svg>
+        </div>
+        <div class="activity-item" data-panel="ai" onclick="switchPanel('ai')" title="Clawd AI">
+          <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/><circle cx="8" cy="10" r="1.5"/><circle cx="12" cy="10" r="1.5"/><circle cx="16" cy="10" r="1.5"/></svg>
+        </div>
+        <div class="activity-item" data-panel="debug" onclick="switchPanel('debug')" title="Debug (Cmd+Shift+D)">
+          <span class="activity-icon">🐛</span>
+        </div>
+        <div class="activity-item" data-panel="agent" onclick="switchPanel('agent')" title="Agent Mode (Cmd+Shift+G)">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        </div>
+        <div class="activity-item" id="memoryBtn" onclick="toggleMemoryPanel()" title="Clawdbot Memory (Cmd+M)">
+          <svg viewBox="0 0 24 24"><path d="M12 2a9 9 0 0 0-9 9c0 4.17 2.84 7.67 6.69 8.69L12 22l2.31-2.31C18.16 18.67 21 15.17 21 11a9 9 0 0 0-9-9zm0 2c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14c-2.67 0-8-1.34-8-4v-1c0-1.1.9-2 2-2h1.46A4.98 4.98 0 0 0 12 14c1.94 0 3.64-1.11 4.54-2.73H18c1.1 0 2 .9 2 2v1c0 2.66-5.33 4-8 4z"/></svg>
+        </div>
+        <div class="activity-item" data-panel="agents" onclick="switchPanel('agents')" title="Sub-Agents (Cmd+Shift+A)" style="position: relative;">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+          <span class="agent-dashboard-badge hidden" id="agentDashboardBadge"></span>
+        </div>
+        <div class="activity-item" data-panel="dashboard" onclick="showDashboard()" title="Project Dashboard">
+          <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+        </div>
+        <div class="activity-item" onclick="openBrowserInPane()" title="Open Browser (Cmd+B)">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+        </div>
+        <div class="activity-spacer"></div>
+        <div class="activity-item" onclick="openSettings()" title="Settings">
+          <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="sidebar" id="sidebar">
+        <!-- Explorer Panel -->
+        <div class="sidebar-panel" id="panel-explorer">
+          <div class="sidebar-header">
+            <span>EXPLORER</span>
+            <div class="sidebar-actions">
+              <button onclick="createNewFile()" title="New File">+</button>
+              <button onclick="createNewFolder()" title="New Folder">📁</button>
+              <button onclick="refreshFiles()" title="Refresh">↻</button>
+            </div>
+          </div>
+          <!-- Recent Files -->
+          <div class="recent-files-section" id="recentFilesSection">
+            <div class="recent-files-header" onclick="toggleRecentFiles()">
+              <span>📂 Recent Files</span>
+              <span id="recentFilesToggle">▼</span>
+            </div>
+            <div class="recent-files-list" id="recentFilesList"></div>
+          </div>
+          <div class="file-tree" id="fileTree"></div>
+        </div>
+
+        <!-- Search Panel -->
+        <div class="sidebar-panel hidden" id="panel-search">
+          <div class="sidebar-header">
+            <span>SEARCH</span>
+          </div>
+          <div class="search-container">
+            <input type="text" id="searchInput" placeholder="Search files and code..." onkeyup="handleSearch(event)">
+            <div class="search-options">
+              <label class="search-toggle" title="Use AI-powered semantic search to find conceptually similar code">
+                <input type="checkbox" id="semanticSearchToggle" onchange="handleSearch({target: document.getElementById('searchInput')})">
+                <span class="search-toggle-label">🧠 Semantic</span>
+              </label>
+              <button class="search-index-btn" onclick="rebuildIndex()" title="Rebuild search index">
+                <span>⟳</span>
+              </button>
+            </div>
+            <div class="search-results" id="searchResults"></div>
+          </div>
+        </div>
+
+        <!-- Git Panel -->
+        <div class="sidebar-panel hidden" id="panel-git">
+          <div class="sidebar-header">
+            <span>SOURCE CONTROL</span>
+          </div>
+          <div class="git-status" id="gitStatus">
+            <p style="padding: 10px; color: #888;">Loading git status...</p>
+          </div>
+        </div>
+
+        <!-- AI Panel -->
+        <div class="sidebar-panel hidden" id="panel-ai">
+          <div class="sidebar-header">
+            <span>CLAWD AI</span>
+            <div class="sidebar-actions">
+              <button onclick="moveAiChatToRight()" title="Move to Right Panel">◫</button>
+            </div>
+          </div>
+          <div class="ai-chat">
+            <div class="ai-messages" id="aiMessages">
+              <div class="ai-message assistant">
+                <strong>Clawd 🐾</strong>
+                <p>Hey Ivan! I'm here to help. Ask me anything about your code, or tell me what to build.</p>
+                <p class="ai-hint">Tip: Use @file, @folder, @codebase to include context</p>
+              </div>
+            </div>
+            <div class="ai-input-container">
+              <div class="ai-context-pills hidden" id="aiContextPills">
+                <!-- Context pills rendered here -->
+              </div>
+              <div class="ai-input-wrapper">
+                <textarea id="aiInput" placeholder="Ask Clawd... (@file, @folder for context)" 
+                          onkeydown="handleAiInput(event)" 
+                          oninput="showAtAutocomplete(this)"></textarea>
+                <div class="at-autocomplete hidden" id="atAutocomplete">
+                  <!-- Autocomplete items rendered here -->
+                </div>
+              </div>
+              <button class="voice-btn" onclick="toggleVoiceInput('chat')" title="Voice input (Cmd+Shift+V)">🎤</button>
+              <button onclick="sendAiMessage()">Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agent Mode Panel -->
+        <div class="sidebar-panel hidden" id="panel-agent">
+          <div class="sidebar-header">
+            <span>🤖 AGENT MODE</span>
+            <div class="sidebar-actions">
+              <select id="agentModeSelect" onchange="setAgentMode(this.value)" title="Agent Mode">
+                <option value="safe">Safe</option>
+                <option value="standard">Standard</option>
+                <option value="autonomous">Auto</option>
+              </select>
+            </div>
+          </div>
+          
+          <!-- Agent Task Input -->
+          <div class="agent-task-input" id="agentTaskInput">
+            <textarea id="agentTaskText" placeholder="Describe what you want to build or change...&#10;&#10;Example: Add user authentication with JWT tokens" rows="4"></textarea>
+            <button class="agent-start-btn" onclick="startAgentTask()">
+              <span>▶</span> Start Agent
+            </button>
+          </div>
+          
+          <!-- Agent Active View (hidden initially) -->
+          <div class="agent-active hidden" id="agentActive">
+            <!-- Task Header -->
+            <div class="agent-task-header">
+              <div class="agent-task-title">
+                <span class="agent-task-icon">🎯</span>
+                <span id="agentTaskTitle">Task in progress...</span>
+              </div>
+              <div class="agent-task-actions">
+                <button onclick="toggleAgentPause()" id="agentPauseBtn" title="Pause">⏸</button>
+                <button onclick="cancelAgentTask()" title="Cancel">⏹</button>
+              </div>
+            </div>
+            
+            <!-- Plan Section -->
+            <div class="agent-section">
+              <div class="agent-section-header">
+                <span>📋 Plan</span>
+                <span class="agent-step-count" id="agentStepCount">0/0</span>
+              </div>
+              <div class="agent-plan" id="agentPlan">
+                <!-- Steps rendered here -->
+              </div>
+            </div>
+            
+            <!-- Current Step Section -->
+            <div class="agent-section">
+              <div class="agent-section-header">
+                <span>📝 Current Step</span>
+              </div>
+              <div class="agent-current-step" id="agentCurrentStep">
+                <div class="agent-step-description" id="agentStepDescription">
+                  Waiting for task...
+                </div>
+                
+                <!-- Diff Preview -->
+                <div class="agent-diff-preview hidden" id="agentDiffPreview">
+                  <div class="agent-diff-header">
+                    <span class="agent-diff-file" id="agentDiffFile">file.js</span>
+                    <span class="agent-diff-type" id="agentDiffType">modified</span>
+                  </div>
+                  <div class="agent-diff-content" id="agentDiffContent">
+                    <!-- Diff lines rendered here -->
+                  </div>
+                </div>
+                
+                <!-- Step Actions -->
+                <div class="agent-step-actions hidden" id="agentStepActions">
+                  <button class="agent-btn reject" onclick="rejectAgentStep()">✕ Reject</button>
+                  <button class="agent-btn edit" onclick="editAgentStep()">✏ Edit</button>
+                  <button class="agent-btn approve" onclick="approveAgentStep()">✓ Approve</button>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Verification Section -->
+            <div class="agent-section">
+              <div class="agent-section-header">
+                <span>🔍 Verification</span>
+                <button class="agent-verify-btn" onclick="runAgentVerification()" title="Run Verification">▶</button>
+              </div>
+              <div class="agent-verification" id="agentVerification">
+                <div class="agent-verify-item" id="agentVerifyTs">
+                  <span class="verify-icon">○</span>
+                  <span class="verify-label">TypeScript</span>
+                  <span class="verify-status">Not run</span>
+                </div>
+                <div class="agent-verify-item" id="agentVerifyLint">
+                  <span class="verify-icon">○</span>
+                  <span class="verify-label">ESLint</span>
+                  <span class="verify-status">Not run</span>
+                </div>
+                <div class="agent-verify-item" id="agentVerifyTest">
+                  <span class="verify-icon">○</span>
+                  <span class="verify-label">Tests</span>
+                  <span class="verify-status">Not run</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Rollback Section -->
+            <div class="agent-section agent-rollback-section hidden" id="agentRollbackSection">
+              <button class="agent-rollback-btn" onclick="rollbackAgentChanges()">
+                ↩ Rollback All Changes
+              </button>
+              <span class="agent-rollback-info" id="agentRollbackInfo">
+                Restore to commit: <code id="agentRollbackCommit">abc123</code>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agents Panel (Sub-Agent Dashboard) -->
+        <div class="sidebar-panel hidden" id="panel-agents">
+          <div class="sidebar-header">
+            <span>🤖 SUB-AGENTS</span>
+            <div class="sidebar-actions">
+              <button onclick="refreshAgentList()" title="Refresh">↻</button>
+              <button onclick="showSpawnAgentModal()" title="Spawn Agent">+</button>
+            </div>
+          </div>
+          <div class="agent-dashboard-list" id="agentDashboardList">
+            <div class="agent-dashboard-empty">
+              <span class="empty-icon">🤖</span>
+              <span class="empty-text">No active agents</span>
+              <button class="agent-spawn-btn" onclick="showSpawnAgentModal()">
+                + Spawn Agent
+              </button>
+            </div>
+          </div>
+          <div class="hidden" id="agentDetailsPanel"></div>
+        </div>
+
+        <!-- Debug Panel -->
+        <div class="sidebar-panel hidden" id="panel-debug">
+          <div class="sidebar-header">
+            <span>🐛 DEBUG</span>
+            <div class="sidebar-actions">
+              <button onclick="clearAllBreakpoints()" title="Clear All Breakpoints">⌫</button>
+            </div>
+          </div>
+          
+          <!-- Debug Controls -->
+          <div class="debug-toolbar">
+            <button class="debug-start" onclick="startDebugging()" title="Start Debugging (F5)">▶</button>
+            <button onclick="stopDebugging()" title="Stop (Shift+F5)" disabled>⏹</button>
+            <button onclick="pauseDebugging()" title="Pause (F6)" disabled>⏸</button>
+            <button onclick="continueDebugging()" title="Continue (F5)" disabled>⏵</button>
+            <button onclick="stepOver()" title="Step Over (F10)" disabled>⤳</button>
+            <button onclick="stepInto()" title="Step Into (F11)" disabled>↓</button>
+            <button onclick="stepOut()" title="Step Out (Shift+F11)" disabled>↑</button>
+            <span class="debug-status" id="debugStatus">Ready</span>
+          </div>
+          
+          <!-- Breakpoints Section -->
+          <div class="debug-section">
+            <div class="debug-section-header">
+              <span>BREAKPOINTS</span>
+            </div>
+            <div class="breakpoints-list" id="breakpointsList">
+              <div class="breakpoints-empty">
+                <p>No breakpoints set</p>
+                <p class="hint">Click in the gutter to add breakpoints</p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Variables Section (Phase 3) -->
+          <div class="debug-section collapsed">
+            <div class="debug-section-header" onclick="toggleDebugSection(this)">
+              <span>▶ VARIABLES</span>
+            </div>
+            <div class="debug-section-content hidden">
+              <div class="debug-placeholder">Start debugging to see variables</div>
+            </div>
+          </div>
+          
+          <!-- Call Stack Section (Phase 3) -->
+          <div class="debug-section collapsed">
+            <div class="debug-section-header" onclick="toggleDebugSection(this)">
+              <span>▶ CALL STACK</span>
+            </div>
+            <div class="debug-section-content hidden">
+              <div class="debug-placeholder">Start debugging to see call stack</div>
+            </div>
+          </div>
+          
+          <!-- Watch Expressions Section (Phase 3) -->
+          <div class="debug-section collapsed">
+            <div class="debug-section-header" onclick="toggleDebugSection(this)">
+              <span>▶ WATCH</span>
+            </div>
+            <div class="debug-section-content hidden">
+              <div class="watch-input-wrapper">
+                <input type="text" id="watchExprInput" placeholder="Add expression..." 
+                       onkeydown="if(event.key==='Enter') addWatchExpression(this.value)">
+                <button onclick="addWatchExpression(document.getElementById('watchExprInput').value)">+</button>
+              </div>
+              <div class="watch-list">
+                <div class="debug-placeholder">No watch expressions</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Dashboard Panel -->
+      <div class="sidebar-panel hidden" id="panel-dashboard">
+        <div class="sidebar-header">
+          <span>PROJECT DASHBOARD</span>
+          <div class="sidebar-actions">
+            <button onclick="showDashboard()" title="Refresh">↻</button>
+          </div>
+        </div>
+        <div class="dashboard-container">
+          <div class="dashboard-loading">
+            <div class="loading-spinner"></div>
+            <span>Loading project stats...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Resize Handle -->
+      <div class="resize-handle" id="sidebarResize"></div>
+
+      <!-- Editor Area -->
+      <div class="editor-area">
+        <!-- Breadcrumbs -->
+        <div class="breadcrumbs" id="breadcrumbs" style="display: none;"></div>
+
+        <!-- Find Widget -->
+        <div class="find-widget" id="findWidget">
+          <div class="find-row">
+            <div class="find-input-wrapper">
+              <input type="text" class="find-input" id="findInput" placeholder="Find..." />
+              <span class="find-count" id="findCount">0 of 0</span>
+            </div>
+            <div class="find-toggles">
+              <button class="find-toggle" id="findCaseSensitive" title="Match Case">Aa</button>
+              <button class="find-toggle" id="findWholeWord" title="Match Whole Word">Ab</button>
+              <button class="find-toggle" id="findRegex" title="Use Regex">.*</button>
+            </div>
+            <div class="find-nav">
+              <button class="find-btn" id="findPrev" title="Previous (Shift+Enter)">↑</button>
+              <button class="find-btn" id="findNext" title="Next (Enter)">↓</button>
+            </div>
+            <button class="find-close" id="findClose" title="Close (Escape)">×</button>
+          </div>
+          <div class="find-row" id="replaceRow" style="display: none;">
+            <div class="find-input-wrapper">
+              <input type="text" class="find-input" id="replaceInput" placeholder="Replace..." />
+            </div>
+            <div class="find-nav">
+              <button class="find-btn" id="replaceOne">Replace</button>
+              <button class="find-btn primary" id="replaceAll">Replace All</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Editor Panes Container -->
+        <div class="editor-panes-wrapper" id="editorPanesWrapper">
+          <div class="editor-panes" id="editorPanes">
+            <div class="editor-pane active" id="editorPane0" data-pane-id="0">
+              <div class="pane-tabs-container">
+                <div class="pane-tabs" id="paneTabs0"></div>
+              </div>
+              <div class="pane-editor-container" id="paneEditor0">
+                <div class="welcome-screen" id="welcomeScreen0">
+                  <h1>🐾 Clawd IDE</h1>
+                  <p>Your AI-powered development environment</p>
+                  <div class="shortcuts">
+                    <div class="shortcut"><kbd>⌘K</kbd> AI Edit (select code first)</div>
+                    <div class="shortcut"><kbd>⌘P</kbd> Quick Open</div>
+                    <div class="shortcut"><kbd>⌘S</kbd> Save File</div>
+                    <div class="shortcut"><kbd>⌘F</kbd> Find</div>
+                    <div class="shortcut"><kbd>⌘\</kbd> Split Editor</div>
+                    <div class="shortcut"><kbd>⌘`</kbd> Toggle Terminal</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inline Edit Widget (Cmd+K) -->
+        <div class="inline-edit-widget" id="inlineEditWidget" style="display: none;">
+          <div class="inline-edit-header">
+            <span>🐾 Clawd Edit</span>
+            <span class="inline-edit-file" id="inlineEditFile"></span>
+          </div>
+          <textarea class="inline-edit-input" id="inlineEditInput" placeholder="Describe what you want to change..." rows="2"></textarea>
+          <div class="inline-edit-preview" id="inlineEditPreview" style="display: none;">
+            <div class="inline-edit-diff" id="inlineEditDiff"></div>
+          </div>
+          <div class="inline-edit-actions">
+            <button class="reject" onclick="closeInlineEdit()">Cancel</button>
+            <button class="regenerate" id="inlineEditRegenerate" onclick="regenerateInlineEdit()" style="display: none;">↻ Regenerate</button>
+            <button class="accept" id="inlineEditAccept" onclick="acceptInlineEdit()" style="display: none;">✓ Accept</button>
+            <button class="generate" id="inlineEditGenerate" onclick="generateInlineEdit()">Generate</button>
+          </div>
+          <div class="inline-edit-loading" id="inlineEditLoading" style="display: none;">
+            <span class="loading-dots"><span></span><span></span><span></span></span>
+            <span>Generating...</span>
+          </div>
+        </div>
+
+        <!-- Code Actions Widget (Cmd+.) -->
+        <div class="code-actions-widget" id="codeActionsWidget" style="display: none;">
+          <div class="code-actions-header">
+            <span>💡 Quick Actions</span>
+            <span class="code-actions-shortcut">⌘.</span>
+          </div>
+          <div class="code-actions-list" id="codeActionsList">
+            <!-- Actions populated dynamically -->
+          </div>
+          <div class="code-actions-loading" id="codeActionsLoading" style="display: none;">
+            <span class="loading-dots"><span></span><span></span><span></span></span>
+            <span>Analyzing...</span>
+          </div>
+        </div>
+
+        <!-- Bottom Panel Container (Terminal + Problems) -->
+        <div class="bottom-panel-container" id="bottomPanelContainer">
+          <div class="bottom-panel-header">
+            <div class="bottom-panel-tabs">
+              <div class="bottom-panel-tab active" data-panel="terminal" onclick="switchBottomPanel('terminal')">
+                <span>⌨</span> Terminal
+              </div>
+              <div class="bottom-panel-tab" data-panel="agent-terminal" onclick="switchBottomPanel('agent-terminal')">
+                <span>🤖</span> Agent <span class="agent-terminal-status" id="agentTerminalStatus">Ready</span>
+              </div>
+              <div class="bottom-panel-tab" data-panel="problems" onclick="switchBottomPanel('problems')">
+                <span>⚠</span> Problems <span class="problems-badge hidden" id="problemsBadge">0</span>
+              </div>
+            </div>
+            <div class="bottom-panel-actions">
+              <button onclick="splitTerminal('horizontal')" title="Split Horizontal (Ctrl+Shift+H)">⊟</button>
+              <button onclick="splitTerminal('vertical')" title="Split Vertical (Ctrl+Shift+V)">⊞</button>
+              <button onclick="moveTerminalToRight()" title="Move to Right Panel">◫</button>
+              <button onclick="clearTerminal()" title="Clear">⌫</button>
+              <button onclick="toggleBottomPanel()" title="Toggle">▼</button>
+            </div>
+          </div>
+          
+          <!-- Terminal Panel -->
+          <div class="bottom-panel-content" id="bottomPanelTerminal">
+            <div class="terminal" id="terminal"></div>
+          </div>
+          
+          <!-- Agent Terminal Panel -->
+          <div class="bottom-panel-content hidden" id="bottomPanelAgentTerminal">
+            <div class="agent-terminal-content" id="agentTerminalContent"></div>
+          </div>
+          
+          <!-- Problems Panel -->
+          <div class="bottom-panel-content hidden" id="bottomPanelProblems">
+            <div class="problems-toolbar">
+              <div class="problems-filters">
+                <button class="problems-filter active" data-filter="all" onclick="filterProblems('all')">All</button>
+                <button class="problems-filter" data-filter="error" onclick="filterProblems('error')">
+                  <span class="filter-icon error">✕</span> <span id="problemsErrorCount">0</span>
+                </button>
+                <button class="problems-filter" data-filter="warning" onclick="filterProblems('warning')">
+                  <span class="filter-icon warning">⚠</span> <span id="problemsWarningCount">0</span>
+                </button>
+                <button class="problems-filter" data-filter="info" onclick="filterProblems('info')">
+                  <span class="filter-icon info">ℹ</span> <span id="problemsInfoCount">0</span>
+                </button>
+              </div>
+              <div class="problems-actions">
+                <input type="text" id="problemsSearch" placeholder="Filter problems..." class="problems-search-input">
+                <button onclick="refreshProblems()" title="Refresh">↻</button>
+              </div>
+            </div>
+            <div class="problems-list" id="problemsList">
+              <div class="problems-empty">No problems detected</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Panel Resize Handle -->
+        <div class="right-panel-resize hidden" id="rightPanelResize"></div>
+
+        <!-- Right Panel Container -->
+        <div class="right-panel-container hidden" id="rightPanelContainer">
+          <div class="right-panel-header">
+            <div class="right-panel-tabs">
+              <div class="right-panel-tab active" data-panel="terminal" onclick="switchRightPanel('terminal')">
+                <span>⌨</span> Terminal
+              </div>
+              <div class="right-panel-tab" data-panel="ai" onclick="switchRightPanel('ai')">
+                <span>🐾</span> AI Chat
+              </div>
+            </div>
+            <div class="right-panel-actions">
+              <button onclick="closeRightPanel()" title="Close Panel">×</button>
+            </div>
+          </div>
+          <div class="right-panel-content">
+            <!-- Terminal in Right Panel -->
+            <div class="terminal-wrapper" id="rightTerminal">
+              <div id="terminalRight"></div>
+            </div>
+            <!-- AI Chat in Right Panel -->
+            <div class="ai-chat-wrapper hidden" id="rightAiChat">
+              <div class="ai-messages" id="rightAiMessages">
+                <div class="ai-message assistant">
+                  <strong>Clawd 🐾</strong>
+                  <p>Hey! I'm here in the right panel. Ask me anything!</p>
+                </div>
+              </div>
+              <div class="ai-input-container">
+                <textarea id="rightAiInput" placeholder="Ask Clawd..." onkeydown="handleRightAiInput(event)"></textarea>
+                <button onclick="sendRightAiMessage()">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar" id="statusBar">
+      <div class="status-bar-left">
+        <div class="status-item" id="statusGit" onclick="switchPanel('git')" title="Git Branch">
+          <span class="icon">⎇</span>
+          <span id="statusBranch">main</span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="status-item" id="statusProblems" onclick="toggleProblemsPanel()" title="Problems">
+          <span class="icon">⚠</span>
+          <span id="statusErrorCount">0</span>
+          <span class="icon">⊘</span>
+          <span id="statusWarningCount">0</span>
+        </div>
+      </div>
+      <div class="status-bar-center">
+        <div class="status-item memory-status" id="statusMemory" onclick="toggleMemoryPanel()" title="Clawdbot Memory">
+          <span class="memory-icon">🧠</span>
+          <span id="statusMemoryText">Memory</span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="context-usage" id="contextUsage" title="Context Usage" onclick="showContextDetail()">
+          <div class="context-bar">
+            <div class="context-bar-fill" id="contextBarFill"></div>
+          </div>
+          <span class="context-text" id="contextText">--% ctx</span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="ai-status connected" id="statusAi">
+          <span class="pulse"></span>
+          <span id="statusAiText">Clawd Ready</span>
+        </div>
+      </div>
+      <div class="status-bar-right">
+        <div class="status-item status-attribution" id="statusAttribution" onclick="showAttributionPanel()" title="AI Attribution (Click for details)">
+          <span>🤖</span>
+          <span class="ai-percent" id="statusAIPercent">--%</span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="status-item" id="statusPosition">
+          <span>Ln <span id="statusLine">1</span>, Col <span id="statusColumn">1</span></span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="status-item" id="statusEncoding">
+          <span>UTF-8</span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="status-item" id="statusLanguage" title="Language Mode">
+          <span id="statusLang">Plain Text</span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="status-item" id="statusIndent" title="Indentation">
+          <span>Spaces: 2</span>
+        </div>
+        <div class="status-separator"></div>
+        <div class="status-item" id="layoutIndicator" onclick="showLayoutPicker()" title="Layout (Cmd+Opt+Tab)">
+          <span>⊞</span> <span>Default</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Command Palette -->
+    <div class="command-palette hidden" id="commandPalette">
+      <input type="text" id="commandInput" placeholder="Type a command or search..." onkeyup="handleCommandInput(event)">
+      <div class="command-results" id="commandResults"></div>
+    </div>
+
+    <!-- Overlay -->
+    <div class="overlay hidden" id="overlay" onclick="closeAllModals()"></div>
+
+    <!-- Settings Modal -->
+    <div class="settings-modal hidden" id="settingsModal">
+      <div class="settings-header">
+        <h2>⚙️ Settings</h2>
+        <button class="settings-close" onclick="closeSettings()">×</button>
+      </div>
+      <div class="settings-content">
+        <div class="settings-section">
+          <h3>🎨 Appearance</h3>
+          <div class="setting-row">
+            <label for="themeSelect">Theme</label>
+            <select id="themeSelect" onchange="setTheme(this.value)">
+              <option value="dark">Dark (Default)</option>
+              <option value="light">Light</option>
+              <option value="midnight">Midnight</option>
+              <option value="forest">Forest</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="settingVimMode">Vim Mode</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingVimMode" onchange="toggleVimMode()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label>Keyboard Shortcuts</label>
+            <button type="button" onclick="toggleShortcutOverlay(); closeSettings();" style="padding: 6px 16px; font-size: 13px;">⌨️ View All (⌘?)</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <h3>Editor</h3>
+          <div class="setting-row">
+            <label for="settingFontSize">Font Size</label>
+            <input type="number" id="settingFontSize" min="10" max="24" value="14">
+          </div>
+          <div class="setting-row">
+            <label for="settingTabSize">Tab Size</label>
+            <select id="settingTabSize">
+              <option value="2">2 spaces</option>
+              <option value="4">4 spaces</option>
+              <option value="8">8 spaces</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="settingWordWrap">Word Wrap</label>
+            <select id="settingWordWrap">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+              <option value="wordWrapColumn">At Column</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="settingMinimap">Minimap</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingMinimap" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label for="settingLineNumbers">Line Numbers</label>
+            <select id="settingLineNumbers">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+              <option value="relative">Relative</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="settingBracketPairs">Bracket Colorization</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingBracketPairs" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>AI Features</h3>
+          <div class="setting-row">
+            <label for="settingInlineCompletions">Inline Completions</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingInlineCompletions" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label for="settingAutoLint">Auto-Fix Lint Errors</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingAutoLint" checked onchange="toggleAutoLint(this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="setting-hint">Automatically fix lint errors in AI-generated code before applying.</p>
+          <div class="setting-row">
+            <label for="settingAttribution">Show AI Attribution</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingAttribution" checked onchange="toggleAttributionGutter(this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="setting-hint">Show gutter indicators for AI-generated code lines.</p>
+          <div class="setting-row">
+            <label for="settingCompletionDelay">Completion Delay</label>
+            <select id="settingCompletionDelay">
+              <option value="300">Fast (300ms)</option>
+              <option value="500" selected>Normal (500ms)</option>
+              <option value="800">Slow (800ms)</option>
+              <option value="1500">Very Slow (1.5s)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Appearance</h3>
+          <div class="setting-row">
+            <label for="settingTheme">Theme</label>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <select id="settingTheme">
+                <option value="clawd-dark">Clawd Dark</option>
+                <option value="clawd-light">Clawd Light</option>
+                <option value="vs-dark">VS Dark</option>
+                <option value="vs">VS Light</option>
+                <option value="hc-black">High Contrast</option>
+              </select>
+              <button type="button" onclick="showThemeImporter(); closeSettings();" style="padding: 6px 12px; font-size: 12px;">🎨 Manage</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label for="settingFontFamily">Font Family</label>
+            <select id="settingFontFamily">
+              <option value="'SF Mono', 'Fira Code', Menlo, Monaco, monospace">SF Mono / Fira Code</option>
+              <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+              <option value="'Cascadia Code', monospace">Cascadia Code</option>
+              <option value="Menlo, Monaco, monospace">Menlo</option>
+              <option value="Consolas, monospace">Consolas</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Terminal</h3>
+          <div class="setting-row">
+            <label for="settingTerminalFontSize">Font Size</label>
+            <input type="number" id="settingTerminalFontSize" min="10" max="20" value="13">
+          </div>
+        </div>
+        
+        <div class="settings-section">
+          <h3>🔊 Sound Effects</h3>
+          <div class="setting-row">
+            <label for="settingSoundsEnabled">Enable Sounds</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingSoundsEnabled" onchange="SoundManager.setEnabled(this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label for="settingSoundsVolume">Volume</label>
+            <input type="range" id="settingSoundsVolume" min="0" max="1" step="0.1" value="0.3" 
+                   onchange="SoundManager.setVolume(parseFloat(this.value))" style="width: 120px;">
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>🧠 Clawdbot Memory</h3>
+          <div class="setting-row">
+            <label for="settingMemoryEnabled">Memory Panel</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingMemoryEnabled" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label for="settingMemoryInChat">Include in AI Chat</label>
+            <label class="toggle">
+              <input type="checkbox" id="settingMemoryInChat" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="setting-hint">When enabled, your memory context (today's notes, preferences, long-term memory) is automatically included with AI chat requests.</p>
+        </div>
+        
+        <div class="settings-section">
+          <h3>❓ Help</h3>
+          <div class="setting-row">
+            <label>Interactive Tutorial</label>
+            <button type="button" onclick="restartOnboarding(); closeSettings();" style="padding: 6px 16px; font-size: 13px;">🎓 Restart Tour</button>
+          </div>
+          <div class="setting-row">
+            <label>Keyboard Shortcuts</label>
+            <button type="button" onclick="showKeybindingsEditor(); closeSettings();" style="padding: 6px 16px; font-size: 13px;">⌨️ View All</button>
+          </div>
+        </div>
+        
+        <div class="settings-section">
+          <h3>🛠️ Developer</h3>
+          <div class="setting-row">
+            <label>Run Diagnostics</label>
+            <button type="button" onclick="openDiagnostics(); closeSettings();" style="padding: 6px 16px; font-size: 13px;">🔍 Run Tests</button>
+          </div>
+          <div class="setting-row">
+            <label>Quick Diagnostics</label>
+            <button type="button" onclick="runQuickDiagnostics();" style="padding: 6px 16px; font-size: 13px;">⚡ Quick Check</button>
+          </div>
+          <div class="setting-row">
+            <label>Open DevTools</label>
+            <button type="button" onclick="openDevTools();" style="padding: 6px 16px; font-size: 13px;">🐛 Console</button>
+          </div>
+        </div>
+      </div>
+      <div class="settings-footer">
+        <button class="settings-btn secondary" onclick="resetSettings()">Reset to Defaults</button>
+        <button class="settings-btn primary" onclick="saveSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load xterm BEFORE Monaco to avoid AMD loader capturing it -->
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/lib/xterm-addon-search.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <script src="app.js"></script>
+  <script src="modules/terminal.js"></script>
+  <script src="modules/git.js"></script>
+  <script src="modules/memory.js"></script>
+  <script src="modules/agent.js"></script>
+  <script src="modules/voice.js"></script>
+  <script src="modules/debugger.js"></script>
+  <script src="modules/keybindings.js"></script>
+  <script src="modules/dashboard.js"></script>
+  <script src="modules/themes.js"></script>
+  <script src="modules/sounds.js"></script>
+  <script src="modules/onboarding.js"></script>
+  <script src="problems.js"></script>
+  <script src="browser.js"></script>
+  <script src="modules/ui-enhancements.js"></script>
+  <script src="modules/agent-terminal.js"></script>
+  <script src="modules/auto-lint.js"></script>
+  <script src="modules/memory-search.js"></script>
+  <script src="modules/agent-dashboard.js"></script>
+  <script src="modules/ai-attribution.js"></script>
+  <script src="modules/layout-presets.js"></script>
+  <script src="modules/session-history.js"></script>
+  <script src="modules/auto-continue.js"></script>
+  <script src="modules/word-diff.js"></script>
+  <script src="modules/clarifying-questions.js"></script>
+  <script src="modules/architecture-diagram.js"></script>
+  
+  <!-- Self-Improvement System -->
+  <script src="modules/self-critique.js"></script>
+  <script src="modules/learning-memory.js"></script>
+  <script src="modules/confidence-calibration.js"></script>
+  <script src="modules/reflexion-engine.js"></script>
+  <script src="modules/pattern-recognition.js"></script>
+  <script src="modules/style-analyzer.js"></script>
+  <script src="modules/adaptive-completions.js"></script>
+  <script src="modules/capability-tracker.js"></script>
+  <script src="modules/metacognitive-dashboard.js"></script>
+  <script src="modules/brain.js"></script>
+  <script src="modules/brain-panel.js"></script>
+  <script src="modules/context-meter.js"></script>
+</body>
+</html>

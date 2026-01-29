@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clawd IDE - Diagnostic Tests</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      background: #0d1117;
+      color: #c9d1d9;
+      padding: 24px;
+      line-height: 1.6;
+    }
+    
+    h1 {
+      color: #f0883e;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      color: #8b949e;
+      margin-bottom: 24px;
+    }
+    
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    
+    button {
+      padding: 10px 20px;
+      background: #f0883e;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background: #db7c37;
+    }
+    
+    button:disabled {
+      background: #21262d;
+      cursor: not-allowed;
+    }
+    
+    button.secondary {
+      background: #21262d;
+      border: 1px solid #30363d;
+    }
+    
+    button.secondary:hover {
+      background: #30363d;
+    }
+    
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    
+    .summary-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+    
+    .summary-card .value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    
+    .summary-card .label {
+      font-size: 12px;
+      color: #8b949e;
+    }
+    
+    .summary-card.passed .value { color: #3fb950; }
+    .summary-card.failed .value { color: #f85149; }
+    .summary-card.warnings .value { color: #d29922; }
+    .summary-card.time .value { color: #58a6ff; }
+    
+    .sections {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    
+    @media (max-width: 900px) {
+      .sections { grid-template-columns: 1fr; }
+    }
+    
+    .section {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    
+    .section-header {
+      padding: 12px 16px;
+      background: #21262d;
+      border-bottom: 1px solid #30363d;
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .section-content {
+      max-height: 400px;
+      overflow-y: auto;
+      padding: 8px;
+    }
+    
+    .result-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+    
+    .result-item.pass {
+      background: #23863611;
+      border-left: 3px solid #3fb950;
+    }
+    
+    .result-item.fail {
+      background: #f8514911;
+      border-left: 3px solid #f85149;
+    }
+    
+    .result-status {
+      flex-shrink: 0;
+    }
+    
+    .result-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .result-name {
+      color: #c9d1d9;
+      word-break: break-word;
+    }
+    
+    .result-error {
+      color: #f85149;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    
+    .result-time {
+      color: #6e7681;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    
+    .warning-item {
+      padding: 12px;
+      background: #9e6a0311;
+      border-left: 3px solid #d29922;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    
+    .warning-category {
+      font-size: 11px;
+      color: #d29922;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .warning-message {
+      font-size: 13px;
+      color: #c9d1d9;
+      margin: 4px 0;
+    }
+    
+    .warning-suggestion {
+      font-size: 12px;
+      color: #8b949e;
+    }
+    
+    .warning-suggestion::before {
+      content: '💡 ';
+    }
+    
+    .improvement-item {
+      padding: 10px 12px;
+      background: #1f6feb11;
+      border-left: 3px solid #58a6ff;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+    
+    .improvement-impact {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+      margin-right: 8px;
+    }
+    
+    .improvement-impact.high { background: #f8514933; color: #ff7b72; }
+    .improvement-impact.medium { background: #d2992233; color: #d29922; }
+    .improvement-impact.info { background: #1f6feb33; color: #58a6ff; }
+    
+    .category-header {
+      padding: 8px 12px;
+      background: #0d1117;
+      font-size: 12px;
+      color: #6e7681;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 8px;
+    }
+    
+    .category-header:first-child {
+      margin-top: 0;
+    }
+    
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 60px;
+      color: #8b949e;
+    }
+    
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid #30363d;
+      border-top-color: #f0883e;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .empty {
+      text-align: center;
+      padding: 40px;
+      color: #6e7681;
+    }
+    
+    .hidden {
+      display: none !important;
+    }
+    
+    .full-width {
+      grid-column: 1 / -1;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔍 Diagnostic Test Suite</h1>
+  <p class="subtitle">Critical analysis of IDE & Clawdbot integration - finding issues, bottlenecks, and improvements</p>
+  
+  <div class="controls">
+    <button id="runAllBtn" onclick="runDiagnostics()">▶️ Run Full Diagnostics</button>
+    <button class="secondary" onclick="runCategory('performance')">⚡ Performance Only</button>
+    <button class="secondary" onclick="runCategory('conflicts')">⚔️ Conflicts Only</button>
+    <button class="secondary" onclick="runCategory('edge-cases')">🔬 Edge Cases Only</button>
+    <button class="secondary" onclick="clearResults()">Clear</button>
+  </div>
+  
+  <div class="summary hidden" id="summary">
+    <div class="summary-card">
+      <div class="value" id="totalTests">0</div>
+      <div class="label">Total Tests</div>
+    </div>
+    <div class="summary-card passed">
+      <div class="value" id="passedTests">0</div>
+      <div class="label">Passed</div>
+    </div>
+    <div class="summary-card failed">
+      <div class="value" id="failedTests">0</div>
+      <div class="label">Failed</div>
+    </div>
+    <div class="summary-card warnings">
+      <div class="value" id="warningCount">0</div>
+      <div class="label">Warnings</div>
+    </div>
+    <div class="summary-card time">
+      <div class="value" id="totalTime">0ms</div>
+      <div class="label">Total Time</div>
+    </div>
+  </div>
+  
+  <div class="loading hidden" id="loading">
+    <div class="spinner"></div>
+    <span>Running diagnostics...</span>
+  </div>
+  
+  <div class="sections hidden" id="results">
+    <div class="section">
+      <div class="section-header">
+        <span>📋</span> Test Results
+      </div>
+      <div class="section-content" id="testResults">
+        <div class="empty">No results yet</div>
+      </div>
+    </div>
+    
+    <div class="section">
+      <div class="section-header">
+        <span>⚠️</span> Warnings & Issues
+      </div>
+      <div class="section-content" id="warnings">
+        <div class="empty">No warnings</div>
+      </div>
+    </div>
+    
+    <div class="section full-width">
+      <div class="section-header">
+        <span>💡</span> Improvement Suggestions
+      </div>
+      <div class="section-content" id="improvements">
+        <div class="empty">No suggestions</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load IDE modules first -->
+  <script src="../modules/self-critique.js"></script>
+  <script src="../modules/learning-memory.js"></script>
+  <script src="../modules/confidence-calibration.js"></script>
+  <script src="../modules/reflexion-engine.js"></script>
+  <script src="../modules/pattern-recognition.js"></script>
+  <script src="../modules/style-analyzer.js"></script>
+  <script src="../modules/adaptive-completions.js"></script>
+  <script src="../modules/capability-tracker.js"></script>
+  <script src="../modules/metacognitive-dashboard.js"></script>
+  
+  <!-- Load diagnostic tests -->
+  <script src="diagnostic-tests.js"></script>
+  
+  <script>
+    async function runDiagnostics() {
+      const btn = document.getElementById('runAllBtn');
+      btn.disabled = true;
+      
+      document.getElementById('loading').classList.remove('hidden');
+      document.getElementById('summary').classList.add('hidden');
+      document.getElementById('results').classList.add('hidden');
+      
+      await new Promise(r => setTimeout(r, 100));
+      
+      try {
+        const report = await DiagnosticTests.runAll();
+        displayReport(report);
+      } catch (e) {
+        console.error('Diagnostic error:', e);
+        alert('Error: ' + e.message);
+      }
+      
+      document.getElementById('loading').classList.add('hidden');
+      btn.disabled = false;
+    }
+    
+    async function runCategory(category) {
+      document.getElementById('loading').classList.remove('hidden');
+      
+      DiagnosticTests.results = [];
+      DiagnosticTests.warnings = [];
+      DiagnosticTests.improvements = [];
+      DiagnosticTests.startTime = performance.now();
+      
+      await new Promise(r => setTimeout(r, 100));
+      
+      try {
+        switch (category) {
+          case 'performance':
+            await DiagnosticTests.testPerformance();
+            break;
+          case 'conflicts':
+            await DiagnosticTests.testConflicts();
+            break;
+          case 'edge-cases':
+            await DiagnosticTests.testEdgeCases();
+            break;
+        }
+        
+        const report = DiagnosticTests.generateReport();
+        displayReport(report);
+      } catch (e) {
+        console.error('Test error:', e);
+      }
+      
+      document.getElementById('loading').classList.add('hidden');
+    }
+    
+    function displayReport(report) {
+      // Summary
+      document.getElementById('summary').classList.remove('hidden');
+      document.getElementById('totalTests').textContent = report.summary.total;
+      document.getElementById('passedTests').textContent = report.summary.passed;
+      document.getElementById('failedTests').textContent = report.summary.failed;
+      document.getElementById('warningCount').textContent = report.warnings.length;
+      document.getElementById('totalTime').textContent = report.summary.totalTime;
+      
+      // Results
+      document.getElementById('results').classList.remove('hidden');
+      
+      // Test results grouped by category
+      let resultsHtml = '';
+      let currentCategory = '';
+      
+      for (const r of report.results) {
+        if (r.category !== currentCategory) {
+          currentCategory = r.category;
+          resultsHtml += `<div class="category-header">${currentCategory}</div>`;
+        }
+        
+        resultsHtml += `
+          <div class="result-item ${r.status.toLowerCase()}">
+            <span class="result-status">${r.status === 'PASS' ? '✅' : '❌'}</span>
+            <div class="result-content">
+              <div class="result-name">${r.name.replace(/^[^:]+:\s*/, '')}</div>
+              ${r.error ? `<div class="result-error">${r.error}</div>` : ''}
+            </div>
+            <span class="result-time">${r.duration.toFixed(1)}ms</span>
+          </div>
+        `;
+      }
+      
+      document.getElementById('testResults').innerHTML = resultsHtml || '<div class="empty">No results</div>';
+      
+      // Warnings
+      let warningsHtml = '';
+      for (const w of report.warnings) {
+        warningsHtml += `
+          <div class="warning-item">
+            <div class="warning-category">${w.category}</div>
+            <div class="warning-message">${w.message}</div>
+            <div class="warning-suggestion">${w.suggestion}</div>
+          </div>
+        `;
+      }
+      
+      document.getElementById('warnings').innerHTML = warningsHtml || '<div class="empty">No warnings - system looks healthy! 🎉</div>';
+      
+      // Improvements
+      let improvementsHtml = '';
+      for (const i of report.improvements) {
+        improvementsHtml += `
+          <div class="improvement-item">
+            <span class="improvement-impact ${i.impact}">${i.impact}</span>
+            ${i.message}
+          </div>
+        `;
+      }
+      
+      document.getElementById('improvements').innerHTML = improvementsHtml || '<div class="empty">No improvement suggestions</div>';
+    }
+    
+    function clearResults() {
+      document.getElementById('summary').classList.add('hidden');
+      document.getElementById('results').classList.add('hidden');
+    }
+  </script>
+</body>
+</html>

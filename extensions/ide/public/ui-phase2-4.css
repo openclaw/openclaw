@@ -1,0 +1,1229 @@
+/* ============================================
+   UI/UX PHASES 2-4: Visual Polish & Advanced
+   ============================================
+   Phase 2: Visual Polish
+   Phase 3: UX Improvements  
+   Phase 4: Advanced Features
+*/
+
+/* ============================================
+   PHASE 2: FILE TREE INDENTATION GUIDES
+   ============================================ */
+
+.file-tree {
+  --indent-size: 16px;
+  --guide-color: rgba(255, 255, 255, 0.06);
+  --guide-color-hover: rgba(255, 255, 255, 0.12);
+}
+
+.file-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  padding-left: calc(var(--depth, 0) * var(--indent-size) + 8px);
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 1px 4px;
+  transition: background 100ms ease, padding-left 150ms ease;
+}
+
+/* Indentation guides */
+.file-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--depth, 0) * var(--indent-size));
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent calc(var(--indent-size) - 1px),
+    var(--guide-color) calc(var(--indent-size) - 1px),
+    var(--guide-color) var(--indent-size)
+  );
+  pointer-events: none;
+}
+
+.file-item:hover::before {
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent calc(var(--indent-size) - 1px),
+    var(--guide-color-hover) calc(var(--indent-size) - 1px),
+    var(--guide-color-hover) var(--indent-size)
+  );
+}
+
+/* Vertical connector lines */
+.file-item[data-has-children]::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--depth, 0) * var(--indent-size) + 6px);
+  top: 50%;
+  bottom: -50%;
+  width: 1px;
+  background: var(--guide-color);
+}
+
+.file-item.expanded > .folder-icon {
+  transform: rotate(90deg);
+}
+
+.folder-icon {
+  transition: transform 200ms ease;
+  font-size: 10px;
+  margin-right: 4px;
+  color: var(--text-muted);
+}
+
+/* ============================================
+   PHASE 2: COLLAPSIBLE SIDEBAR SECTIONS
+   ============================================ */
+
+.sidebar-section {
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background 150ms ease;
+}
+
+.sidebar-section-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.sidebar-section-header:active {
+  background: var(--bg-hover);
+}
+
+.sidebar-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-section-title .section-icon {
+  font-size: 14px;
+}
+
+.sidebar-section-chevron {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-section.collapsed .sidebar-section-chevron {
+  transform: rotate(-90deg);
+}
+
+.sidebar-section-content {
+  max-height: 2000px;
+  overflow: hidden;
+  transition: max-height 300ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 200ms ease,
+              padding 200ms ease;
+  opacity: 1;
+}
+
+.sidebar-section.collapsed .sidebar-section-content {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.sidebar-section-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.sidebar-section-header:hover .sidebar-section-actions {
+  opacity: 1;
+}
+
+.sidebar-action-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: all 100ms ease;
+}
+
+.sidebar-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ============================================
+   PHASE 2: CONTEXT MENU ANIMATIONS
+   ============================================ */
+
+.context-menu {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  min-width: 180px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 10000;
+  animation: contextMenuAppear 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top left;
+}
+
+@keyframes contextMenuAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  transition: background 100ms ease;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.context-menu-item.danger {
+  color: var(--error);
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.context-menu-item-icon {
+  width: 16px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.context-menu-item-shortcut {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-code);
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0;
+}
+
+/* ============================================
+   PHASE 2: ENHANCED HOVER STATES
+   ============================================ */
+
+/* Buttons */
+button, .btn, [role="button"] {
+  transition: all 150ms ease;
+}
+
+button:hover:not(:disabled),
+.btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+button:active:not(:disabled),
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+  filter: brightness(0.95);
+}
+
+/* Activity bar items */
+.activity-item {
+  position: relative;
+  transition: all 150ms ease;
+}
+
+.activity-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 0;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  transition: height 150ms ease;
+}
+
+.activity-item:hover::before {
+  height: 16px;
+}
+
+.activity-item.active::before {
+  height: 24px;
+}
+
+/* Tab hover glow */
+.tab {
+  position: relative;
+}
+
+.tab::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transition: transform 200ms ease;
+}
+
+.tab:hover::after {
+  transform: scaleX(0.5);
+}
+
+.tab.active::after {
+  transform: scaleX(1);
+}
+
+/* ============================================
+   PHASE 3: CHAT PANEL REDESIGN
+   ============================================ */
+
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.chat-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.chat-header-title .avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.chat-header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Message Bubbles */
+.chat-message {
+  display: flex;
+  gap: 12px;
+  animation: messageSlideIn 200ms ease-out;
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-message.user {
+  flex-direction: row-reverse;
+}
+
+.chat-message-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.chat-message.assistant .chat-message-avatar {
+  background: linear-gradient(135deg, var(--accent-muted), var(--bg-tertiary));
+  color: var(--accent);
+}
+
+.chat-message.user .chat-message-avatar {
+  background: var(--bg-active);
+  color: var(--info);
+}
+
+.chat-message-body {
+  max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.chat-message-sender {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-message-time {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.chat-message-content {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  border-top-left-radius: 4px;
+  padding: 12px 16px;
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.chat-message.user .chat-message-content {
+  background: var(--bg-active);
+  border-color: transparent;
+  border-radius: 16px;
+  border-top-right-radius: 4px;
+}
+
+/* Code blocks in messages */
+.chat-message-content pre {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  overflow-x: auto;
+  font-size: 13px;
+}
+
+.chat-message-content code {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.chat-message-content p code {
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* Code block actions */
+.code-block-wrapper {
+  position: relative;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.code-block-header + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.code-block-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.code-action-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 100ms ease;
+}
+
+.code-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.code-action-btn.primary {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.code-action-btn.primary:hover {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+/* Chat Input */
+.chat-input-container {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.chat-input-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--bg-primary);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 8px 12px;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.chat-input-wrapper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  min-height: 24px;
+  max-height: 150px;
+  font-family: inherit;
+}
+
+.chat-input:focus {
+  outline: none;
+}
+
+.chat-input::placeholder {
+  color: var(--text-muted);
+}
+
+.chat-input-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.chat-action-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 150ms ease;
+}
+
+.chat-action-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.chat-send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  color: var(--bg-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 150ms ease;
+}
+
+.chat-send-btn:hover {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+}
+
+.chat-send-btn:active {
+  transform: scale(0.95);
+}
+
+.chat-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Typing indicator */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.typing-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: typingBounce 1.4s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(1) { animation-delay: 0s; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingBounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-6px); }
+}
+
+/* ============================================
+   PHASE 3: SKELETON LOADING STATES
+   ============================================ */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 0%,
+    var(--bg-hover) 50%,
+    var(--bg-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+@keyframes skeletonShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-text {
+  height: 14px;
+  margin: 4px 0;
+}
+
+.skeleton-text.short { width: 40%; }
+.skeleton-text.medium { width: 70%; }
+.skeleton-text.long { width: 100%; }
+
+.skeleton-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+
+.skeleton-button {
+  height: 32px;
+  width: 80px;
+  border-radius: 6px;
+}
+
+.skeleton-card {
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+/* File tree skeleton */
+.skeleton-file-tree {
+  padding: 8px;
+}
+
+.skeleton-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+}
+
+.skeleton-file-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
+
+.skeleton-file-name {
+  height: 12px;
+  flex: 1;
+}
+
+/* ============================================
+   PHASE 3: PROGRESSIVE DISCLOSURE
+   ============================================ */
+
+.disclosure-panel {
+  overflow: hidden;
+}
+
+.disclosure-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 150ms ease;
+}
+
+.disclosure-trigger:hover {
+  background: var(--bg-hover);
+}
+
+.disclosure-icon {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 200ms ease;
+}
+
+.disclosure-panel.expanded .disclosure-icon {
+  transform: rotate(90deg);
+}
+
+.disclosure-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 300ms ease, padding 200ms ease;
+  padding: 0 12px;
+}
+
+.disclosure-panel.expanded .disclosure-content {
+  max-height: 500px;
+  padding: 8px 12px;
+}
+
+/* ============================================
+   PHASE 4: THEMING SYSTEM
+   ============================================ */
+
+/* Theme variables - Dark (default) */
+[data-theme="dark"] {
+  --bg-primary: #1a1b1e;
+  --bg-secondary: #22242a;
+  --bg-tertiary: #2a2d35;
+  --bg-elevated: #32363f;
+  --bg-hover: #3a3f4b;
+  --bg-active: #0d4a6f;
+  --text-primary: #e4e4e7;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --accent: #34d399;
+  --accent-hover: #6ee7b7;
+  --accent-muted: rgba(52, 211, 153, 0.15);
+  --border: rgba(255, 255, 255, 0.08);
+}
+
+/* Theme variables - Light */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f4f5;
+  --bg-tertiary: #e4e4e7;
+  --bg-elevated: #ffffff;
+  --bg-hover: #d4d4d8;
+  --bg-active: #dbeafe;
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #a1a1aa;
+  --accent: #059669;
+  --accent-hover: #047857;
+  --accent-muted: rgba(5, 150, 105, 0.15);
+  --border: rgba(0, 0, 0, 0.1);
+  --error: #dc2626;
+  --warning: #d97706;
+  --info: #2563eb;
+  --success: #16a34a;
+}
+
+/* Theme variables - Midnight */
+[data-theme="midnight"] {
+  --bg-primary: #0f0f12;
+  --bg-secondary: #16161a;
+  --bg-tertiary: #1e1e24;
+  --bg-elevated: #26262e;
+  --bg-hover: #2e2e38;
+  --bg-active: #1a3a5c;
+  --text-primary: #f0f0f5;
+  --text-secondary: #9090a0;
+  --text-muted: #606070;
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --accent-muted: rgba(139, 92, 246, 0.15);
+  --border: rgba(255, 255, 255, 0.06);
+}
+
+/* Theme variables - Forest */
+[data-theme="forest"] {
+  --bg-primary: #1a1f1a;
+  --bg-secondary: #222822;
+  --bg-tertiary: #2a322a;
+  --bg-elevated: #323c32;
+  --bg-hover: #3a463a;
+  --bg-active: #1a3a2a;
+  --text-primary: #e4ebe4;
+  --text-secondary: #a1b0a1;
+  --text-muted: #708070;
+  --accent: #4ade80;
+  --accent-hover: #86efac;
+  --accent-muted: rgba(74, 222, 128, 0.15);
+  --border: rgba(255, 255, 255, 0.06);
+}
+
+/* Theme transition */
+body {
+  transition: background-color 300ms ease, color 300ms ease;
+}
+
+/* ============================================
+   PHASE 4: KEYBOARD SHORTCUT OVERLAY
+   ============================================ */
+
+.shortcut-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 200ms ease, visibility 200ms ease;
+}
+
+.shortcut-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.shortcut-modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 800px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  animation: modalAppear 200ms ease-out;
+}
+
+@keyframes modalAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.shortcut-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.shortcut-modal-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.shortcut-modal-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  transition: all 150ms ease;
+}
+
+.shortcut-modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.shortcut-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+}
+
+.shortcut-section {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.shortcut-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 6px;
+  transition: background 100ms ease;
+}
+
+.shortcut-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.shortcut-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.shortcut-keys {
+  display: flex;
+  gap: 4px;
+}
+
+.shortcut-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-code);
+  color: var(--text-secondary);
+}
+
+/* ============================================
+   PHASE 4: VIM MODE INDICATOR
+   ============================================ */
+
+.vim-mode-indicator {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-code);
+  font-size: 13px;
+  color: var(--text-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 150ms ease, visibility 150ms ease;
+  z-index: 1000;
+}
+
+.vim-mode-indicator.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.vim-mode-indicator.normal {
+  border-left: 3px solid var(--accent);
+}
+
+.vim-mode-indicator.insert {
+  border-left: 3px solid var(--info);
+}
+
+.vim-mode-indicator.visual {
+  border-left: 3px solid var(--warning);
+}
+
+.vim-mode-indicator.command {
+  border-left: 3px solid var(--error);
+}
+
+/* ============================================
+   PHASE 4: ACCESSIBILITY IMPROVEMENTS
+   ============================================ */
+
+/* Focus visible styles */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  :root {
+    --border: rgba(255, 255, 255, 0.2);
+    --text-muted: #a0a0a0;
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Screen reader only */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Skip link */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 0;
+  background: var(--accent);
+  color: var(--bg-primary);
+  padding: 8px 16px;
+  z-index: 100000;
+  transition: top 150ms ease;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ============================================
+   PHASE 4: TOAST NOTIFICATIONS
+   ============================================ */
+
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 10000;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  max-width: 400px;
+  pointer-events: auto;
+  animation: toastSlideIn 200ms ease-out;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast.exiting {
+  animation: toastSlideOut 150ms ease-in forwards;
+}
+
+@keyframes toastSlideOut {
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+.toast-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.toast.success .toast-icon { color: var(--success); }
+.toast.error .toast-icon { color: var(--error); }
+.toast.warning .toast-icon { color: var(--warning); }
+.toast.info .toast-icon { color: var(--info); }
+
+.toast-content {
+  flex: 1;
+}
+
+.toast-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.toast-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  margin: -4px;
+  font-size: 14px;
+  transition: color 100ms ease;
+}
+
+.toast-close:hover {
+  color: var(--text-primary);
+}
+
+.toast-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--bg-tertiary);
+  border-radius: 0 0 12px 12px;
+  overflow: hidden;
+}
+
+.toast-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  animation: toastProgress 5s linear forwards;
+}
+
+@keyframes toastProgress {
+  from { width: 100%; }
+  to { width: 0%; }
+}

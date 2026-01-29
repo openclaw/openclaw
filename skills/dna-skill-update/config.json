@@ -1,0 +1,38 @@
+{
+  "name": "dna-update",
+  "version": "1.0.0",
+  "description": "Comprehensive backup, update, and restore workflow for DNA installations",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dna/dna"
+  },
+  "upstream": {
+    "remote": "origin",
+    "url": "https://github.com/dna/dna",
+    "defaultBranch": "main"
+  },
+  "paths": {
+    "repo": "~/code/dna",
+    "config": "~/.dna/dna.json",
+    "backups": "~/.dna-backups",
+    "skills": "~/.skills/dna-update"
+  },
+  "features": {
+    "dynamicWorkspaces": true,
+    "multiAgent": true,
+    "sandboxSupport": true,
+    "gitIntegration": true
+  },
+  "backup": {
+    "includes": [
+      "config",
+      "sessions",
+      "agents",
+      "credentials",
+      "cron",
+      "sandboxes",
+      "workspaces (dynamic from config)",
+      "git state"
+    ]
+  }
+}
