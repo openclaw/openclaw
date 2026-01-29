@@ -1,0 +1,14 @@
+{
+  "name": "@moltbot/2fa-github",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "GitHub Mobile 2FA gate for sensitive tool calls",
+  "moltbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "moltbot": "workspace:*"
+  }
+}

@@ -85,6 +85,7 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { wrapToolsWithHook } from "./tool-hook-wrapper.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -432,8 +433,15 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
 
+      // Wrap tools with before_tool_call hook invocation before splitting
+      const toolHookCtx = {
+        agentId: params.sessionKey?.split(":")[0] ?? "main",
+        sessionKey: params.sessionKey,
+      };
+      const wrappedTools = wrapToolsWithHook(tools, toolHookCtx);
+
       const { builtInTools, customTools } = splitSdkTools({
-        tools,
+        tools: wrappedTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
 

@@ -1,0 +1,46 @@
+{
+  "id": "2fa-github",
+  "name": "GitHub Mobile 2FA Gate",
+  "description": "Gates sensitive tools behind GitHub Mobile push authentication",
+  "uiHints": {
+    "clientId": {
+      "label": "GitHub OAuth App Client ID",
+      "placeholder": "Ov23xxxxxxxxxxxxxxxxxx",
+      "help": "Create at GitHub Settings > Developer Settings > OAuth Apps (enable Device Flow)"
+    },
+    "tokenTtlMinutes": {
+      "label": "Session TTL (minutes)",
+      "placeholder": "30",
+      "help": "How long before re-authentication is required"
+    },
+    "sensitiveTools": {
+      "label": "Sensitive Tools",
+      "help": "Tool names requiring 2FA (default: Bash, Write, Edit, NotebookEdit)"
+    },
+    "gateAllTools": {
+      "label": "Gate All Tools",
+      "help": "Require 2FA for all tools, not just sensitive ones"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "clientId": {
+        "type": "string"
+      },
+      "tokenTtlMinutes": {
+        "type": "number"
+      },
+      "sensitiveTools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "gateAllTools": {
+        "type": "boolean"
+      }
+    }
+  }
+}
