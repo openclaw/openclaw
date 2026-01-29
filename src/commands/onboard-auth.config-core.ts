@@ -1,4 +1,4 @@
-import { buildXiaomiProvider } from "../agents/models-config.providers.js";
+import { buildXiaomiProvider, XIAOMI_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -349,7 +349,14 @@ export function applyXiaomiProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   const existingProvider = providers.xiaomi;
   const defaultProvider = buildXiaomiProvider();
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const mergedModels = existingModels.length > 0 ? existingModels : (defaultProvider.models ?? []);
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === XIAOMI_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
   const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
     string,
     unknown
