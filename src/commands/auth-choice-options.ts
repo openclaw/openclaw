@@ -20,7 +20,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "ollama";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -58,6 +59,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Qwen",
     hint: "OAuth",
     choices: ["qwen-portal"],
+  },
+  {
+    value: "ollama",
+    label: "Local (Ollama)",
+    hint: "No subscription required",
+    choices: ["ollama"],
   },
   {
     value: "synthetic",
@@ -165,6 +172,11 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
   options.push({ value: "qwen-portal", label: "Qwen OAuth" });
+  options.push({
+    value: "ollama",
+    label: "Local (Ollama)",
+    hint: "Requires Ollama to be running locally",
+  });
   options.push({
     value: "copilot-proxy",
     label: "Copilot Proxy (local)",
