@@ -249,7 +249,7 @@ export function createEventStore(config: EventStoreConfig): EventStore & {
 
   const prune = async (olderThan: number): Promise<number> => {
     const result = pruneByTimeStmt.run(olderThan);
-    return result.changes;
+    return Number(result.changes);
   };
 
   const close = (): void => {

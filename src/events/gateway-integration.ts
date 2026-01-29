@@ -12,13 +12,8 @@
 import type { MoltbotConfig } from "../config/config.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../infra/diagnostic-events.js";
-import {
-  createEventBus,
-  setEventBus,
-  getEventBus,
-  type EventBus,
-  type EventBusConfig,
-} from "./bus.js";
+import { createEventBus, setEventBus, getEventBus } from "./bus.js";
+import type { EventBus, EventBusConfig } from "./types.js";
 import { createEventStore, getDefaultEventStorePath } from "./store.js";
 import { createEvent, type EventTopicMap } from "./catalog.js";
 
