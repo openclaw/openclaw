@@ -794,12 +794,14 @@ export async function applyAuthChoiceApiProviders(
         options: [
           { value: "retry-apikey", label: "Re-enter API key" },
           { value: "retry-baseurl", label: "Re-enter base URL" },
-          { value: "cancel", label: "Go back to provider selection" },
+          { value: "cancel", label: "Go back to auth method selection" },
         ],
       });
 
       if (action === "cancel") {
-        return null; // Return null to go back to provider selection
+        // Throw an error with a specific message that signals to restart auth selection
+        // The caller should catch this and re-prompt for auth choice
+        throw new Error("AUTH_CHOICE_CANCELLED");
       }
 
       if (action === "retry-apikey") {
