@@ -678,14 +678,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     // Restore dist/control-ui/ to committed state to prevent dirty repo after update
     // (ui:build regenerates assets with new hashes, which would block future updates)
-    const restoreUiStep = await runStep(
-      step(
-        "restore control-ui",
-        ["git", "-C", gitRoot, "checkout", "--", "dist/control-ui/"],
-        gitRoot,
-      ),
-    );
-    steps.push(restoreUiStep);
+    // Only attempt if the directory is tracked by git (older checkouts may still track it)
+    const lsFilesResult = await runCommand(
+      ["git", "-C", gitRoot, "ls-files", "--error-unmatch", "dist/control-ui/"],
+      { cwd: gitRoot, timeoutMs },
+    ).catch(() => null);
+    const controlUiTracked = lsFilesResult?.code === 0;
+
+    if (controlUiTracked) {
+      const restoreUiStep = await runStep(
+        step(
+          "restore control-ui",
+          ["git", "-C", gitRoot, "checkout", "--", "dist/control-ui/"],
+          gitRoot,
+        ),
+      );
+      steps.push(restoreUiStep);
+    }
 
     const doctorStep = await runStep(
       step(
