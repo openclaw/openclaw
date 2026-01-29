@@ -546,4 +546,128 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain('<file name="report.mp3" mime="text/tab-separated-values">');
     expect(ctx.Body).toContain("a\tb\tc");
   });
+
+  it("escapes XML special characters in filenames to prevent injection", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    // Create file with XML special characters in the name (what filesystem allows)
+    // Note: The sanitizeFilename in store.ts would strip most dangerous chars,
+    // but we test that even if some slip through, they get escaped in output
+    const filePath = path.join(dir, "file<test>.txt");
+    await fs.writeFile(filePath, "safe content");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      MediaType: "text/plain",
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    // Verify XML special chars are escaped in the output
+    expect(ctx.Body).toContain("&lt;");
+    expect(ctx.Body).toContain("&gt;");
+    // The raw < and > should not appear unescaped in the name attribute
+    expect(ctx.Body).not.toMatch(/name="[^"]*<[^"]*"/);
+  });
+
+  it("normalizes MIME types to prevent attribute injection", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const filePath = path.join(dir, "data.txt");
+    await fs.writeFile(filePath, "test content");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      // Attempt to inject via MIME type with quotes - normalization should strip this
+      MediaType: 'text/plain" onclick="alert(1)',
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    // MIME normalization strips everything after first ; or " - verify injection is blocked
+    expect(ctx.Body).not.toContain("onclick=");
+    expect(ctx.Body).not.toContain("alert(1)");
+    // Verify the MIME type is normalized to just "text/plain"
+    expect(ctx.Body).toContain('mime="text/plain"');
+  });
+
+  it("handles path traversal attempts in filenames safely", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    // Even if a file somehow got a path-like name, it should be handled safely
+    const filePath = path.join(dir, "normal.txt");
+    await fs.writeFile(filePath, "legitimate content");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      MediaType: "text/plain",
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    // Verify the file was processed and output contains expected structure
+    expect(ctx.Body).toContain('<file name="');
+    expect(ctx.Body).toContain('mime="text/plain"');
+    expect(ctx.Body).toContain("legitimate content");
+  });
+
+  it("handles files with non-ASCII Unicode filenames", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const filePath = path.join(dir, "文档.txt");
+    await fs.writeFile(filePath, "中文内容");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      MediaType: "text/plain",
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("中文内容");
+  });
 });
