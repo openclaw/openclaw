@@ -750,54 +750,31 @@ export async function applyAuthChoiceApiProviders(
         label: m.id,
         hint: m.maxInputTokens ? `${Math.round(m.maxInputTokens / 1000)}k context` : undefined,
       }));
-      modelOptions.push({ value: "__custom__", label: "Enter custom model name", hint: undefined });
 
       const selectedModel = await params.prompter.select({
         message: `Select model (${availableModels.length} available)`,
         options: modelOptions,
       });
 
-      if (selectedModel === "__custom__") {
-        const customModel = await params.prompter.text({
-          message: "Enter model name",
-          validate: (value) => (value?.trim() ? undefined : "Model name is required"),
-        });
-        normalizedModelId = String(customModel).trim();
-      } else {
-        normalizedModelId = String(selectedModel);
-        const modelInfo = availableModels.find((m) => m.id === normalizedModelId);
-        if (modelInfo?.maxInputTokens) {
-          contextWindow = modelInfo.maxInputTokens;
-        }
-        if (modelInfo?.maxOutputTokens) {
-          maxTokens = modelInfo.maxOutputTokens;
-        }
+      normalizedModelId = String(selectedModel);
+      const modelInfo = availableModels.find((m) => m.id === normalizedModelId);
+      if (modelInfo?.maxInputTokens) {
+        contextWindow = modelInfo.maxInputTokens;
+      }
+      if (modelInfo?.maxOutputTokens) {
+        maxTokens = modelInfo.maxOutputTokens;
       }
     } else {
-      // Fall back to manual model entry
-      const defaultModel = process.env.LITELLM_MODEL ?? "gpt-4";
-      const modelId = await params.prompter.text({
-        message: "Enter model name (as configured in LiteLLM)",
-        initialValue: defaultModel,
-        placeholder: defaultModel,
-        validate: (value) => (value?.trim() ? undefined : "Model name is required"),
-      });
-      normalizedModelId = String(modelId).trim();
+      // No models available from LiteLLM - fail with error
+      throw new Error(
+        "Could not fetch models from LiteLLM. Please ensure your LiteLLM server is running " +
+          `at ${normalizedBaseUrl} and accessible, or provide the model via --litellm-model flag.`,
+      );
     }
 
-    // If context window wasn't auto-detected, prompt for it (skip in non-interactive mode)
-    if (!contextWindow && !params.opts?.nonInteractive) {
-      const contextInput = await params.prompter.text({
-        message: "Enter context window size (tokens)",
-        initialValue: "128000",
-        placeholder: "128000",
-        validate: (value) => {
-          const num = Number(value);
-          if (Number.isNaN(num) || num <= 0) return "Must be a positive number";
-          return undefined;
-        },
-      });
-      contextWindow = Number(contextInput);
+    // Strip litellm/ prefix if the API returned it (avoid litellm/litellm/model)
+    if (normalizedModelId.startsWith("litellm/")) {
+      normalizedModelId = normalizedModelId.slice("litellm/".length);
     }
 
     const modelRef = `litellm/${normalizedModelId}`;
