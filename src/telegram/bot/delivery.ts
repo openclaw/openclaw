@@ -310,7 +310,14 @@ export async function resolveMedia(
         fetchImpl,
         filePathHint: file.file_path,
       });
-      const saved = await saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes);
+      const originalName = fetched.fileName ?? file.file_path;
+      const saved = await saveMediaBuffer(
+        fetched.buffer,
+        fetched.contentType,
+        "inbound",
+        maxBytes,
+        originalName,
+      );
 
       // Check sticker cache for existing description
       const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
@@ -361,7 +368,12 @@ export async function resolveMedia(
   }
 
   const m =
-    msg.photo?.[msg.photo.length - 1] ?? msg.video ?? msg.document ?? msg.audio ?? msg.voice;
+    msg.photo?.[msg.photo.length - 1] ??
+    msg.video ??
+    msg.video_note ??
+    msg.document ??
+    msg.audio ??
+    msg.voice;
   if (!m?.file_id) return null;
   const file = await ctx.getFile();
   if (!file.file_path) {
@@ -377,10 +389,18 @@ export async function resolveMedia(
     fetchImpl,
     filePathHint: file.file_path,
   });
-  const saved = await saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes);
+  const originalName = fetched.fileName ?? file.file_path;
+  const saved = await saveMediaBuffer(
+    fetched.buffer,
+    fetched.contentType,
+    "inbound",
+    maxBytes,
+    originalName,
+  );
   let placeholder = "<media:document>";
   if (msg.photo) placeholder = "<media:image>";
   else if (msg.video) placeholder = "<media:video>";
+  else if (msg.video_note) placeholder = "<media:video>";
   else if (msg.audio || msg.voice) placeholder = "<media:audio>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
