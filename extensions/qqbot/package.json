@@ -5,10 +5,26 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "clawdbot": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "qqbot",
+      "label": "QQ Bot",
+      "selectionLabel": "QQ Bot (Official API)",
+      "docsPath": "/docs/channels/qqbot",
+      "blurb": "Connect to QQ via official QQ Bot API",
+      "order": 50
+    }
   },
   "moltbot": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "qqbot",
+      "label": "QQ Bot",
+      "selectionLabel": "QQ Bot (Official API)",
+      "docsPath": "/docs/channels/qqbot",
+      "blurb": "Connect to QQ via official QQ Bot API",
+      "order": 50
+    }
   },
   "scripts": {
     "build": "tsc",
