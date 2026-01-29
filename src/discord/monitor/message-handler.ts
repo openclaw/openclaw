@@ -43,7 +43,7 @@ export function createDiscordMessageHandler(params: {
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
-  const channelDelayMs = resolveChannelDelayMs({ cfg: params.cfg, channel: "discord" });
+  // Note: channelDelayMs is resolved per-message below to support per-channel overrides
   const skipIfPeerRepliedMs = resolveSkipIfPeerRepliedMs({ cfg: params.cfg });
 
   const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
@@ -168,6 +168,10 @@ export function createDiscordMessageHandler(params: {
 
   return async (data, client) => {
     try {
+      // Resolve channel delay per-message to support per-channel overrides via Discord channel ID
+      const discordChannelId = data.message?.channelId ?? "discord";
+      const channelDelayMs = resolveChannelDelayMs({ cfg: params.cfg, channel: discordChannelId });
+
       // Apply channel delay for multi-bot coordination
       if (channelDelayMs > 0) {
         await sleep(channelDelayMs);
