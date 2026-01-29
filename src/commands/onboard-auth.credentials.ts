@@ -21,6 +21,19 @@ export async function writeOAuthCredentials(
   });
 }
 
+export async function setOllamaApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "ollama:default",
+    credential: {
+      type: "api_key",
+      provider: "ollama",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setAnthropicApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({

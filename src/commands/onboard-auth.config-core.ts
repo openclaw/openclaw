@@ -5,12 +5,16 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 import {
+  OLLAMA_BASE_URL,
+} from "../agents/models-config.providers.js";
+import {
   buildVeniceModelDefinition,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import type { MoltbotConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -49,6 +53,53 @@ export function applyZaiConfig(cfg: MoltbotConfig): MoltbotConfig {
               }
             : undefined),
           primary: ZAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyOllamaProviderConfig(
+  cfg: MoltbotConfig,
+  models?: ModelDefinitionConfig[],
+): MoltbotConfig {
+  const providers = { ...cfg.models?.providers };
+  providers.ollama = {
+    baseUrl: OLLAMA_BASE_URL,
+    api: "openai-completions",
+    apiKey: "local",
+    models: models && models.length > 0 ? models : undefined,
+  };
+
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers,
+    },
+  };
+}
+
+export function applyOllamaConfig(
+  cfg: MoltbotConfig,
+  modelRef: string,
+  models?: ModelDefinitionConfig[],
+): MoltbotConfig {
+  const next = applyOllamaProviderConfig(cfg, models);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: modelRef,
         },
       },
     },

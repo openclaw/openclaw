@@ -64,8 +64,8 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const OLLAMA_API_BASE_URL = "http://127.0.0.1:11434";
+export const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
+export const OLLAMA_API_BASE_URL = "http://127.0.0.1:11434";
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 const OLLAMA_DEFAULT_COST = {
@@ -90,7 +90,7 @@ interface OllamaTagsResponse {
   models: OllamaModel[];
 }
 
-async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
+export async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
@@ -410,12 +410,22 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
-  // Ollama provider - only add if explicitly configured
+  // Ollama provider - add if configured OR if reachable locally
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  } else {
+    const discovered = await discoverOllamaModels();
+    if (discovered.length > 0) {
+      providers.ollama = {
+        baseUrl: OLLAMA_BASE_URL,
+        api: "openai-completions",
+        apiKey: "local",
+        models: discovered,
+      };
+    }
   }
 
   return providers;
