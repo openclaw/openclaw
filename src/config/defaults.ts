@@ -253,26 +253,16 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   }
 
   const existingAgent = nextCfg.agents?.defaults;
-  if (!existingAgent) {
-    return mutated ? nextCfg : cfg;
-  }
-  const existingModels = existingAgent.models ?? {};
-  if (Object.keys(existingModels).length === 0) {
-    return mutated ? nextCfg : cfg;
-  }
+  const existingModels = existingAgent?.models ?? {};
 
   const nextModels: Record<string, { alias?: string }> = {
     ...existingModels,
   };
 
+  // Always apply default model aliases, creating entries if they don't exist
   for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
     const entry = nextModels[target];
-    if (!entry) {
-      continue;
-    }
-    if (entry.alias !== undefined) {
-      continue;
-    }
+    if (entry?.alias !== undefined) continue; // User already defined an alias
     nextModels[target] = { ...entry, alias };
     mutated = true;
   }
