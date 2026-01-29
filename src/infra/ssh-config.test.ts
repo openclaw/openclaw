@@ -54,6 +54,8 @@ describe("ssh-config", () => {
     expect(config?.host).toBe("peters-mac-studio-1.sheep-coho.ts.net");
     expect(config?.port).toBe(2222);
     expect(config?.identityFiles).toEqual(["/tmp/id_ed25519"]);
+    const args = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+    expect(args?.slice(-2)).toEqual(["--", "me@alias"]);
   });
 
   it("returns null when ssh -G fails", async () => {

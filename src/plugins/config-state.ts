@@ -99,7 +99,7 @@ export function applyTestPluginDefaults(
         ...plugins,
         slots: {
           ...plugins?.slots,
-          memory: null,
+          memory: "none",
         },
       },
     };
@@ -112,7 +112,7 @@ export function applyTestPluginDefaults(
       enabled: false,
       slots: {
         ...plugins?.slots,
-        memory: null,
+        memory: "none",
       },
     },
   };

@@ -107,7 +107,9 @@ export async function gatewayStatusCommand(
             const base = user ? `${user}@${host.trim()}` : host.trim();
             return sshPort !== 22 ? `${base}:${sshPort}` : base;
           })
-          .filter((x): x is string => Boolean(x));
+          .filter((candidate): candidate is string =>
+            Boolean(candidate && parseSshTarget(candidate)),
+          );
         if (candidates.length > 0) sshTarget = candidates[0] ?? null;
       }
 
