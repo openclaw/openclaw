@@ -1,0 +1,16 @@
+file 'title_scaled.jpg'
+duration 8
+file 'ide-code_scaled.jpg'
+duration 12
+file 'ide-welcome_scaled.jpg'
+duration 15
+file 'whatsapp_scaled.jpg'
+duration 20
+file 'ide-commands_scaled.jpg'
+duration 25
+file 'ide-memory_scaled.jpg'
+duration 15
+file 'ide-code_scaled.jpg'
+duration 13
+file 'title_scaled.jpg'
+duration 12

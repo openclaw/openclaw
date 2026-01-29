@@ -1,0 +1,26 @@
+# Scene list for demo video
+# Format: start_time end_time image_path
+
+# Intro - DNA Logo (need to create)
+0 8 logo
+
+# Problem - show frustration (use IDE as placeholder)
+8 20 ide-code
+
+# Solution - DNA interface
+20 35 ide-welcome
+
+# WhatsApp Demo
+35 55 whatsapp-mockup
+
+# IDE Demo
+55 80 ide-commands
+
+# Memory
+80 95 ide-memory
+
+# Features rapid
+95 108 ide-code
+
+# CTA - logo
+108 120 logo

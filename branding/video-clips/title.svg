@@ -1,0 +1,47 @@
+<svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0F0D15"/>
+      <stop offset="100%" style="stop-color:#1a1625"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  
+  <!-- DNA Helix Icon -->
+  <g transform="translate(860, 380)">
+    <circle cx="100" cy="50" r="80" fill="none" stroke="#6366F1" stroke-width="3" opacity="0.3"/>
+    <circle cx="100" cy="50" r="60" fill="none" stroke="#818CF8" stroke-width="2" opacity="0.5"/>
+    
+    <!-- Helix strands -->
+    <path d="M60 10 Q100 30, 140 50 Q100 70, 60 90" fill="none" stroke="#818CF8" stroke-width="4"/>
+    <path d="M140 10 Q100 30, 60 50 Q100 70, 140 90" fill="none" stroke="#A78BFA" stroke-width="4"/>
+    
+    <!-- Nodes -->
+    <circle cx="60" cy="10" r="6" fill="#818CF8"/>
+    <circle cx="140" cy="10" r="6" fill="#A78BFA"/>
+    <circle cx="100" cy="30" r="5" fill="#6366F1"/>
+    <circle cx="100" cy="50" r="8" fill="#818CF8"/>
+    <circle cx="100" cy="70" r="5" fill="#6366F1"/>
+    <circle cx="60" cy="90" r="6" fill="#818CF8"/>
+    <circle cx="140" cy="90" r="6" fill="#A78BFA"/>
+  </g>
+  
+  <!-- Title -->
+  <text x="960" y="580" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="120" font-weight="700" fill="url(#textGrad)">DNA</text>
+  
+  <!-- Tagline -->
+  <text x="960" y="660" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="36" fill="rgba(255,255,255,0.7)">Your AI, Everywhere</text>
+  
+  <!-- URL -->
+  <text x="960" y="750" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="24" fill="rgba(255,255,255,0.5)">dna.somovselect.com</text>
+  
+  <!-- Open Source badge -->
+  <rect x="860" y="790" width="200" height="36" rx="18" fill="rgba(255,255,255,0.1)"/>
+  <text x="960" y="815" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" fill="rgba(255,255,255,0.6)">✨ Open Source • MIT</text>
+</svg>
