@@ -1,0 +1,19 @@
+What if your AI assistant could be everywhere you are? On WhatsApp. In your IDE. Even managing your calendar — without you switching apps.
+
+Today, AI lives in browser tabs. You copy. You paste. You lose context constantly. Your AI doesn't remember what you said yesterday. It doesn't know your preferences. And it definitely can't help you across platforms.
+
+DNA changes that.
+
+It's an AI assistant that connects to your favorite messaging apps — and remembers everything. Your projects. Your preferences. Your way of working. One AI. Every platform. Continuous memory.
+
+Message DNA on WhatsApp. Ask about your schedule. Need to research something? Just ask. It's conversational. Fast. And it remembers what you've discussed.
+
+For developers, there's the DNA IDE. A full code editor with AI built in. Use natural language to edit code. It knows your codebase. It remembers your patterns. It gets better the more you use it.
+
+And here's what makes DNA different: persistent memory. It saves important context automatically. Decisions you've made. Preferences you've shared. Projects you're working on. Next week, next month — it remembers.
+
+Sixty built-in skills. Connect to GitHub, Google Calendar, Notion, and more. Run it on your own machine. Your data stays private. Choose any AI model — Claude, GPT, or local.
+
+DNA. Your AI, everywhere.
+
+Get started in five minutes. Visit dna.somovselect.com.
