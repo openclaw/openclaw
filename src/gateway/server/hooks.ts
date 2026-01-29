@@ -9,6 +9,7 @@ import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { HookMessageChannel, HooksConfigResolved } from "../hooks.js";
+import { markHookRunComplete, registerHookRun } from "../hook-run-registry.js";
 import { createHooksRequestHandler } from "../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -42,6 +43,8 @@ export function createGatewayHooksRequestHandler(params: {
     thinking?: string;
     timeoutSeconds?: number;
     allowUnsafeExternalContent?: boolean;
+    cleanup?: "delete" | "keep";
+    cleanupDelayMinutes?: number;
   }) => {
     const sessionKey = value.sessionKey.trim() ? value.sessionKey.trim() : `hook:${randomUUID()}`;
     const mainSessionKey = resolveMainSessionKeyFromConfig();
@@ -71,6 +74,13 @@ export function createGatewayHooksRequestHandler(params: {
     };
 
     const runId = randomUUID();
+    registerHookRun({
+      runId,
+      sessionKey,
+      jobName: value.name,
+      cleanup: value.cleanup,
+      cleanupDelayMinutes: value.cleanupDelayMinutes,
+    });
     void (async () => {
       try {
         const cfg = loadConfig();
@@ -88,10 +98,12 @@ export function createGatewayHooksRequestHandler(params: {
         enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
           sessionKey: mainSessionKey,
         });
+        markHookRunComplete(runId);
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}` });
         }
       } catch (err) {
+        markHookRunComplete(runId);
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
           sessionKey: mainSessionKey,
