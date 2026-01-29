@@ -83,8 +83,8 @@ export function attachMediaRoutes(
 export async function startMediaServer(
   port: number,
   ttlMs = DEFAULT_TTL_MS,
-  host = "127.0.0.1",
   runtime: RuntimeEnv = defaultRuntime,
+  host = "127.0.0.1",
 ): Promise<Server> {
   const app = express();
   attachMediaRoutes(app, ttlMs, runtime);

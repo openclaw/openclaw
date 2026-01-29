@@ -42,7 +42,7 @@ export async function ensureMediaHosted(
   }
   if (needsServerStart && opts.startServer) {
     if (!mediaServer) {
-      mediaServer = await startMediaServer(port, TTL_MS, undefined, runtime);
+      mediaServer = await startMediaServer(port, TTL_MS, runtime);
       logInfo(
         `🦞 Started temporary media host on http://127.0.0.1:${port}/media/:id (TTL ${TTL_MS / 1000}s)`,
         runtime,
