@@ -21,7 +21,7 @@ It answers you on the channels you already use (WhatsApp, Telegram, Slack, Disco
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-[Website](https://molt.bot) · [Docs](https://docs.molt.bot) · [Getting Started](https://docs.molt.bot/start/getting-started) · [Updating](https://docs.molt.bot/install/updating) · [Showcase](https://docs.molt.bot/start/showcase) · [FAQ](https://docs.molt.bot/start/faq) · [Wizard](https://docs.molt.bot/start/wizard) · [Nix](https://github.com/moltbot/nix-clawdbot) · [Docker](https://docs.molt.bot/install/docker) · [Discord](https://discord.gg/clawd)
+[Website](https://molt.bot) · [Docs](https://docs.molt.bot) · [Getting Started](https://docs.molt.bot/start/getting-started) · [Updating](https://docs.molt.bot/install/updating) · [Showcase](https://docs.molt.bot/start/showcase) · [FAQ](https://docs.molt.bot/start/faq) · [Wizard](https://docs.molt.bot/start/wizard) · [Nix](https://github.com/moltbot/nix-moltbot) · [Docker](https://docs.molt.bot/install/docker) · [Discord](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`moltbot onboard`). It walks through gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
@@ -245,11 +245,11 @@ Details: [Nodes](https://docs.molt.bot/nodes) · [macOS app](https://docs.molt.b
 
 Details: [Session tools](https://docs.molt.bot/concepts/session-tool)
 
-## Skills registry (ClawdHub)
+## Skills registry (MoltHub)
 
-ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can search for skills automatically and pull in new ones as needed.
+MoltHub is a minimal skill registry. With MoltHub enabled, the agent can search for skills automatically and pull in new ones as needed.
 
-[ClawdHub](https://ClawdHub.com)
+[MoltHub](https://ClawdHub.com)
 
 ## Chat commands
 
@@ -295,13 +295,13 @@ Runbook: [iOS connect](https://docs.molt.bot/platforms/ios).
 
 ## Agent workspace + skills
 
-- Workspace root: `~/clawd` (configurable via `agents.defaults.workspace`).
+- Workspace root: `~/moltbot` (configurable via `agents.defaults.workspace`).
 - Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
-- Skills: `~/clawd/skills/<skill>/SKILL.md`.
+- Skills: `~/moltbot/skills/<skill>/SKILL.md`.
 
 ## Configuration
 
-Minimal `~/.clawdbot/moltbot.json` (model + defaults):
+Minimal `~/.moltbot/moltbot.json` (model + defaults):
 
 ```json5
 {
@@ -323,7 +323,7 @@ Details: [Security guide](https://docs.molt.bot/gateway/security) · [Docker + s
 
 ### [WhatsApp](https://docs.molt.bot/channels/whatsapp)
 
-- Link the device: `pnpm moltbot channels login` (stores creds in `~/.clawdbot/credentials`).
+- Link the device: `pnpm moltbot channels login` (stores creds in `~/.moltbot/credentials`).
 - Allowlist who can talk to the assistant via `channels.whatsapp.allowFrom`.
 - If `channels.whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
