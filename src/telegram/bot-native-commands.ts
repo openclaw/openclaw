@@ -463,6 +463,7 @@ export const registerTelegramNativeCommands = ({
             SenderName: buildSenderName(msg),
             SenderId: senderId || undefined,
             SenderUsername: senderUsername || undefined,
+            Provider: "telegram",
             Surface: "telegram",
             MessageSid: String(msg.message_id),
             Timestamp: msg.date ? msg.date * 1000 : undefined,
