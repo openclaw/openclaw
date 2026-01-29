@@ -75,6 +75,21 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
+const XML_ESCAPE_MAP: Record<string, string> = {
+  "<": "&lt;",
+  ">": "&gt;",
+  "&": "&amp;",
+  '"': "&quot;",
+  "'": "&apos;",
+};
+
+/**
+ * Escapes special XML characters in attribute values to prevent injection.
+ */
+function xmlEscapeAttr(value: string): string {
+  return value.replace(/[<>&"']/g, (char) => XML_ESCAPE_MAP[char] ?? char);
+}
+
 function resolveFileLimits(cfg: MoltbotConfig) {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
   return {
@@ -236,6 +251,12 @@ async function extractFileBlocks(params: {
       forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
     const rawMime = bufferResult?.mime ?? attachment.mime;
     const mimeType = textHint ?? normalizeMimeType(rawMime);
+    // Log when MIME type is overridden from non-text to text for auditability
+    if (textHint && rawMime && !rawMime.startsWith("text/")) {
+      logVerbose(
+        `media: MIME override from "${rawMime}" to "${textHint}" for index=${attachment.index}`,
+      );
+    }
     if (!mimeType) {
       if (shouldLogVerbose()) {
         logVerbose(`media: file attachment skipped (unknown mime) index=${attachment.index}`);
@@ -290,7 +311,10 @@ async function extractFileBlocks(params: {
     const safeName = (bufferResult.fileName ?? `file-${attachment.index + 1}`)
       .replace(/[\r\n\t]+/g, " ")
       .trim();
-    blocks.push(`<file name="${safeName}" mime="${mimeType}">\n${blockText}\n</file>`);
+    // Escape XML special characters in attributes to prevent injection
+    blocks.push(
+      `<file name="${xmlEscapeAttr(safeName)}" mime="${xmlEscapeAttr(mimeType)}">\n${blockText}\n</file>`,
+    );
   }
   return blocks;
 }
