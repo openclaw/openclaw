@@ -38,7 +38,7 @@ import {
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -86,7 +86,7 @@ export type RunCronAgentTurnResult = {
 };
 
 export async function runCronIsolatedAgentTurn(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   deps: CliDeps;
   job: CronJob;
   message: string;
@@ -117,7 +117,7 @@ export async function runCronIsolatedAgentTurn(params: {
   } else if (overrideModel) {
     agentCfg.model = overrideModel;
   }
-  const cfgWithAgentDefaults: ClawdbotConfig = {
+  const cfgWithAgentDefaults: MoltbotConfig = {
     ...params.cfg,
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };
@@ -234,10 +234,18 @@ export async function runCronIsolatedAgentTurn(params: {
     deliveryMode === "explicit" || (deliveryMode === "auto" && hasExplicitTarget);
   const bestEffortDeliver = agentPayload?.bestEffortDeliver === true;
 
-  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel: agentPayload?.channel ?? "last",
-    to: agentPayload?.to,
-  });
+  const resolvedDelivery = await resolveDeliveryTarget(
+    cfgWithAgentDefaults,
+    agentId,
+    {
+      channel: agentPayload?.channel ?? "last",
+      to: agentPayload?.to,
+    },
+    {
+      origin: params.job.origin,
+      deliveryMode: params.job.deliveryMode,
+    },
+  );
 
   const userTimezone = resolveUserTimezone(params.cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(params.cfg.agents?.defaults?.timeFormat);

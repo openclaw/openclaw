@@ -52,7 +52,10 @@ export function buildGatewayCronService(params: {
         cfg: runtimeConfig,
         agentId,
       });
-      enqueueSystemEvent(text, { sessionKey });
+      // Pass origin through to the system event - heartbeat runner will use it for routing
+      const deliveryMode = opts?.deliveryMode ?? "origin";
+      const origin = deliveryMode === "origin" ? opts?.origin : undefined;
+      enqueueSystemEvent(text, { sessionKey, origin });
     },
     requestHeartbeatNow,
     runHeartbeatOnce: async (opts) => {

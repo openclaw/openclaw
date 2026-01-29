@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { FeishuAccountConfig } from "../config/types.feishu.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -13,7 +13,7 @@ export type FeishuCredentials = {
 };
 
 function resolveAccountConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   accountId: string,
 ): FeishuAccountConfig | undefined {
   const accounts = cfg.channels?.feishu?.accounts;
@@ -25,7 +25,7 @@ function resolveAccountConfig(
   return matchKey ? (accounts[matchKey] as FeishuAccountConfig | undefined) : undefined;
 }
 
-function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuAccountConfig {
+function mergeFeishuAccountConfig(cfg: MoltbotConfig, accountId: string): FeishuAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.feishu ?? {}) as FeishuAccountConfig & {
     accounts?: unknown;
   };
@@ -44,7 +44,7 @@ function readSecretFile(filePath: string): string | undefined {
 }
 
 export function resolveFeishuCredentials(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   opts?: { accountId?: string | null },
 ): FeishuCredentials {
   const accountId = opts?.accountId?.trim() || "default";
@@ -74,7 +74,7 @@ export function resolveFeishuCredentials(
 }
 
 export function resolveFeishuVerificationToken(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   opts?: { accountId?: string | null },
 ): string | undefined {
   const accountId = opts?.accountId?.trim() || "default";
@@ -88,7 +88,7 @@ export function resolveFeishuVerificationToken(
 }
 
 export function resolveFeishuEncryptKey(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   opts?: { accountId?: string | null },
 ): string | undefined {
   const accountId = opts?.accountId?.trim() || "default";

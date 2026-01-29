@@ -53,6 +53,26 @@ export type CronIsolation = {
   postToMainMaxChars?: number;
 };
 
+/**
+ * Origin context: where the cron job was created.
+ * Used for routing replies back to the originating session/channel.
+ */
+export type CronOrigin = {
+  /** The channel where the job was created (telegram, whatsapp, etc.) */
+  channel?: ChannelId;
+  /** The chat/conversation ID where the job was created */
+  to?: string;
+  /** The account ID (for multi-account setups) */
+  accountId?: string;
+  /** The thread ID (for threaded conversations) */
+  threadId?: string | number;
+  /** The session key where the job was created */
+  sessionKey?: string;
+};
+
+/** Delivery routing mode for cron job replies */
+export type CronDeliveryMode = "origin" | "current";
+
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -77,6 +97,17 @@ export type CronJob = {
   payload: CronPayload;
   isolation?: CronIsolation;
   state: CronJobState;
+  /**
+   * Origin context: where the job was created.
+   * Replies are routed back here by default.
+   */
+  origin?: CronOrigin;
+  /**
+   * Delivery routing mode:
+   * - "origin" (default): Route replies to where the job was created
+   * - "current": Route replies to the session's current lastChannel/lastTo
+   */
+  deliveryMode?: CronDeliveryMode;
 };
 
 export type CronStoreFile = {

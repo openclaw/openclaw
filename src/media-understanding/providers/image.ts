@@ -4,7 +4,7 @@ import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-age
 
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { setupLlmProxy } from "../../agents/llm-proxy.js";
-import { ensureClawdbotModelsJson } from "../../agents/models-config.js";
+import { ensureMoltbotModelsJson } from "../../agents/models-config.js";
 import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
 import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
@@ -15,7 +15,7 @@ export async function describeImageWithModel(
   // Set up LLM proxy if configured (must be done before any fetch calls)
   setupLlmProxy(params.cfg);
 
-  await ensureClawdbotModelsJson(params.cfg, params.agentDir);
+  await ensureMoltbotModelsJson(params.cfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;

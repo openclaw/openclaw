@@ -323,7 +323,7 @@ importers:
         specifier: ^10.5.0
         version: 10.5.0
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
         version: link:../..
 
@@ -331,7 +331,7 @@ importers:
 
   extensions/line:
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
         version: link:../..
 
@@ -357,17 +357,17 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
         version: link:../..
 
   extensions/mattermost: {}
 
   extensions/memory-core:
-    dependencies:
-      clawdbot:
-        specifier: '>=2026.1.24-3'
-        version: 2026.1.24-3(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3)
+    devDependencies:
+      moltbot:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/memory-lancedb:
     dependencies:
@@ -392,7 +392,7 @@ importers:
       '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.2.2
         version: 1.2.2
-      clawdbot:
+      moltbot:
         specifier: workspace:*
         version: link:../..
       express:
@@ -406,7 +406,7 @@ importers:
 
   extensions/nostr:
     dependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
         version: link:../..
       nostr-tools:
@@ -448,7 +448,7 @@ importers:
         specifier: ^4.3.5
         version: 4.3.6
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
         version: link:../..
 
@@ -468,7 +468,7 @@ importers:
 
   extensions/zalo:
     dependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
         version: link:../..
       undici:
@@ -480,7 +480,13 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
-      clawdbot:
+      moltbot:
+        specifier: workspace:*
+        version: link:../..
+
+  packages/clawdbot:
+    dependencies:
+      moltbot:
         specifier: workspace:*
         version: link:../..
 

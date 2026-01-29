@@ -2,7 +2,7 @@
  * Feishu message sending utilities
  */
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -258,7 +258,7 @@ export type SendFeishuMessageParams = {
   to: string;
   text: string;
   accountId?: string | null;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   runtime?: RuntimeEnv;
   /** Receive ID type: chat_id (default), open_id, user_id, union_id, email */
   receiveIdType?: "chat_id" | "open_id" | "user_id" | "union_id" | "email";
@@ -458,7 +458,7 @@ export async function reactMessageFeishu(params: {
   messageId: string;
   emoji: string;
   accountId?: string | null;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   runtime?: RuntimeEnv;
 }): Promise<{ success: boolean; error?: string }> {
   const cfg = params.config ?? loadConfig();
@@ -500,7 +500,7 @@ export async function reactMessageFeishu(params: {
 export async function deleteMessageFeishu(params: {
   messageId: string;
   accountId?: string | null;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   runtime?: RuntimeEnv;
 }): Promise<{ success: boolean; error?: string }> {
   const cfg = params.config ?? loadConfig();
@@ -535,7 +535,7 @@ export async function editMessageFeishu(params: {
   messageId: string;
   text: string;
   accountId?: string | null;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   runtime?: RuntimeEnv;
   msgType?: "text" | "post";
   postContent?: FeishuPostContent;

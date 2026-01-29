@@ -2,7 +2,14 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-export type SystemEvent = { text: string; ts: number };
+import type { CronOrigin } from "../cron/types.js";
+
+export type SystemEvent = {
+  text: string;
+  ts: number;
+  /** Origin context for routing replies (from cron jobs) */
+  origin?: CronOrigin;
+};
 
 const MAX_EVENTS = 20;
 
@@ -17,6 +24,8 @@ const queues = new Map<string, SessionQueue>();
 type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
+  /** Origin context for routing replies (from cron jobs) */
+  origin?: CronOrigin;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -62,7 +71,11 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   entry.lastContextKey = normalizeContextKey(options?.contextKey);
   if (entry.lastText === cleaned) return; // skip consecutive duplicates
   entry.lastText = cleaned;
-  entry.queue.push({ text: cleaned, ts: Date.now() });
+  const event: SystemEvent = { text: cleaned, ts: Date.now() };
+  if (options?.origin) {
+    event.origin = options.origin;
+  }
+  entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) entry.queue.shift();
 }
 
@@ -85,6 +98,11 @@ export function drainSystemEvents(sessionKey: string): string[] {
 export function peekSystemEvents(sessionKey: string): string[] {
   const key = requireSessionKey(sessionKey);
   return queues.get(key)?.queue.map((e) => e.text) ?? [];
+}
+
+export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  return queues.get(key)?.queue.slice() ?? [];
 }
 
 export function hasSystemEvents(sessionKey: string) {

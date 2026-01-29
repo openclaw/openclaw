@@ -7,7 +7,7 @@
  */
 import { ProxyAgent, setGlobalDispatcher, getGlobalDispatcher, type Dispatcher } from "undici";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 
 let originalDispatcher: Dispatcher | null = null;
 let currentProxyUrl: string | null = null;
@@ -18,7 +18,7 @@ let currentProxyUrl: string | null = null;
  *
  * Safe to call multiple times - only reconfigures if the proxy URL changes.
  */
-export function setupLlmProxy(cfg: ClawdbotConfig | undefined): void {
+export function setupLlmProxy(cfg: MoltbotConfig | undefined): void {
   const proxyUrl = cfg?.models?.proxy?.trim();
 
   // No proxy configured - restore original dispatcher if we changed it

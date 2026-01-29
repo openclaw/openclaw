@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { FeishuAccountConfig } from "../config/types.feishu.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
@@ -31,7 +31,7 @@ export type ResolvedFeishuAccount = {
   config: FeishuAccountConfig;
 };
 
-function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
+function listConfiguredAccountIds(cfg: MoltbotConfig): string[] {
   const accounts = cfg.channels?.feishu?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   const ids = new Set<string>();
@@ -42,7 +42,7 @@ function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
   return [...ids];
 }
 
-export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
+export function listFeishuAccountIds(cfg: MoltbotConfig): string[] {
   const ids = Array.from(
     new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "feishu")]),
   );
@@ -51,7 +51,7 @@ export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
   return ids.sort((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
+export function resolveDefaultFeishuAccountId(cfg: MoltbotConfig): string {
   const boundDefault = resolveDefaultAgentBoundAccountId(cfg, "feishu");
   if (boundDefault) return boundDefault;
   const ids = listFeishuAccountIds(cfg);
@@ -60,7 +60,7 @@ export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
 }
 
 function resolveAccountConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   accountId: string,
 ): FeishuAccountConfig | undefined {
   const accounts = cfg.channels?.feishu?.accounts;
@@ -72,7 +72,7 @@ function resolveAccountConfig(
   return matchKey ? (accounts[matchKey] as FeishuAccountConfig | undefined) : undefined;
 }
 
-function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuAccountConfig {
+function mergeFeishuAccountConfig(cfg: MoltbotConfig, accountId: string): FeishuAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.feishu ?? {}) as FeishuAccountConfig & {
     accounts?: unknown;
   };
@@ -81,7 +81,7 @@ function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): Feish
 }
 
 export function resolveFeishuAccount(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   accountId?: string | null;
 }): ResolvedFeishuAccount {
   const hasExplicitAccountId = Boolean(params.accountId?.trim());
@@ -120,7 +120,7 @@ export function resolveFeishuAccount(params: {
   return fallback;
 }
 
-export function listEnabledFeishuAccounts(cfg: ClawdbotConfig): ResolvedFeishuAccount[] {
+export function listEnabledFeishuAccounts(cfg: MoltbotConfig): ResolvedFeishuAccount[] {
   return listFeishuAccountIds(cfg)
     .map((accountId) => resolveFeishuAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

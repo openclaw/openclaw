@@ -80,7 +80,7 @@ function buildMessagingSection(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Never use exec/curl for provider messaging; Clawdbot handles all routing internally.",
+    "- Never use exec/curl for provider messaging; Moltbot handles all routing internally.",
     params.availableTools.has("message")
       ? [
           "",
@@ -115,13 +115,13 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   if (!docsPath || params.isMinimal) return [];
   return [
     "## Documentation",
-    `Clawdbot docs: ${docsPath}`,
-    "Mirror: https://docs.clawd.bot",
-    "Source: https://github.com/clawdbot/clawdbot",
+    `Moltbot docs: ${docsPath}`,
+    "Mirror: https://docs.molt.bot",
+    "Source: https://github.com/moltbot/moltbot",
     "Community: https://discord.com/invite/clawd",
     "Find new skills: https://clawdhub.com",
-    "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
-    "When diagnosing issues, run `clawdbot status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    "For Moltbot behavior, commands, config, or architecture: consult local docs first.",
+    "When diagnosing issues, run `moltbot status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
   ];
 }
@@ -165,12 +165,9 @@ export function buildAgentSystemPrompt(params: {
     workspaceDir?: string;
     workspaceAccess?: "none" | "ro" | "rw";
     agentWorkspaceMount?: string;
-    browserControlUrl?: string;
+    browserBridgeUrl?: string;
     browserNoVncUrl?: string;
     hostBrowserAllowed?: boolean;
-    allowedControlUrls?: string[];
-    allowedControlHosts?: string[];
-    allowedControlPorts?: number[];
     elevated?: {
       allowed: boolean;
       defaultLevel: "on" | "off" | "ask" | "full";
@@ -200,7 +197,7 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
-    gateway: "Restart, apply config, or run updates on the running Clawdbot process",
+    gateway: "Restart, apply config, or run updates on the running Moltbot process",
     agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
@@ -209,6 +206,10 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    qveris_search:
+      "Search for third-party API tools by capability description (e.g. 'weather forecast', 'stock prices'). Describe what you want to accomplish, not specific params. Returns tool_id, params, and examples.",
+    qveris_execute:
+      "Execute a discovered third-party tool. Requires tool_id and search_id from qveris_search. Pass params as JSON string in params_to_tool. Consider stats (success_rate, avg_execution_time) when selecting tools.",
   };
 
   const toolOrder = [
@@ -223,6 +224,8 @@ export function buildAgentSystemPrompt(params: {
     "process",
     "web_search",
     "web_fetch",
+    "qveris_search",
+    "qveris_execute",
     "browser",
     "canvas",
     "nodes",
@@ -327,11 +330,11 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside Clawdbot.";
+    return "You are a personal assistant running inside Moltbot.";
   }
 
   const lines = [
-    "You are a personal assistant running inside Clawdbot.",
+    "You are a personal assistant running inside Moltbot.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
@@ -363,25 +366,25 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "",
-    "## Clawdbot CLI Quick Reference",
-    "Clawdbot is controlled via subcommands. Do not invent commands.",
+    "## Moltbot CLI Quick Reference",
+    "Moltbot is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
-    "- clawdbot gateway status",
-    "- clawdbot gateway start",
-    "- clawdbot gateway stop",
-    "- clawdbot gateway restart",
-    "If unsure, ask the user to run `clawdbot help` (or `clawdbot gateway --help`) and paste the output.",
+    "- moltbot gateway status",
+    "- moltbot gateway start",
+    "- moltbot gateway stop",
+    "- moltbot gateway restart",
+    "If unsure, ask the user to run `moltbot help` (or `moltbot gateway --help`) and paste the output.",
     "",
     ...skillsSection,
     ...memorySection,
     // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## Clawdbot Self-Update" : "",
+    hasGateway && !isMinimal ? "## Moltbot Self-Update" : "",
     hasGateway && !isMinimal
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
-          "After restart, Clawdbot pings the last active session automatically.",
+          "After restart, Moltbot pings the last active session automatically.",
         ].join("\n")
       : "",
     hasGateway && !isMinimal ? "" : "",
@@ -419,9 +422,7 @@ export function buildAgentSystemPrompt(params: {
                   : ""
               }`
             : "",
-          params.sandboxInfo.browserControlUrl
-            ? `Sandbox browser control URL: ${params.sandboxInfo.browserControlUrl}`
-            : "",
+          params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
           params.sandboxInfo.browserNoVncUrl
             ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
             : "",
@@ -430,15 +431,6 @@ export function buildAgentSystemPrompt(params: {
             : params.sandboxInfo.hostBrowserAllowed === false
               ? "Host browser control: blocked."
               : "",
-          params.sandboxInfo.allowedControlUrls?.length
-            ? `Browser control URL allowlist: ${params.sandboxInfo.allowedControlUrls.join(", ")}`
-            : "",
-          params.sandboxInfo.allowedControlHosts?.length
-            ? `Browser control host allowlist: ${params.sandboxInfo.allowedControlHosts.join(", ")}`
-            : "",
-          params.sandboxInfo.allowedControlPorts?.length
-            ? `Browser control port allowlist: ${params.sandboxInfo.allowedControlPorts.join(", ")}`
-            : "",
           params.sandboxInfo.elevated?.allowed
             ? "Elevated exec is available for this session."
             : "",
@@ -461,7 +453,7 @@ export function buildAgentSystemPrompt(params: {
       userTimezone,
     }),
     "## Workspace Files (injected)",
-    "These user-editable files are loaded by Clawdbot and included below in Project Context.",
+    "These user-editable files are loaded by Moltbot and included below in Project Context.",
     "",
     ...buildReplyTagsSection(isMinimal),
     ...buildMessagingSection({
@@ -552,7 +544,7 @@ export function buildAgentSystemPrompt(params: {
       heartbeatPromptLine,
       "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
       "HEARTBEAT_OK",
-      'Clawdbot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
+      'Moltbot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
       'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
       "",
     );

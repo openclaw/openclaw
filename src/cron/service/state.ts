@@ -1,5 +1,12 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "../types.js";
+import type {
+  CronDeliveryMode,
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronOrigin,
+  CronStoreFile,
+} from "../types.js";
 
 export type CronEvent = {
   jobId: string;
@@ -24,7 +31,16 @@ export type CronServiceDeps = {
   log: Logger;
   storePath: string;
   cronEnabled: boolean;
-  enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => void;
+  enqueueSystemEvent: (
+    text: string,
+    opts?: {
+      agentId?: string;
+      /** Origin context for routing replies back to where the job was created */
+      origin?: CronOrigin;
+      /** Delivery mode: "origin" (default) or "current" */
+      deliveryMode?: CronDeliveryMode;
+    },
+  ) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
   runHeartbeatOnce?: (opts?: { reason?: string }) => Promise<HeartbeatRunResult>;
   runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{

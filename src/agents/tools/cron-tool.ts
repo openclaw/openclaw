@@ -42,6 +42,13 @@ const CronToolSchema = Type.Object({
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  /** Origin context for routing cron job replies back to where the job was created */
+  originContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
 };
 
 type ChatMessage = {
@@ -208,6 +215,18 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               : undefined;
             if (agentId) {
               (job as { agentId?: string }).agentId = agentId;
+            }
+          }
+          // Inject origin context for reply routing (unless already specified)
+          if (job && typeof job === "object" && !("origin" in job) && opts?.originContext) {
+            const origin: Record<string, unknown> = {};
+            if (opts.originContext.channel) origin.channel = opts.originContext.channel;
+            if (opts.originContext.to) origin.to = opts.originContext.to;
+            if (opts.originContext.accountId) origin.accountId = opts.originContext.accountId;
+            if (opts.originContext.threadId != null) origin.threadId = opts.originContext.threadId;
+            if (opts.agentSessionKey) origin.sessionKey = opts.agentSessionKey;
+            if (Object.keys(origin).length > 0) {
+              (job as { origin?: Record<string, unknown> }).origin = origin;
             }
           }
           const contextMessages =

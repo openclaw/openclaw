@@ -95,6 +95,8 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     state: {
       ...input.state,
     },
+    origin: input.origin,
+    deliveryMode: input.deliveryMode,
   };
   assertSupportedJobSpec(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
@@ -115,6 +117,8 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
+  if (patch.origin) job.origin = patch.origin;
+  if (patch.deliveryMode) job.deliveryMode = patch.deliveryMode;
   assertSupportedJobSpec(job);
 }
 
