@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
 
+import { registerChild } from "../infra/child-registry.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -263,6 +264,9 @@ export async function launchClawdChrome(
   }
 
   const proc = spawnOnce();
+  // Register with child registry (managedExternally: true because browser has its own close logic)
+  // Note: Only register the main proc, NOT the bootstrap process (which is short-lived)
+  registerChild("chrome-browser", proc, { managedExternally: true });
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {

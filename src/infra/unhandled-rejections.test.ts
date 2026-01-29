@@ -127,3 +127,63 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(false);
   });
 });
+
+describe("isTransientNetworkError - expanded patterns", () => {
+  it("recognizes EAI_NODATA as transient", () => {
+    const err = { code: "EAI_NODATA", message: "DNS lookup failed" };
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+
+  it("recognizes EAI_NONAME as transient", () => {
+    const err = { code: "EAI_NONAME", message: "DNS name not found" };
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+
+  it("recognizes HTTP 502 as transient", () => {
+    const err = { status: 502, message: "Bad Gateway" };
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+
+  it("recognizes HTTP 503 as transient", () => {
+    const err = { statusCode: 503, message: "Service Unavailable" };
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+
+  it("recognizes HTTP 429 rate limit as transient", () => {
+    const err = { status: 429, message: "Too Many Requests" };
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+
+  it("recognizes socket closed message as transient", () => {
+    const err = new Error("socket closed unexpectedly");
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+
+  it("recognizes client network socket disconnected as transient", () => {
+    const err = new Error("Client network socket disconnected before secure TLS connection");
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+
+  it("recognizes TLS certificate errors as transient", () => {
+    const err1 = { code: "CERT_HAS_EXPIRED", message: "certificate has expired" };
+    expect(isTransientNetworkError(err1)).toBe(true);
+
+    const err2 = { code: "ERR_TLS_CERT_ALTNAME_INVALID", message: "Hostname mismatch" };
+    expect(isTransientNetworkError(err2)).toBe(true);
+  });
+
+  it("does not recognize HTTP 400 as transient", () => {
+    const err = { status: 400, message: "Bad Request" };
+    expect(isTransientNetworkError(err)).toBe(false);
+  });
+
+  it("does not recognize HTTP 401 as transient", () => {
+    const err = { status: 401, message: "Unauthorized" };
+    expect(isTransientNetworkError(err)).toBe(false);
+  });
+
+  it("handles string status codes", () => {
+    const err = { status: "503", message: "Service Unavailable" };
+    expect(isTransientNetworkError(err)).toBe(true);
+  });
+});

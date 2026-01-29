@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 
+import { registerChild } from "./child-registry.js";
 import { ensurePortAvailable } from "./ports.js";
 
 export type SshParsedTarget = {
@@ -145,6 +146,8 @@ export async function startSshPortForward(opts: {
   const child = spawn("/usr/bin/ssh", args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
+  // Register with child registry (managedExternally: true because tunnel has its own stop logic)
+  registerChild("ssh-tunnel", child, { managedExternally: true });
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk) => {
     const lines = String(chunk)

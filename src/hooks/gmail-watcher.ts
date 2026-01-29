@@ -8,6 +8,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { hasBinary } from "../agents/skills.js";
 import type { MoltbotConfig } from "../config/config.js";
+import { registerChild } from "../infra/child-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -72,6 +73,9 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
   });
+
+  // Register with child registry (managedExternally: true because we have our own stop logic)
+  registerChild("gog-gmail-watcher", child, { managedExternally: true });
 
   child.stdout?.on("data", (data: Buffer) => {
     const line = data.toString().trim();

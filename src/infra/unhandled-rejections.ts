@@ -28,6 +28,10 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "EHOSTUNREACH",
   "ENETUNREACH",
   "EAI_AGAIN",
+  "EAI_NODATA",
+  "EAI_NONAME",
+  "CERT_HAS_EXPIRED",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_DNS_RESOLVE_FAILED",
   "UND_ERR_CONNECT",
@@ -97,6 +101,34 @@ export function isTransientNetworkError(err: unknown): boolean {
   // AggregateError may wrap multiple causes
   if (err instanceof AggregateError && err.errors?.length) {
     return err.errors.some((e) => isTransientNetworkError(e));
+  }
+
+  // Message-based fallback detection
+  const message = err instanceof Error ? err.message?.toLowerCase() : "";
+  if (
+    message.includes("fetch failed") ||
+    message.includes("network error") ||
+    message.includes("socket hang up") ||
+    message.includes("socket closed") ||
+    message.includes("client network socket disconnected")
+  ) {
+    return true;
+  }
+
+  // Check for transient HTTP error responses (handle both number and string status codes)
+  const statusRaw =
+    (err as { status?: unknown }).status ?? (err as { statusCode?: unknown }).statusCode;
+  const status =
+    typeof statusRaw === "number"
+      ? statusRaw
+      : typeof statusRaw === "string"
+        ? parseInt(statusRaw, 10)
+        : NaN;
+  if (
+    Number.isFinite(status) &&
+    (status === 429 || status === 502 || status === 503 || status === 504)
+  ) {
+    return true;
   }
 
   return false;
