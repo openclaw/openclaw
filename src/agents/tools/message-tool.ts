@@ -87,6 +87,30 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
         },
       ),
     ),
+    embeds: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {},
+          {
+            additionalProperties: true,
+            description:
+              "Provider-specific embed objects (Discord embeds, etc.). Passed through to the channel adapter when supported.",
+          },
+        ),
+      ),
+    ),
+    components: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {},
+          {
+            additionalProperties: true,
+            description:
+              "Provider-specific message components (Discord buttons/selects, etc.). Passed through when supported.",
+          },
+        ),
+      ),
+    ),
   };
   if (!options.includeButtons) delete props.buttons;
   if (!options.includeCards) delete props.card;

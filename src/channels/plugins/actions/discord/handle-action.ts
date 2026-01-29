@@ -37,6 +37,7 @@ export async function handleDiscordMessageAction(
     const mediaUrl = readStringParam(params, "media", { trim: false });
     const replyTo = readStringParam(params, "replyTo");
     const embeds = Array.isArray(params.embeds) ? params.embeds : undefined;
+    const components = Array.isArray(params.components) ? params.components : undefined;
     return await handleDiscordAction(
       {
         action: "sendMessage",
@@ -46,6 +47,7 @@ export async function handleDiscordMessageAction(
         mediaUrl: mediaUrl ?? undefined,
         replyTo: replyTo ?? undefined,
         embeds,
+        components,
       },
       cfg,
     );
