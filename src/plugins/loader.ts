@@ -10,6 +10,7 @@ import { resolveUserPath } from "../utils.js";
 import { discoverMoltbotPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
+  applyTestPluginDefaults,
   normalizePluginsConfig,
   resolveEnableState,
   resolveMemorySlotDecision,
@@ -162,7 +163,7 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
 }
 
 export function loadMoltbotPlugins(options: PluginLoadOptions = {}): PluginRegistry {
-  const cfg = options.config ?? {};
+  const cfg = applyTestPluginDefaults(options.config ?? {});
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const normalized = normalizePluginsConfig(cfg.plugins);
