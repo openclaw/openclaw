@@ -4,7 +4,22 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { chunkMarkdown, listMemoryFiles } from "./internal.js";
+import { chunkMarkdown, listMemoryFiles, normalizeExtraMemoryPaths } from "./internal.js";
+
+describe("normalizeExtraMemoryPaths", () => {
+  it("trims, resolves, and dedupes paths", () => {
+    const workspaceDir = path.join(os.tmpdir(), "memory-test-workspace");
+    const absPath = path.resolve(path.sep, "shared-notes");
+    const result = normalizeExtraMemoryPaths(workspaceDir, [
+      " notes ",
+      "./notes",
+      absPath,
+      absPath,
+      "",
+    ]);
+    expect(result).toEqual([path.resolve(workspaceDir, "notes"), absPath]);
+  });
+});
 
 describe("listMemoryFiles", () => {
   let tmpDir: string;
@@ -18,10 +33,7 @@ describe("listMemoryFiles", () => {
   });
 
   it("includes files from additional paths (directory)", async () => {
-    // Create default memory file
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
-
-    // Create additional directory with files
     const extraDir = path.join(tmpDir, "extra-notes");
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "note1.md"), "# Note 1");
@@ -29,11 +41,11 @@ describe("listMemoryFiles", () => {
     await fs.writeFile(path.join(extraDir, "ignore.txt"), "Not a markdown file");
 
     const files = await listMemoryFiles(tmpDir, [extraDir]);
-    expect(files).toHaveLength(3); // MEMORY.md + 2 notes
-    expect(files.some((f) => f.endsWith("MEMORY.md"))).toBe(true);
-    expect(files.some((f) => f.endsWith("note1.md"))).toBe(true);
-    expect(files.some((f) => f.endsWith("note2.md"))).toBe(true);
-    expect(files.some((f) => f.endsWith("ignore.txt"))).toBe(false);
+    expect(files).toHaveLength(3);
+    expect(files.some((file) => file.endsWith("MEMORY.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("note1.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("note2.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("ignore.txt"))).toBe(false);
   });
 
   it("includes files from additional paths (single file)", async () => {
@@ -43,7 +55,7 @@ describe("listMemoryFiles", () => {
 
     const files = await listMemoryFiles(tmpDir, [singleFile]);
     expect(files).toHaveLength(2);
-    expect(files.some((f) => f.endsWith("standalone.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
   });
 
   it("handles relative paths in additional paths", async () => {
@@ -52,10 +64,9 @@ describe("listMemoryFiles", () => {
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "nested.md"), "# Nested");
 
-    // Use relative path
     const files = await listMemoryFiles(tmpDir, ["subdir"]);
     expect(files).toHaveLength(2);
-    expect(files.some((f) => f.endsWith("nested.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("nested.md"))).toBe(true);
   });
 
   it("ignores non-existent additional paths", async () => {
@@ -63,6 +74,42 @@ describe("listMemoryFiles", () => {
 
     const files = await listMemoryFiles(tmpDir, ["/does/not/exist"]);
     expect(files).toHaveLength(1);
+  });
+
+  it("ignores symlinked files and directories", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const extraDir = path.join(tmpDir, "extra");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "note.md"), "# Note");
+
+    const targetFile = path.join(tmpDir, "target.md");
+    await fs.writeFile(targetFile, "# Target");
+    const linkFile = path.join(extraDir, "linked.md");
+
+    const targetDir = path.join(tmpDir, "target-dir");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(targetDir, "nested.md"), "# Nested");
+    const linkDir = path.join(tmpDir, "linked-dir");
+
+    let symlinksOk = true;
+    try {
+      await fs.symlink(targetFile, linkFile, "file");
+      await fs.symlink(targetDir, linkDir, "dir");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        symlinksOk = false;
+      } else {
+        throw err;
+      }
+    }
+
+    const files = await listMemoryFiles(tmpDir, [extraDir, linkDir]);
+    expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
+    if (symlinksOk) {
+      expect(files.some((file) => file.endsWith("linked.md"))).toBe(false);
+      expect(files.some((file) => file.endsWith("nested.md"))).toBe(false);
+    }
   });
 });
 
