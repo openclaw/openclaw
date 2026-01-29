@@ -1,6 +1,10 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCommand } from "../../commands/sessions.js";
+import {
+  sessionsBookmarkCommand,
+  sessionsSearchCommand,
+} from "../../commands/sessions-search.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -142,5 +146,63 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         },
         defaultRuntime,
       );
+    });
+
+  program
+    .command("search")
+    .description("Full-text search across session transcripts")
+    .argument("<query>", "Search query")
+    .option("--agent <id>", "Filter to a specific agent")
+    .option("--channel <name>", "Filter by channel (e.g. telegram, discord)")
+    .option("--since <period>", "Only search messages after this time (e.g. 1h, 2d, 30m, 2024-01-01)")
+    .option("--limit <n>", "Maximum results to return", "50")
+    .option("--json", "Output as JSON", false)
+    .option("--bookmarks", "List bookmarked messages instead of searching", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ['moltbot search "API key"', "Search all transcripts for 'API key'."],
+          ['moltbot search "deploy" --agent pi', "Search only the pi agent."],
+          ['moltbot search "error" --since 1d', "Errors in the last 24 hours."],
+          ['moltbot search "meeting" --channel telegram', "Search Telegram messages."],
+          ['moltbot search "bug" --limit 10 --json', "JSON output, max 10 results."],
+          ["moltbot search --bookmarks", "List all bookmarked messages."],
+        ])}`,
+    )
+    .action(async (query, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsSearchCommand(
+          {
+            query: String(query),
+            agent: opts.agent as string | undefined,
+            channel: opts.channel as string | undefined,
+            since: opts.since as string | undefined,
+            limit: opts.limit ? Number.parseInt(String(opts.limit), 10) : 50,
+            json: Boolean(opts.json),
+            bookmarks: Boolean(opts.bookmarks),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  program
+    .command("bookmark")
+    .description("Manage message bookmarks")
+    .option("--add <ref>", "Bookmark a message (format: agentId:sessionKey:lineNumber)")
+    .option("--remove <ref>", "Remove a bookmark")
+    .option("--list", "List all bookmarks", true)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsBookmarkCommand(
+          {
+            add: opts.add as string | undefined,
+            remove: opts.remove as string | undefined,
+            list: true,
+          },
+          defaultRuntime,
+        );
+      });
     });
 }

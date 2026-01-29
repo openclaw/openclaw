@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { agentsListCommand } from "../../commands/agents.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCommand } from "../../commands/sessions.js";
+import { sessionsSearchCommand } from "../../commands/sessions-search.js";
 import { statusCommand } from "../../commands/status.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getFlagValue, getPositiveIntFlagValue, getVerboseFlag, hasFlag } from "../argv.js";
@@ -10,6 +11,8 @@ import { registerBrowserCli } from "../browser-cli.js";
 import { registerConfigCli } from "../config-cli.js";
 import { registerMemoryCli, runMemoryStatus } from "../memory-cli.js";
 import { registerAgentCommands } from "./register.agent.js";
+import { registerBackupCommands } from "./register.backup.js";
+import { registerNotificationsCommands } from "./register.notifications.js";
 import { registerConfigureCommand } from "./register.configure.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 import { registerMessageCommands } from "./register.message.js";
@@ -17,6 +20,7 @@ import { registerOnboardCommand } from "./register.onboard.js";
 import { registerSetupCommand } from "./register.setup.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 import { registerSubCliCommands } from "./register.subclis.js";
+import { registerTemplatesCommands } from "./register.templates.js";
 import type { ProgramContext } from "./context.js";
 
 type CommandRegisterParams = {
@@ -89,6 +93,39 @@ const routeAgentsList: RouteSpec = {
   },
 };
 
+const routeSearch: RouteSpec = {
+  match: (path) => path[0] === "search",
+  run: async (argv) => {
+    const json = hasFlag(argv, "--json");
+    const agent = getFlagValue(argv, "--agent");
+    if (agent === null) return false;
+    const channel = getFlagValue(argv, "--channel");
+    if (channel === null) return false;
+    const since = getFlagValue(argv, "--since");
+    if (since === null) return false;
+    const limitRaw = getFlagValue(argv, "--limit");
+    if (limitRaw === null) return false;
+    const limit = limitRaw ? Number.parseInt(limitRaw, 10) : 50;
+    const bookmarks = hasFlag(argv, "--bookmarks");
+    // Extract positional query argument (first non-flag arg after "search")
+    const searchIdx = argv.indexOf("search");
+    let query = "";
+    if (searchIdx >= 0) {
+      for (let i = searchIdx + 1; i < argv.length; i++) {
+        if (!argv[i].startsWith("-")) {
+          query = argv[i];
+          break;
+        }
+      }
+    }
+    await sessionsSearchCommand(
+      { query, agent, channel, since, limit, json, bookmarks },
+      defaultRuntime,
+    );
+    return true;
+  },
+};
+
 const routeMemoryStatus: RouteSpec = {
   match: (path) => path[0] === "memory" && path[1] === "status",
   run: async (argv) => {
@@ -146,11 +183,23 @@ export const commandRegistry: CommandRegistration[] = [
   {
     id: "status-health-sessions",
     register: ({ program }) => registerStatusHealthSessionsCommands(program),
-    routes: [routeHealth, routeStatus, routeSessions],
+    routes: [routeHealth, routeStatus, routeSessions, routeSearch],
   },
   {
     id: "browser",
     register: ({ program }) => registerBrowserCli(program),
+  },
+  {
+    id: "templates",
+    register: ({ program }) => registerTemplatesCommands(program),
+  },
+  {
+    id: "backup",
+    register: ({ program }) => registerBackupCommands(program),
+  },
+  {
+    id: "notifications",
+    register: ({ program }) => registerNotificationsCommands(program),
   },
 ];
 
