@@ -46,6 +46,7 @@ import { normalizeUsage, type UsageLike } from "../usage.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { checkProactiveCompaction } from "./proactive-compaction.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
@@ -293,9 +294,63 @@ export async function runEmbeddedPiAgent(
       }
 
       let overflowCompactionAttempted = false;
+      let proactiveCompactionAttempted = false;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
+
+          // Proactive compaction: check before sending if near context limit
+          const proactiveEnabled =
+            params.config?.agents?.defaults?.compaction?.proactiveEnabled ?? true;
+          if (proactiveEnabled && !overflowCompactionAttempted && !proactiveCompactionAttempted) {
+            const proactiveCheck = await checkProactiveCompaction({
+              sessionFile: params.sessionFile,
+              contextTokens: ctxInfo.tokens,
+              config: params.config,
+              promptTokenEstimate: Math.ceil(params.prompt.length / 4),
+            });
+
+            if (proactiveCheck.shouldCompact) {
+              log.info(
+                `proactive compaction triggered: estimated=${proactiveCheck.estimatedTokens} ` +
+                  `threshold=${proactiveCheck.threshold} for ${provider}/${modelId}`,
+              );
+              proactiveCompactionAttempted = true;
+
+              const compactResult = await compactEmbeddedPiSessionDirect({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                messageChannel: params.messageChannel,
+                messageProvider: params.messageProvider,
+                agentAccountId: params.agentAccountId,
+                authProfileId: lastProfileId,
+                sessionFile: params.sessionFile,
+                workspaceDir: params.workspaceDir,
+                agentDir,
+                config: params.config,
+                skillsSnapshot: params.skillsSnapshot,
+                provider,
+                model: modelId,
+                thinkLevel,
+                reasoningLevel: params.reasoningLevel,
+                bashElevated: params.bashElevated,
+                extraSystemPrompt: params.extraSystemPrompt,
+                ownerNumbers: params.ownerNumbers,
+              });
+
+              if (compactResult.compacted) {
+                log.info(
+                  `proactive compaction succeeded: tokensBefore=${compactResult.result?.tokensBefore} ` +
+                    `tokensAfter=${compactResult.result?.tokensAfter}`,
+                );
+              } else {
+                log.warn(
+                  `proactive compaction skipped: ${compactResult.reason ?? "nothing to compact"}`,
+                );
+              }
+            }
+          }
+
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
           const prompt =

@@ -100,6 +100,8 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        proactiveEnabled: z.boolean().optional(),
+        proactiveThresholdRatio: z.number().min(0.5).max(0.95).optional(),
       })
       .strict()
       .optional(),
