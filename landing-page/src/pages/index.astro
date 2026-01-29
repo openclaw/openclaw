@@ -1,0 +1,303 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="DNA — Your AI, Everywhere You Chat">
+  <!-- Header -->
+  <header class="fixed top-0 left-0 right-0 z-50 backdrop-blur-md bg-[#0F0D15]/80 border-b border-white/5">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <a href="/" class="text-2xl font-bold gradient-text">DNA</a>
+      <nav class="hidden md:flex items-center gap-8">
+        <a href="#features" class="text-sm text-gray-400 hover:text-white transition">Features</a>
+        <a href="#demo" class="text-sm text-gray-400 hover:text-white transition">Demo</a>
+        <a href="https://github.com/vanek-nutic/dna/tree/main/docs" class="text-sm text-gray-400 hover:text-white transition">Docs</a>
+        <a href="https://github.com/vanek-nutic/dna" class="text-sm text-gray-400 hover:text-white transition">GitHub</a>
+      </nav>
+      <a href="https://github.com/vanek-nutic/dna#-quick-start" class="btn-primary text-sm">Get Started →</a>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="pt-32 pb-20 px-6">
+    <div class="max-w-4xl mx-auto text-center">
+      <div class="inline-block mb-6 px-4 py-2 rounded-full text-sm bg-white/5 border border-white/10">
+        ✨ Open Source • MIT License
+      </div>
+      <h1 class="text-5xl md:text-7xl font-bold mb-6 leading-tight">
+        Your AI, <span class="gradient-text">Everywhere</span> You Chat
+      </h1>
+      <p class="text-xl text-gray-400 mb-10 max-w-2xl mx-auto">
+        One AI assistant. WhatsApp. Telegram. Discord. Persistent memory. Your machine.
+      </p>
+      <div class="flex flex-wrap gap-4 justify-center">
+        <a href="https://github.com/vanek-nutic/dna#-quick-start" class="btn-primary text-lg">
+          Get Started Free
+        </a>
+        <a href="#demo" class="btn-secondary text-lg">
+          Watch Demo →
+        </a>
+      </div>
+    </div>
+    
+    <!-- Hero Image Placeholder -->
+    <div class="max-w-5xl mx-auto mt-16">
+      <div class="aspect-video rounded-xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-white/10 flex items-center justify-center">
+        <span class="text-gray-500">[ Product Screenshot ]</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Trust Block -->
+  <section class="py-12 px-6 border-y border-white/5">
+    <div class="max-w-4xl mx-auto flex flex-wrap items-center justify-center gap-8 md:gap-16 text-center">
+      <div>
+        <div class="text-3xl font-bold gradient-text">60+</div>
+        <div class="text-sm text-gray-500">Built-in Skills</div>
+      </div>
+      <div>
+        <div class="text-3xl font-bold gradient-text">6</div>
+        <div class="text-sm text-gray-500">Platforms Supported</div>
+      </div>
+      <div>
+        <div class="text-3xl font-bold gradient-text">100%</div>
+        <div class="text-sm text-gray-500">Self-Hosted</div>
+      </div>
+      <div>
+        <div class="text-3xl font-bold gradient-text">MIT</div>
+        <div class="text-sm text-gray-500">Open Source</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="py-24 px-6">
+    <div class="max-w-6xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl font-bold mb-4">Everything You Need</h2>
+        <p class="text-gray-400 max-w-2xl mx-auto">DNA combines the power of modern AI with the convenience of your favorite messaging apps.</p>
+      </div>
+      
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- Feature 1 -->
+        <div class="card transition-all duration-300">
+          <div class="text-3xl mb-4">📱</div>
+          <h3 class="text-xl font-semibold mb-2">Multi-Platform</h3>
+          <p class="text-gray-400">WhatsApp, Telegram, Discord, Slack, Signal, and iMessage. Chat where you already are.</p>
+        </div>
+        
+        <!-- Feature 2 -->
+        <div class="card transition-all duration-300">
+          <div class="text-3xl mb-4">🧠</div>
+          <h3 class="text-xl font-semibold mb-2">Persistent Memory</h3>
+          <p class="text-gray-400">Remembers context across conversations. Days, weeks, months — it never forgets.</p>
+        </div>
+        
+        <!-- Feature 3 -->
+        <div class="card transition-all duration-300">
+          <div class="text-3xl mb-4">🛠️</div>
+          <h3 class="text-xl font-semibold mb-2">60+ Skills</h3>
+          <p class="text-gray-400">GitHub, Google Calendar, Notion, weather, and more. Extend with your own skills.</p>
+        </div>
+        
+        <!-- Feature 4 -->
+        <div class="card transition-all duration-300">
+          <div class="text-3xl mb-4">💻</div>
+          <h3 class="text-xl font-semibold mb-2">Built-in IDE</h3>
+          <p class="text-gray-400">AI-powered code editor with inline editing, agent mode, and project awareness.</p>
+        </div>
+        
+        <!-- Feature 5 -->
+        <div class="card transition-all duration-300">
+          <div class="text-3xl mb-4">🔒</div>
+          <h3 class="text-xl font-semibold mb-2">Privacy-First</h3>
+          <p class="text-gray-400">Runs on YOUR machine. Your data never leaves your computer.</p>
+        </div>
+        
+        <!-- Feature 6 -->
+        <div class="card transition-all duration-300">
+          <div class="text-3xl mb-4">🎨</div>
+          <h3 class="text-xl font-semibold mb-2">Fully Customizable</h3>
+          <p class="text-gray-400">Choose your AI model, customize personality, add your own tools.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Demo Section -->
+  <section id="demo" class="py-24 px-6 bg-white/[0.02]">
+    <div class="max-w-4xl mx-auto text-center">
+      <h2 class="text-4xl font-bold mb-4">See DNA in Action</h2>
+      <p class="text-gray-400 mb-12">Watch how DNA works across platforms</p>
+      
+      <!-- Video Placeholder -->
+      <div class="aspect-video rounded-xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-white/10 flex items-center justify-center">
+        <span class="text-gray-500">[ Demo Video Coming Soon ]</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section class="py-24 px-6">
+    <div class="max-w-4xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl font-bold mb-4">Get Started in 5 Minutes</h2>
+        <p class="text-gray-400">No complicated setup. Just clone, configure, and chat.</p>
+      </div>
+      
+      <div class="grid md:grid-cols-4 gap-8">
+        <div class="text-center">
+          <div class="w-12 h-12 rounded-full gradient-bg flex items-center justify-center text-xl font-bold mx-auto mb-4">1</div>
+          <h3 class="font-semibold mb-2">Clone</h3>
+          <p class="text-sm text-gray-500">Clone the repository</p>
+        </div>
+        <div class="text-center">
+          <div class="w-12 h-12 rounded-full gradient-bg flex items-center justify-center text-xl font-bold mx-auto mb-4">2</div>
+          <h3 class="font-semibold mb-2">Setup</h3>
+          <p class="text-sm text-gray-500">Run wizard, add API key</p>
+        </div>
+        <div class="text-center">
+          <div class="w-12 h-12 rounded-full gradient-bg flex items-center justify-center text-xl font-bold mx-auto mb-4">3</div>
+          <h3 class="font-semibold mb-2">Connect</h3>
+          <p class="text-sm text-gray-500">Scan QR for WhatsApp</p>
+        </div>
+        <div class="text-center">
+          <div class="w-12 h-12 rounded-full gradient-bg flex items-center justify-center text-xl font-bold mx-auto mb-4">4</div>
+          <h3 class="font-semibold mb-2">Chat</h3>
+          <p class="text-sm text-gray-500">Start chatting!</p>
+        </div>
+      </div>
+      
+      <!-- Code Block -->
+      <div class="mt-12 rounded-xl bg-[#0a0a0f] border border-white/10 overflow-hidden">
+        <div class="px-4 py-2 border-b border-white/10 flex items-center gap-2">
+          <div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+          <div class="w-3 h-3 rounded-full bg-yellow-500/50"></div>
+          <div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+          <span class="text-xs text-gray-500 ml-2">Terminal</span>
+        </div>
+        <pre class="p-6 text-sm overflow-x-auto"><code class="text-gray-300"><span class="text-gray-500">$</span> git clone https://github.com/vanek-nutic/dna.git
+<span class="text-gray-500">$</span> cd dna && npm install && npm run build
+<span class="text-gray-500">$</span> ./dna.mjs wizard
+
+<span class="text-green-400">✓</span> Select provider: Anthropic
+<span class="text-green-400">✓</span> API key saved to keychain
+<span class="text-green-400">✓</span> WhatsApp connected
+<span class="text-green-400">✓</span> DNA is ready!</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="py-24 px-6 bg-white/[0.02]">
+    <div class="max-w-3xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl font-bold mb-4">Frequently Asked Questions</h2>
+      </div>
+      
+      <div class="space-y-4">
+        <details class="card group">
+          <summary class="cursor-pointer font-semibold flex items-center justify-between">
+            What is DNA?
+            <span class="text-gray-500 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-4 text-gray-400">DNA is a self-hosted AI assistant that connects to your messaging apps (WhatsApp, Telegram, Discord) and maintains persistent memory across conversations. Unlike ChatGPT or Claude's web interfaces, DNA remembers your context over time.</p>
+        </details>
+        
+        <details class="card group">
+          <summary class="cursor-pointer font-semibold flex items-center justify-between">
+            Is DNA free?
+            <span class="text-gray-500 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-4 text-gray-400">DNA itself is free and open source (MIT license). You only pay for AI API usage — typically $5-20/month depending on your usage. You can also use free local models with Ollama.</p>
+        </details>
+        
+        <details class="card group">
+          <summary class="cursor-pointer font-semibold flex items-center justify-between">
+            Is my data private?
+            <span class="text-gray-500 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-4 text-gray-400">Yes. DNA runs on YOUR machine. Your conversations, memory files, and API keys never leave your computer (except to call the AI provider API). There's no telemetry or tracking.</p>
+        </details>
+        
+        <details class="card group">
+          <summary class="cursor-pointer font-semibold flex items-center justify-between">
+            What AI models are supported?
+            <span class="text-gray-500 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-4 text-gray-400">DNA supports Anthropic (Claude), OpenAI (GPT-4), Google (Gemini), OpenRouter (100+ models), and Ollama (local models). Switch models anytime.</p>
+        </details>
+        
+        <details class="card group">
+          <summary class="cursor-pointer font-semibold flex items-center justify-between">
+            Do I need to know how to code?
+            <span class="text-gray-500 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-4 text-gray-400">No. If you can copy-paste commands into a terminal, you can run DNA. The setup wizard guides you through everything in about 5 minutes.</p>
+        </details>
+        
+        <details class="card group">
+          <summary class="cursor-pointer font-semibold flex items-center justify-between">
+            What's the DNA IDE?
+            <span class="text-gray-500 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-4 text-gray-400">DNA includes a full-featured browser-based code editor with AI built in. It features inline code editing (Cmd+K), agent mode for autonomous changes, integrated terminal, Git support, and memory integration.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="py-24 px-6">
+    <div class="max-w-4xl mx-auto text-center">
+      <h2 class="text-4xl font-bold mb-4">Ready to Try DNA?</h2>
+      <p class="text-gray-400 mb-10">Free and open source. Get started in 5 minutes.</p>
+      <div class="flex flex-wrap gap-4 justify-center">
+        <a href="https://github.com/vanek-nutic/dna#-quick-start" class="btn-primary text-lg">
+          Get Started
+        </a>
+        <a href="https://github.com/vanek-nutic/dna/tree/main/docs" class="btn-secondary text-lg">
+          Read the Docs
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="py-12 px-6 border-t border-white/5">
+    <div class="max-w-6xl mx-auto">
+      <div class="grid md:grid-cols-4 gap-8 mb-12">
+        <div>
+          <div class="text-2xl font-bold gradient-text mb-4">DNA</div>
+          <p class="text-sm text-gray-500">Your AI, everywhere you chat.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold mb-4">Documentation</h4>
+          <ul class="space-y-2 text-sm text-gray-500">
+            <li><a href="https://github.com/vanek-nutic/dna/blob/main/docs/quickstart.md" class="hover:text-white transition">Quick Start</a></li>
+            <li><a href="https://github.com/vanek-nutic/dna/blob/main/docs/installation.md" class="hover:text-white transition">Installation</a></li>
+            <li><a href="https://github.com/vanek-nutic/dna/blob/main/docs/configuration.md" class="hover:text-white transition">Configuration</a></li>
+            <li><a href="https://github.com/vanek-nutic/dna/blob/main/docs/skills.md" class="hover:text-white transition">Skills</a></li>
+            <li><a href="https://github.com/vanek-nutic/dna/blob/main/docs/faq.md" class="hover:text-white transition">FAQ</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold mb-4">Community</h4>
+          <ul class="space-y-2 text-sm text-gray-500">
+            <li><a href="https://github.com/vanek-nutic/dna" class="hover:text-white transition">GitHub</a></li>
+            <li><a href="https://github.com/vanek-nutic/dna/issues" class="hover:text-white transition">Issues</a></li>
+            <li><a href="https://github.com/vanek-nutic/dna/discussions" class="hover:text-white transition">Discussions</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold mb-4">Legal</h4>
+          <ul class="space-y-2 text-sm text-gray-500">
+            <li><a href="https://github.com/vanek-nutic/dna/blob/main/LICENSE" class="hover:text-white transition">MIT License</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="pt-8 border-t border-white/5 text-center text-sm text-gray-500">
+        © 2026 DNA. Open source under MIT License.
+      </div>
+    </div>
+  </footer>
+</Layout>
