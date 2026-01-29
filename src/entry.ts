@@ -5,11 +5,13 @@ import process from "node:process";
 
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isTruthyEnvValue } from "./infra/env.js";
+import { installGlobalFetchSanitizer } from "./infra/fetch.js";
 import { installProcessWarningFilter } from "./infra/warnings.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 process.title = "moltbot";
 installProcessWarningFilter();
+installGlobalFetchSanitizer();
 
 if (process.argv.includes("--no-color")) {
   process.env.NO_COLOR = "1";
