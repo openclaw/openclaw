@@ -41,6 +41,17 @@ export type DiscordGuildChannelConfig = {
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
+export type DiscordReactionTriggerConfig = {
+  /** Enable reaction triggers on bot messages. Default: false. */
+  enabled?: boolean;
+  /** Time window in seconds for valid reactions after bot message. Default: 60. */
+  windowSeconds?: number;
+  /** Positive reaction emojis that trigger affirmative action. */
+  positiveEmojis?: string[];
+  /** Negative reaction emojis that trigger negative action. */
+  negativeEmojis?: string[];
+};
+
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
@@ -49,6 +60,8 @@ export type DiscordGuildEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
+  /** Reaction trigger configuration for bot message responses. */
+  reactionTrigger?: DiscordReactionTriggerConfig;
   users?: Array<string | number>;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };

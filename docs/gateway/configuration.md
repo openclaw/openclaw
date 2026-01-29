@@ -1090,6 +1090,12 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
           slug: "friends-of-clawd",
           requireMention: false,              // per-guild default
           reactionNotifications: "own",       // off | own | all | allowlist
+          reactionTrigger: {                  // optional: turn reactions on bot messages into session triggers
+            enabled: true,
+            windowSeconds: 60,
+            positiveEmojis: ["👍", "✅", "👌"],
+            negativeEmojis: ["👎", "❌"]
+          },
           users: ["987654321098765432"],      // optional per-guild user allowlist
           channels: {
             general: { allow: true },
@@ -1121,11 +1127,12 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
 Moltbot starts Discord only when a `channels.discord` config section exists. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Bot-authored messages are ignored by default. Enable with `channels.discord.allowBots` (own messages are still filtered to prevent self-reply loops).
-Reaction notification modes:
+Reaction notification modes (`guilds.<id>.reactionNotifications`):
 - `off`: no reaction events.
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+Optional `guilds.<id>.reactionTrigger`: when enabled, positive/negative reactions on the bot's recent messages (within `windowSeconds`, default 60) dispatch an inbound message to the session instead of only emitting a system event. See [Discord](/channels/discord#reaction-trigger).
 Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Set `channels.discord.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking. Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 

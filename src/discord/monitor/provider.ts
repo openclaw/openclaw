@@ -3,10 +3,12 @@ import { Client } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { dispatchInboundMessageWithDispatcher } from "../../auto-reply/dispatch.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -518,6 +520,64 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   });
 
   registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
+
+  // Reaction trigger callback - dispatches to session when reaction trigger conditions are met
+  const onReactionTrigger: import("./listeners.js").ReactionTriggerCallback = async (params) => {
+    const {
+      channelId,
+      originalContent,
+      emoji,
+      sentiment,
+      userId,
+      userName,
+      client: triggerClient,
+    } = params;
+    const sentimentLabel = sentiment === "positive" ? "YES/확인" : "NO/거부";
+    const triggerMessage = `[리액션 응답: ${sentimentLabel}] ${userName}님이 ${emoji} 리액션으로 응답했습니다. 원본 메시지: "${originalContent.slice(0, 150)}${originalContent.length > 150 ? "..." : ""}"`;
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: account.accountId,
+      guildId: undefined, // Will be resolved from channel
+      peer: { kind: "channel", id: channelId },
+    });
+
+    // Fire-and-forget: don't await to avoid blocking the reaction listener
+    void dispatchInboundMessageWithDispatcher({
+      ctx: {
+        Body: triggerMessage,
+        BodyForAgent: triggerMessage,
+        SessionKey: route.sessionKey,
+        Provider: "discord",
+        Surface: "discord",
+        AccountId: account.accountId,
+        From: userName,
+        SenderName: userName,
+        SenderId: userId,
+        MessageSid: `reaction-trigger-${Date.now()}`,
+        ChatType: "group",
+      },
+      cfg,
+      dispatcherOptions: {
+        deliver: async (reply) => {
+          // Send reply to Discord channel
+          if (!reply.text) return;
+          try {
+            const channel = await triggerClient.fetchChannel(channelId);
+            if (channel && "send" in channel) {
+              await channel.send({ content: reply.text });
+            }
+          } catch (err) {
+            logger.error(danger(`reaction trigger reply failed: ${String(err)}`));
+          }
+        },
+      },
+    }).catch((err) => {
+      logger.error(danger(`reaction trigger dispatch failed: ${String(err)}`));
+    });
+  };
+
   registerDiscordListener(
     client.listeners,
     new DiscordReactionListener({
@@ -527,6 +587,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       botUserId,
       guildEntries,
       logger,
+      onReactionTrigger,
     }),
   );
   registerDiscordListener(
