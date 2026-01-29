@@ -18,9 +18,103 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
+  type DiscordReactionTriggerResolved,
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
+
+// ============================================================================
+// Reaction Trigger Support
+// ============================================================================
+
+// Cache of recent bot messages for reaction trigger feature
+// Key: channelId:messageId, Value: { timestamp, content }
+type BotMessageCacheEntry = {
+  timestamp: number;
+  content: string;
+  channelId: string;
+};
+
+const botMessageCache = new Map<string, BotMessageCacheEntry>();
+const BOT_MESSAGE_CACHE_MAX_SIZE = 1000;
+const BOT_MESSAGE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Default emoji classifications
+const DEFAULT_POSITIVE_EMOJIS = ["👍", "✅", "👌", "❤️", "🙌", "⭐", "🎉", "💯", "✔️", "🆗", "👏"];
+const DEFAULT_NEGATIVE_EMOJIS = ["👎", "❌", "🚫", "⛔", "🛑"];
+
+export function cacheBotMessage(params: { channelId: string; messageId: string; content: string }) {
+  const key = `${params.channelId}:${params.messageId}`;
+  botMessageCache.set(key, {
+    timestamp: Date.now(),
+    content: params.content,
+    channelId: params.channelId,
+  });
+
+  // Cleanup old entries
+  if (botMessageCache.size > BOT_MESSAGE_CACHE_MAX_SIZE) {
+    const now = Date.now();
+    for (const [k, v] of botMessageCache) {
+      if (now - v.timestamp > BOT_MESSAGE_CACHE_TTL_MS) {
+        botMessageCache.delete(k);
+      }
+    }
+  }
+}
+
+function getBotMessageFromCache(channelId: string, messageId: string): BotMessageCacheEntry | null {
+  const key = `${channelId}:${messageId}`;
+  const entry = botMessageCache.get(key);
+  if (!entry) return null;
+  // Check TTL
+  if (Date.now() - entry.timestamp > BOT_MESSAGE_CACHE_TTL_MS) {
+    botMessageCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+type ReactionSentiment = "positive" | "negative" | "neutral";
+
+function classifyReactionEmoji(
+  emoji: string,
+  config?: DiscordReactionTriggerResolved,
+): ReactionSentiment {
+  const positiveEmojis = config?.positiveEmojis ?? DEFAULT_POSITIVE_EMOJIS;
+  const negativeEmojis = config?.negativeEmojis ?? DEFAULT_NEGATIVE_EMOJIS;
+
+  if (positiveEmojis.includes(emoji)) return "positive";
+  if (negativeEmojis.includes(emoji)) return "negative";
+  return "neutral";
+}
+
+function shouldTriggerOnReaction(params: {
+  botUserId?: string;
+  messageAuthorId?: string;
+  messageTimestamp: number;
+  config?: DiscordReactionTriggerResolved;
+  emojiSentiment: ReactionSentiment;
+}): boolean {
+  const { botUserId, messageAuthorId, messageTimestamp, config, emojiSentiment } = params;
+
+  // Must be enabled
+  if (!config?.enabled) return false;
+
+  // Must be bot's own message
+  if (!botUserId || messageAuthorId !== botUserId) return false;
+
+  // Must be within time window
+  const windowMs = (config.windowSeconds ?? 60) * 1000;
+  const elapsed = Date.now() - messageTimestamp;
+  if (elapsed > windowMs) return false;
+
+  // Must be positive or negative (not neutral)
+  if (emojiSentiment === "neutral") return false;
+
+  return true;
+}
+
+// ============================================================================
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -92,6 +186,17 @@ export class DiscordMessageListener extends MessageCreateListener {
   }
 }
 
+export type ReactionTriggerCallback = (params: {
+  channelId: string;
+  messageId: string;
+  originalContent: string;
+  emoji: string;
+  sentiment: ReactionSentiment;
+  userId: string;
+  userName: string;
+  client: Client;
+}) => Promise<void>;
+
 export class DiscordReactionListener extends MessageReactionAddListener {
   constructor(
     private params: {
@@ -101,6 +206,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
       botUserId?: string;
       guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
       logger: Logger;
+      onReactionTrigger?: ReactionTriggerCallback;
     },
   ) {
     super();
@@ -118,6 +224,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
         botUserId: this.params.botUserId,
         guildEntries: this.params.guildEntries,
         logger: this.params.logger,
+        onReactionTrigger: this.params.onReactionTrigger,
       });
     } finally {
       logSlowDiscordListener({
@@ -177,9 +284,10 @@ async function handleDiscordReactionEvent(params: {
   botUserId?: string;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+  onReactionTrigger?: ReactionTriggerCallback;
 }) {
   try {
-    const { data, client, action, botUserId, guildEntries } = params;
+    const { data, client, action, botUserId, guildEntries, onReactionTrigger } = params;
     if (!("user" in data)) return;
     const user = data.user;
     if (!user || user.bot) return;
@@ -254,8 +362,6 @@ async function handleDiscordReactionEvent(params: {
         ? `#${normalizeDiscordSlug(channelName)}`
         : `#${data.channel_id}`;
     const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
-    const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
-    const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
     const route = resolveAgentRoute({
       cfg: params.cfg,
       channel: "discord",
@@ -263,6 +369,54 @@ async function handleDiscordReactionEvent(params: {
       guildId: data.guild_id ?? undefined,
       peer: { kind: "channel", id: data.channel_id },
     });
+
+    // Check reaction trigger conditions (only for "added" action)
+    if (action === "added" && onReactionTrigger) {
+      const reactionTriggerConfig = guildInfo?.reactionTrigger;
+      const emojiSentiment = classifyReactionEmoji(emojiLabel, reactionTriggerConfig);
+
+      // Try to get cached bot message info
+      const cachedMessage = getBotMessageFromCache(data.channel_id, data.message_id);
+      const messageTimestamp = cachedMessage?.timestamp ?? message?.createdAt?.getTime() ?? 0;
+      const messageContent = cachedMessage?.content ?? message?.content ?? "";
+
+      const shouldTrigger = shouldTriggerOnReaction({
+        botUserId,
+        messageAuthorId,
+        messageTimestamp,
+        config: reactionTriggerConfig,
+        emojiSentiment,
+      });
+
+      if (shouldTrigger) {
+        // Build enhanced system event text for reaction trigger
+        const sentimentLabel = emojiSentiment === "positive" ? "POSITIVE" : "NEGATIVE";
+        const triggerText = `[Reaction Trigger] ${sentimentLabel} response (${emojiLabel}) from ${actorLabel} to bot message: "${messageContent.slice(0, 200)}${messageContent.length > 200 ? "..." : ""}"`;
+
+        enqueueSystemEvent(triggerText, {
+          sessionKey: route.sessionKey,
+          contextKey: `discord:reaction-trigger:${data.message_id}:${user.id}:${emojiLabel}`,
+        });
+
+        // Call the trigger callback to wake the session
+        await onReactionTrigger({
+          channelId: data.channel_id,
+          messageId: data.message_id,
+          originalContent: messageContent,
+          emoji: emojiLabel,
+          sentiment: emojiSentiment,
+          userId: user.id,
+          userName: user.username || actorLabel || user.id,
+          client,
+        });
+
+        return; // Don't also emit regular notification
+      }
+    }
+
+    // Regular reaction notification (existing behavior)
+    const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
+    const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
     enqueueSystemEvent(text, {
       sessionKey: route.sessionKey,
       contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,

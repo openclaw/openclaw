@@ -57,6 +57,7 @@ Minimal config:
 12. Reactions: the agent can trigger reactions via the `discord` tool (gated by `channels.discord.actions.*`).
     - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
     - The `discord` tool is only exposed when the current channel is Discord.
+    - User reactions on the bot's messages can **trigger** the session (yes/no style) when `guilds.<id>.reactionTrigger` is enabled; see [Reaction trigger](#reaction-trigger).
 13. Native commands use isolated session keys (`agent:<agentId>:discord:slash:<userId>`) rather than the shared `main` session.
 
 Note: Name → id resolution uses guild member search and requires Server Members Intent; if the bot can’t search members, use ids or `<@id>` mentions.
@@ -266,6 +267,12 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
           slug: "friends-of-clawd",
           requireMention: false,
           reactionNotifications: "own",
+          reactionTrigger: {
+            enabled: true,
+            windowSeconds: 60,
+            positiveEmojis: ["👍", "✅", "👌"],
+            negativeEmojis: ["👎", "❌"]
+          },
           users: ["987654321098765432", "steipete"],
           channels: {
             general: { allow: true },
@@ -311,6 +318,7 @@ ack reaction after the bot replies.
 - `guilds.<id>.channels`: channel rules (keys are channel slugs or ids).
 - `guilds.<id>.requireMention`: per-guild mention requirement (overridable per channel).
 - `guilds.<id>.reactionNotifications`: reaction system event mode (`off`, `own`, `all`, `allowlist`).
+- `guilds.<id>.reactionTrigger`: optional config to turn user reactions on the bot's messages into session triggers. When enabled, positive/negative emoji reactions on the bot's recent messages (within a time window) dispatch an inbound message to the session instead of only emitting a system event. See [Reaction trigger](#reaction-trigger) below.
 - `textChunkLimit`: outbound text chunk size (chars). Default: 2000.
 - `chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
 - `maxLinesPerMessage`: soft max line count per message. Default: 17.
@@ -331,6 +339,32 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+
+#### Reaction trigger
+
+When `guilds.<id>.reactionTrigger.enabled` is `true`, reactions on the **bot's own messages** within a short time window are treated as session triggers: the agent receives an inbound message describing the reaction (e.g. positive/negative and who reacted), and can reply in the same channel. Useful for yes/no or confirm/cancel flows without typing a new message.
+
+- **Scope**: only reactions on messages sent by the bot; only within `reactionTrigger.windowSeconds` (default 60) after the bot message.
+- **Classification**: emoji are classified as positive (e.g. 👍 ✅ 👌) or negative (e.g. 👎 ❌). Custom lists: `reactionTrigger.positiveEmojis` and `reactionTrigger.negativeEmojis`. Neutral emoji do not trigger.
+- **Behavior**: when a positive or negative reaction matches, a system event is enqueued and an inbound message is dispatched to the session; the agent can reply. Regular reaction notifications are not emitted for that reaction.
+
+Example:
+
+```json5
+"YOUR_GUILD_ID": {
+  "requireMention": false,
+  "reactionNotifications": "own",
+  "reactionTrigger": {
+    "enabled": true,
+    "windowSeconds": 60,
+    "positiveEmojis": ["👍", "✅", "👌"],
+    "negativeEmojis": ["👎", "❌"]
+  },
+  "channels": { "general": { "allow": true } }
+}
+```
+
+Omit `positiveEmojis`/`negativeEmojis` to use built-in default lists.
 
 ### Tool action defaults
 

@@ -199,6 +199,15 @@ export const DiscordGuildChannelSchema = z
   })
   .strict();
 
+export const DiscordReactionTriggerSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    windowSeconds: z.number().int().positive().optional(),
+    positiveEmojis: z.array(z.string()).optional(),
+    negativeEmojis: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const DiscordGuildSchema = z
   .object({
     slug: z.string().optional(),
@@ -206,6 +215,7 @@ export const DiscordGuildSchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionTrigger: DiscordReactionTriggerSchema.optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })

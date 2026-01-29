@@ -17,11 +17,19 @@ export type DiscordAllowList = {
 
 export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
+export type DiscordReactionTriggerResolved = {
+  enabled?: boolean;
+  windowSeconds?: number;
+  positiveEmojis?: string[];
+  negativeEmojis?: string[];
+};
+
 export type DiscordGuildEntryResolved = {
   id?: string;
   slug?: string;
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
+  reactionTrigger?: DiscordReactionTriggerResolved;
   users?: Array<string | number>;
   channels?: Record<
     string,
