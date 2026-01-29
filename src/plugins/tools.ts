@@ -12,6 +12,7 @@ type PluginToolMeta = {
 };
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
+const loggedConflicts = new Set<string>();
 
 export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
@@ -61,7 +62,11 @@ export function resolvePluginTools(params: {
     const pluginIdKey = normalizeToolName(entry.pluginId);
     if (existingNormalized.has(pluginIdKey)) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
-      log.error(message);
+      const key = `plugin-id:${pluginIdKey}`;
+      if (!loggedConflicts.has(key)) {
+        loggedConflicts.add(key);
+        log.error(message);
+      }
       registry.diagnostics.push({
         level: "error",
         pluginId: entry.pluginId,
@@ -94,13 +99,17 @@ export function resolvePluginTools(params: {
     for (const tool of list) {
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
-        log.error(message);
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: entry.pluginId,
-          source: entry.source,
-          message,
-        });
+        const key = `tool-name:${normalizeToolName(entry.pluginId)}:${normalizeToolName(tool.name)}`;
+        if (!loggedConflicts.has(key)) {
+          loggedConflicts.add(key);
+          log.warn(message);
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: entry.pluginId,
+            source: entry.source,
+            message,
+          });
+        }
         continue;
       }
       nameSet.add(tool.name);

@@ -1,0 +1,197 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.1.27-beta.1",
+    "lastTouchedAt": "2026-01-29T18:27:46.225Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-01-28T03:25:58.516Z",
+    "lastRunVersion": "2026.1.24-3",
+    "lastRunCommand": "configure",
+    "lastRunMode": "local"
+  },
+  "browser": {
+    "enabled": true,
+    "remoteCdpTimeoutMs": 0,
+    "remoteCdpHandshakeTimeoutMs": 60000
+  },
+  "auth": {
+    "profiles": {
+      "openai-codex:codex-cli": {
+        "provider": "openai-codex",
+        "mode": "oauth"
+      },
+      "anthropic:claude-cli": {
+        "provider": "anthropic",
+        "mode": "oauth"
+      },
+      "openai:manual": {
+        "provider": "openai",
+        "mode": "token"
+      },
+      "zai:default": {
+        "provider": "zai",
+        "mode": "api_key"
+      },
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "token"
+      }
+    },
+    "order": {
+      "anthropic": [
+        "<redacted>"
+      ]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-opus-4-5",
+        "fallbacks": [
+          "<redacted>"
+        ]
+      },
+      "models": {
+        "anthropic/claude-opus-4-5": {
+          "alias": "opus"
+        }
+      },
+      "workspace": "/Users/conradsasinski/clawd",
+      "memorySearch": {
+        "sources": [
+          "<redacted>"
+        ],
+        "experimental": {
+          "sessionMemory": true
+        },
+        "provider": "openai",
+        "fallback": "openai",
+        "model": "text-embedding-3-small",
+        "sync": {
+          "watch": true
+        }
+      },
+      "compaction": {
+        "memoryFlush": {
+          "enabled": true
+        }
+      },
+      "thinkingDefault": "medium",
+      "elevatedDefault": "full",
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      },
+      "sandbox": {
+        "mode": "off"
+      }
+    },
+    "list": [
+      "<redacted>"
+    ]
+  },
+  "tools": {
+    "allow": [
+      "<redacted>"
+    ],
+    "web": {
+      "search": {
+        "enabled": true,
+        "apiKey": "<redacted>"
+      },
+      "fetch": {
+        "enabled": true
+      }
+    },
+    "agentToAgent": {
+      "enabled": true
+    },
+    "elevated": {
+      "enabled": true,
+      "allowFrom": []
+    },
+    "exec": {
+      "host": "gateway",
+      "security": "full",
+      "ask": "off"
+    }
+  },
+  "messages": {
+    "inbound": {
+      "byChannel": {
+        "telegram": 2000
+      }
+    },
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "botToken": "<redacted>",
+      "replyToMode": "off",
+      "groupPolicy": "allowlist",
+      "streamMode": "off"
+    }
+  },
+  "talk": {
+    "apiKey": "<redacted>"
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "<redacted>"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "skills": {
+    "load": {
+      "watch": true,
+      "watchDebounceMs": 500
+    },
+    "install": {
+      "nodeManager": "npm"
+    },
+    "entries": {
+      "sag": {
+        "apiKey": "<redacted>"
+      },
+      "cronometer-logger": {
+        "enabled": true,
+        "config": {
+          "mode": "day-only",
+          "diaryGroup": "disabled",
+          "defaultDate": "today"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  }
+}

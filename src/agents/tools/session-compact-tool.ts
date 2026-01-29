@@ -2,10 +2,9 @@ import { Type } from "@sinclair/typebox";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  abortEmbeddedPiRun,
   compactEmbeddedPiSession,
+  compactEmbeddedPiSessionDirect,
   isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
@@ -170,16 +169,16 @@ export function createSessionCompactTool(opts?: SessionCompactToolOpts): AnyAgen
 
       const sessionId = entry.sessionId;
 
-      // Abort any active run before compacting
-      if (isEmbeddedPiRunActive(sessionId)) {
-        abortEmbeddedPiRun(sessionId);
-        await waitForEmbeddedPiRunEnd(sessionId, 15_000);
-      }
+      // If called from within an active run, use direct compaction to avoid
+      // aborting ourselves (which would prevent the tool result from being saved).
+      // Otherwise, use queued compaction for external callers.
+      const runIsActive = isEmbeddedPiRunActive(sessionId);
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
       const workspaceDir = opts?.workspaceDir ?? resolveAgentDir(cfg, agentId);
 
-      const result = await compactEmbeddedPiSession({
+      const compactFn = runIsActive ? compactEmbeddedPiSessionDirect : compactEmbeddedPiSession;
+      const result = await compactFn({
         sessionId,
         sessionKey,
         messageChannel: entry.lastChannel ?? entry.channel ?? "unknown",

@@ -3,6 +3,9 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("session-tool-result-guard");
 
 type ToolCall = { id: string; name?: string };
 
@@ -69,8 +72,16 @@ export function installSessionToolResultGuard(
 
   const flushPendingToolResults = () => {
     if (pending.size === 0) return;
+    log.warn(
+      `flushPendingToolResults called with ${pending.size} pending tool calls: ${Array.from(
+        pending.entries(),
+      )
+        .map(([id, name]) => `${name ?? "unknown"}(${id})`)
+        .join(", ")}`,
+    );
     if (allowSyntheticToolResults) {
       for (const [id, name] of pending.entries()) {
+        log.warn(`Creating synthetic error result for tool call: ${name ?? "unknown"}(${id})`);
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
         originalAppend(
           persistToolResult(synthetic, {
@@ -90,7 +101,11 @@ export function installSessionToolResultGuard(
     if (role === "toolResult") {
       const id = extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pending.get(id) : undefined;
+      const wasPending = id ? pending.has(id) : false;
       if (id) pending.delete(id);
+      log.debug(
+        `Tool result received: ${toolName ?? "unknown"}(${id}) - wasPending=${wasPending}, remainingPending=${pending.size}`,
+      );
       return originalAppend(
         persistToolResult(message, {
           toolCallId: id ?? undefined,
@@ -128,6 +143,9 @@ export function installSessionToolResultGuard(
     if (toolCalls.length > 0) {
       for (const call of toolCalls) {
         pending.set(call.id, call.name);
+        log.debug(
+          `Tool call added to pending: ${call.name ?? "unknown"}(${call.id}) - totalPending=${pending.size}`,
+        );
       }
     }
 

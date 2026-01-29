@@ -634,6 +634,59 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("resends pairing info after a cooldown so Telegram never appears silent", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    vi.useFakeTimers();
+    try {
+      const base = new Date("2025-01-09T00:00:00Z");
+      vi.setSystemTime(base);
+
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "pairing" } },
+      });
+      readTelegramAllowFromStore.mockResolvedValue([]);
+      upsertTelegramPairingRequest
+        .mockResolvedValueOnce({ code: "PAIRME12", created: true })
+        .mockResolvedValue({ code: "PAIRME12", created: false });
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      const message = {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        date: 1736380800,
+        from: { id: 999, username: "random" },
+      };
+
+      await handler({
+        message,
+        me: { username: "moltbot_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+      await handler({
+        message: { ...message, text: "hello again" },
+        me: { username: "moltbot_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+      vi.setSystemTime(new Date(base.getTime() + 6 * 60 * 1000));
+      await handler({
+        message: { ...message, text: "hello after cooldown" },
+        me: { username: "moltbot_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("triggers typing cue via onReplyStart", async () => {
     onSpy.mockReset();
     sendChatActionSpy.mockReset();

@@ -19,12 +19,12 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { recordInboundSession } from "../channels/session.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { MoltbotConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
@@ -80,6 +80,19 @@ type ResolveTelegramGroupConfig = (
   chatId: string | number,
   messageThreadId?: number,
 ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+
+const PAIRING_NUDGE_COOLDOWN_MS = 5 * 60 * 1000;
+const pairingNudgeSentAtByChatId = new Map<string, number>();
+
+function shouldSendPairingNudge(chatId: string, nowMs: number): boolean {
+  const lastMs = pairingNudgeSentAtByChatId.get(chatId);
+  if (lastMs == null) return true;
+  return nowMs - lastMs >= PAIRING_NUDGE_COOLDOWN_MS;
+}
+
+function recordPairingNudge(chatId: string, nowMs: number): void {
+  pairingNudgeSentAtByChatId.set(chatId, nowMs);
+}
 
 type ResolveGroupActivation = (params: {
   chatId: string | number;
@@ -224,6 +237,8 @@ export const buildTelegramMessageContext = async ({
     if (dmPolicy === "disabled") return null;
 
     if (dmPolicy !== "open") {
+      const isStartCommand = /^\/start(?:\s|$)/i.test((msg.text ?? msg.caption ?? "").trim());
+      const nowMs = Date.now();
       const candidate = String(chatId);
       const senderUsername = msg.from?.username ?? "";
       const allowMatch = resolveSenderAllowMatch({
@@ -254,7 +269,13 @@ export const buildTelegramMessageContext = async ({
               firstName: from?.first_name,
               lastName: from?.last_name,
             });
-            if (created) {
+            const shouldReply =
+              created || isStartCommand || (code ? shouldSendPairingNudge(candidate, nowMs) : true);
+            if (shouldReply) {
+              recordPairingNudge(candidate, nowMs);
+            }
+
+            if (code && shouldReply) {
               logger.info(
                 {
                   chatId: candidate,
@@ -272,14 +293,29 @@ export const buildTelegramMessageContext = async ({
                   bot.api.sendMessage(
                     chatId,
                     [
+                      buildPairingReply({
+                        channel: "telegram",
+                        idLine: `Your Telegram user id: ${telegramUserId}`,
+                        code,
+                      }),
+                      "",
+                      "Tip: send /start to show this again.",
+                    ].join("\n"),
+                  ),
+              });
+            } else if (!code && shouldReply) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    [
                       "Moltbot: access not configured.",
                       "",
-                      `Your Telegram user id: ${telegramUserId}`,
+                      "Pairing requests are temporarily rate-limited.",
                       "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      formatCliCommand("moltbot pairing approve telegram <code>"),
+                      "Ask the bot owner to run:",
+                      "moltbot pairing list telegram",
                     ].join("\n"),
                   ),
               });
