@@ -1,7 +1,7 @@
 {
   "version": "0.1.0",
   "storage": {
-    "type": "r2",
+    "type": "local",
     "options": {
       "path": "/Users/steve/.savestate",
       "passphraseConfigured": true,

@@ -45,7 +45,9 @@ Note: Some references to "clawdbot" remain in older code/docs during transition.
 
 ## David's Work
 
-- **DBH Ventures** — Primary (timespent.xyz venture studio)
+- **DBH Ventures** — Primary (timespent.xyz venture studio / incubator)
+  - I help evaluate ideas, research markets, and build MVPs
+  - Workflow managed in Vikunja (projects.timespent.xyz)
 - **One Point Partners** — Part-time partner (onepoint-partners.com) — M365 account
 - **Email accounts**:
   - dbh.today@gmail.com (personal Google) ✅
@@ -60,11 +62,19 @@ Note: Some references to "clawdbot" remain in older code/docs during transition.
 - **My login**: steve / SteveAgent2026!
 - **Rule**: Always create projects under David's account (dbhurley), not steve
 - **Projects**:
+  - ID 2: 📥 Inbox (ideas to evaluate)
   - ID 3: 🚀 DBH Ventures - Incubation Template (standard playbook)
   - ID 4: 🛡️ MeshGuard (launched)
   - ID 5: 💾 SaveState (launched Jan 27, 2026)
   - ID 7: 🎨 NotHockney (paused - foundation complete)
 - **Incubation phases**: Idea → Foundation → MVP → Launch → Growth
+- **Idea workflow**: 
+  1. New idea → create task in Inbox (ID 2)
+  2. Evaluate idea (research competitors, market, fit)
+  3. Decision: ✅ YES (clone template, start project) or ❌ NO (mark done with reason)
+- **Usage**: When David shares an idea/tweet to evaluate, add to Inbox and research before recommending YES/NO
+- **Usage**: Clone template project for each new venture
+- **⚠️ IMPORTANT**: Always create tasks/projects via David's account (dbhurley) so he sees them by default — use API with his credentials, not steve's
 - **Usage**: Clone template project for each new venture
 
 ## NotHockney — Incubation (Jan 2026)

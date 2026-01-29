@@ -44,6 +44,15 @@
       ],
       "filename": "ss-2026-01-28T00-52-22-62j057.saf.enc",
       "size": 491193
+    },
+    {
+      "id": "ss-2026-01-29T16-08-18-2da1ym",
+      "timestamp": "2026-01-29T16:08:18.391Z",
+      "platform": "clawdbot",
+      "adapter": "clawdbot",
+      "label": "launch-review-test",
+      "filename": "ss-2026-01-29T16-08-18-2da1ym.saf.enc",
+      "size": 504684
     }
   ]
 }
