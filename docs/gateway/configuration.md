@@ -2411,6 +2411,8 @@ Notes:
 - `z.ai/*` and `z-ai/*` are accepted aliases and normalize to `zai/*`.
 - If `ZAI_API_KEY` is missing, requests to `zai/*` will fail with an auth error at runtime.
 - Example error: `No API key found for provider "zai".`
+- Optional: set `ZAI_BASE_URL` to override the `zai` provider endpoint without editing config.
+  (Legacy alias: `Z_AI_BASE_URL`.) Example for Chinese Z.AI endpoint: `ZAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/`
 - Z.AI’s general API endpoint is `https://api.z.ai/api/paas/v4`. GLM coding
   requests use the dedicated Coding endpoint `https://api.z.ai/api/coding/paas/v4`.
   The built-in `zai` provider uses the Coding endpoint. If you need the general
