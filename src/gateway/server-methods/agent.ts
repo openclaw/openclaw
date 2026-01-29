@@ -9,7 +9,8 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { getActiveSessions } from "../../config/sessions/active-sessions.js";
+import { registerAgentRunContext, getAgentMetrics } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -495,6 +496,74 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+    });
+  },
+  "agent.status": ({ params, respond }) => {
+    const p = params as Record<string, unknown>;
+    const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
+    if (!agentIdRaw) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid agent.status params: agentId is required"),
+      );
+      return;
+    }
+    const agentId = normalizeAgentId(agentIdRaw);
+    const cfg = loadConfig();
+    const knownAgents = listAgentIds(cfg);
+    if (!knownAgents.includes(agentId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.status params: unknown agent "${agentIdRaw}"`,
+        ),
+      );
+      return;
+    }
+
+    // Check if agent has active sessions
+    const activeSessions = getActiveSessions();
+    const agentActiveSessions = activeSessions.filter((s) => s.agentId === agentId);
+    const isActive = agentActiveSessions.length > 0;
+
+    // Get metrics
+    const metrics = getAgentMetrics(agentId);
+    const now = Date.now();
+
+    respond(true, {
+      agentId,
+      isActive,
+      activeSessions: agentActiveSessions.map((s) => ({
+        sessionKey: s.sessionKey,
+        startedAt: new Date(s.startedAt).toISOString(),
+        lastHeartbeat: new Date(s.lastHeartbeat).toISOString(),
+        pid: s.pid,
+      })),
+      metrics: metrics
+        ? {
+            state: metrics.state,
+            compactionCount: metrics.compactionCount,
+            lastCompactionDurationMs: metrics.lastCompactionDurationMs,
+            lastCompactionAt: metrics.lastCompactionAt
+              ? new Date(metrics.lastCompactionAt).toISOString()
+              : undefined,
+            timeoutCount: metrics.timeoutCount,
+            resetCount: metrics.resetCount,
+            contextUsage: metrics.contextUsage,
+            lastActivity: new Date(metrics.lastActivity).toISOString(),
+          }
+        : {
+            state: "idle" as const,
+            compactionCount: 0,
+            timeoutCount: 0,
+            resetCount: 0,
+            contextUsage: { current: 0, max: 0, percentage: 0 },
+            lastActivity: new Date(now).toISOString(),
+          },
+      timestamp: new Date(now).toISOString(),
     });
   },
 };

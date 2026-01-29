@@ -8,6 +8,9 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 
+import { recordCompaction, setAgentState, updateContextUsage } from "../../infra/agent-events.js";
+import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
+
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -424,7 +427,24 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+        // Record compaction metrics
+        const compactionStartTime = Date.now();
+        const agentId = params.sessionKey
+          ? resolveAgentIdFromSessionKey(params.sessionKey)
+          : undefined;
+        if (agentId) {
+          setAgentState(agentId, "compacting");
+        }
+
         const result = await session.compact(params.customInstructions);
+
+        // Record compaction duration
+        const compactionDuration = Date.now() - compactionStartTime;
+        if (agentId) {
+          recordCompaction(agentId, compactionDuration);
+          setAgentState(agentId, "idle");
+        }
+
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
@@ -440,6 +460,12 @@ export async function compactEmbeddedPiSessionDirect(
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
+
+        // Update context usage metrics
+        if (agentId && tokensAfter !== undefined) {
+          updateContextUsage(agentId, tokensAfter, model.contextWindow ?? 100_000);
+        }
+
         return {
           ok: true,
           compacted: true,
