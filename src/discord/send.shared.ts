@@ -286,6 +286,7 @@ async function sendDiscordText(
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   embeds?: unknown[],
+  components?: unknown[],
   chunkMode?: ChunkMode,
 ) {
   if (!text.trim()) {
@@ -308,6 +309,7 @@ async function sendDiscordText(
             content: chunks[0],
             message_reference: messageReference,
             ...(embeds?.length ? { embeds } : {}),
+            ...(components?.length ? { components } : {}),
           },
         }) as Promise<{ id: string; channel_id: string }>,
       "text",
@@ -324,6 +326,7 @@ async function sendDiscordText(
             content: chunk,
             message_reference: isFirst ? messageReference : undefined,
             ...(isFirst && embeds?.length ? { embeds } : {}),
+            ...(isFirst && components?.length ? { components } : {}),
           },
         }) as Promise<{ id: string; channel_id: string }>,
       "text",
@@ -345,6 +348,7 @@ async function sendDiscordMedia(
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   embeds?: unknown[],
+  components?: unknown[],
   chunkMode?: ChunkMode,
 ) {
   const media = await loadWebMedia(mediaUrl);
@@ -367,6 +371,7 @@ async function sendDiscordMedia(
           content: caption || undefined,
           message_reference: messageReference,
           ...(embeds?.length ? { embeds } : {}),
+          ...(components?.length ? { components } : {}),
           files: [
             {
               data: media.buffer,
@@ -388,6 +393,7 @@ async function sendDiscordMedia(
       undefined,
       request,
       maxLinesPerMessage,
+      undefined,
       undefined,
       chunkMode,
     );
