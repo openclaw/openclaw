@@ -6,6 +6,8 @@ DNA is a self-hosted AI assistant that connects to your favorite messaging platf
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Node](https://img.shields.io/badge/node-18%2B-green)
+![Version](https://img.shields.io/badge/version-1.0.0-purple)
+![Skills](https://img.shields.io/badge/skills-60%2B-orange)
 
 ---
 
