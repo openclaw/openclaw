@@ -57,8 +57,6 @@ export type WebInboundReaction = {
   senderJid?: string;
   /** E.164 of the person who reacted. */
   senderE164?: string;
-  /** Push name of the person who reacted. */
-  senderName?: string;
   /** Whether the reacted message was sent by us. */
   reactedToFromMe?: boolean;
   timestamp?: number;
