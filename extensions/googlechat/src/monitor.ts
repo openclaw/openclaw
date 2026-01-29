@@ -274,6 +274,19 @@ export async function handleGoogleChatWebhookRequest(
   }
 
   selected.statusSink?.({ lastInboundAt: Date.now() });
+
+  // For synchronous responses in spaces, handle non-MESSAGE events immediately
+  const evtType = (event.type ?? (event as { eventType?: string }).eventType)?.toUpperCase();
+  const isGroup = event.space?.type?.toUpperCase() !== "DM";
+
+  // For non-MESSAGE events in groups (like ADDED_TO_SPACE), return an acknowledgment
+  if (isGroup && evtType !== "MESSAGE") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ text: "Hello! I'm ready to help. 🦞" }));
+    return true;
+  }
+
   processGoogleChatEvent(event, selected).catch((err) => {
     selected?.runtime.error?.(
       `[${selected.account.accountId}] Google Chat webhook failed: ${String(err)}`,
@@ -696,6 +709,9 @@ async function processMessageWithPipeline(params: {
     GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     OriginatingChannel: "googlechat",
     OriginatingTo: `googlechat:${spaceId}`,
+    // Thread reply context
+    IsThreadReply: message.threadReply,
+    QuotedMessageId: message.quotedMessageMetadata?.name,
   });
 
   void core.channel.session

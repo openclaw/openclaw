@@ -47,6 +47,11 @@ export type GoogleChatAnnotation = {
   customEmojiMetadata?: Record<string, unknown>;
 };
 
+export type GoogleChatQuotedMessageMetadata = {
+  name?: string;
+  lastUpdateTime?: string;
+};
+
 export type GoogleChatMessage = {
   name?: string;
   text?: string;
@@ -55,6 +60,10 @@ export type GoogleChatMessage = {
   thread?: GoogleChatThread;
   attachment?: GoogleChatAttachment[];
   annotations?: GoogleChatAnnotation[];
+  /** True if this message is a reply in a thread */
+  threadReply?: boolean;
+  /** Metadata about the quoted/original message being replied to */
+  quotedMessageMetadata?: GoogleChatQuotedMessageMetadata;
 };
 
 export type GoogleChatEvent = {
