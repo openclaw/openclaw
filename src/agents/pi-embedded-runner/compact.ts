@@ -29,6 +29,7 @@ import { resolveMoltbotDocsPath } from "../docs-path.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
+import { isCliProvider } from "../model-selection.js";
 import { ensureMoltbotModelsJson } from "../models-config.js";
 import {
   ensureSessionHeader,
@@ -114,6 +115,18 @@ export async function compactEmbeddedPiSessionDirect(
 
   const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
   const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+
+  // CLI providers (claude-cli, codex-cli, etc.) are not supported for compaction
+  // because they don't use the embedded Pi runner. Users need to switch to an
+  // API provider before compacting.
+  if (isCliProvider(provider, params.config)) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: `Compaction is not supported for CLI providers (${provider}/${modelId}). Use /model to switch to an API provider before compacting.`,
+    };
+  }
+
   const agentDir = params.agentDir ?? resolveMoltbotAgentDir();
   await ensureMoltbotModelsJson(params.config, agentDir);
   const { model, error, authStorage, modelRegistry } = resolveModel(
