@@ -1,0 +1,83 @@
+<svg width="400" height="700" viewBox="0 0 400 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#075E54"/>
+      <stop offset="100%" style="stop-color:#128C7E"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+  
+  <!-- Phone Frame -->
+  <rect x="0" y="0" width="400" height="700" rx="30" fill="#0B141A"/>
+  
+  <!-- Header -->
+  <rect x="0" y="0" width="400" height="70" rx="30" fill="url(#headerGrad)"/>
+  <rect x="0" y="30" width="400" height="40" fill="url(#headerGrad)"/>
+  
+  <!-- Back arrow -->
+  <path d="M20 35 L30 25 L30 28 L23 35 L30 42 L30 45 Z" fill="white"/>
+  
+  <!-- Avatar -->
+  <circle cx="55" cy="35" r="18" fill="#6366F1"/>
+  <text x="55" y="41" text-anchor="middle" fill="white" font-size="16" font-family="system-ui">🧬</text>
+  
+  <!-- Contact name -->
+  <text x="82" y="32" fill="white" font-size="16" font-weight="600" font-family="system-ui">DNA</text>
+  <text x="82" y="48" fill="rgba(255,255,255,0.7)" font-size="12" font-family="system-ui">online</text>
+  
+  <!-- Icons -->
+  <text x="320" y="40" fill="white" font-size="18">📹</text>
+  <text x="350" y="40" fill="white" font-size="18">📞</text>
+  <text x="380" y="40" fill="white" font-size="14">⋮</text>
+  
+  <!-- Chat background -->
+  <rect x="0" y="70" width="400" height="580" fill="#0B141A"/>
+  
+  <!-- Date bubble -->
+  <rect x="155" y="85" width="90" height="24" rx="8" fill="rgba(255,255,255,0.1)"/>
+  <text x="200" y="102" text-anchor="middle" fill="rgba(255,255,255,0.6)" font-size="11" font-family="system-ui">TODAY</text>
+  
+  <!-- User message 1 -->
+  <rect x="100" y="125" width="280" height="50" rx="12" fill="#005C4B" filter="url(#shadow)"/>
+  <text x="115" y="148" fill="white" font-size="14" font-family="system-ui">What meetings do I have tomorrow?</text>
+  <text x="355" y="165" fill="rgba(255,255,255,0.5)" font-size="10" font-family="system-ui">2:41 PM</text>
+  
+  <!-- DNA response 1 -->
+  <rect x="20" y="190" width="300" height="95" rx="12" fill="#1F2C34" filter="url(#shadow)"/>
+  <text x="35" y="215" fill="white" font-size="14" font-family="system-ui">📅 Tomorrow's schedule:</text>
+  <text x="35" y="238" fill="rgba(255,255,255,0.85)" font-size="13" font-family="system-ui">• 9:00 AM - Team standup</text>
+  <text x="35" y="258" fill="rgba(255,255,255,0.85)" font-size="13" font-family="system-ui">• 2:00 PM - Client call (Acme Corp)</text>
+  <text x="295" y="275" fill="rgba(255,255,255,0.5)" font-size="10" font-family="system-ui">2:41 PM</text>
+  
+  <!-- User message 2 -->
+  <rect x="80" y="300" width="300" height="50" rx="12" fill="#005C4B" filter="url(#shadow)"/>
+  <text x="95" y="323" fill="white" font-size="14" font-family="system-ui">Remind me to prep for the client call</text>
+  <text x="355" y="340" fill="rgba(255,255,255,0.5)" font-size="10" font-family="system-ui">2:42 PM</text>
+  
+  <!-- DNA response 2 -->
+  <rect x="20" y="365" width="280" height="70" rx="12" fill="#1F2C34" filter="url(#shadow)"/>
+  <text x="35" y="390" fill="white" font-size="14" font-family="system-ui">⏰ Got it! I'll remind you at 1:00 PM</text>
+  <text x="35" y="413" fill="rgba(255,255,255,0.85)" font-size="13" font-family="system-ui">tomorrow to prep for Acme Corp.</text>
+  <text x="275" y="425" fill="rgba(255,255,255,0.5)" font-size="10" font-family="system-ui">2:42 PM</text>
+  
+  <!-- User message 3 -->
+  <rect x="140" y="450" width="240" height="50" rx="12" fill="#005C4B" filter="url(#shadow)"/>
+  <text x="155" y="473" fill="white" font-size="14" font-family="system-ui">Check my unread emails</text>
+  <text x="355" y="490" fill="rgba(255,255,255,0.5)" font-size="10" font-family="system-ui">2:43 PM</text>
+  
+  <!-- DNA response 3 -->
+  <rect x="20" y="515" width="320" height="95" rx="12" fill="#1F2C34" filter="url(#shadow)"/>
+  <text x="35" y="540" fill="white" font-size="14" font-family="system-ui">📧 You have 3 unread emails:</text>
+  <text x="35" y="563" fill="rgba(255,255,255,0.85)" font-size="13" font-family="system-ui">1. Invoice from Supplier Co. (urgent)</text>
+  <text x="35" y="583" fill="rgba(255,255,255,0.85)" font-size="13" font-family="system-ui">2. Newsletter from TechNews</text>
+  <text x="35" y="603" fill="rgba(255,255,255,0.85)" font-size="13" font-family="system-ui">3. Shipping update - Amazon</text>
+  
+  <!-- Input bar -->
+  <rect x="0" y="650" width="400" height="50" fill="#1F2C34"/>
+  <rect x="10" y="660" width="320" height="35" rx="20" fill="#2A3942"/>
+  <text x="25" y="683" fill="rgba(255,255,255,0.5)" font-size="14" font-family="system-ui">Message</text>
+  <circle cx="365" cy="677" r="20" fill="#00A884"/>
+  <text x="365" y="683" text-anchor="middle" fill="white" font-size="16">🎤</text>
+</svg>

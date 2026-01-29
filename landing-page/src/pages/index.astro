@@ -128,13 +128,29 @@ import Layout from '../layouts/Layout.astro';
 
   <!-- Demo Section -->
   <section id="demo" class="py-24 px-6 bg-white/[0.02]">
-    <div class="max-w-4xl mx-auto text-center">
-      <h2 class="text-4xl font-bold mb-4">See DNA in Action</h2>
-      <p class="text-gray-400 mb-12">Watch how DNA works across platforms</p>
+    <div class="max-w-6xl mx-auto">
+      <div class="text-center mb-12">
+        <h2 class="text-4xl font-bold mb-4">See DNA in Action</h2>
+        <p class="text-gray-400">Chat naturally. Get things done.</p>
+      </div>
       
-      <!-- Video Placeholder -->
-      <div class="aspect-video rounded-xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-white/10 flex items-center justify-center">
-        <span class="text-gray-500">[ Demo Video Coming Soon ]</span>
+      <!-- Side by side: WhatsApp + IDE -->
+      <div class="grid md:grid-cols-2 gap-8 items-start">
+        <!-- WhatsApp Mockup -->
+        <div class="text-center">
+          <h3 class="text-xl font-semibold mb-4 text-gray-300">📱 Chat on WhatsApp</h3>
+          <div class="rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-indigo-500/10 inline-block">
+            <img src="/screenshots/whatsapp-mockup.svg" alt="DNA on WhatsApp" class="max-h-[500px]" />
+          </div>
+        </div>
+        
+        <!-- IDE Screenshot -->
+        <div class="text-center">
+          <h3 class="text-xl font-semibold mb-4 text-gray-300">💻 Code with AI</h3>
+          <div class="rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-indigo-500/10">
+            <img src="/screenshots/ide-commands.jpg" alt="DNA IDE" class="w-full" />
+          </div>
+        </div>
       </div>
     </div>
   </section>
