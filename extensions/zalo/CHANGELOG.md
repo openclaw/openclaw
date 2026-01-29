@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.1.27-beta.1
+## 2026.1.29
 
 ### Changes
 - Version alignment with core Moltbot release numbers.
