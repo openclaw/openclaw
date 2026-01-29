@@ -1,5 +1,5 @@
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized) struct GatewayDiscoveryModelTests {
     @Test @MainActor func debugLoggingCapturesLifecycleAndResets() {

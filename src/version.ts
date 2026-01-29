@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-declare const __CLAWDBOT_VERSION__: string | undefined;
+declare const __DNA_VERSION__: string | undefined;
 
 function readVersionFromPackageJson(): string | null {
   try {
@@ -12,11 +12,11 @@ function readVersionFromPackageJson(): string | null {
   }
 }
 
-// Single source of truth for the current moltbot version.
+// Single source of truth for the current dna version.
 // - Embedded/bundled builds: injected define or env var.
 // - Dev/npm builds: package.json.
 export const VERSION =
-  (typeof __CLAWDBOT_VERSION__ === "string" && __CLAWDBOT_VERSION__) ||
-  process.env.CLAWDBOT_BUNDLED_VERSION ||
+  (typeof __DNA_VERSION__ === "string" && __DNA_VERSION__) ||
+  process.env.DNA_BUNDLED_VERSION ||
   readVersionFromPackageJson() ||
   "0.0.0";

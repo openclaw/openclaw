@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `moltbot models` (status/list/set/scan, aliases, fallbacks, auth)"
+summary: "CLI reference for `dna models` (status/list/set/scan, aliases, fallbacks, auth)"
 read_when:
   - You want to change default models or view provider auth status
   - You want to scan available models/providers and debug auth profiles
 ---
 
-# `moltbot models`
+# `dna models`
 
 Model discovery, scanning, and configuration (default model, fallbacks, auth profiles).
 
@@ -16,13 +16,13 @@ Related:
 ## Common commands
 
 ```bash
-moltbot models status
-moltbot models list
-moltbot models set <model-or-alias>
-moltbot models scan
+dna models status
+dna models list
+dna models set <model-or-alias>
+dna models scan
 ```
 
-`moltbot models status` shows the resolved default/fallbacks plus an auth overview.
+`dna models status` shows the resolved default/fallbacks plus an auth overview.
 When provider usage snapshots are available, the OAuth/token status section includes
 provider usage headers.
 Add `--probe` to run live auth probes against each configured provider profile.
@@ -31,7 +31,7 @@ Probes are real requests (may consume tokens and trigger rate limits).
 Notes:
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, Moltbot treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, DNA treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 ### `models status`
 Options:
@@ -48,20 +48,20 @@ Options:
 ## Aliases + fallbacks
 
 ```bash
-moltbot models aliases list
-moltbot models fallbacks list
+dna models aliases list
+dna models fallbacks list
 ```
 
 ## Auth profiles
 
 ```bash
-moltbot models auth add
-moltbot models auth login --provider <id>
-moltbot models auth setup-token
-moltbot models auth paste-token
+dna models auth add
+dna models auth login --provider <id>
+dna models auth setup-token
+dna models auth paste-token
 ```
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
-`moltbot plugins list` to see which providers are installed.
+`dna plugins list` to see which providers are installed.
 
 Notes:
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).

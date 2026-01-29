@@ -1,6 +1,6 @@
-# @clawdbot/voice-call
+# @dna/voice-call
 
-Official Voice Call plugin for **Clawdbot**.
+Official Voice Call plugin for **DNA**.
 
 Providers:
 - **Twilio** (Programmable Voice + Media Streams)
@@ -13,10 +13,10 @@ Plugin system: `https://docs.molt.bot/plugin`
 
 ## Install (local dev)
 
-### Option A: install via Clawdbot (recommended)
+### Option A: install via DNA (recommended)
 
 ```bash
-clawdbot plugins install @clawdbot/voice-call
+dna plugins install @dna/voice-call
 ```
 
 Restart the Gateway afterwards.
@@ -24,9 +24,9 @@ Restart the Gateway afterwards.
 ### Option B: copy into your global extensions folder (dev)
 
 ```bash
-mkdir -p ~/.clawdbot/extensions
-cp -R extensions/voice-call ~/.clawdbot/extensions/voice-call
-cd ~/.clawdbot/extensions/voice-call && pnpm install
+mkdir -p ~/.dna/extensions
+cp -R extensions/voice-call ~/.dna/extensions/voice-call
+cd ~/.dna/extensions/voice-call && pnpm install
 ```
 
 ## Config
@@ -100,13 +100,13 @@ Notes:
 ## CLI
 
 ```bash
-clawdbot voicecall call --to "+15555550123" --message "Hello from Clawdbot"
-clawdbot voicecall continue --call-id <id> --message "Any questions?"
-clawdbot voicecall speak --call-id <id> --message "One moment"
-clawdbot voicecall end --call-id <id>
-clawdbot voicecall status --call-id <id>
-clawdbot voicecall tail
-clawdbot voicecall expose --mode funnel
+dna voicecall call --to "+15555550123" --message "Hello from DNA"
+dna voicecall continue --call-id <id> --message "Any questions?"
+dna voicecall speak --call-id <id> --message "One moment"
+dna voicecall end --call-id <id>
+dna voicecall status --call-id <id>
+dna voicecall tail
+dna voicecall expose --mode funnel
 ```
 
 ## Tool

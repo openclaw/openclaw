@@ -1,4 +1,4 @@
-import MoltbotKit
+import DNAKit
 import Foundation
 import Observation
 import OSLog
@@ -10,28 +10,28 @@ import AppKit
 import UIKit
 #endif
 
-private let chatUILogger = Logger(subsystem: "bot.molt", category: "MoltbotChatUI")
+private let chatUILogger = Logger(subsystem: "bot.molt", category: "DNAChatUI")
 
 @MainActor
 @Observable
-public final class MoltbotChatViewModel {
-    public private(set) var messages: [MoltbotChatMessage] = []
+public final class DNAChatViewModel {
+    public private(set) var messages: [DNAChatMessage] = []
     public var input: String = ""
     public var thinkingLevel: String = "off"
     public private(set) var isLoading = false
     public private(set) var isSending = false
     public private(set) var isAborting = false
     public var errorText: String?
-    public var attachments: [MoltbotPendingAttachment] = []
+    public var attachments: [DNAPendingAttachment] = []
     public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
 
     public private(set) var sessionKey: String
     public private(set) var sessionId: String?
     public private(set) var streamingAssistantText: String?
-    public private(set) var pendingToolCalls: [MoltbotChatPendingToolCall] = []
-    public private(set) var sessions: [MoltbotChatSessionEntry] = []
-    private let transport: any MoltbotChatTransport
+    public private(set) var pendingToolCalls: [DNAChatPendingToolCall] = []
+    public private(set) var sessions: [DNAChatSessionEntry] = []
+    private let transport: any DNAChatTransport
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -43,7 +43,7 @@ public final class MoltbotChatViewModel {
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
 
-    private var pendingToolCallsById: [String: MoltbotChatPendingToolCall] = [:] {
+    private var pendingToolCallsById: [String: DNAChatPendingToolCall] = [:] {
         didSet {
             self.pendingToolCalls = self.pendingToolCallsById.values
                 .sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
@@ -52,7 +52,7 @@ public final class MoltbotChatViewModel {
 
     private var lastHealthPollAt: Date?
 
-    public init(sessionKey: String, transport: any MoltbotChatTransport) {
+    public init(sessionKey: String, transport: any DNAChatTransport) {
         self.sessionKey = sessionKey
         self.transport = transport
 
@@ -99,12 +99,12 @@ public final class MoltbotChatViewModel {
         Task { await self.performSwitchSession(to: sessionKey) }
     }
 
-    public var sessionChoices: [MoltbotChatSessionEntry] {
+    public var sessionChoices: [DNAChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
         var seen = Set<String>()
-        var recent: [MoltbotChatSessionEntry] = []
+        var recent: [DNAChatSessionEntry] = []
         for entry in sorted {
             guard !seen.contains(entry.key) else { continue }
             seen.insert(entry.key)
@@ -112,7 +112,7 @@ public final class MoltbotChatViewModel {
             recent.append(entry)
         }
 
-        var result: [MoltbotChatSessionEntry] = []
+        var result: [DNAChatSessionEntry] = []
         var included = Set<String>()
         for entry in recent where !included.contains(entry.key) {
             result.append(entry)
@@ -138,7 +138,7 @@ public final class MoltbotChatViewModel {
         Task { await self.addImageAttachment(url: nil, data: data, fileName: fileName, mimeType: mimeType) }
     }
 
-    public func removeAttachment(_ id: MoltbotPendingAttachment.ID) {
+    public func removeAttachment(_ id: DNAPendingAttachment.ID) {
         self.attachments.removeAll { $0.id == id }
     }
 
@@ -180,15 +180,15 @@ public final class MoltbotChatViewModel {
         }
     }
 
-    private static func decodeMessages(_ raw: [AnyCodable]) -> [MoltbotChatMessage] {
+    private static func decodeMessages(_ raw: [AnyCodable]) -> [DNAChatMessage] {
         let decoded = raw.compactMap { item in
-            (try? ChatPayloadDecoding.decode(item, as: MoltbotChatMessage.self))
+            (try? ChatPayloadDecoding.decode(item, as: DNAChatMessage.self))
         }
         return Self.dedupeMessages(decoded)
     }
 
-    private static func dedupeMessages(_ messages: [MoltbotChatMessage]) -> [MoltbotChatMessage] {
-        var result: [MoltbotChatMessage] = []
+    private static func dedupeMessages(_ messages: [DNAChatMessage]) -> [DNAChatMessage] {
+        var result: [DNAChatMessage] = []
         result.reserveCapacity(messages.count)
         var seen = Set<String>()
 
@@ -205,7 +205,7 @@ public final class MoltbotChatViewModel {
         return result
     }
 
-    private static func dedupeKey(for message: MoltbotChatMessage) -> String? {
+    private static func dedupeKey(for message: DNAChatMessage) -> String? {
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -233,8 +233,8 @@ public final class MoltbotChatViewModel {
         self.streamingAssistantText = nil
 
         // Optimistically append user message to UI.
-        var userContent: [MoltbotChatMessageContent] = [
-            MoltbotChatMessageContent(
+        var userContent: [DNAChatMessageContent] = [
+            DNAChatMessageContent(
                 type: "text",
                 text: messageText,
                 thinking: nil,
@@ -246,8 +246,8 @@ public final class MoltbotChatViewModel {
                 name: nil,
                 arguments: nil),
         ]
-        let encodedAttachments = self.attachments.map { att -> MoltbotChatAttachmentPayload in
-            MoltbotChatAttachmentPayload(
+        let encodedAttachments = self.attachments.map { att -> DNAChatAttachmentPayload in
+            DNAChatAttachmentPayload(
                 type: att.type,
                 mimeType: att.mimeType,
                 fileName: att.fileName,
@@ -255,7 +255,7 @@ public final class MoltbotChatViewModel {
         }
         for att in encodedAttachments {
             userContent.append(
-                MoltbotChatMessageContent(
+                DNAChatMessageContent(
                     type: att.type,
                     text: nil,
                     thinking: nil,
@@ -268,7 +268,7 @@ public final class MoltbotChatViewModel {
                     arguments: nil))
         }
         self.messages.append(
-            MoltbotChatMessage(
+            DNAChatMessage(
                 id: UUID(),
                 role: "user",
                 content: userContent,
@@ -332,8 +332,8 @@ public final class MoltbotChatViewModel {
         await self.bootstrap()
     }
 
-    private func placeholderSession(key: String) -> MoltbotChatSessionEntry {
-        MoltbotChatSessionEntry(
+    private func placeholderSession(key: String) -> DNAChatSessionEntry {
+        DNAChatSessionEntry(
             key: key,
             kind: nil,
             displayName: nil,
@@ -354,7 +354,7 @@ public final class MoltbotChatViewModel {
             contextTokens: nil)
     }
 
-    private func handleTransportEvent(_ evt: MoltbotChatTransportEvent) {
+    private func handleTransportEvent(_ evt: DNAChatTransportEvent) {
         switch evt {
         case let .health(ok):
             self.healthOK = ok
@@ -370,7 +370,7 @@ public final class MoltbotChatViewModel {
         }
     }
 
-    private func handleChatEvent(_ chat: MoltbotChatEventPayload) {
+    private func handleChatEvent(_ chat: DNAChatEventPayload) {
         if let sessionKey = chat.sessionKey, sessionKey != self.sessionKey {
             return
         }
@@ -407,7 +407,7 @@ public final class MoltbotChatViewModel {
         }
     }
 
-    private func handleAgentEvent(_ evt: MoltbotAgentEventPayload) {
+    private func handleAgentEvent(_ evt: DNAAgentEventPayload) {
         if let sessionId, evt.runId != sessionId {
             return
         }
@@ -423,7 +423,7 @@ public final class MoltbotChatViewModel {
             guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
             if phase == "start" {
                 let args = evt.data["args"]
-                self.pendingToolCallsById[toolCallId] = MoltbotChatPendingToolCall(
+                self.pendingToolCallsById[toolCallId] = DNAChatPendingToolCall(
                     toolCallId: toolCallId,
                     name: name,
                     args: args,
@@ -534,7 +534,7 @@ public final class MoltbotChatViewModel {
 
         let preview = Self.previewImage(data: data)
         self.attachments.append(
-            MoltbotPendingAttachment(
+            DNAPendingAttachment(
                 url: url,
                 data: data,
                 fileName: fileName,
@@ -542,7 +542,7 @@ public final class MoltbotChatViewModel {
                 preview: preview))
     }
 
-    private static func previewImage(data: Data) -> MoltbotPlatformImage? {
+    private static func previewImage(data: Data) -> DNAPlatformImage? {
         #if canImport(AppKit)
         NSImage(data: data)
         #elseif canImport(UIKit)

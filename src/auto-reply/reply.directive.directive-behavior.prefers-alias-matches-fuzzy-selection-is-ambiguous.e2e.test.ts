@@ -29,10 +29,10 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     },
     {
       env: {
-        CLAWDBOT_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
-        PI_CODING_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
+        DNA_AGENT_DIR: (home) => path.join(home, ".dna", "agent"),
+        PI_CODING_AGENT_DIR: (home) => path.join(home, ".dna", "agent"),
       },
-      prefix: "moltbot-reply-",
+      prefix: "dna-reply-",
     },
   );
 }
@@ -116,7 +116,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
-      const authDir = path.join(home, ".clawdbot", "agents", "main", "agent");
+      const authDir = path.join(home, ".dna", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true, mode: 0o700 });
       await fs.writeFile(
         path.join(authDir, "auth-profiles.json"),

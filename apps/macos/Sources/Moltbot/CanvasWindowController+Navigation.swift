@@ -17,7 +17,7 @@ extension CanvasWindowController {
         let scheme = url.scheme?.lowercased()
 
         // Deep links: allow local Canvas content to invoke the agent without bouncing through NSWorkspace.
-        if scheme == "moltbot" {
+        if scheme == "dna" {
             if self.webView.url?.scheme == CanvasScheme.scheme {
                 Task { await DeepLinkHandler.shared.handle(url: url) }
             } else {

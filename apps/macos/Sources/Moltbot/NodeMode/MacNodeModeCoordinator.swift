@@ -1,4 +1,4 @@
-import MoltbotKit
+import DNAKit
 import Foundation
 import OSLog
 
@@ -60,7 +60,7 @@ final class MacNodeModeCoordinator {
                     caps: caps,
                     commands: commands,
                     permissions: permissions,
-                    clientId: "moltbot-macos",
+                    clientId: "dna-macos",
                     clientMode: "node",
                     clientDisplayName: InstanceIdentity.displayName)
                 let sessionBox = self.buildSessionBox(url: config.url)
@@ -91,7 +91,7 @@ final class MacNodeModeCoordinator {
                             return BridgeInvokeResponse(
                                 id: req.id,
                                 ok: false,
-                                error: MoltbotNodeError(code: .unavailable, message: "UNAVAILABLE: node not ready"))
+                                error: DNANodeError(code: .unavailable, message: "UNAVAILABLE: node not ready"))
                         }
                         return await self.runtime.handleInvoke(req)
                     })
@@ -107,13 +107,13 @@ final class MacNodeModeCoordinator {
     }
 
     private func currentCaps() -> [String] {
-        var caps: [String] = [MoltbotCapability.canvas.rawValue, MoltbotCapability.screen.rawValue]
+        var caps: [String] = [DNACapability.canvas.rawValue, DNACapability.screen.rawValue]
         if UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false {
-            caps.append(MoltbotCapability.camera.rawValue)
+            caps.append(DNACapability.camera.rawValue)
         }
         let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
-        if MoltbotLocationMode(rawValue: rawLocationMode) != .off {
-            caps.append(MoltbotCapability.location.rawValue)
+        if DNALocationMode(rawValue: rawLocationMode) != .off {
+            caps.append(DNACapability.location.rawValue)
         }
         return caps
     }
@@ -125,30 +125,30 @@ final class MacNodeModeCoordinator {
 
     private func currentCommands(caps: [String]) -> [String] {
         var commands: [String] = [
-            MoltbotCanvasCommand.present.rawValue,
-            MoltbotCanvasCommand.hide.rawValue,
-            MoltbotCanvasCommand.navigate.rawValue,
-            MoltbotCanvasCommand.evalJS.rawValue,
-            MoltbotCanvasCommand.snapshot.rawValue,
-            MoltbotCanvasA2UICommand.push.rawValue,
-            MoltbotCanvasA2UICommand.pushJSONL.rawValue,
-            MoltbotCanvasA2UICommand.reset.rawValue,
+            DNACanvasCommand.present.rawValue,
+            DNACanvasCommand.hide.rawValue,
+            DNACanvasCommand.navigate.rawValue,
+            DNACanvasCommand.evalJS.rawValue,
+            DNACanvasCommand.snapshot.rawValue,
+            DNACanvasA2UICommand.push.rawValue,
+            DNACanvasA2UICommand.pushJSONL.rawValue,
+            DNACanvasA2UICommand.reset.rawValue,
             MacNodeScreenCommand.record.rawValue,
-            MoltbotSystemCommand.notify.rawValue,
-            MoltbotSystemCommand.which.rawValue,
-            MoltbotSystemCommand.run.rawValue,
-            MoltbotSystemCommand.execApprovalsGet.rawValue,
-            MoltbotSystemCommand.execApprovalsSet.rawValue,
+            DNASystemCommand.notify.rawValue,
+            DNASystemCommand.which.rawValue,
+            DNASystemCommand.run.rawValue,
+            DNASystemCommand.execApprovalsGet.rawValue,
+            DNASystemCommand.execApprovalsSet.rawValue,
         ]
 
         let capsSet = Set(caps)
-        if capsSet.contains(MoltbotCapability.camera.rawValue) {
-            commands.append(MoltbotCameraCommand.list.rawValue)
-            commands.append(MoltbotCameraCommand.snap.rawValue)
-            commands.append(MoltbotCameraCommand.clip.rawValue)
+        if capsSet.contains(DNACapability.camera.rawValue) {
+            commands.append(DNACameraCommand.list.rawValue)
+            commands.append(DNACameraCommand.snap.rawValue)
+            commands.append(DNACameraCommand.clip.rawValue)
         }
-        if capsSet.contains(MoltbotCapability.location.rawValue) {
-            commands.append(MoltbotLocationCommand.get.rawValue)
+        if capsSet.contains(DNACapability.location.rawValue) {
+            commands.append(DNALocationCommand.get.rawValue)
         }
 
         return commands

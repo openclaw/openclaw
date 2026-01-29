@@ -1,5 +1,5 @@
-import MoltbotKit
-import MoltbotProtocol
+import DNAKit
+import DNAProtocol
 import Cocoa
 import Foundation
 import Observation
@@ -293,7 +293,7 @@ final class InstancesStore {
         }
     }
 
-    func handlePresenceEventPayload(_ payload: MoltbotProtocol.AnyCodable) {
+    func handlePresenceEventPayload(_ payload: DNAProtocol.AnyCodable) {
         do {
             let wrapper = try GatewayPayloadDecoding.decode(payload, as: PresenceEventPayload.self)
             self.applyPresence(wrapper.presence)

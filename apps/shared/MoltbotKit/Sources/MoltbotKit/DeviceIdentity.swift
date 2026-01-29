@@ -16,7 +16,7 @@ public struct DeviceIdentity: Codable, Sendable {
 }
 
 enum DeviceIdentityPaths {
-    private static let stateDirEnv = "CLAWDBOT_STATE_DIR"
+    private static let stateDirEnv = "DNA_STATE_DIR"
 
     static func stateDirURL() -> URL {
         if let raw = getenv(self.stateDirEnv) {
@@ -27,10 +27,10 @@ enum DeviceIdentityPaths {
         }
 
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            return appSupport.appendingPathComponent("moltbot", isDirectory: true)
+            return appSupport.appendingPathComponent("dna", isDirectory: true)
         }
 
-        return FileManager.default.temporaryDirectory.appendingPathComponent("moltbot", isDirectory: true)
+        return FileManager.default.temporaryDirectory.appendingPathComponent("dna", isDirectory: true)
     }
 }
 

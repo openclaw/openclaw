@@ -1,10 +1,10 @@
 ---
-summary: "CLI reference for `moltbot pairing` (approve/list pairing requests)"
+summary: "CLI reference for `dna pairing` (approve/list pairing requests)"
 read_when:
   - You’re using pairing-mode DMs and need to approve senders
 ---
 
-# `moltbot pairing`
+# `dna pairing`
 
 Approve or inspect DM pairing requests (for channels that support pairing).
 
@@ -14,7 +14,7 @@ Related:
 ## Commands
 
 ```bash
-moltbot pairing list whatsapp
-moltbot pairing approve whatsapp <code> --notify
+dna pairing list whatsapp
+dna pairing approve whatsapp <code> --notify
 ```
 

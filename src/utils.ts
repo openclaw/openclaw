@@ -215,10 +215,10 @@ export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.MOLTBOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const override = env.DNA_STATE_DIR?.trim() || env.DNA_STATE_DIR?.trim();
   if (override) return resolveUserPath(override);
-  const legacyDir = path.join(homedir(), ".clawdbot");
-  const newDir = path.join(homedir(), ".moltbot");
+  const legacyDir = path.join(homedir(), ".dna");
+  const newDir = path.join(homedir(), ".dna");
   try {
     const hasLegacy = fs.existsSync(legacyDir);
     const hasNew = fs.existsSync(newDir);
@@ -282,5 +282,5 @@ export function formatTerminalLink(
   return `\u001b]8;;${safeUrl}\u0007${safeLabel}\u001b]8;;\u0007`;
 }
 
-// Configuration root; can be overridden via CLAWDBOT_STATE_DIR.
+// Configuration root; can be overridden via DNA_STATE_DIR.
 export const CONFIG_DIR = resolveConfigDir();

@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -19,7 +19,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 
-export function createMoltbotTools(options?: {
+export function createDNATools(options?: {
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
@@ -39,7 +39,7 @@ export function createMoltbotTools(options?: {
   sandboxRoot?: string;
   workspaceDir?: string;
   sandboxed?: boolean;
-  config?: MoltbotConfig;
+  config?: DNAConfig;
   pluginToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;

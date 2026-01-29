@@ -115,12 +115,12 @@ export function registerPairingCli(program: Command) {
       const resolvedCode = opts.channel ? codeOrChannel : code;
       if (!opts.channel && !code) {
         throw new Error(
-          `Usage: ${formatCliCommand("moltbot pairing approve <channel> <code>")} (or: ${formatCliCommand("moltbot pairing approve --channel <channel> <code>")})`,
+          `Usage: ${formatCliCommand("dna pairing approve <channel> <code>")} (or: ${formatCliCommand("dna pairing approve --channel <channel> <code>")})`,
         );
       }
       if (opts.channel && code != null) {
         throw new Error(
-          `Too many arguments. Use: ${formatCliCommand("moltbot pairing approve --channel <channel> <code>")}`,
+          `Too many arguments. Use: ${formatCliCommand("dna pairing approve --channel <channel> <code>")}`,
         );
       }
       const channel = parseChannel(channelRaw, channels);

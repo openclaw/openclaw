@@ -9,7 +9,7 @@ import {
   normalizeProviderId,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 
@@ -23,7 +23,7 @@ const PROVIDER_FILTER_THRESHOLD = 30;
 const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
 
 type PromptDefaultModelParams = {
-  config: MoltbotConfig;
+  config: DNAConfig;
   prompter: WizardPrompter;
   allowKeep?: boolean;
   includeManual?: boolean;
@@ -38,7 +38,7 @@ type PromptModelAllowlistResult = { models?: string[] };
 
 function hasAuthForProvider(
   provider: string,
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
 ) {
   if (listProfilesForProvider(store, provider).length > 0) return true;
@@ -47,13 +47,13 @@ function hasAuthForProvider(
   return false;
 }
 
-function resolveConfiguredModelRaw(cfg: MoltbotConfig): string {
+function resolveConfiguredModelRaw(cfg: DNAConfig): string {
   const raw = cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
   if (typeof raw === "string") return raw.trim();
   return raw?.primary?.trim() ?? "";
 }
 
-function resolveConfiguredModelKeys(cfg: MoltbotConfig): string[] {
+function resolveConfiguredModelKeys(cfg: DNAConfig): string[] {
   const models = cfg.agents?.defaults?.models ?? {};
   return Object.keys(models)
     .map((key) => String(key ?? "").trim())
@@ -266,7 +266,7 @@ export async function promptDefaultModel(
 }
 
 export async function promptModelAllowlist(params: {
-  config: MoltbotConfig;
+  config: DNAConfig;
   prompter: WizardPrompter;
   message?: string;
   agentDir?: string;
@@ -387,7 +387,7 @@ export async function promptModelAllowlist(params: {
   return { models: [] };
 }
 
-export function applyPrimaryModel(cfg: MoltbotConfig, model: string): MoltbotConfig {
+export function applyPrimaryModel(cfg: DNAConfig, model: string): DNAConfig {
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
@@ -414,7 +414,7 @@ export function applyPrimaryModel(cfg: MoltbotConfig, model: string): MoltbotCon
   };
 }
 
-export function applyModelAllowlist(cfg: MoltbotConfig, models: string[]): MoltbotConfig {
+export function applyModelAllowlist(cfg: DNAConfig, models: string[]): DNAConfig {
   const defaults = cfg.agents?.defaults;
   const normalized = normalizeModelKeys(models);
   if (normalized.length === 0) {
@@ -448,9 +448,9 @@ export function applyModelAllowlist(cfg: MoltbotConfig, models: string[]): Moltb
 }
 
 export function applyModelFallbacksFromSelection(
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   selection: string[],
-): MoltbotConfig {
+): DNAConfig {
   const normalized = normalizeModelKeys(selection);
   if (normalized.length <= 1) return cfg;
 

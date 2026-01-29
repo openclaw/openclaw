@@ -1,8 +1,8 @@
 ---
-summary: "Use OpenRouter's unified API to access many models in Moltbot"
+summary: "Use OpenRouter's unified API to access many models in DNA"
 read_when:
   - You want a single API key for many LLMs
-  - You want to run models via OpenRouter in Moltbot
+  - You want to run models via OpenRouter in DNA
 ---
 # OpenRouter
 
@@ -12,7 +12,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-moltbot onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+dna onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
 ```
 
 ## Config snippet

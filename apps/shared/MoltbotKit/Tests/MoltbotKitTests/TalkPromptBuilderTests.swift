@@ -1,5 +1,5 @@
 import XCTest
-@testable import MoltbotKit
+@testable import DNAKit
 
 final class TalkPromptBuilderTests: XCTestCase {
     func testBuildIncludesTranscript() {

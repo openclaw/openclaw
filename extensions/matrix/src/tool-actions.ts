@@ -21,7 +21,7 @@ import {
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "clawdbot/plugin-sdk";
+} from "dna/plugin-sdk";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
 const reactionActions = new Set(["react", "reactions"]);

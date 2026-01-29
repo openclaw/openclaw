@@ -1,4 +1,4 @@
-import MoltbotProtocol
+import DNAProtocol
 
 /// Server-push messages from the gateway websocket.
 ///

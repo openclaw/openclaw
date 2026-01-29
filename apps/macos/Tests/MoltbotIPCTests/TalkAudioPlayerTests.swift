@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized) struct TalkAudioPlayerTests {
     @MainActor

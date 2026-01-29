@@ -1,5 +1,5 @@
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+import type { DNAPluginApi } from "dna/plugin-sdk";
+import { emptyPluginConfigSchema } from "dna/plugin-sdk";
 
 import { createDiagnosticsOtelService } from "./src/service.js";
 
@@ -8,7 +8,7 @@ const plugin = {
   name: "Diagnostics OpenTelemetry",
   description: "Export diagnostics events to OpenTelemetry",
   configSchema: emptyPluginConfigSchema(),
-  register(api: MoltbotPluginApi) {
+  register(api: DNAPluginApi) {
     api.registerService(createDiagnosticsOtelService());
   },
 };

@@ -6,7 +6,7 @@ read_when:
 ---
 # OpenResponses API (HTTP)
 
-Moltbot’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
+DNA’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
@@ -14,7 +14,7 @@ This endpoint is **disabled by default**. Enable it in config first.
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/responses`
 
 Under the hood, requests are executed as a normal Gateway agent run (same codepath as
-`moltbot agent`), so routing/permissions/config match your Gateway.
+`dna agent`), so routing/permissions/config match your Gateway.
 
 ## Authentication
 
@@ -23,22 +23,22 @@ Uses the Gateway auth configuration. Send a bearer token:
 - `Authorization: Bearer <token>`
 
 Notes:
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `CLAWDBOT_GATEWAY_PASSWORD`).
+- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `DNA_GATEWAY_TOKEN`).
+- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `DNA_GATEWAY_PASSWORD`).
 
 ## Choosing an agent
 
 No custom headers required: encode the agent id in the OpenResponses `model` field:
 
-- `model: "moltbot:<agentId>"` (example: `"moltbot:main"`, `"moltbot:beta"`)
+- `model: "dna:<agentId>"` (example: `"dna:main"`, `"dna:beta"`)
 - `model: "agent:<agentId>"` (alias)
 
-Or target a specific Moltbot agent by header:
+Or target a specific DNA agent by header:
 
-- `x-moltbot-agent-id: <agentId>` (default: `main`)
+- `x-dna-agent-id: <agentId>` (default: `main`)
 
 Advanced:
-- `x-moltbot-session-key: <sessionKey>` to fully control session routing.
+- `x-dna-session-key: <sessionKey>` to fully control session routing.
 
 ## Enabling the endpoint
 
@@ -277,9 +277,9 @@ Non-streaming:
 curl -sS http://127.0.0.1:18789/v1/responses \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-moltbot-agent-id: main' \
+  -H 'x-dna-agent-id: main' \
   -d '{
-    "model": "moltbot",
+    "model": "dna",
     "input": "hi"
   }'
 ```
@@ -289,9 +289,9 @@ Streaming:
 curl -N http://127.0.0.1:18789/v1/responses \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-moltbot-agent-id: main' \
+  -H 'x-dna-agent-id: main' \
   -d '{
-    "model": "moltbot",
+    "model": "dna",
     "stream": true,
     "input": "hi"
   }'

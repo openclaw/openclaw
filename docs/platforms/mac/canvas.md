@@ -15,16 +15,16 @@ UI surfaces.
 
 Canvas state is stored under Application Support:
 
-- `~/Library/Application Support/Moltbot/canvas/<session>/...`
+- `~/Library/Application Support/DNA/canvas/<session>/...`
 
 The Canvas panel serves those files via a **custom URL scheme**:
 
-- `moltbot-canvas://<session>/<path>`
+- `dna-canvas://<session>/<path>`
 
 Examples:
-- `moltbot-canvas://main/` → `<canvasRoot>/main/index.html`
-- `moltbot-canvas://main/assets/app.css` → `<canvasRoot>/main/assets/app.css`
-- `moltbot-canvas://main/widgets/todo/` → `<canvasRoot>/main/widgets/todo/index.html`
+- `dna-canvas://main/` → `<canvasRoot>/main/index.html`
+- `dna-canvas://main/assets/app.css` → `<canvasRoot>/main/assets/app.css`
+- `dna-canvas://main/widgets/todo/` → `<canvasRoot>/main/widgets/todo/index.html`
 
 If no `index.html` exists at the root, the app shows a **built‑in scaffold page**.
 
@@ -50,10 +50,10 @@ Canvas is exposed via the **Gateway WebSocket**, so the agent can:
 CLI examples:
 
 ```bash
-moltbot nodes canvas present --node <id>
-moltbot nodes canvas navigate --node <id> --url "/"
-moltbot nodes canvas eval --node <id> --js "document.title"
-moltbot nodes canvas snapshot --node <id>
+dna nodes canvas present --node <id>
+dna nodes canvas navigate --node <id> --url "/"
+dna nodes canvas eval --node <id> --js "document.title"
+dna nodes canvas snapshot --node <id>
 ```
 
 Notes:
@@ -69,7 +69,7 @@ A2UI host page on first open.
 Default A2UI host URL:
 
 ```
-http://<gateway-host>:18793/__moltbot__/a2ui/
+http://<gateway-host>:18793/__dna__/a2ui/
 ```
 
 ### A2UI commands (v0.8)
@@ -91,25 +91,25 @@ cat > /tmp/a2ui-v0.8.jsonl <<'EOFA2'
 {"beginRendering":{"surfaceId":"main","root":"root"}}
 EOFA2
 
-moltbot nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
+dna nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
 Quick smoke:
 
 ```bash
-moltbot nodes canvas a2ui push --node <id> --text "Hello from A2UI"
+dna nodes canvas a2ui push --node <id> --text "Hello from A2UI"
 ```
 
 ## Triggering agent runs from Canvas
 
 Canvas can trigger new agent runs via deep links:
 
-- `moltbot://agent?...`
+- `dna://agent?...`
 
 Example (in JS):
 
 ```js
-window.location.href = "moltbot://agent?message=Review%20this%20design";
+window.location.href = "dna://agent?message=Review%20this%20design";
 ```
 
 The app prompts for confirmation unless a valid key is provided.

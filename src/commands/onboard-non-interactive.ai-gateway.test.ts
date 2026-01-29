@@ -8,27 +8,27 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
   it("stores the API key and configures the default model", async () => {
     const prev = {
       home: process.env.HOME,
-      stateDir: process.env.CLAWDBOT_STATE_DIR,
-      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
-      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
-      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      password: process.env.CLAWDBOT_GATEWAY_PASSWORD,
+      stateDir: process.env.DNA_STATE_DIR,
+      configPath: process.env.DNA_CONFIG_PATH,
+      skipChannels: process.env.DNA_SKIP_CHANNELS,
+      skipGmail: process.env.DNA_SKIP_GMAIL_WATCHER,
+      skipCron: process.env.DNA_SKIP_CRON,
+      skipCanvas: process.env.DNA_SKIP_CANVAS_HOST,
+      token: process.env.DNA_GATEWAY_TOKEN,
+      password: process.env.DNA_GATEWAY_PASSWORD,
     };
 
-    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
-    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-    process.env.CLAWDBOT_SKIP_CRON = "1";
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    process.env.DNA_SKIP_CHANNELS = "1";
+    process.env.DNA_SKIP_GMAIL_WATCHER = "1";
+    process.env.DNA_SKIP_CRON = "1";
+    process.env.DNA_SKIP_CANVAS_HOST = "1";
+    delete process.env.DNA_GATEWAY_TOKEN;
+    delete process.env.DNA_GATEWAY_PASSWORD;
 
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-onboard-gateway-"));
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "dna-onboard-gateway-"));
     process.env.HOME = tempHome;
-    process.env.CLAWDBOT_STATE_DIR = tempHome;
-    process.env.CLAWDBOT_CONFIG_PATH = path.join(tempHome, "moltbot.json");
+    process.env.DNA_STATE_DIR = tempHome;
+    process.env.DNA_CONFIG_PATH = path.join(tempHome, "dna.json");
     vi.resetModules();
 
     const runtime = {
@@ -81,14 +81,14 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
     } finally {
       await fs.rm(tempHome, { recursive: true, force: true });
       process.env.HOME = prev.home;
-      process.env.CLAWDBOT_STATE_DIR = prev.stateDir;
-      process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
-      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
-      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
-      process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
-      process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
-      process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
-      process.env.CLAWDBOT_GATEWAY_PASSWORD = prev.password;
+      process.env.DNA_STATE_DIR = prev.stateDir;
+      process.env.DNA_CONFIG_PATH = prev.configPath;
+      process.env.DNA_SKIP_CHANNELS = prev.skipChannels;
+      process.env.DNA_SKIP_GMAIL_WATCHER = prev.skipGmail;
+      process.env.DNA_SKIP_CRON = prev.skipCron;
+      process.env.DNA_SKIP_CANVAS_HOST = prev.skipCanvas;
+      process.env.DNA_GATEWAY_TOKEN = prev.token;
+      process.env.DNA_GATEWAY_PASSWORD = prev.password;
     }
   }, 60_000);
 });

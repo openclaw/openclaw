@@ -1,4 +1,4 @@
-import MoltbotProtocol
+import DNAProtocol
 import Foundation
 
 /// Structured error surfaced when the gateway responds with `{ ok: false }`.

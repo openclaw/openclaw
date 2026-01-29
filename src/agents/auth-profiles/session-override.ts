@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../../config/config.js";
+import type { DNAConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
@@ -37,7 +37,7 @@ export async function clearSessionAuthProfileOverride(params: {
 }
 
 export async function resolveSessionAuthProfileOverride(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   provider: string;
   agentDir: string;
   sessionEntry?: SessionEntry;

@@ -1,6 +1,6 @@
 import Foundation
 
-enum MoltbotEnv {
+enum DNAEnv {
     static func path(_ key: String) -> String? {
         // Normalize env overrides once so UI + file IO stay consistent.
         guard let raw = getenv(key) else { return nil }
@@ -13,23 +13,23 @@ enum MoltbotEnv {
     }
 }
 
-enum MoltbotPaths {
-    private static let configPathEnv = "CLAWDBOT_CONFIG_PATH"
-    private static let stateDirEnv = "CLAWDBOT_STATE_DIR"
+enum DNAPaths {
+    private static let configPathEnv = "DNA_CONFIG_PATH"
+    private static let stateDirEnv = "DNA_STATE_DIR"
 
     static var stateDirURL: URL {
-        if let override = MoltbotEnv.path(self.stateDirEnv) {
+        if let override = DNAEnv.path(self.stateDirEnv) {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".clawdbot", isDirectory: true)
+            .appendingPathComponent(".dna", isDirectory: true)
     }
 
     static var configURL: URL {
-        if let override = MoltbotEnv.path(self.configPathEnv) {
+        if let override = DNAEnv.path(self.configPathEnv) {
             return URL(fileURLWithPath: override)
         }
-        return self.stateDirURL.appendingPathComponent("moltbot.json")
+        return self.stateDirURL.appendingPathComponent("dna.json")
     }
 
     static var workspaceURL: URL {

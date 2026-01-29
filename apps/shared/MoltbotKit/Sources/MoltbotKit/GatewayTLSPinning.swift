@@ -18,7 +18,7 @@ public struct GatewayTLSParams: Sendable {
 
 public enum GatewayTLSStore {
     private static let suiteName = "bot.molt.shared"
-    private static let legacySuiteName = "com.clawdbot.shared"
+    private static let legacySuiteName = "com.dna.shared"
     private static let keyPrefix = "gateway.tls."
 
     private static var defaults: UserDefaults {

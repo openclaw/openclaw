@@ -1,19 +1,19 @@
 ---
-summary: "Gmail Pub/Sub push wired into Moltbot webhooks via gogcli"
+summary: "Gmail Pub/Sub push wired into DNA webhooks via gogcli"
 read_when:
-  - Wiring Gmail inbox triggers to Moltbot
+  - Wiring Gmail inbox triggers to DNA
   - Setting up Pub/Sub push for agent wake
 ---
 
-# Gmail Pub/Sub -> Moltbot
+# Gmail Pub/Sub -> DNA
 
-Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> Moltbot webhook.
+Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> DNA webhook.
 
 ## Prereqs
 
 - `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)).
-- Moltbot hooks enabled (see [Webhooks](/automation/webhook)).
+- DNA hooks enabled (see [Webhooks](/automation/webhook)).
 - `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
   Other tunnel services can work, but are DIY/unsupported and require manual wiring.
   Right now, Tailscale is what we support.
@@ -24,7 +24,7 @@ Example hook config (enable Gmail preset mapping):
 {
   hooks: {
     enabled: true,
-    token: "CLAWDBOT_HOOK_TOKEN",
+    token: "DNA_HOOK_TOKEN",
     path: "/hooks",
     presets: ["gmail"]
   }
@@ -38,7 +38,7 @@ that sets `deliver` + optional `channel`/`to`:
 {
   hooks: {
     enabled: true,
-    token: "CLAWDBOT_HOOK_TOKEN",
+    token: "DNA_HOOK_TOKEN",
     presets: ["gmail"],
     mappings: [
       {
@@ -91,19 +91,19 @@ under `hooks.transformsDir` (see [Webhooks](/automation/webhook)).
 
 ## Wizard (recommended)
 
-Use the Moltbot helper to wire everything together (installs deps on macOS via brew):
+Use the DNA helper to wire everything together (installs deps on macOS via brew):
 
 ```bash
-moltbot webhooks gmail setup \
-  --account moltbot@gmail.com
+dna webhooks gmail setup \
+  --account dna@gmail.com
 ```
 
 Defaults:
 - Uses Tailscale Funnel for the public push endpoint.
-- Writes `hooks.gmail` config for `moltbot webhooks gmail run`.
+- Writes `hooks.gmail` config for `dna webhooks gmail run`.
 - Enables the Gmail hook preset (`hooks.presets: ["gmail"]`).
 
-Path note: when `tailscale.mode` is enabled, Moltbot automatically sets
+Path note: when `tailscale.mode` is enabled, DNA automatically sets
 `hooks.gmail.serve.path` to `/` and keeps the public path at
 `hooks.gmail.tailscale.path` (default `/gmail-pubsub`) because Tailscale
 strips the set-path prefix before proxying.
@@ -119,14 +119,14 @@ via Homebrew; on Linux install them manually first.
 Gateway auto-start (recommended):
 - When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
   `gog gmail watch serve` on boot and auto-renews the watch.
-- Set `CLAWDBOT_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
+- Set `DNA_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
 - Do not run the manual daemon at the same time, or you will hit
   `listen tcp 127.0.0.1:8788: bind: address already in use`.
 
 Manual daemon (starts `gog gmail watch serve` + auto-renew):
 
 ```bash
-moltbot webhooks gmail run
+dna webhooks gmail run
 ```
 
 ## One-time setup
@@ -164,7 +164,7 @@ gcloud pubsub topics add-iam-policy-binding gog-gmail-watch \
 
 ```bash
 gog gmail watch start \
-  --account moltbot@gmail.com \
+  --account dna@gmail.com \
   --label INBOX \
   --topic projects/<project-id>/topics/gog-gmail-watch
 ```
@@ -177,23 +177,23 @@ Local example (shared token auth):
 
 ```bash
 gog gmail watch serve \
-  --account moltbot@gmail.com \
+  --account dna@gmail.com \
   --bind 127.0.0.1 \
   --port 8788 \
   --path /gmail-pubsub \
   --token <shared> \
   --hook-url http://127.0.0.1:18789/hooks/gmail \
-  --hook-token CLAWDBOT_HOOK_TOKEN \
+  --hook-token DNA_HOOK_TOKEN \
   --include-body \
   --max-bytes 20000
 ```
 
 Notes:
 - `--token` protects the push endpoint (`x-gog-token` or `?token=`).
-- `--hook-url` points to Moltbot `/hooks/gmail` (mapped; isolated run + summary to main).
-- `--include-body` and `--max-bytes` control the body snippet sent to Moltbot.
+- `--hook-url` points to DNA `/hooks/gmail` (mapped; isolated run + summary to main).
+- `--include-body` and `--max-bytes` control the body snippet sent to DNA.
 
-Recommended: `moltbot webhooks gmail run` wraps the same flow and auto-renews the watch.
+Recommended: `dna webhooks gmail run` wraps the same flow and auto-renews the watch.
 
 ## Expose the handler (advanced, unsupported)
 
@@ -224,8 +224,8 @@ Send a message to the watched inbox:
 
 ```bash
 gog gmail send \
-  --account moltbot@gmail.com \
-  --to moltbot@gmail.com \
+  --account dna@gmail.com \
+  --to dna@gmail.com \
   --subject "watch test" \
   --body "ping"
 ```
@@ -233,8 +233,8 @@ gog gmail send \
 Check watch state and history:
 
 ```bash
-gog gmail watch status --account moltbot@gmail.com
-gog gmail history --account moltbot@gmail.com --since <historyId>
+gog gmail watch status --account dna@gmail.com
+gog gmail history --account dna@gmail.com --since <historyId>
 ```
 
 ## Troubleshooting
@@ -246,7 +246,7 @@ gog gmail history --account moltbot@gmail.com --since <historyId>
 ## Cleanup
 
 ```bash
-gog gmail watch stop --account moltbot@gmail.com
+gog gmail watch stop --account dna@gmail.com
 gcloud pubsub subscriptions delete gog-gmail-watch-push
 gcloud pubsub topics delete gog-gmail-watch
 ```

@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 struct ChatSessionsSheet: View {
-    @Bindable var viewModel: MoltbotChatViewModel
+    @Bindable var viewModel: DNAChatViewModel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

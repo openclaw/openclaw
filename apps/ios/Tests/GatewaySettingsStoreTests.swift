@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 private struct KeychainEntry: Hashable {
     let service: String

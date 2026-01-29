@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { MoltbotConfig, SkillConfig } from "../../config/config.js";
+import type { DNAConfig, SkillConfig } from "../../config/config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
@@ -17,7 +17,7 @@ function isTruthy(value: unknown): boolean {
   return true;
 }
 
-export function resolveConfigPath(config: MoltbotConfig | undefined, pathStr: string) {
+export function resolveConfigPath(config: DNAConfig | undefined, pathStr: string) {
   const parts = pathStr.split(".").filter(Boolean);
   let current: unknown = config;
   for (const part of parts) {
@@ -27,7 +27,7 @@ export function resolveConfigPath(config: MoltbotConfig | undefined, pathStr: st
   return current;
 }
 
-export function isConfigPathTruthy(config: MoltbotConfig | undefined, pathStr: string): boolean {
+export function isConfigPathTruthy(config: DNAConfig | undefined, pathStr: string): boolean {
   const value = resolveConfigPath(config, pathStr);
   if (value === undefined && pathStr in DEFAULT_CONFIG_VALUES) {
     return DEFAULT_CONFIG_VALUES[pathStr] === true;
@@ -36,7 +36,7 @@ export function isConfigPathTruthy(config: MoltbotConfig | undefined, pathStr: s
 }
 
 export function resolveSkillConfig(
-  config: MoltbotConfig | undefined,
+  config: DNAConfig | undefined,
   skillKey: string,
 ): SkillConfig | undefined {
   const skills = config?.skills?.entries;
@@ -58,10 +58,10 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
 }
 
 function isBundledSkill(entry: SkillEntry): boolean {
-  return entry.skill.source === "moltbot-bundled";
+  return entry.skill.source === "dna-bundled";
 }
 
-export function resolveBundledAllowlist(config?: MoltbotConfig): string[] | undefined {
+export function resolveBundledAllowlist(config?: DNAConfig): string[] | undefined {
   return normalizeAllowlist(config?.skills?.allowBundled);
 }
 
@@ -89,7 +89,7 @@ export function hasBinary(bin: string): boolean {
 
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
-  config?: MoltbotConfig;
+  config?: DNAConfig;
   eligibility?: SkillEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;

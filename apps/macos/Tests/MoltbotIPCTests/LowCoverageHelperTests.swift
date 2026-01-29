@@ -1,13 +1,13 @@
 import AppKit
-import MoltbotProtocol
+import DNAProtocol
 import Foundation
 import Testing
 
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 struct LowCoverageHelperTests {
-    private typealias ProtoAnyCodable = MoltbotProtocol.AnyCodable
+    private typealias ProtoAnyCodable = DNAProtocol.AnyCodable
 
     @Test func anyCodableHelperAccessors() throws {
         let payload: [String: ProtoAnyCodable] = [

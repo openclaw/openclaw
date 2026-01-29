@@ -1,8 +1,8 @@
-import MoltbotKit
+import DNAKit
 import Foundation
 import Testing
-@testable import Moltbot
-@testable import MoltbotIPC
+@testable import DNA
+@testable import DNAIPC
 
 private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
     var state: URLSessionTask.State = .running

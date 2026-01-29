@@ -1,7 +1,7 @@
 import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 
-export function applyOpencodeZenProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyOpencodeZenProviderConfig(cfg: DNAConfig): DNAConfig {
   // Use the built-in opencode provider from pi-ai; only seed the allowlist alias.
   const models = { ...cfg.agents?.defaults?.models };
   models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
@@ -21,7 +21,7 @@ export function applyOpencodeZenProviderConfig(cfg: MoltbotConfig): MoltbotConfi
   };
 }
 
-export function applyOpencodeZenConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyOpencodeZenConfig(cfg: DNAConfig): DNAConfig {
   const next = applyOpencodeZenProviderConfig(cfg);
   return {
     ...next,

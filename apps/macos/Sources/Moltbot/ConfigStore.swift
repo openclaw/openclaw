@@ -1,4 +1,4 @@
-import MoltbotProtocol
+import DNAProtocol
 import Foundation
 
 enum ConfigStore {
@@ -44,7 +44,7 @@ enum ConfigStore {
         if let gateway = await self.loadFromGateway() {
             return gateway
         }
-        return MoltbotConfigFile.loadDict()
+        return DNAConfigFile.loadDict()
     }
 
     @MainActor
@@ -63,7 +63,7 @@ enum ConfigStore {
                 do {
                     try await self.saveToGateway(root)
                 } catch {
-                    MoltbotConfigFile.saveDict(root)
+                    DNAConfigFile.saveDict(root)
                 }
             }
         }

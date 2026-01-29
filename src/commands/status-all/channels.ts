@@ -7,7 +7,7 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { DNAConfig } from "../../config/config.js";
 import { formatAge } from "./format.js";
 
 export type ChannelRow = {
@@ -78,7 +78,7 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
 const resolveAccountEnabled = (
   plugin: ChannelPlugin,
   account: unknown,
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
 ): boolean => {
   if (plugin.config.isEnabled) return plugin.config.isEnabled(account, cfg);
   const enabled = asRecord(account).enabled;
@@ -88,7 +88,7 @@ const resolveAccountEnabled = (
 const resolveAccountConfigured = async (
   plugin: ChannelPlugin,
   account: unknown,
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
 ): Promise<boolean> => {
   if (plugin.config.isConfigured) {
     return await plugin.config.isConfigured(account, cfg);
@@ -100,7 +100,7 @@ const resolveAccountConfigured = async (
 const buildAccountSnapshot = (params: {
   plugin: ChannelPlugin;
   account: unknown;
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   accountId: string;
   enabled: boolean;
   configured: boolean;
@@ -116,7 +116,7 @@ const buildAccountSnapshot = (params: {
 
 const formatAllowFrom = (params: {
   plugin: ChannelPlugin;
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   accountId?: string | null;
   allowFrom: Array<string | number>;
 }) => {
@@ -132,7 +132,7 @@ const formatAllowFrom = (params: {
 
 const buildAccountNotes = (params: {
   plugin: ChannelPlugin;
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   entry: ChannelAccountRow;
 }) => {
   const { plugin, cfg, entry } = params;
@@ -206,7 +206,7 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
 
 function summarizeTokenConfig(params: {
   plugin: ChannelPlugin;
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   accounts: ChannelAccountRow[];
   showSecrets: boolean;
 }): { state: "ok" | "setup" | "warn" | null; detail: string | null } {
@@ -291,7 +291,7 @@ function summarizeTokenConfig(params: {
 // `status --all` channels table.
 // Keep this generic: channel-specific rules belong in the channel plugin.
 export async function buildChannelsTable(
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   opts?: { showSecrets?: boolean },
 ): Promise<{
   rows: ChannelRow[];

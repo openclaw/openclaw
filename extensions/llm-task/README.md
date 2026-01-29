@@ -4,7 +4,7 @@ Adds an **optional** agent tool `llm-task` for running **JSON-only** LLM tasks
 (drafting, summarizing, classifying) with optional JSON Schema validation.
 
 Designed to be called from workflow engines (for example, Lobster via
-`clawd.invoke --each`) without adding new Clawdbot code per workflow.
+`clawd.invoke --each`) without adding new DNA code per workflow.
 
 ## Enable
 
@@ -89,9 +89,9 @@ Returns `details.json` containing the parsed JSON (and validates against
 
 ## Bundled extension note
 
-This extension depends on Clawdbot internal modules (the embedded agent runner).
-It is intended to ship as a **bundled** Clawdbot extension (like `lobster`) and
+This extension depends on DNA internal modules (the embedded agent runner).
+It is intended to ship as a **bundled** DNA extension (like `lobster`) and
 be enabled via `plugins.entries` + tool allowlists.
 
 It is **not** currently designed to be copied into
-`~/.clawdbot/extensions` as a standalone plugin directory.
+`~/.dna/extensions` as a standalone plugin directory.

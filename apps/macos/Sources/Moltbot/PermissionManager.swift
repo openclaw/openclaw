@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import MoltbotIPC
+import DNAIPC
 import CoreGraphics
 import CoreLocation
 import Foundation
@@ -380,7 +380,7 @@ enum AppleScriptPermission {
     static func isAuthorized() -> Bool {
         let script = """
         tell application "Terminal"
-            return "moltbot-ok"
+            return "dna-ok"
         end tell
         """
 

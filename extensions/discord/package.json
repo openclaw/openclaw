@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/discord",
+  "name": "@dna/discord",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Discord channel plugin",
-  "moltbot": {
+  "description": "DNA Discord channel plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ]

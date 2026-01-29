@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import { findLegacyGatewayServices, uninstallLegacyGatewayServices } from "../daemon/legacy.js";
@@ -43,7 +43,7 @@ function normalizeExecutablePath(value: string): string {
 }
 
 export async function maybeMigrateLegacyGatewayService(
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -57,7 +57,7 @@ export async function maybeMigrateLegacyGatewayService(
   );
 
   const migrate = await prompter.confirmSkipInNonInteractive({
-    message: "Migrate legacy gateway services to Moltbot now?",
+    message: "Migrate legacy gateway services to DNA now?",
     initialValue: true,
   });
   if (!migrate) return;
@@ -85,12 +85,12 @@ export async function maybeMigrateLegacyGatewayService(
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({ env: process.env });
   if (loaded) {
-    note(`Moltbot ${service.label} already ${service.loadedText}.`, "Gateway");
+    note(`DNA ${service.label} already ${service.loadedText}.`, "Gateway");
     return;
   }
 
   const install = await prompter.confirmSkipInNonInteractive({
-    message: "Install Moltbot gateway service now?",
+    message: "Install DNA gateway service now?",
     initialValue: true,
   });
   if (!install) return;
@@ -107,7 +107,7 @@ export async function maybeMigrateLegacyGatewayService(
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    token: cfg.gateway?.auth?.token ?? process.env.DNA_GATEWAY_TOKEN,
     runtime: daemonRuntime,
     warn: (message, title) => note(message, title),
     config: cfg,
@@ -127,7 +127,7 @@ export async function maybeMigrateLegacyGatewayService(
 }
 
 export async function maybeRepairGatewayServiceConfig(
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -174,7 +174,7 @@ export async function maybeRepairGatewayServiceConfig(
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    token: cfg.gateway?.auth?.token ?? process.env.DNA_GATEWAY_TOKEN,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
     warn: (message, title) => note(message, title),

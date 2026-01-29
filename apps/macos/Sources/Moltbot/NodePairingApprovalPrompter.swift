@@ -1,8 +1,8 @@
 import AppKit
-import MoltbotDiscovery
-import MoltbotIPC
-import MoltbotKit
-import MoltbotProtocol
+import DNADiscovery
+import DNAIPC
+import DNAKit
+import DNAProtocol
 import Foundation
 import Observation
 import OSLog

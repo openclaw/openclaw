@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
-import { createMoltbotCodingTools } from "./pi-tools.js";
+import { createDNACodingTools } from "./pi-tools.js";
 
-const defaultTools = createMoltbotCodingTools();
+const defaultTools = createDNACodingTools();
 
-describe("createMoltbotCodingTools", () => {
+describe("createDNACodingTools", () => {
   it("preserves action enums in normalized schemas", () => {
     const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
 
@@ -51,21 +51,21 @@ describe("createMoltbotCodingTools", () => {
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("gates apply_patch behind tools.exec.applyPatch for OpenAI models", () => {
-    const config: MoltbotConfig = {
+    const config: DNAConfig = {
       tools: {
         exec: {
           applyPatch: { enabled: true },
         },
       },
     };
-    const openAiTools = createMoltbotCodingTools({
+    const openAiTools = createDNACodingTools({
       config,
       modelProvider: "openai",
       modelId: "gpt-5.2",
     });
     expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
 
-    const anthropicTools = createMoltbotCodingTools({
+    const anthropicTools = createDNACodingTools({
       config,
       modelProvider: "anthropic",
       modelId: "claude-opus-4-5",
@@ -73,21 +73,21 @@ describe("createMoltbotCodingTools", () => {
     expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("respects apply_patch allowModels", () => {
-    const config: MoltbotConfig = {
+    const config: DNAConfig = {
       tools: {
         exec: {
           applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
         },
       },
     };
-    const allowed = createMoltbotCodingTools({
+    const allowed = createDNACodingTools({
       config,
       modelProvider: "openai",
       modelId: "gpt-5.2",
     });
     expect(allowed.some((tool) => tool.name === "apply_patch")).toBe(true);
 
-    const denied = createMoltbotCodingTools({
+    const denied = createDNACodingTools({
       config,
       modelProvider: "openai",
       modelId: "gpt-5-mini",
@@ -95,7 +95,7 @@ describe("createMoltbotCodingTools", () => {
     expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("keeps canonical tool names for Anthropic OAuth (pi-ai remaps on the wire)", () => {
-    const tools = createMoltbotCodingTools({
+    const tools = createDNACodingTools({
       modelProvider: "anthropic",
       modelAuthMode: "oauth",
     });
@@ -107,7 +107,7 @@ describe("createMoltbotCodingTools", () => {
     expect(names.has("apply_patch")).toBe(false);
   });
   it("provides top-level object schemas for all tools", () => {
-    const tools = createMoltbotCodingTools();
+    const tools = createDNACodingTools();
     const offenders = tools
       .map((tool) => {
         const schema =

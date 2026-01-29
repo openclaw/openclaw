@@ -1,4 +1,4 @@
-import MoltbotKit
+import DNAKit
 import Testing
 
 @Suite struct BonjourEscapesTests {
@@ -8,7 +8,7 @@ import Testing
     }
 
     @Test func decodeSpaces() {
-        #expect(BonjourEscapes.decode("Moltbot\\032Gateway") == "Moltbot Gateway")
+        #expect(BonjourEscapes.decode("DNA\\032Gateway") == "DNA Gateway")
     }
 
     @Test func decodeMultipleEscapes() {

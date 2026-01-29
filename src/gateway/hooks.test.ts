@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -26,7 +26,7 @@ describe("gateway hooks helpers", () => {
         token: "secret",
         path: "hooks///",
       },
-    } as MoltbotConfig;
+    } as DNAConfig;
     const resolved = resolveHooksConfig(base);
     expect(resolved?.basePath).toBe("/hooks");
     expect(resolved?.token).toBe("secret");
@@ -35,7 +35,7 @@ describe("gateway hooks helpers", () => {
   test("resolveHooksConfig rejects root path", () => {
     const cfg = {
       hooks: { enabled: true, token: "x", path: "/" },
-    } as MoltbotConfig;
+    } as DNAConfig;
     expect(() => resolveHooksConfig(cfg)).toThrow("hooks.path may not be '/'");
   });
 
@@ -43,7 +43,7 @@ describe("gateway hooks helpers", () => {
     const req = {
       headers: {
         authorization: "Bearer top",
-        "x-moltbot-token": "header",
+        "x-dna-token": "header",
       },
     } as unknown as IncomingMessage;
     const url = new URL("http://localhost/hooks/wake?token=query");
@@ -52,7 +52,7 @@ describe("gateway hooks helpers", () => {
     expect(result1.fromQuery).toBe(false);
 
     const req2 = {
-      headers: { "x-moltbot-token": "header" },
+      headers: { "x-dna-token": "header" },
     } as unknown as IncomingMessage;
     const result2 = extractHookToken(req2, url);
     expect(result2.token).toBe("header");

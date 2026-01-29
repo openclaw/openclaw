@@ -1,9 +1,9 @@
-import MoltbotProtocol
+import DNAProtocol
 import SwiftUI
 import Testing
-@testable import Moltbot
+@testable import DNA
 
-private typealias SnapshotAnyCodable = Moltbot.AnyCodable
+private typealias SnapshotAnyCodable = DNA.AnyCodable
 
 @Suite(.serialized)
 @MainActor
@@ -52,7 +52,7 @@ struct ChannelsSettingsSmokeTests {
                         "ok": true,
                         "status": 200,
                         "elapsedMs": 120,
-                        "bot": ["id": 123, "username": "moltbotbot"],
+                        "bot": ["id": 123, "username": "dnabot"],
                         "webhook": ["url": "https://example.com/hook", "hasCustomCert": false],
                     ],
                     "lastProbeAt": 1_700_000_050_000,

@@ -1,9 +1,9 @@
-import MoltbotProtocol
+import DNAProtocol
 import SwiftUI
 import Testing
-@testable import Moltbot
+@testable import DNA
 
-private typealias ProtoAnyCodable = MoltbotProtocol.AnyCodable
+private typealias ProtoAnyCodable = DNAProtocol.AnyCodable
 
 @Suite(.serialized)
 @MainActor

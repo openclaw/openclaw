@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/tlon",
+  "name": "@dna/tlon",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Tlon/Urbit channel plugin",
-  "moltbot": {
+  "description": "DNA Tlon/Urbit channel plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ],
@@ -18,7 +18,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/tlon",
+      "npmSpec": "@dna/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
     }

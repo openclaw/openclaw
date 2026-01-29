@@ -8,7 +8,7 @@ import { createMSTeamsPollStoreFs } from "./polls.js";
 import { createMSTeamsPollStoreMemory } from "./polls-store-memory.js";
 
 const createFsStore = async () => {
-  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "moltbot-msteams-polls-"));
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "dna-msteams-polls-"));
   return createMSTeamsPollStoreFs({ stateDir });
 };
 

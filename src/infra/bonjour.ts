@@ -28,7 +28,7 @@ export type GatewayBonjourAdvertiseOpts = {
 };
 
 function isDisabledByEnv() {
-  if (isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_BONJOUR)) return true;
+  if (isTruthyEnvValue(process.env.DNA_DISABLE_BONJOUR)) return true;
   if (process.env.NODE_ENV === "test") return true;
   if (process.env.VITEST) return true;
   return false;
@@ -36,12 +36,12 @@ function isDisabledByEnv() {
 
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "Moltbot";
+  return trimmed.length > 0 ? trimmed : "DNA";
 }
 
 function prettifyInstanceName(name: string) {
   const normalized = name.trim().replace(/\s+/g, " ");
-  return normalized.replace(/\s+\(Moltbot\)\s*$/i, "").trim() || normalized;
+  return normalized.replace(/\s+\(DNA\)\s*$/i, "").trim() || normalized;
 }
 
 type BonjourService = {
@@ -95,11 +95,11 @@ export async function startGatewayBonjourAdvertiser(
       .hostname()
       .replace(/\.local$/i, "")
       .split(".")[0]
-      .trim() || "moltbot";
+      .trim() || "dna";
   const instanceName =
     typeof opts.instanceName === "string" && opts.instanceName.trim()
       ? opts.instanceName.trim()
-      : `${hostname} (Moltbot)`;
+      : `${hostname} (DNA)`;
   const displayName = prettifyInstanceName(instanceName);
 
   const txtBase: Record<string, string> = {
@@ -140,7 +140,7 @@ export async function startGatewayBonjourAdvertiser(
 
   const gateway = responder.createService({
     name: safeServiceName(instanceName),
-    type: "moltbot-gw",
+    type: "dna-gw",
     protocol: Protocol.TCP,
     port: opts.gatewayPort,
     domain: "local",

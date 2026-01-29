@@ -3,7 +3,7 @@ import path from "node:path";
 
 import JSON5 from "json5";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -187,13 +187,13 @@ async function safeAclReset(params: {
 }
 
 function setGroupPolicyAllowlist(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   channel: string;
   changes: string[];
   policyFlips: Set<string>;
 }): void {
   if (!params.cfg.channels) return;
-  const section = params.cfg.channels[params.channel as keyof MoltbotConfig["channels"]] as
+  const section = params.cfg.channels[params.channel as keyof DNAConfig["channels"]] as
     | Record<string, unknown>
     | undefined;
   if (!section || typeof section !== "object") return;
@@ -222,7 +222,7 @@ function setGroupPolicyAllowlist(params: {
 }
 
 function setWhatsAppGroupAllowFromFromStore(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   storeAllowFrom: string[];
   changes: string[];
   policyFlips: Set<string>;
@@ -252,8 +252,8 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   }
 }
 
-function applyConfigFixes(params: { cfg: MoltbotConfig; env: NodeJS.ProcessEnv }): {
-  cfg: MoltbotConfig;
+function applyConfigFixes(params: { cfg: DNAConfig; env: NodeJS.ProcessEnv }): {
+  cfg: DNAConfig;
   changes: string[];
   policyFlips: Set<string>;
 } {
@@ -349,7 +349,7 @@ async function collectIncludePathsRecursive(params: {
 async function chmodCredentialsAndAgentState(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   actions: SecurityFixAction[];
   applyPerms: (params: {
     path: string;

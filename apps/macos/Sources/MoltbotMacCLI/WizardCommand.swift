@@ -1,5 +1,5 @@
-import MoltbotKit
-import MoltbotProtocol
+import DNAKit
+import DNAProtocol
 import Darwin
 import Foundation
 
@@ -71,10 +71,10 @@ func runWizardCommand(_ args: [String]) async {
     let opts = WizardCliOptions.parse(args)
     if opts.help {
         print("""
-        moltbot-mac wizard
+        dna-mac wizard
 
         Usage:
-          moltbot-mac wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
+          dna-mac wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
                               [--mode <local|remote>] [--workspace <path>] [--json]
 
         Options:
@@ -146,7 +146,7 @@ private func resolveWizardGatewayEndpoint(opts: WizardCliOptions, config: Gatewa
 
 private func resolvedToken(opts: WizardCliOptions, config: GatewayConfig) -> String? {
     if let token = opts.token, !token.isEmpty { return token }
-    if let token = ProcessInfo.processInfo.environment["CLAWDBOT_GATEWAY_TOKEN"], !token.isEmpty {
+    if let token = ProcessInfo.processInfo.environment["DNA_GATEWAY_TOKEN"], !token.isEmpty {
         return token
     }
     if (config.mode ?? "local").lowercased() == "remote" {
@@ -157,7 +157,7 @@ private func resolvedToken(opts: WizardCliOptions, config: GatewayConfig) -> Str
 
 private func resolvedPassword(opts: WizardCliOptions, config: GatewayConfig) -> String? {
     if let password = opts.password, !password.isEmpty { return password }
-    if let password = ProcessInfo.processInfo.environment["CLAWDBOT_GATEWAY_PASSWORD"], !password.isEmpty {
+    if let password = ProcessInfo.processInfo.environment["DNA_GATEWAY_PASSWORD"], !password.isEmpty {
         return password
     }
     if (config.mode ?? "local").lowercased() == "remote" {
@@ -253,13 +253,13 @@ actor GatewayWizardClient {
         }
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
-        let clientId = "moltbot-macos"
+        let clientId = "dna-macos"
         let clientMode = "ui"
         let role = "operator"
         let scopes: [String] = []
         let client: [String: ProtoAnyCodable] = [
             "id": ProtoAnyCodable(clientId),
-            "displayName": ProtoAnyCodable(Host.current().localizedName ?? "Moltbot macOS Wizard CLI"),
+            "displayName": ProtoAnyCodable(Host.current().localizedName ?? "DNA macOS Wizard CLI"),
             "version": ProtoAnyCodable("dev"),
             "platform": ProtoAnyCodable(platform),
             "deviceFamily": ProtoAnyCodable("Mac"),

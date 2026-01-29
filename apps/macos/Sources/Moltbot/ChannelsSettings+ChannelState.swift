@@ -1,4 +1,4 @@
-import MoltbotProtocol
+import DNAProtocol
 import SwiftUI
 
 extension ChannelsSettings {

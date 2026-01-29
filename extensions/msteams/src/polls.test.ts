@@ -4,17 +4,17 @@ import path from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { PluginRuntime } from "clawdbot/plugin-sdk";
+import type { PluginRuntime } from "dna/plugin-sdk";
 import { buildMSTeamsPollCard, createMSTeamsPollStoreFs, extractMSTeamsPollVote } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const runtimeStub = {
   state: {
     resolveStateDir: (env: NodeJS.ProcessEnv = process.env, homedir?: () => string) => {
-      const override = env.CLAWDBOT_STATE_DIR?.trim();
+      const override = env.DNA_STATE_DIR?.trim();
       if (override) return override;
       const resolvedHome = homedir ? homedir() : os.homedir();
-      return path.join(resolvedHome, ".clawdbot");
+      return path.join(resolvedHome, ".dna");
     },
   },
 } as unknown as PluginRuntime;
@@ -39,7 +39,7 @@ describe("msteams polls", () => {
   it("extracts poll votes from activity values", () => {
     const vote = extractMSTeamsPollVote({
       value: {
-        moltbotPollId: "poll-1",
+        dnaPollId: "poll-1",
         choices: "0,1",
       },
     });
@@ -51,7 +51,7 @@ describe("msteams polls", () => {
   });
 
   it("stores and records poll votes", async () => {
-    const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "moltbot-msteams-polls-"));
+    const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "dna-msteams-polls-"));
     const store = createMSTeamsPollStoreFs({ homedir: () => home });
     await store.createPoll({
       id: "poll-2",

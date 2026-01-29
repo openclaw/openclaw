@@ -1,4 +1,4 @@
-import MoltbotKit
+import DNAKit
 import Foundation
 
 struct WideAreaGatewayBeacon: Sendable, Equatable {
@@ -50,9 +50,9 @@ enum WideAreaGatewayDiscovery {
             return []
         }
 
-        let domain = MoltbotBonjour.wideAreaGatewayServiceDomain
+        let domain = DNABonjour.wideAreaGatewayServiceDomain
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_moltbot-gw._tcp.\(domainTrimmed)"
+        let probeName = "_dna-gw._tcp.\(domainTrimmed)"
         guard let ptrLines = context.dig(
             ["+short", "+time=1", "+tries=1", "@\(nameserver)", probeName, "PTR"],
             min(defaultTimeoutSeconds, remaining()))?.split(whereSeparator: \.isNewline),
@@ -66,7 +66,7 @@ enum WideAreaGatewayDiscovery {
             let ptr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if ptr.isEmpty { continue }
             let ptrName = ptr.hasSuffix(".") ? String(ptr.dropLast()) : ptr
-            let suffix = "._moltbot-gw._tcp.\(domainTrimmed)"
+            let suffix = "._dna-gw._tcp.\(domainTrimmed)"
             let rawInstanceName = ptrName.hasSuffix(suffix)
                 ? String(ptrName.dropLast(suffix.count))
                 : ptrName
@@ -154,9 +154,9 @@ enum WideAreaGatewayDiscovery {
         remaining: () -> TimeInterval,
         dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> String?
     {
-        let domain = MoltbotBonjour.wideAreaGatewayServiceDomain
+        let domain = DNABonjour.wideAreaGatewayServiceDomain
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_moltbot-gw._tcp.\(domainTrimmed)"
+        let probeName = "_dna-gw._tcp.\(domainTrimmed)"
 
         let ips = candidates
         candidates.removeAll(keepingCapacity: true)

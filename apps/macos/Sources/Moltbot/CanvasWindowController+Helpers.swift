@@ -23,7 +23,7 @@ extension CanvasWindowController {
     }
 
     static func storedFrameDefaultsKey(sessionKey: String) -> String {
-        "moltbot.canvas.frame.\(self.sanitizeSessionKey(sessionKey))"
+        "dna.canvas.frame.\(self.sanitizeSessionKey(sessionKey))"
     }
 
     static func loadRestoredFrame(sessionKey: String) -> NSRect? {

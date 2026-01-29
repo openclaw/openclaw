@@ -69,7 +69,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
       vi.mocked(abortEmbeddedPiRun).mockClear();
       return await fn(home);
     },
-    { prefix: "moltbot-triggers-" },
+    { prefix: "dna-triggers-" },
   );
 }
 
@@ -98,7 +98,7 @@ describe("trigger handling", () => {
   it("reports active auth profile and key snippet in status", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
-      const agentDir = join(home, ".clawdbot", "agents", "main", "agent");
+      const agentDir = join(home, ".dna", "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         join(agentDir, "auth-profiles.json"),

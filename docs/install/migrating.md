@@ -1,16 +1,16 @@
 ---
-summary: "Move (migrate) a Moltbot install from one machine to another"
+summary: "Move (migrate) a DNA install from one machine to another"
 read_when:
-  - You are moving Moltbot to a new laptop/server
+  - You are moving DNA to a new laptop/server
   - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
 ---
-# Migrating Moltbot to a new machine
+# Migrating DNA to a new machine
 
-This guide migrates a Moltbot Gateway from one machine to another **without redoing onboarding**.
+This guide migrates a DNA Gateway from one machine to another **without redoing onboarding**.
 
 The migration is simple conceptually:
 
-- Copy the **state directory** (`$CLAWDBOT_STATE_DIR`, default: `~/.clawdbot/`) — this includes config, auth, sessions, and channel state.
+- Copy the **state directory** (`$DNA_STATE_DIR`, default: `~/.dna/`) — this includes config, auth, sessions, and channel state.
 - Copy your **workspace** (`~/clawd/` by default) — this includes your agent files (memory, prompts, etc.).
 
 But there are common footguns around **profiles**, **permissions**, and **partial copies**.
@@ -21,20 +21,20 @@ But there are common footguns around **profiles**, **permissions**, and **partia
 
 Most installs use the default:
 
-- **State dir:** `~/.clawdbot/`
+- **State dir:** `~/.dna/`
 
 But it may be different if you use:
 
-- `--profile <name>` (often becomes `~/.clawdbot-<profile>/`)
-- `CLAWDBOT_STATE_DIR=/some/path`
+- `--profile <name>` (often becomes `~/.dna-<profile>/`)
+- `DNA_STATE_DIR=/some/path`
 
 If you’re not sure, run on the **old** machine:
 
 ```bash
-moltbot status
+dna status
 ```
 
-Look for mentions of `CLAWDBOT_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
+Look for mentions of `DNA_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
 
 ### 2) Identify your workspace
 
@@ -49,7 +49,7 @@ Your workspace is where files like `MEMORY.md`, `USER.md`, and `memory/*.md` liv
 
 If you copy **both** the state dir and workspace, you keep:
 
-- Gateway configuration (`moltbot.json`)
+- Gateway configuration (`dna.json`)
 - Auth profiles / API keys / OAuth tokens
 - Session history + agent state
 - Channel state (e.g. WhatsApp login/session)
@@ -61,7 +61,7 @@ If you copy **only** the workspace (e.g., via Git), you do **not** preserve:
 - credentials
 - channel logins
 
-Those live under `$CLAWDBOT_STATE_DIR`.
+Those live under `$DNA_STATE_DIR`.
 
 ## Migration steps (recommended)
 
@@ -70,7 +70,7 @@ Those live under `$CLAWDBOT_STATE_DIR`.
 On the **old** machine, stop the gateway first so files aren’t changing mid-copy:
 
 ```bash
-moltbot gateway stop
+dna gateway stop
 ```
 
 (Optional but recommended) archive the state dir and workspace:
@@ -78,26 +78,26 @@ moltbot gateway stop
 ```bash
 # Adjust paths if you use a profile or custom locations
 cd ~
-tar -czf moltbot-state.tgz .clawdbot
+tar -czf dna-state.tgz .dna
 
 tar -czf clawd-workspace.tgz clawd
 ```
 
-If you have multiple profiles/state dirs (e.g. `~/.clawdbot-main`, `~/.clawdbot-work`), archive each.
+If you have multiple profiles/state dirs (e.g. `~/.dna-main`, `~/.dna-work`), archive each.
 
-### Step 1 — Install Moltbot on the new machine
+### Step 1 — Install DNA on the new machine
 
 On the **new** machine, install the CLI (and Node if needed):
 
 - See: [Install](/install)
 
-At this stage, it’s OK if onboarding creates a fresh `~/.clawdbot/` — you will overwrite it in the next step.
+At this stage, it’s OK if onboarding creates a fresh `~/.dna/` — you will overwrite it in the next step.
 
 ### Step 2 — Copy the state dir + workspace to the new machine
 
 Copy **both**:
 
-- `$CLAWDBOT_STATE_DIR` (default `~/.clawdbot/`)
+- `$DNA_STATE_DIR` (default `~/.dna/`)
 - your workspace (default `~/clawd/`)
 
 Common approaches:
@@ -108,7 +108,7 @@ Common approaches:
 
 After copying, ensure:
 
-- Hidden directories were included (e.g. `.clawdbot/`)
+- Hidden directories were included (e.g. `.dna/`)
 - File ownership is correct for the user running the gateway
 
 ### Step 3 — Run Doctor (migrations + service repair)
@@ -116,7 +116,7 @@ After copying, ensure:
 On the **new** machine:
 
 ```bash
-moltbot doctor
+dna doctor
 ```
 
 Doctor is the “safe boring” command. It repairs services, applies config migrations, and warns about mismatches.
@@ -124,15 +124,15 @@ Doctor is the “safe boring” command. It repairs services, applies config mig
 Then:
 
 ```bash
-moltbot gateway restart
-moltbot status
+dna gateway restart
+dna status
 ```
 
 ## Common footguns (and how to avoid them)
 
 ### Footgun: profile / state-dir mismatch
 
-If you ran the old gateway with a profile (or `CLAWDBOT_STATE_DIR`), and the new gateway uses a different one, you’ll see symptoms like:
+If you ran the old gateway with a profile (or `DNA_STATE_DIR`), and the new gateway uses a different one, you’ll see symptoms like:
 
 - config changes not taking effect
 - channels missing / logged out
@@ -141,17 +141,17 @@ If you ran the old gateway with a profile (or `CLAWDBOT_STATE_DIR`), and the new
 Fix: run the gateway/service using the **same** profile/state dir you migrated, then rerun:
 
 ```bash
-moltbot doctor
+dna doctor
 ```
 
-### Footgun: copying only `moltbot.json`
+### Footgun: copying only `dna.json`
 
-`moltbot.json` is not enough. Many providers store state under:
+`dna.json` is not enough. Many providers store state under:
 
-- `$CLAWDBOT_STATE_DIR/credentials/`
-- `$CLAWDBOT_STATE_DIR/agents/<agentId>/...`
+- `$DNA_STATE_DIR/credentials/`
+- `$DNA_STATE_DIR/agents/<agentId>/...`
 
-Always migrate the entire `$CLAWDBOT_STATE_DIR` folder.
+Always migrate the entire `$DNA_STATE_DIR` folder.
 
 ### Footgun: permissions / ownership
 
@@ -168,7 +168,7 @@ If you’re in remote mode, migrate the **gateway host**.
 
 ### Footgun: secrets in backups
 
-`$CLAWDBOT_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Treat backups like production secrets:
+`$DNA_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Treat backups like production secrets:
 
 - store encrypted
 - avoid sharing over insecure channels
@@ -178,7 +178,7 @@ If you’re in remote mode, migrate the **gateway host**.
 
 On the new machine, confirm:
 
-- `moltbot status` shows the gateway running
+- `dna status` shows the gateway running
 - Your channels are still connected (e.g. WhatsApp doesn’t require re-pair)
 - The dashboard opens and shows existing sessions
 - Your workspace files (memory, configs) are present
@@ -187,4 +187,4 @@ On the new machine, confirm:
 
 - [Doctor](/gateway/doctor)
 - [Gateway troubleshooting](/gateway/troubleshooting)
-- [Where does Moltbot store its data?](/help/faq#where-does-moltbot-store-its-data)
+- [Where does DNA store its data?](/help/faq#where-does-dna-store-its-data)

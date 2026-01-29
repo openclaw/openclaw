@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loginWeb } from "../../../channel-web.js";
-import type { MoltbotConfig } from "../../../config/config.js";
+import type { DNAConfig } from "../../../config/config.js";
 import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
 import type { DmPolicy } from "../../../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
@@ -20,15 +20,15 @@ import { promptAccountId } from "./helpers.js";
 
 const channel = "whatsapp" as const;
 
-function setWhatsAppDmPolicy(cfg: MoltbotConfig, dmPolicy: DmPolicy): MoltbotConfig {
+function setWhatsAppDmPolicy(cfg: DNAConfig, dmPolicy: DmPolicy): DNAConfig {
   return mergeWhatsAppConfig(cfg, { dmPolicy });
 }
 
-function setWhatsAppAllowFrom(cfg: MoltbotConfig, allowFrom?: string[]): MoltbotConfig {
+function setWhatsAppAllowFrom(cfg: DNAConfig, allowFrom?: string[]): DNAConfig {
   return mergeWhatsAppConfig(cfg, { allowFrom }, { unsetOnUndefined: ["allowFrom"] });
 }
 
-function setWhatsAppSelfChatMode(cfg: MoltbotConfig, selfChatMode: boolean): MoltbotConfig {
+function setWhatsAppSelfChatMode(cfg: DNAConfig, selfChatMode: boolean): DNAConfig {
   return mergeWhatsAppConfig(cfg, { selfChatMode });
 }
 
@@ -41,25 +41,25 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function detectWhatsAppLinked(cfg: MoltbotConfig, accountId: string): Promise<boolean> {
+async function detectWhatsAppLinked(cfg: DNAConfig, accountId: string): Promise<boolean> {
   const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
   const credsPath = path.join(authDir, "creds.json");
   return await pathExists(credsPath);
 }
 
 async function promptWhatsAppAllowFrom(
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   _runtime: RuntimeEnv,
   prompter: WizardPrompter,
   options?: { forceAllowlist?: boolean },
-): Promise<MoltbotConfig> {
+): Promise<DNAConfig> {
   const existingPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
   const existingAllowFrom = cfg.channels?.whatsapp?.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
 
   if (options?.forceAllowlist) {
     await prompter.note(
-      "We need the sender/owner number so Moltbot can allowlist you.",
+      "We need the sender/owner number so DNA can allowlist you.",
       "WhatsApp number",
     );
     const entry = await prompter.text({
@@ -111,13 +111,13 @@ async function promptWhatsAppAllowFrom(
     message: "WhatsApp phone setup",
     options: [
       { value: "personal", label: "This is my personal phone number" },
-      { value: "separate", label: "Separate phone just for Moltbot" },
+      { value: "separate", label: "Separate phone just for DNA" },
     ],
   })) as "personal" | "separate";
 
   if (phoneMode === "personal") {
     await prompter.note(
-      "We need the sender/owner number so Moltbot can allowlist you.",
+      "We need the sender/owner number so DNA can allowlist you.",
       "WhatsApp number",
     );
     const entry = await prompter.text({
@@ -323,7 +323,7 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     } else if (!linked) {
       await prompter.note(
-        `Run \`${formatCliCommand("moltbot channels login")}\` later to link WhatsApp.`,
+        `Run \`${formatCliCommand("dna channels login")}\` later to link WhatsApp.`,
         "WhatsApp",
       );
     }

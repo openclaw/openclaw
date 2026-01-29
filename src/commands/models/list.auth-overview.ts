@@ -7,14 +7,14 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { DNAConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 
 export function resolveProviderAuthOverview(params: {
   provider: string;
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   store: AuthProfileStore;
   modelsPath: string;
 }): ProviderAuthOverview {

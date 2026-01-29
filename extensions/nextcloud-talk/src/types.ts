@@ -3,7 +3,7 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
-} from "clawdbot/plugin-sdk";
+} from "dna/plugin-sdk";
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;

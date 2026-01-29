@@ -13,7 +13,7 @@ Quick provider overview + examples: [/concepts/model-providers](/concepts/model-
 
 ## How model selection works
 
-Moltbot selects models in this order:
+DNA selects models in this order:
 
 1) **Primary** model (`agents.defaults.model.primary` or `agents.defaults.model`).
 2) **Fallbacks** in `agents.defaults.model.fallbacks` (in order).
@@ -21,7 +21,7 @@ Moltbot selects models in this order:
    next model.
 
 Related:
-- `agents.defaults.models` is the allowlist/catalog of models Moltbot can use (plus aliases).
+- `agents.defaults.models` is the allowlist/catalog of models DNA can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
@@ -35,7 +35,7 @@ Related:
 If you don’t want to hand-edit config, run the onboarding wizard:
 
 ```bash
-moltbot onboard
+dna onboard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)
@@ -59,7 +59,7 @@ Provider configuration examples (including OpenCode Zen) live in
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
 session overrides. When a user selects a model that isn’t in that allowlist,
-Moltbot returns:
+DNA returns:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
@@ -104,34 +104,34 @@ Notes:
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - If the model ID itself contains `/` (OpenRouter-style), you must include the provider prefix (example: `/model openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, Moltbot treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, DNA treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
 
 ## CLI commands
 
 ```bash
-moltbot models list
-moltbot models status
-moltbot models set <provider/model>
-moltbot models set-image <provider/model>
+dna models list
+dna models status
+dna models set <provider/model>
+dna models set-image <provider/model>
 
-moltbot models aliases list
-moltbot models aliases add <alias> <provider/model>
-moltbot models aliases remove <alias>
+dna models aliases list
+dna models aliases add <alias> <provider/model>
+dna models aliases remove <alias>
 
-moltbot models fallbacks list
-moltbot models fallbacks add <provider/model>
-moltbot models fallbacks remove <provider/model>
-moltbot models fallbacks clear
+dna models fallbacks list
+dna models fallbacks add <provider/model>
+dna models fallbacks remove <provider/model>
+dna models fallbacks clear
 
-moltbot models image-fallbacks list
-moltbot models image-fallbacks add <provider/model>
-moltbot models image-fallbacks remove <provider/model>
-moltbot models image-fallbacks clear
+dna models image-fallbacks list
+dna models image-fallbacks add <provider/model>
+dna models image-fallbacks remove <provider/model>
+dna models image-fallbacks clear
 ```
 
-`moltbot models` (no subcommand) is a shortcut for `models status`.
+`dna models` (no subcommand) is a shortcut for `models status`.
 
 ### `models list`
 
@@ -159,12 +159,12 @@ Preferred Anthropic auth is the Claude Code CLI setup-token (run anywhere; paste
 
 ```bash
 claude setup-token
-moltbot models status
+dna models status
 ```
 
 ## Scanning (OpenRouter free models)
 
-`moltbot models scan` inspects OpenRouter’s **free model catalog** and can
+`dna models scan` inspects OpenRouter’s **free model catalog** and can
 optionally probe models for tool and image support.
 
 Key flags:
@@ -198,5 +198,5 @@ mode, pass `--yes` to accept defaults.
 ## Models registry (`models.json`)
 
 Custom providers in `models.providers` are written into `models.json` under the
-agent directory (default `~/.clawdbot/agents/<agentId>/models.json`). This file
+agent directory (default `~/.dna/agents/<agentId>/models.json`). This file
 is merged by default unless `models.mode` is set to `replace`.

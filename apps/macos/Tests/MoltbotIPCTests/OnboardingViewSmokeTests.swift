@@ -1,7 +1,7 @@
-import MoltbotDiscovery
+import DNADiscovery
 import SwiftUI
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 @MainActor

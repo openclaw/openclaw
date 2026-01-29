@@ -1,6 +1,6 @@
 import SwiftUI
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 @MainActor
@@ -17,7 +17,7 @@ struct TailscaleIntegrationSectionTests {
         let service = TailscaleService(
             isInstalled: true,
             isRunning: true,
-            tailscaleHostname: "moltbot.tailnet.ts.net",
+            tailscaleHostname: "dna.tailnet.ts.net",
             tailscaleIP: "100.64.0.1")
         var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
         view.setTestingService(service)

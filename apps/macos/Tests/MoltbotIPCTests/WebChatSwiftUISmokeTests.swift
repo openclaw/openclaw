@@ -1,18 +1,18 @@
 import AppKit
-import MoltbotChatUI
+import DNAChatUI
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 @MainActor
 struct WebChatSwiftUISmokeTests {
-    private struct TestTransport: MoltbotChatTransport, Sendable {
-        func requestHistory(sessionKey: String) async throws -> MoltbotChatHistoryPayload {
+    private struct TestTransport: DNAChatTransport, Sendable {
+        func requestHistory(sessionKey: String) async throws -> DNAChatHistoryPayload {
             let json = """
             {"sessionKey":"\(sessionKey)","sessionId":null,"messages":[],"thinkingLevel":"off"}
             """
-            return try JSONDecoder().decode(MoltbotChatHistoryPayload.self, from: Data(json.utf8))
+            return try JSONDecoder().decode(DNAChatHistoryPayload.self, from: Data(json.utf8))
         }
 
         func sendMessage(
@@ -20,17 +20,17 @@ struct WebChatSwiftUISmokeTests {
             message _: String,
             thinking _: String,
             idempotencyKey _: String,
-            attachments _: [MoltbotChatAttachmentPayload]) async throws -> MoltbotChatSendResponse
+            attachments _: [DNAChatAttachmentPayload]) async throws -> DNAChatSendResponse
         {
             let json = """
             {"runId":"\(UUID().uuidString)","status":"ok"}
             """
-            return try JSONDecoder().decode(MoltbotChatSendResponse.self, from: Data(json.utf8))
+            return try JSONDecoder().decode(DNAChatSendResponse.self, from: Data(json.utf8))
         }
 
         func requestHealth(timeoutMs _: Int) async throws -> Bool { true }
 
-        func events() -> AsyncStream<MoltbotChatTransportEvent> {
+        func events() -> AsyncStream<DNAChatTransportEvent> {
             AsyncStream { continuation in
                 continuation.finish()
             }

@@ -1,13 +1,13 @@
 import Foundation
 
 enum CommandResolver {
-    private static let projectRootDefaultsKey = "moltbot.gatewayProjectRootPath"
-    private static let helperName = "moltbot"
+    private static let projectRootDefaultsKey = "dna.gatewayProjectRootPath"
+    private static let helperName = "dna"
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
         if FileManager().isReadableFile(atPath: distEntry) { return distEntry }
-        let binEntry = root.appendingPathComponent("bin/moltbot.js").path
+        let binEntry = root.appendingPathComponent("bin/dna.js").path
         if FileManager().isReadableFile(atPath: binEntry) { return binEntry }
         return nil
     }
@@ -36,9 +36,9 @@ enum CommandResolver {
 
     static func errorCommand(with message: String) -> [String] {
         let script = """
-        cat <<'__CLAWDBOT_ERR__' >&2
+        cat <<'__DNA_ERR__' >&2
         \(message)
-        __CLAWDBOT_ERR__
+        __DNA_ERR__
         exit 1
         """
         return ["/bin/sh", "-c", script]
@@ -52,7 +52,7 @@ enum CommandResolver {
             return url
         }
         let fallback = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/moltbot")
+            .appendingPathComponent("Projects/dna")
         if FileManager().fileExists(atPath: fallback.path) {
             return fallback
         }
@@ -87,18 +87,18 @@ enum CommandResolver {
         // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
         extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
         #endif
-        let moltbotPaths = self.moltbotManagedPaths(home: home)
-        if !moltbotPaths.isEmpty {
-            extras.insert(contentsOf: moltbotPaths, at: 1)
+        let dnaPaths = self.dnaManagedPaths(home: home)
+        if !dnaPaths.isEmpty {
+            extras.insert(contentsOf: dnaPaths, at: 1)
         }
-        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + moltbotPaths.count)
+        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + dnaPaths.count)
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
     }
 
-    private static func moltbotManagedPaths(home: URL) -> [String] {
-        let base = home.appendingPathComponent(".clawdbot")
+    private static func dnaManagedPaths(home: URL) -> [String] {
+        let base = home.appendingPathComponent(".dna")
         let bin = base.appendingPathComponent("bin")
         let nodeBin = base.appendingPathComponent("tools/node/bin")
         var paths: [String] = []
@@ -187,11 +187,11 @@ enum CommandResolver {
         return nil
     }
 
-    static func moltbotExecutable(searchPaths: [String]? = nil) -> String? {
+    static func dnaExecutable(searchPaths: [String]? = nil) -> String? {
         self.findExecutable(named: self.helperName, searchPaths: searchPaths)
     }
 
-    static func projectMoltbotExecutable(projectRoot: URL? = nil) -> String? {
+    static func projectDNAExecutable(projectRoot: URL? = nil) -> String? {
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
@@ -202,12 +202,12 @@ enum CommandResolver {
     }
 
     static func nodeCliPath() -> String? {
-        let candidate = self.projectRoot().appendingPathComponent("bin/moltbot.js").path
+        let candidate = self.projectRoot().appendingPathComponent("bin/dna.js").path
         return FileManager().isReadableFile(atPath: candidate) ? candidate : nil
     }
 
-    static func hasAnyMoltbotInvoker(searchPaths: [String]? = nil) -> Bool {
-        if self.moltbotExecutable(searchPaths: searchPaths) != nil { return true }
+    static func hasAnyDNAInvoker(searchPaths: [String]? = nil) -> Bool {
+        if self.dnaExecutable(searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
            self.nodeCliPath() != nil
@@ -217,7 +217,7 @@ enum CommandResolver {
         return false
     }
 
-    static func moltbotNodeCommand(
+    static func dnaNodeCommand(
         subcommand: String,
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
@@ -238,8 +238,8 @@ enum CommandResolver {
         switch runtimeResult {
         case let .success(runtime):
             let root = self.projectRoot()
-            if let moltbotPath = self.projectMoltbotExecutable(projectRoot: root) {
-                return [moltbotPath, subcommand] + extraArgs
+            if let dnaPath = self.projectDNAExecutable(projectRoot: root) {
+                return [dnaPath, subcommand] + extraArgs
             }
 
             if let entry = self.gatewayEntrypoint(in: root) {
@@ -251,14 +251,14 @@ enum CommandResolver {
             }
             if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {
                 // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
-                return [pnpm, "--silent", "moltbot", subcommand] + extraArgs
+                return [pnpm, "--silent", "dna", subcommand] + extraArgs
             }
-            if let moltbotPath = self.moltbotExecutable(searchPaths: searchPaths) {
-                return [moltbotPath, subcommand] + extraArgs
+            if let dnaPath = self.dnaExecutable(searchPaths: searchPaths) {
+                return [dnaPath, subcommand] + extraArgs
             }
 
             let missingEntry = """
-            moltbot entrypoint missing (looked for dist/index.js or bin/moltbot.js); run pnpm build.
+            dna entrypoint missing (looked for dist/index.js or bin/dna.js); run pnpm build.
             """
             return self.errorCommand(with: missingEntry)
 
@@ -267,15 +267,15 @@ enum CommandResolver {
         }
     }
 
-    // Existing callers still refer to moltbotCommand; keep it as node alias.
-    static func moltbotCommand(
+    // Existing callers still refer to dnaCommand; keep it as node alias.
+    static func dnaCommand(
         subcommand: String,
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil) -> [String]
     {
-        self.moltbotNodeCommand(
+        self.dnaNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,
@@ -289,7 +289,7 @@ enum CommandResolver {
         guard !settings.target.isEmpty else { return nil }
         guard let parsed = self.parseSSHTarget(settings.target) else { return nil }
 
-        // Run the real moltbot CLI on the remote host.
+        // Run the real dna CLI on the remote host.
         let exportedPath = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -306,7 +306,7 @@ enum CommandResolver {
 
         let projectSection = if userPRJ.isEmpty {
             """
-            DEFAULT_PRJ="$HOME/Projects/moltbot"
+            DEFAULT_PRJ="$HOME/Projects/dna"
             if [ -d "$DEFAULT_PRJ" ]; then
               PRJ="$DEFAULT_PRJ"
               cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }
@@ -345,9 +345,9 @@ enum CommandResolver {
         CLI="";
         \(cliSection)
         \(projectSection)
-        if command -v moltbot >/dev/null 2>&1; then
-          CLI="$(command -v moltbot)"
-          moltbot \(quotedArgs);
+        if command -v dna >/dev/null 2>&1; then
+          CLI="$(command -v dna)"
+          dna \(quotedArgs);
         elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/dist/index.js" ]; then
           if command -v node >/dev/null 2>&1; then
             CLI="node $PRJ/dist/index.js"
@@ -355,18 +355,18 @@ enum CommandResolver {
           else
             echo "Node >=22 required on remote host"; exit 127;
           fi
-        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/moltbot.js" ]; then
+        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/dna.js" ]; then
           if command -v node >/dev/null 2>&1; then
-            CLI="node $PRJ/bin/moltbot.js"
-            node "$PRJ/bin/moltbot.js" \(quotedArgs);
+            CLI="node $PRJ/bin/dna.js"
+            node "$PRJ/bin/dna.js" \(quotedArgs);
           else
             echo "Node >=22 required on remote host"; exit 127;
           fi
         elif command -v pnpm >/dev/null 2>&1; then
-          CLI="pnpm --silent moltbot"
-          pnpm --silent moltbot \(quotedArgs);
+          CLI="pnpm --silent dna"
+          pnpm --silent dna \(quotedArgs);
         else
-          echo "moltbot CLI missing on remote host"; exit 127;
+          echo "dna CLI missing on remote host"; exit 127;
         fi
         """
         let options: [String] = [
@@ -394,7 +394,7 @@ enum CommandResolver {
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil) -> RemoteSettings
     {
-        let root = configRoot ?? MoltbotConfigFile.loadDict()
+        let root = configRoot ?? DNAConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
         let target = defaults.string(forKey: remoteTargetKey) ?? ""
         let identity = defaults.string(forKey: remoteIdentityKey) ?? ""

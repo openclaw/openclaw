@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 
 type SpawnCall = {
   command: string;
@@ -82,24 +82,24 @@ describe("sandbox skill mirroring", () => {
   });
 
   const runContext = async (workspaceAccess: "none" | "ro") => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-state-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-state-"));
     const bundledDir = path.join(stateDir, "bundled-skills");
     await fs.mkdir(bundledDir, { recursive: true });
 
-    process.env.CLAWDBOT_STATE_DIR = stateDir;
-    process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = bundledDir;
+    process.env.DNA_STATE_DIR = stateDir;
+    process.env.DNA_BUNDLED_SKILLS_DIR = bundledDir;
     vi.resetModules();
 
     const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-workspace-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-workspace-"));
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "demo-skill"),
       name: "demo-skill",
       description: "Demo skill",
     });
 
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         defaults: {
           sandbox: {

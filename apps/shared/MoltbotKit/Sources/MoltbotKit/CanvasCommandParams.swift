@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MoltbotCanvasNavigateParams: Codable, Sendable, Equatable {
+public struct DNACanvasNavigateParams: Codable, Sendable, Equatable {
     public var url: String
 
     public init(url: String) {
@@ -8,7 +8,7 @@ public struct MoltbotCanvasNavigateParams: Codable, Sendable, Equatable {
     }
 }
 
-public struct MoltbotCanvasPlacement: Codable, Sendable, Equatable {
+public struct DNACanvasPlacement: Codable, Sendable, Equatable {
     public var x: Double?
     public var y: Double?
     public var width: Double?
@@ -22,17 +22,17 @@ public struct MoltbotCanvasPlacement: Codable, Sendable, Equatable {
     }
 }
 
-public struct MoltbotCanvasPresentParams: Codable, Sendable, Equatable {
+public struct DNACanvasPresentParams: Codable, Sendable, Equatable {
     public var url: String?
-    public var placement: MoltbotCanvasPlacement?
+    public var placement: DNACanvasPlacement?
 
-    public init(url: String? = nil, placement: MoltbotCanvasPlacement? = nil) {
+    public init(url: String? = nil, placement: DNACanvasPlacement? = nil) {
         self.url = url
         self.placement = placement
     }
 }
 
-public struct MoltbotCanvasEvalParams: Codable, Sendable, Equatable {
+public struct DNACanvasEvalParams: Codable, Sendable, Equatable {
     public var javaScript: String
 
     public init(javaScript: String) {
@@ -40,7 +40,7 @@ public struct MoltbotCanvasEvalParams: Codable, Sendable, Equatable {
     }
 }
 
-public enum MoltbotCanvasSnapshotFormat: String, Codable, Sendable {
+public enum DNACanvasSnapshotFormat: String, Codable, Sendable {
     case png
     case jpeg
 
@@ -63,12 +63,12 @@ public enum MoltbotCanvasSnapshotFormat: String, Codable, Sendable {
     }
 }
 
-public struct MoltbotCanvasSnapshotParams: Codable, Sendable, Equatable {
+public struct DNACanvasSnapshotParams: Codable, Sendable, Equatable {
     public var maxWidth: Int?
     public var quality: Double?
-    public var format: MoltbotCanvasSnapshotFormat?
+    public var format: DNACanvasSnapshotFormat?
 
-    public init(maxWidth: Int? = nil, quality: Double? = nil, format: MoltbotCanvasSnapshotFormat? = nil) {
+    public init(maxWidth: Int? = nil, quality: Double? = nil, format: DNACanvasSnapshotFormat? = nil) {
         self.maxWidth = maxWidth
         self.quality = quality
         self.format = format

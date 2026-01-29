@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { twitchOutbound } from "./outbound.js";
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
+import type { DNAConfig } from "dna/plugin-sdk";
 
 // Mock dependencies
 vi.mock("./config.js", () => ({
@@ -49,7 +49,7 @@ describe("outbound", () => {
         },
       },
     },
-  } as unknown as MoltbotConfig;
+  } as unknown as DNAConfig;
 
   beforeEach(() => {
     vi.clearAllMocks();

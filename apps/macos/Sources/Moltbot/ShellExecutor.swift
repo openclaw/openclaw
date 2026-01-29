@@ -1,4 +1,4 @@
-import MoltbotIPC
+import DNAIPC
 import Foundation
 
 enum ShellExecutor {

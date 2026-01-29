@@ -1,4 +1,4 @@
-import MoltbotDiscovery
+import DNADiscovery
 import SwiftUI
 
 #if DEBUG
@@ -14,7 +14,7 @@ extension OnboardingView {
             tailnetDns: "gateway.ts.net",
             sshPort: 2222,
             gatewayPort: 18789,
-            cliPath: "/usr/local/bin/moltbot",
+            cliPath: "/usr/local/bin/dna",
             stableID: "gateway-1",
             debugID: "gateway-1",
             isLocal: false)
@@ -28,14 +28,14 @@ extension OnboardingView {
         view.localGatewayProbe = LocalGatewayProbe(
             port: GatewayEnvironment.gatewayPort(),
             pid: 123,
-            command: "moltbot-gateway",
+            command: "dna-gateway",
             expected: true)
         view.showAdvancedConnection = true
         view.preferredGatewayID = gateway.stableID
         view.cliInstalled = true
-        view.cliInstallLocation = "/usr/local/bin/moltbot"
+        view.cliInstallLocation = "/usr/local/bin/dna"
         view.cliStatus = "Installed"
-        view.workspacePath = "/tmp/moltbot"
+        view.workspacePath = "/tmp/dna"
         view.workspaceStatus = "Saved workspace"
         view.anthropicAuthPKCE = AnthropicOAuth.PKCE(verifier: "verifier", challenge: "challenge")
         view.anthropicAuthCode = "code#state"

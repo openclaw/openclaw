@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import type {
   LineConfig,
   LineAccountConfig,
@@ -95,7 +95,7 @@ function resolveSecret(params: {
 }
 
 export function resolveLineAccount(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   accountId?: string;
 }): ResolvedLineAccount {
   const { cfg, accountId = DEFAULT_ACCOUNT_ID } = params;
@@ -138,7 +138,7 @@ export function resolveLineAccount(params: {
   };
 }
 
-export function listLineAccountIds(cfg: MoltbotConfig): string[] {
+export function listLineAccountIds(cfg: DNAConfig): string[] {
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
   const ids = new Set<string>();
@@ -162,7 +162,7 @@ export function listLineAccountIds(cfg: MoltbotConfig): string[] {
   return Array.from(ids);
 }
 
-export function resolveDefaultLineAccountId(cfg: MoltbotConfig): string {
+export function resolveDefaultLineAccountId(cfg: DNAConfig): string {
   const ids = listLineAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;

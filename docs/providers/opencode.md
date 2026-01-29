@@ -1,5 +1,5 @@
 ---
-summary: "Use OpenCode Zen (curated models) with Moltbot"
+summary: "Use OpenCode Zen (curated models) with DNA"
 read_when:
   - You want OpenCode Zen for model access
   - You want a curated list of coding-friendly models
@@ -13,9 +13,9 @@ Zen is currently in beta.
 ## CLI setup
 
 ```bash
-moltbot onboard --auth-choice opencode-zen
+dna onboard --auth-choice opencode-zen
 # or non-interactive
-moltbot onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
+dna onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```
 
 ## Config snippet

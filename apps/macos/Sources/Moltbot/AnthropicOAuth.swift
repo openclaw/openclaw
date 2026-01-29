@@ -18,7 +18,7 @@ enum AnthropicAuthMode: Equatable {
 
     var shortLabel: String {
         switch self {
-        case .oauthFile: "OAuth (Moltbot token file)"
+        case .oauthFile: "OAuth (DNA token file)"
         case .oauthEnv: "OAuth (env var)"
         case .apiKeyEnv: "API key (env var)"
         case .missing: "Missing credentials"
@@ -36,7 +36,7 @@ enum AnthropicAuthMode: Equatable {
 enum AnthropicAuthResolver {
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        oauthStatus: MoltbotOAuthStore.AnthropicOAuthStatus = MoltbotOAuthStore
+        oauthStatus: DNAOAuthStore.AnthropicOAuthStatus = DNAOAuthStore
             .anthropicOAuthStatus()) -> AnthropicAuthMode
     {
         if oauthStatus.isConnected { return .oauthFile }
@@ -194,10 +194,10 @@ enum AnthropicOAuth {
     }
 }
 
-enum MoltbotOAuthStore {
+enum DNAOAuthStore {
     static let oauthFilename = "oauth.json"
     private static let providerKey = "anthropic"
-    private static let moltbotOAuthDirEnv = "CLAWDBOT_OAUTH_DIR"
+    private static let dnaOAuthDirEnv = "DNA_OAUTH_DIR"
     private static let legacyPiDirEnv = "PI_CODING_AGENT_DIR"
 
     enum AnthropicOAuthStatus: Equatable {
@@ -215,18 +215,18 @@ enum MoltbotOAuthStore {
 
         var shortDescription: String {
             switch self {
-            case .missingFile: "Moltbot OAuth token file not found"
-            case .unreadableFile: "Moltbot OAuth token file not readable"
-            case .invalidJSON: "Moltbot OAuth token file invalid"
-            case .missingProviderEntry: "No Anthropic entry in Moltbot OAuth token file"
+            case .missingFile: "DNA OAuth token file not found"
+            case .unreadableFile: "DNA OAuth token file not readable"
+            case .invalidJSON: "DNA OAuth token file invalid"
+            case .missingProviderEntry: "No Anthropic entry in DNA OAuth token file"
             case .missingTokens: "Anthropic entry missing tokens"
-            case .connected: "Moltbot OAuth credentials found"
+            case .connected: "DNA OAuth credentials found"
             }
         }
     }
 
     static func oauthDir() -> URL {
-        if let override = ProcessInfo.processInfo.environment[self.moltbotOAuthDirEnv]?
+        if let override = ProcessInfo.processInfo.environment[self.dnaOAuthDirEnv]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !override.isEmpty
         {
@@ -235,7 +235,7 @@ enum MoltbotOAuthStore {
         }
 
         return FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".clawdbot", isDirectory: true)
+            .appendingPathComponent(".dna", isDirectory: true)
             .appendingPathComponent("credentials", isDirectory: true)
     }
 

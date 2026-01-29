@@ -3,9 +3,9 @@ import Foundation
 import SwiftUI
 
 enum DebugActions {
-    private static let verboseDefaultsKey = "moltbot.debug.verboseMain"
+    private static let verboseDefaultsKey = "dna.debug.verboseMain"
     private static let sessionMenuLimit = 12
-    private static let onboardingSeenKey = "moltbot.onboardingSeen"
+    private static let onboardingSeenKey = "dna.onboardingSeen"
 
     @MainActor
     static func openAgentEventsWindow() {
@@ -40,7 +40,7 @@ enum DebugActions {
     static func openConfigFolder() {
         let url = FileManager()
             .homeDirectoryForCurrentUser
-            .appendingPathComponent(".clawdbot", isDirectory: true)
+            .appendingPathComponent(".dna", isDirectory: true)
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -63,7 +63,7 @@ enum DebugActions {
     }
 
     static func sendTestNotification() async {
-        _ = await NotificationManager().send(title: "Moltbot", body: "Test notification", sound: nil)
+        _ = await NotificationManager().send(title: "DNA", body: "Test notification", sound: nil)
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
@@ -196,7 +196,7 @@ enum DebugActions {
     private static func resolveSessionStorePath() -> String {
         let defaultPath = SessionLoader.defaultStorePath
         let configURL = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".clawdbot/moltbot.json")
+            .appendingPathComponent(".dna/dna.json")
         guard
             let data = try? Data(contentsOf: configURL),
             let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

@@ -1,4 +1,4 @@
-import MoltbotDiscovery
+import DNADiscovery
 import Testing
 
 @Suite
@@ -35,7 +35,7 @@ struct GatewayDiscoveryModelTests {
         #expect(GatewayDiscoveryModel.isLocalGateway(
             lanHost: nil,
             tailnetDns: nil,
-            displayName: "Peter's Mac Studio (Moltbot)",
+            displayName: "Peter's Mac Studio (DNA)",
             serviceName: nil,
             local: local))
     }
@@ -72,13 +72,13 @@ struct GatewayDiscoveryModelTests {
             lanHost: nil,
             tailnetDns: nil,
             displayName: nil,
-            serviceName: "steipetacstudio (Moltbot)",
+            serviceName: "steipetacstudio (DNA)",
             local: local))
         #expect(GatewayDiscoveryModel.isLocalGateway(
             lanHost: nil,
             tailnetDns: nil,
             displayName: nil,
-            serviceName: "steipete (Moltbot)",
+            serviceName: "steipete (DNA)",
             local: local))
     }
 
@@ -88,13 +88,13 @@ struct GatewayDiscoveryModelTests {
             "tailnetDns": "  peters-mac-studio-1.ts.net  ",
             "sshPort": " 2222 ",
             "gatewayPort": " 18799 ",
-            "cliPath": " /opt/moltbot ",
+            "cliPath": " /opt/dna ",
         ])
         #expect(parsed.lanHost == "studio.local")
         #expect(parsed.tailnetDns == "peters-mac-studio-1.ts.net")
         #expect(parsed.sshPort == 2222)
         #expect(parsed.gatewayPort == 18799)
-        #expect(parsed.cliPath == "/opt/moltbot")
+        #expect(parsed.cliPath == "/opt/dna")
     }
 
     @Test func parsesGatewayTXTDefaults() {

@@ -1,6 +1,6 @@
 import AppKit
-import MoltbotIPC
-import MoltbotKit
+import DNAIPC
+import DNAKit
 import Foundation
 import WebKit
 
@@ -57,8 +57,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         (() => {
           try {
             if (location.protocol !== '\(CanvasScheme.scheme):') return;
-            if (globalThis.__moltbotA2UIBridgeInstalled) return;
-            globalThis.__moltbotA2UIBridgeInstalled = true;
+            if (globalThis.__dnaA2UIBridgeInstalled) return;
+            globalThis.__dnaA2UIBridgeInstalled = true;
 
             const deepLinkKey = \(Self.jsStringLiteral(deepLinkKey));
             const sessionKey = \(Self.jsStringLiteral(injectedSessionKey));
@@ -85,11 +85,11 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
                   ...(context.length ? { context } : {}),
                 };
 
-                const handler = globalThis.webkit?.messageHandlers?.clawdbotCanvasA2UIAction;
+                const handler = globalThis.webkit?.messageHandlers?.dnaCanvasA2UIAction;
 
                 // If the bundled A2UI shell is present, let it forward actions so we keep its richer
                 // context resolution (data model path lookups, surface detection, etc.).
-                const hasBundledA2UIHost = !!globalThis.clawdbotA2UI || !!document.querySelector('moltbot-a2ui-host');
+                const hasBundledA2UIHost = !!globalThis.dnaA2UI || !!document.querySelector('dna-a2ui-host');
                 if (hasBundledA2UIHost && handler?.postMessage) return;
 
                 // Otherwise, forward directly when possible.
@@ -115,7 +115,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
                 params.set('deliver', 'false');
                 params.set('channel', 'last');
                 params.set('key', deepLinkKey);
-                location.href = 'moltbot://agent?' + params.toString();
+                location.href = 'dna://agent?' + params.toString();
               } catch {}
             }, true);
           } catch {}
@@ -268,7 +268,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         let js = """
         (() => {
           try {
-            const api = globalThis.__moltbot;
+            const api = globalThis.__dna;
             if (!api) return;
             if (typeof api.setDebugStatusEnabled === 'function') {
               api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
@@ -336,7 +336,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             path = outPath
         } else {
             let ts = Int(Date().timeIntervalSince1970)
-            path = "/tmp/moltbot-canvas-\(CanvasWindowController.sanitizeSessionKey(self.sessionKey))-\(ts).png"
+            path = "/tmp/dna-canvas-\(CanvasWindowController.sanitizeSessionKey(self.sessionKey))-\(ts).png"
         }
 
         try png.write(to: URL(fileURLWithPath: path), options: [.atomic])

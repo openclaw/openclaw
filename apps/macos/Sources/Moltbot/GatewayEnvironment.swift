@@ -1,4 +1,4 @@
-import MoltbotIPC
+import DNAIPC
 import Foundation
 import OSLog
 
@@ -72,11 +72,11 @@ enum GatewayEnvironment {
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
 
     static func gatewayPort() -> Int {
-        if let raw = ProcessInfo.processInfo.environment["CLAWDBOT_GATEWAY_PORT"] {
+        if let raw = ProcessInfo.processInfo.environment["DNA_GATEWAY_PORT"] {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if let parsed = Int(trimmed), parsed > 0 { return parsed }
         }
-        if let configPort = MoltbotConfigFile.gatewayPort(), configPort > 0 {
+        if let configPort = DNAConfigFile.gatewayPort(), configPort > 0 {
             return configPort
         }
         let stored = UserDefaults.standard.integer(forKey: "gatewayPort")
@@ -123,7 +123,7 @@ enum GatewayEnvironment {
                 requiredGateway: expectedString,
                 message: RuntimeLocator.describeFailure(err))
         case let .success(runtime):
-            let gatewayBin = CommandResolver.moltbotExecutable()
+            let gatewayBin = CommandResolver.dnaExecutable()
 
             if gatewayBin == nil, projectEntrypoint == nil {
                 return GatewayEnvironmentStatus(
@@ -131,7 +131,7 @@ enum GatewayEnvironment {
                     nodeVersion: runtime.version.description,
                     gatewayVersion: nil,
                     requiredGateway: expectedString,
-                    message: "moltbot CLI not found in PATH; install the CLI.")
+                    message: "dna CLI not found in PATH; install the CLI.")
             }
 
             let installed = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
@@ -181,7 +181,7 @@ enum GatewayEnvironment {
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
         let status = self.check()
-        let gatewayBin = CommandResolver.moltbotExecutable()
+        let gatewayBin = CommandResolver.dnaExecutable()
         let runtime = RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
 
         guard case .ok = status.kind else {
@@ -210,14 +210,14 @@ enum GatewayEnvironment {
         if CommandResolver.connectionModeIsRemote() {
             return nil
         }
-        if let env = ProcessInfo.processInfo.environment["CLAWDBOT_GATEWAY_BIND"] {
+        if let env = ProcessInfo.processInfo.environment["DNA_GATEWAY_BIND"] {
             let trimmed = env.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if self.supportedBindModes.contains(trimmed) {
                 return trimmed
             }
         }
 
-        let root = MoltbotConfigFile.loadDict()
+        let root = DNAConfigFile.loadDict()
         if let gateway = root["gateway"] as? [String: Any],
            let bind = gateway["bind"] as? String
         {
@@ -247,16 +247,16 @@ enum GatewayEnvironment {
         let bun = CommandResolver.findExecutable(named: "bun")
         let (label, cmd): (String, [String]) =
             if let npm {
-                ("npm", [npm, "install", "-g", "moltbot@\(target)"])
+                ("npm", [npm, "install", "-g", "dna@\(target)"])
             } else if let pnpm {
-                ("pnpm", [pnpm, "add", "-g", "moltbot@\(target)"])
+                ("pnpm", [pnpm, "add", "-g", "dna@\(target)"])
             } else if let bun {
-                ("bun", [bun, "add", "-g", "moltbot@\(target)"])
+                ("bun", [bun, "add", "-g", "dna@\(target)"])
             } else {
-                ("npm", ["npm", "install", "-g", "moltbot@\(target)"])
+                ("npm", ["npm", "install", "-g", "dna@\(target)"])
             }
 
-        statusHandler("Installing moltbot@\(target) via \(label)…")
+        statusHandler("Installing dna@\(target) via \(label)…")
 
         func summarize(_ text: String) -> String? {
             let lines = text
@@ -270,7 +270,7 @@ enum GatewayEnvironment {
 
         let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: ["PATH": preferred], timeout: 300)
         if response.success {
-            statusHandler("Installed moltbot@\(target)")
+            statusHandler("Installed dna@\(target)")
         } else {
             if response.timedOut {
                 statusHandler("Install failed: timed out. Check your internet connection and try again.")

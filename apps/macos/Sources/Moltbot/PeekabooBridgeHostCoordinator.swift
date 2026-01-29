@@ -12,7 +12,7 @@ final class PeekabooBridgeHostCoordinator {
     private let logger = Logger(subsystem: "bot.molt", category: "PeekabooBridge")
 
     private var host: PeekabooBridgeHost?
-    private var services: MoltbotPeekabooBridgeServices?
+    private var services: DNAPeekabooBridgeServices?
 
     func setEnabled(_ enabled: Bool) async {
         if enabled {
@@ -39,7 +39,7 @@ final class PeekabooBridgeHostCoordinator {
         }
         let allowlistedBundles: Set<String> = []
 
-        let services = MoltbotPeekabooBridgeServices()
+        let services = DNAPeekabooBridgeServices()
         let server = PeekabooBridgeServer(
             services: services,
             hostKind: .gui,
@@ -47,7 +47,7 @@ final class PeekabooBridgeHostCoordinator {
             allowlistedBundles: allowlistedBundles)
 
         let host = PeekabooBridgeHost(
-            socketPath: PeekabooBridgeConstants.clawdbotSocketPath,
+            socketPath: PeekabooBridgeConstants.dnaSocketPath,
             server: server,
             allowedTeamIDs: allowlistedTeamIDs,
             requestTimeoutSec: 10)
@@ -57,7 +57,7 @@ final class PeekabooBridgeHostCoordinator {
 
         await host.start()
         self.logger
-            .info("PeekabooBridge host started at \(PeekabooBridgeConstants.clawdbotSocketPath, privacy: .public)")
+            .info("PeekabooBridge host started at \(PeekabooBridgeConstants.dnaSocketPath, privacy: .public)")
     }
 
     private static func currentTeamID() -> String? {
@@ -90,7 +90,7 @@ final class PeekabooBridgeHostCoordinator {
 }
 
 @MainActor
-private final class MoltbotPeekabooBridgeServices: PeekabooBridgeServiceProviding {
+private final class DNAPeekabooBridgeServices: PeekabooBridgeServiceProviding {
     let permissions: PermissionsService
     let screenCapture: any ScreenCaptureServiceProtocol
     let automation: any UIAutomationServiceProtocol

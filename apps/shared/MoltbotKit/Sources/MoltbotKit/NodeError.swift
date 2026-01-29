@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MoltbotNodeErrorCode: String, Codable, Sendable {
+public enum DNANodeErrorCode: String, Codable, Sendable {
     case notPaired = "NOT_PAIRED"
     case unauthorized = "UNAUTHORIZED"
     case backgroundUnavailable = "NODE_BACKGROUND_UNAVAILABLE"
@@ -8,14 +8,14 @@ public enum MoltbotNodeErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
 }
 
-public struct MoltbotNodeError: Error, Codable, Sendable, Equatable {
-    public var code: MoltbotNodeErrorCode
+public struct DNANodeError: Error, Codable, Sendable, Equatable {
+    public var code: DNANodeErrorCode
     public var message: String
     public var retryable: Bool?
     public var retryAfterMs: Int?
 
     public init(
-        code: MoltbotNodeErrorCode,
+        code: DNANodeErrorCode,
         message: String,
         retryable: Bool? = nil,
         retryAfterMs: Int? = nil)

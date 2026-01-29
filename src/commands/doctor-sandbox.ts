@@ -7,7 +7,7 @@ import {
   DEFAULT_SANDBOX_IMAGE,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -87,17 +87,17 @@ async function dockerImageExists(image: string): Promise<boolean> {
   }
 }
 
-function resolveSandboxDockerImage(cfg: MoltbotConfig): string {
+function resolveSandboxDockerImage(cfg: DNAConfig): string {
   const image = cfg.agents?.defaults?.sandbox?.docker?.image?.trim();
   return image ? image : DEFAULT_SANDBOX_IMAGE;
 }
 
-function resolveSandboxBrowserImage(cfg: MoltbotConfig): string {
+function resolveSandboxBrowserImage(cfg: DNAConfig): string {
   const image = cfg.agents?.defaults?.sandbox?.browser?.image?.trim();
   return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
 }
 
-function updateSandboxDockerImage(cfg: MoltbotConfig, image: string): MoltbotConfig {
+function updateSandboxDockerImage(cfg: DNAConfig, image: string): DNAConfig {
   return {
     ...cfg,
     agents: {
@@ -116,7 +116,7 @@ function updateSandboxDockerImage(cfg: MoltbotConfig, image: string): MoltbotCon
   };
 }
 
-function updateSandboxBrowserImage(cfg: MoltbotConfig, image: string): MoltbotConfig {
+function updateSandboxBrowserImage(cfg: DNAConfig, image: string): DNAConfig {
   return {
     ...cfg,
     agents: {
@@ -170,10 +170,10 @@ async function handleMissingSandboxImage(
 }
 
 export async function maybeRepairSandboxImages(
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
-): Promise<MoltbotConfig> {
+): Promise<DNAConfig> {
   const sandbox = cfg.agents?.defaults?.sandbox;
   const mode = sandbox?.mode ?? "off";
   if (!sandbox || mode === "off") return cfg;
@@ -230,7 +230,7 @@ export async function maybeRepairSandboxImages(
   return next;
 }
 
-export function noteSandboxScopeWarnings(cfg: MoltbotConfig) {
+export function noteSandboxScopeWarnings(cfg: DNAConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const warnings: string[] = [];

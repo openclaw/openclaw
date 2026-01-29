@@ -1,13 +1,13 @@
 {
-  "name": "@moltbot/zalouser",
+  "name": "@dna/zalouser",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Zalo Personal Account plugin via zca-cli",
+  "description": "DNA Zalo Personal Account plugin via zca-cli",
   "dependencies": {
-    "moltbot": "workspace:*",
+    "dna": "workspace:*",
     "@sinclair/typebox": "0.34.47"
   },
-  "moltbot": {
+  "dna": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/zalouser",
+      "npmSpec": "@dna/zalouser",
       "localPath": "extensions/zalouser",
       "defaultChoice": "npm"
     }

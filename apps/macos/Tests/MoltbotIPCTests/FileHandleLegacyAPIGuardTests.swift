@@ -5,7 +5,7 @@ import Testing
     @Test func sourcesAvoidLegacyNonThrowingFileHandleReadAPIs() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let packageRoot = testFile
-            .deletingLastPathComponent() // MoltbotIPCTests
+            .deletingLastPathComponent() // DNAIPCTests
             .deletingLastPathComponent() // Tests
             .deletingLastPathComponent() // apps/macos
 

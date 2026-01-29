@@ -11,7 +11,7 @@ final class VoiceWakeOverlayController {
     let logger = Logger(subsystem: "bot.molt", category: "voicewake.overlay")
     let enableUI: Bool
 
-    /// Keep the voice wake overlay above any other Moltbot windows, but below the system’s pop-up menus.
+    /// Keep the voice wake overlay above any other DNA windows, but below the system’s pop-up menus.
     /// (Menu bar menus typically live at `.popUpMenu`.)
     static let preferredWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 4)
 

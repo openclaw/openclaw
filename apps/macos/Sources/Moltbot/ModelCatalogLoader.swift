@@ -6,7 +6,7 @@ enum ModelCatalogLoader {
     private static let logger = Logger(subsystem: "bot.molt", category: "models")
     private nonisolated static let appSupportDir: URL = {
         let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("Moltbot", isDirectory: true)
+        return base.appendingPathComponent("DNA", isDirectory: true)
     }()
 
     private static var cachePath: URL {

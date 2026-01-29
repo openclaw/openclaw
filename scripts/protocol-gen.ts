@@ -14,8 +14,8 @@ async function writeJsonSchema() {
 
   const rootSchema = {
     $schema: "http://json-schema.org/draft-07/schema#",
-    $id: "https://moltbot.dev/protocol.schema.json",
-    title: "Moltbot Gateway Protocol",
+    $id: "https://dna.dev/protocol.schema.json",
+    title: "DNA Gateway Protocol",
     description: "Handshake, request/response, and event frames for the Gateway WebSocket.",
     oneOf: [
       { $ref: "#/definitions/RequestFrame" },

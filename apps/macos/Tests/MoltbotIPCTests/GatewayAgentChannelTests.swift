@@ -1,5 +1,5 @@
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite struct GatewayAgentChannelTests {
     @Test func shouldDeliverBlocksWebChat() {

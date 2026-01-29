@@ -1,19 +1,19 @@
-import MoltbotProtocol
+import DNAProtocol
 import Foundation
 
-enum MoltbotConfigFile {
+enum DNAConfigFile {
     private static let logger = Logger(subsystem: "bot.molt", category: "config")
 
     static func url() -> URL {
-        MoltbotPaths.configURL
+        DNAPaths.configURL
     }
 
     static func stateDirURL() -> URL {
-        MoltbotPaths.stateDirURL
+        DNAPaths.stateDirURL
     }
 
     static func defaultWorkspaceURL() -> URL {
-        MoltbotPaths.workspaceURL
+        DNAPaths.workspaceURL
     }
 
     static func loadDict() -> [String: Any] {

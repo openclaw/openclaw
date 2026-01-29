@@ -12,7 +12,7 @@ A **node** is a companion device (macOS/iOS/Android/headless) that connects to t
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `moltbot nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `dna nodes …` works against this Mac).
 
 Notes:
 - Nodes are **peripherals**, not gateways. They don’t run the gateway service.
@@ -26,16 +26,16 @@ creates a device pairing request for `role: node`. Approve via the devices CLI (
 Quick CLI:
 
 ```bash
-moltbot devices list
-moltbot devices approve <requestId>
-moltbot devices reject <requestId>
-moltbot nodes status
-moltbot nodes describe --node <idOrNameOrIp>
+dna devices list
+dna devices approve <requestId>
+dna devices reject <requestId>
+dna nodes status
+dna nodes describe --node <idOrNameOrIp>
 ```
 
 Notes:
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- `node.pair.*` (CLI: `moltbot nodes pending/approve/reject`) is a separate gateway-owned
+- `node.pair.*` (CLI: `dna nodes pending/approve/reject`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
 
 ## Remote node host (system.run)
@@ -47,21 +47,21 @@ forwards `exec` calls to the **node host** when `host=node` is selected.
 ### What runs where
 - **Gateway host**: receives messages, runs the model, routes tool calls.
 - **Node host**: executes `system.run`/`system.which` on the node machine.
-- **Approvals**: enforced on the node host via `~/.clawdbot/exec-approvals.json`.
+- **Approvals**: enforced on the node host via `~/.dna/exec-approvals.json`.
 
 ### Start a node host (foreground)
 
 On the node machine:
 
 ```bash
-moltbot node run --host <gateway-host> --port 18789 --display-name "Build Node"
+dna node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
 ### Start a node host (service)
 
 ```bash
-moltbot node install --host <gateway-host> --port 18789 --display-name "Build Node"
-moltbot node restart
+dna node install --host <gateway-host> --port 18789 --display-name "Build Node"
+dna node restart
 ```
 
 ### Pair + name
@@ -69,34 +69,34 @@ moltbot node restart
 On the gateway host:
 
 ```bash
-moltbot nodes pending
-moltbot nodes approve <requestId>
-moltbot nodes list
+dna nodes pending
+dna nodes approve <requestId>
+dna nodes list
 ```
 
 Naming options:
-- `--display-name` on `moltbot node run` / `moltbot node install` (persists in `~/.clawdbot/node.json` on the node).
-- `moltbot nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
+- `--display-name` on `dna node run` / `dna node install` (persists in `~/.dna/node.json` on the node).
+- `dna nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Allowlist the commands
 
 Exec approvals are **per node host**. Add allowlist entries from the gateway:
 
 ```bash
-moltbot approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
-moltbot approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
+dna approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
+dna approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 ```
 
-Approvals live on the node host at `~/.clawdbot/exec-approvals.json`.
+Approvals live on the node host at `~/.dna/exec-approvals.json`.
 
 ### Point exec at the node
 
 Configure defaults (gateway config):
 
 ```bash
-moltbot config set tools.exec.host node
-moltbot config set tools.exec.security allowlist
-moltbot config set tools.exec.node "<id-or-name>"
+dna config set tools.exec.host node
+dna config set tools.exec.security allowlist
+dna config set tools.exec.node "<id-or-name>"
 ```
 
 Or per session:
@@ -118,7 +118,7 @@ Related:
 Low-level (raw RPC):
 
 ```bash
-moltbot nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+dna nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
 ```
 
 Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
@@ -130,17 +130,17 @@ If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format
 CLI helper (writes to a temp file and prints `MEDIA:<path>`):
 
 ```bash
-moltbot nodes canvas snapshot --node <idOrNameOrIp> --format png
-moltbot nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
+dna nodes canvas snapshot --node <idOrNameOrIp> --format png
+dna nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
 ```
 
 ### Canvas controls
 
 ```bash
-moltbot nodes canvas present --node <idOrNameOrIp> --target https://example.com
-moltbot nodes canvas hide --node <idOrNameOrIp>
-moltbot nodes canvas navigate https://example.com --node <idOrNameOrIp>
-moltbot nodes canvas eval --node <idOrNameOrIp> --js "document.title"
+dna nodes canvas present --node <idOrNameOrIp> --target https://example.com
+dna nodes canvas hide --node <idOrNameOrIp>
+dna nodes canvas navigate https://example.com --node <idOrNameOrIp>
+dna nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 ```
 
 Notes:
@@ -150,9 +150,9 @@ Notes:
 ### A2UI (Canvas)
 
 ```bash
-moltbot nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-moltbot nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-moltbot nodes canvas a2ui reset --node <idOrNameOrIp>
+dna nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
+dna nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
+dna nodes canvas a2ui reset --node <idOrNameOrIp>
 ```
 
 Notes:
@@ -163,16 +163,16 @@ Notes:
 Photos (`jpg`):
 
 ```bash
-moltbot nodes camera list --node <idOrNameOrIp>
-moltbot nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
-moltbot nodes camera snap --node <idOrNameOrIp> --facing front
+dna nodes camera list --node <idOrNameOrIp>
+dna nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
+dna nodes camera snap --node <idOrNameOrIp> --facing front
 ```
 
 Video clips (`mp4`):
 
 ```bash
-moltbot nodes camera clip --node <idOrNameOrIp> --duration 10s
-moltbot nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
+dna nodes camera clip --node <idOrNameOrIp> --duration 10s
+dna nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 ```
 
 Notes:
@@ -185,8 +185,8 @@ Notes:
 Nodes expose `screen.record` (mp4). Example:
 
 ```bash
-moltbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
-moltbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
+dna nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
+dna nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
 ```
 
 Notes:
@@ -203,8 +203,8 @@ Nodes expose `location.get` when Location is enabled in settings.
 CLI helper:
 
 ```bash
-moltbot nodes location get --node <idOrNameOrIp>
-moltbot nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
+dna nodes location get --node <idOrNameOrIp>
+dna nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
 ```
 
 Notes:
@@ -219,7 +219,7 @@ Android nodes can expose `sms.send` when the user grants **SMS** permission and 
 Low-level invoke:
 
 ```bash
-moltbot nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from Moltbot"}'
+dna nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from DNA"}'
 ```
 
 Notes:
@@ -234,8 +234,8 @@ The headless node host exposes `system.run`, `system.which`, and `system.execApp
 Examples:
 
 ```bash
-moltbot nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
-moltbot nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+dna nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
+dna nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
 ```
 
 Notes:
@@ -246,7 +246,7 @@ Notes:
 - macOS nodes drop `PATH` overrides; headless node hosts only accept `PATH` when it prepends the node host PATH.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
-- On headless node host, `system.run` is gated by exec approvals (`~/.clawdbot/exec-approvals.json`).
+- On headless node host, `system.run` is gated by exec approvals (`~/.dna/exec-approvals.json`).
 
 ## Exec node binding
 
@@ -256,21 +256,21 @@ This sets the default node for `exec host=node` (and can be overridden per agent
 Global default:
 
 ```bash
-moltbot config set tools.exec.node "node-id-or-name"
+dna config set tools.exec.node "node-id-or-name"
 ```
 
 Per-agent override:
 
 ```bash
-moltbot config get agents.list
-moltbot config set agents.list[0].tools.exec.node "node-id-or-name"
+dna config get agents.list
+dna config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 Unset to allow any node:
 
 ```bash
-moltbot config unset tools.exec.node
-moltbot config unset agents.list[0].tools.exec.node
+dna config unset tools.exec.node
+dna config unset agents.list[0].tools.exec.node
 ```
 
 ## Permissions map
@@ -279,27 +279,27 @@ Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by
 
 ## Headless node host (cross-platform)
 
-Moltbot can run a **headless node host** (no UI) that connects to the Gateway
+DNA can run a **headless node host** (no UI) that connects to the Gateway
 WebSocket and exposes `system.run` / `system.which`. This is useful on Linux/Windows
 or for running a minimal node alongside a server.
 
 Start it:
 
 ```bash
-moltbot node run --host <gateway-host> --port 18789
+dna node run --host <gateway-host> --port 18789
 ```
 
 Notes:
 - Pairing is still required (the Gateway will show a node approval prompt).
-- The node host stores its node id, token, display name, and gateway connection info in `~/.clawdbot/node.json`.
-- Exec approvals are enforced locally via `~/.clawdbot/exec-approvals.json`
+- The node host stores its node id, token, display name, and gateway connection info in `~/.dna/node.json`.
+- Exec approvals are enforced locally via `~/.dna/exec-approvals.json`
   (see [Exec approvals](/tools/exec-approvals)).
 - On macOS, the headless node host prefers the companion app exec host when reachable and falls
-  back to local execution if the app is unavailable. Set `CLAWDBOT_NODE_EXEC_HOST=app` to require
-  the app, or `CLAWDBOT_NODE_EXEC_FALLBACK=0` to disable fallback.
+  back to local execution if the app is unavailable. Set `DNA_NODE_EXEC_HOST=app` to require
+  the app, or `DNA_NODE_EXEC_FALLBACK=0` to disable fallback.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 
 ## Mac node mode
 
-- The macOS menubar app connects to the Gateway WS server as a node (so `moltbot nodes …` works against this Mac).
+- The macOS menubar app connects to the Gateway WS server as a node (so `dna nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://molt.bot/install.sh}"
-SMOKE_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_SMOKE_PREVIOUS:-}"
-SKIP_PREVIOUS="${CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
-DEFAULT_PACKAGE="moltbot"
-if [[ -z "${CLAWDBOT_INSTALL_PACKAGE:-}" && "$INSTALL_URL" == *"clawd.bot"* ]]; then
-  DEFAULT_PACKAGE="clawdbot"
+INSTALL_URL="${DNA_INSTALL_URL:-https://molt.bot/install.sh}"
+SMOKE_PREVIOUS_VERSION="${DNA_INSTALL_SMOKE_PREVIOUS:-}"
+SKIP_PREVIOUS="${DNA_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
+DEFAULT_PACKAGE="dna"
+if [[ -z "${DNA_INSTALL_PACKAGE:-}" && "$INSTALL_URL" == *"clawd.bot"* ]]; then
+  DEFAULT_PACKAGE="dna"
 fi
-PACKAGE_NAME="${CLAWDBOT_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
-if [[ "$PACKAGE_NAME" == "moltbot" ]]; then
-  ALT_PACKAGE_NAME="clawdbot"
+PACKAGE_NAME="${DNA_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
+if [[ "$PACKAGE_NAME" == "dna" ]]; then
+  ALT_PACKAGE_NAME="dna"
 else
-  ALT_PACKAGE_NAME="moltbot"
+  ALT_PACKAGE_NAME="dna"
 fi
 
 echo "==> Resolve npm versions"
@@ -49,7 +49,7 @@ fi
 echo "package=$PACKAGE_NAME latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"
 
 if [[ "$SKIP_PREVIOUS" == "1" ]]; then
-  echo "==> Skip preinstall previous (CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
+  echo "==> Skip preinstall previous (DNA_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
 else
   echo "==> Preinstall previous (forces installer upgrade path)"
   npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
@@ -70,8 +70,8 @@ if ! command -v "$CLI_NAME" >/dev/null 2>&1; then
     exit 1
   fi
 fi
-if [[ -n "${CLAWDBOT_INSTALL_LATEST_OUT:-}" ]]; then
-  printf "%s" "$LATEST_VERSION" > "$CLAWDBOT_INSTALL_LATEST_OUT"
+if [[ -n "${DNA_INSTALL_LATEST_OUT:-}" ]]; then
+  printf "%s" "$LATEST_VERSION" > "$DNA_INSTALL_LATEST_OUT"
 fi
 INSTALLED_VERSION="$("$CLI_NAME" --version 2>/dev/null | head -n 1 | tr -d '\r')"
 echo "cli=$CLI_NAME installed=$INSTALLED_VERSION expected=$LATEST_VERSION"

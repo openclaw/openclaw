@@ -1,6 +1,6 @@
 import AppKit
-import MoltbotIPC
-import MoltbotKit
+import DNAIPC
+import DNAKit
 import Foundation
 import OSLog
 
@@ -26,7 +26,7 @@ final class CanvasManager {
 
     private nonisolated static let canvasRoot: URL = {
         let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("Moltbot/canvas", isDirectory: true)
+        return base.appendingPathComponent("DNA/canvas", isDirectory: true)
     }()
 
     func show(sessionKey: String, path: String? = nil, placement: CanvasPlacement? = nil) throws -> String {
@@ -231,7 +231,7 @@ final class CanvasManager {
     private static func resolveA2UIHostUrl(from raw: String?) -> String? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
-        return base.appendingPathComponent("__moltbot__/a2ui/").absoluteString + "?platform=macos"
+        return base.appendingPathComponent("__dna__/a2ui/").absoluteString + "?platform=macos"
     }
 
     // MARK: - Anchoring

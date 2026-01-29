@@ -1,15 +1,15 @@
-import type { MoltbotConfig } from "../../../config/config.js";
+import type { DNAConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
-  nextConfig: MoltbotConfig;
+  nextConfig: DNAConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   defaultPort: number;
 }): {
-  nextConfig: MoltbotConfig;
+  nextConfig: DNAConfig;
   port: number;
   bind: string;
   authMode: string;

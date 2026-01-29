@@ -1,5 +1,5 @@
-import type { MoltbotPluginApi } from "../../src/plugins/types.js";
+import type { DNAPluginApi } from "../../src/plugins/types.js";
 
-export default function register(_api: MoltbotPluginApi) {
+export default function register(_api: DNAPluginApi) {
   // OpenProse is delivered via plugin-shipped skills.
 }

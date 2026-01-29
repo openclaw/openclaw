@@ -1,5 +1,5 @@
 ---
-summary: "Menu bar icon states and animations for Moltbot on macOS"
+summary: "Menu bar icon states and animations for DNA on macOS"
 read_when:
   - Changing menu bar icon behavior
 ---

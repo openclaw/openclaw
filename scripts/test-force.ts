@@ -27,13 +27,13 @@ function killGatewayListeners(port: number): PortProcess[] {
 
 function runTests() {
   const isolatedLock =
-    process.env.CLAWDBOT_GATEWAY_LOCK ??
-    path.join(os.tmpdir(), `moltbot-gateway.lock.test.${Date.now()}`);
+    process.env.DNA_GATEWAY_LOCK ??
+    path.join(os.tmpdir(), `dna-gateway.lock.test.${Date.now()}`);
   const result = spawnSync("pnpm", ["vitest", "run"], {
     stdio: "inherit",
     env: {
       ...process.env,
-      CLAWDBOT_GATEWAY_LOCK: isolatedLock,
+      DNA_GATEWAY_LOCK: isolatedLock,
     },
   });
   if (result.error) {
@@ -45,7 +45,7 @@ function runTests() {
 
 function main() {
   const port = Number.parseInt(
-    process.env.CLAWDBOT_GATEWAY_PORT ?? `${DEFAULT_PORT}`,
+    process.env.DNA_GATEWAY_PORT ?? `${DEFAULT_PORT}`,
     10,
   );
 

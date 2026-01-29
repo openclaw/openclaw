@@ -2,11 +2,11 @@
 import process from "node:process";
 import type { GatewayLockHandle } from "../infra/gateway-lock.js";
 
-declare const __CLAWDBOT_VERSION__: string;
+declare const __DNA_VERSION__: string;
 
 const BUNDLED_VERSION =
-  (typeof __CLAWDBOT_VERSION__ === "string" && __CLAWDBOT_VERSION__) ||
-  process.env.CLAWDBOT_BUNDLED_VERSION ||
+  (typeof __DNA_VERSION__ === "string" && __DNA_VERSION__) ||
+  process.env.DNA_BUNDLED_VERSION ||
   "0.0.0";
 
 function argValue(args: string[], flag: string): string | undefined {
@@ -26,7 +26,7 @@ type GatewayWsLogStyle = "auto" | "full" | "compact";
 
 async function main() {
   if (hasFlag(args, "--version") || hasFlag(args, "-v")) {
-    // Match `moltbot --version` behavior for Swift env/version checks.
+    // Match `dna --version` behavior for Swift env/version checks.
     // Keep output a single line.
     console.log(BUNDLED_VERSION);
     process.exit(0);
@@ -75,7 +75,7 @@ async function main() {
   const cfg = loadConfig();
   const portRaw =
     argValue(args, "--port") ??
-    process.env.CLAWDBOT_GATEWAY_PORT ??
+    process.env.DNA_GATEWAY_PORT ??
     (typeof cfg.gateway?.port === "number" ? String(cfg.gateway.port) : "") ??
     "18789";
   const port = Number.parseInt(portRaw, 10);
@@ -86,7 +86,7 @@ async function main() {
 
   const bindRaw =
     argValue(args, "--bind") ??
-    process.env.CLAWDBOT_GATEWAY_BIND ??
+    process.env.DNA_GATEWAY_BIND ??
     cfg.gateway?.bind ??
     "loopback";
   const bind =
@@ -103,7 +103,7 @@ async function main() {
   }
 
   const token = argValue(args, "--token");
-  if (token) process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+  if (token) process.env.DNA_GATEWAY_TOKEN = token;
 
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let lock: GatewayLockHandle | null = null;
@@ -211,7 +211,7 @@ async function main() {
 
 void main().catch((err) => {
   console.error(
-    "[moltbot] Gateway daemon failed:",
+    "[dna] Gateway daemon failed:",
     err instanceof Error ? (err.stack ?? err.message) : err,
   );
   process.exit(1);

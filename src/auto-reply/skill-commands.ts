@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
@@ -21,7 +21,7 @@ function resolveReservedCommandNames(): Set<string> {
 
 export function listSkillCommandsForWorkspace(params: {
   workspaceDir: string;
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   skillFilter?: string[];
 }): SkillCommandSpec[] {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
@@ -33,7 +33,7 @@ export function listSkillCommandsForWorkspace(params: {
 }
 
 export function listSkillCommandsForAgents(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   agentIds?: string[];
 }): SkillCommandSpec[] {
   const used = resolveReservedCommandNames();

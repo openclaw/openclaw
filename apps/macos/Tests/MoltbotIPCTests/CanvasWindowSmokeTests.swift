@@ -1,15 +1,15 @@
 import AppKit
-import MoltbotIPC
+import DNAIPC
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 @MainActor
 struct CanvasWindowSmokeTests {
     @Test func panelControllerShowsAndHides() async throws {
         let root = FileManager().temporaryDirectory
-            .appendingPathComponent("moltbot-canvas-test-\(UUID().uuidString)")
+            .appendingPathComponent("dna-canvas-test-\(UUID().uuidString)")
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager().removeItem(at: root) }
 
@@ -32,7 +32,7 @@ struct CanvasWindowSmokeTests {
 
     @Test func windowControllerShowsAndCloses() async throws {
         let root = FileManager().temporaryDirectory
-            .appendingPathComponent("moltbot-canvas-test-\(UUID().uuidString)")
+            .appendingPathComponent("dna-canvas-test-\(UUID().uuidString)")
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager().removeItem(at: root) }
 

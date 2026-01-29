@@ -7,9 +7,9 @@ import {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-  type MoltbotConfig,
+  type DNAConfig,
   type ChannelSetupInput,
-} from "clawdbot/plugin-sdk";
+} from "dna/plugin-sdk";
 
 import {
   listNextcloudTalkAccountIds,
@@ -173,7 +173,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
       applyAccountNameToChannelSection({
-        cfg: cfg as MoltbotConfig,
+        cfg: cfg as DNAConfig,
         channelKey: "nextcloud-talk",
         accountId,
         name,
@@ -194,7 +194,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     applyAccountConfig: ({ cfg, accountId, input }) => {
       const setupInput = input as NextcloudSetupInput;
       const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg as MoltbotConfig,
+        cfg: cfg as DNAConfig,
         channelKey: "nextcloud-talk",
         accountId,
         name: setupInput.name,
@@ -217,7 +217,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
                     : {}),
             },
           },
-        } as MoltbotConfig;
+        } as DNAConfig;
       }
       return {
         ...namedConfig,
@@ -241,7 +241,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
             },
           },
         },
-      } as MoltbotConfig;
+      } as DNAConfig;
     },
   },
   outbound: {
@@ -323,7 +323,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       return { stop };
     },
     logoutAccount: async ({ accountId, cfg }) => {
-      const nextCfg = { ...cfg } as MoltbotConfig;
+      const nextCfg = { ...cfg } as DNAConfig;
       const nextSection = cfg.channels?.["nextcloud-talk"]
         ? { ...cfg.channels["nextcloud-talk"] }
         : undefined;
@@ -377,7 +377,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
           const nextChannels = { ...nextCfg.channels } as Record<string, unknown>;
           delete nextChannels["nextcloud-talk"];
           if (Object.keys(nextChannels).length > 0) {
-            nextCfg.channels = nextChannels as MoltbotConfig["channels"];
+            nextCfg.channels = nextChannels as DNAConfig["channels"];
           } else {
             delete nextCfg.channels;
           }

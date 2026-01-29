@@ -6,8 +6,8 @@
     {
       "layers" : [
         {
-          "image-name" : "moltbot-mac.png",
-          "name" : "moltbot-mac",
+          "image-name" : "dna-mac.png",
+          "name" : "dna-mac",
           "position" : {
             "scale" : 1.07,
             "translation-in-points" : [

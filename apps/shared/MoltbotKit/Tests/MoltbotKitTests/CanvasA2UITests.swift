@@ -1,11 +1,11 @@
-import MoltbotKit
+import DNAKit
 import Testing
 
 @Suite struct CanvasA2UITests {
     @Test func commandStringsAreStable() {
-        #expect(MoltbotCanvasA2UICommand.push.rawValue == "canvas.a2ui.push")
-        #expect(MoltbotCanvasA2UICommand.pushJSONL.rawValue == "canvas.a2ui.pushJSONL")
-        #expect(MoltbotCanvasA2UICommand.reset.rawValue == "canvas.a2ui.reset")
+        #expect(DNACanvasA2UICommand.push.rawValue == "canvas.a2ui.push")
+        #expect(DNACanvasA2UICommand.pushJSONL.rawValue == "canvas.a2ui.pushJSONL")
+        #expect(DNACanvasA2UICommand.reset.rawValue == "canvas.a2ui.reset")
     }
 
     @Test func jsonlDecodesAndValidatesV0_8() throws {
@@ -16,7 +16,7 @@ import Testing
         {"deleteSurface":{"surfaceId":"main"}}
         """
 
-        let messages = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
+        let messages = try DNACanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
         #expect(messages.count == 4)
     }
 
@@ -26,7 +26,7 @@ import Testing
         """
 
         #expect(throws: Error.self) {
-            _ = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
+            _ = try DNACanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
         }
     }
 
@@ -36,7 +36,7 @@ import Testing
         """
 
         #expect(throws: Error.self) {
-            _ = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
+            _ = try DNACanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
         }
     }
 }

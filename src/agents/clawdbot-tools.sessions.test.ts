@@ -21,7 +21,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { createMoltbotTools } from "./moltbot-tools.js";
+import { createDNATools } from "./dna-tools.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   const start = Date.now();
@@ -35,7 +35,7 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
 
 describe("sessions tools", () => {
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
-    const tools = createMoltbotTools();
+    const tools = createDNATools();
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);
       expect(tool).toBeDefined();
@@ -118,7 +118,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_list");
+    const tool = createDNATools().find((candidate) => candidate.name === "sessions_list");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_list tool");
 
@@ -155,7 +155,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createDNATools().find((candidate) => candidate.name === "sessions_history");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_history tool");
 
@@ -191,7 +191,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createDNATools().find((candidate) => candidate.name === "sessions_history");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_history tool");
 
@@ -218,7 +218,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createDNATools().find((candidate) => candidate.name === "sessions_history");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_history tool");
 
@@ -290,7 +290,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createMoltbotTools({
+    const tool = createDNATools({
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
@@ -390,7 +390,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createMoltbotTools({
+    const tool = createDNATools({
       agentSessionKey: "main",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
@@ -480,7 +480,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createMoltbotTools({
+    const tool = createDNATools({
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");

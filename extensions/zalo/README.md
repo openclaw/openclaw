@@ -1,17 +1,17 @@
-# @clawdbot/zalo
+# @dna/zalo
 
-Zalo channel plugin for Clawdbot (Bot API).
+Zalo channel plugin for DNA (Bot API).
 
 ## Install (local checkout)
 
 ```bash
-clawdbot plugins install ./extensions/zalo
+dna plugins install ./extensions/zalo
 ```
 
 ## Install (npm)
 
 ```bash
-clawdbot plugins install @clawdbot/zalo
+dna plugins install @dna/zalo
 ```
 
 Onboarding: select Zalo and confirm the install prompt to fetch the plugin automatically.

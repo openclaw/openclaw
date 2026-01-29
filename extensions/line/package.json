@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/line",
+  "name": "@dna/line",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot LINE channel plugin",
-  "moltbot": {
+  "description": "DNA LINE channel plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ],
@@ -18,12 +18,12 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/line",
+      "npmSpec": "@dna/line",
       "localPath": "extensions/line",
       "defaultChoice": "npm"
     }
   },
   "devDependencies": {
-    "moltbot": "workspace:*"
+    "dna": "workspace:*"
   }
 }

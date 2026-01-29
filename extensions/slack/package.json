@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/slack",
+  "name": "@dna/slack",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Slack channel plugin",
-  "moltbot": {
+  "description": "DNA Slack channel plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ]

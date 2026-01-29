@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import {
   resolveAgentConfig,
   resolveAgentModelFallbacksOverride,
@@ -8,13 +8,13 @@ import {
 
 describe("resolveAgentConfig", () => {
   it("should return undefined when no agents config exists", () => {
-    const cfg: MoltbotConfig = {};
+    const cfg: DNAConfig = {};
     const result = resolveAgentConfig(cfg, "main");
     expect(result).toBeUndefined();
   });
 
   it("should return undefined when agent id does not exist", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         list: [{ id: "main", workspace: "~/clawd" }],
       },
@@ -24,14 +24,14 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should return basic agent config", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         list: [
           {
             id: "main",
             name: "Main Agent",
             workspace: "~/clawd",
-            agentDir: "~/.clawdbot/agents/main",
+            agentDir: "~/.dna/agents/main",
             model: "anthropic/claude-opus-4",
           },
         ],
@@ -41,7 +41,7 @@ describe("resolveAgentConfig", () => {
     expect(result).toEqual({
       name: "Main Agent",
       workspace: "~/clawd",
-      agentDir: "~/.clawdbot/agents/main",
+      agentDir: "~/.dna/agents/main",
       model: "anthropic/claude-opus-4",
       identity: undefined,
       groupChat: undefined,
@@ -52,7 +52,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("supports per-agent model primary+fallbacks", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         defaults: {
           model: {
@@ -76,7 +76,7 @@ describe("resolveAgentConfig", () => {
     expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual(["openai/gpt-5.2"]);
 
     // If fallbacks isn't present, we don't override the global fallbacks.
-    const cfgNoOverride: MoltbotConfig = {
+    const cfgNoOverride: DNAConfig = {
       agents: {
         list: [
           {
@@ -91,7 +91,7 @@ describe("resolveAgentConfig", () => {
     expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toBe(undefined);
 
     // Explicit empty list disables global fallbacks for that agent.
-    const cfgDisable: MoltbotConfig = {
+    const cfgDisable: DNAConfig = {
       agents: {
         list: [
           {
@@ -108,7 +108,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should return agent-specific sandbox config", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         list: [
           {
@@ -136,7 +136,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should return agent-specific tools config", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         list: [
           {
@@ -166,7 +166,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should return both sandbox and tools config", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         list: [
           {
@@ -190,7 +190,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should normalize agent id", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: DNAConfig = {
       agents: {
         list: [{ id: "main", workspace: "~/clawd" }],
       },

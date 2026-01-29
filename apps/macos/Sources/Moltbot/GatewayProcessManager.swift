@@ -270,7 +270,7 @@ final class GatewayProcessManager {
         let lower = message.lowercased()
         if self.isGatewayAuthFailure(error) {
             return """
-            Gateway on port \(port) rejected auth. Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN) \
+            Gateway on port \(port) rejected auth. Set gateway.auth.token (or DNA_GATEWAY_TOKEN) \
             to match the running gateway (or clear it on the gateway) and retry.
             """
         }

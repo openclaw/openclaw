@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MoltbotCanvasA2UIJSONL: Sendable {
+public enum DNACanvasA2UIJSONL: Sendable {
     public struct ParsedItem: Sendable {
         public var lineNumber: Int
         public var message: AnyCodable

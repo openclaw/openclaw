@@ -64,7 +64,7 @@ describe("discord native commands", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/dna-sessions.json" },
       discord: { dm: { enabled: true, policy: "open" } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 

@@ -3,7 +3,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { scheduleGatewaySigusr1Restart, triggerMoltbotRestart } from "../../infra/restart.js";
+import { scheduleGatewaySigusr1Restart, triggerDNARestart } from "../../infra/restart.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
@@ -237,11 +237,11 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: "⚙️ Restarting moltbot in-process (SIGUSR1); back in a few seconds.",
+        text: "⚙️ Restarting dna in-process (SIGUSR1); back in a few seconds.",
       },
     };
   }
-  const restartMethod = triggerMoltbotRestart();
+  const restartMethod = triggerDNARestart();
   if (!restartMethod.ok) {
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
@@ -254,7 +254,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   return {
     shouldContinue: false,
     reply: {
-      text: `⚙️ Restarting moltbot via ${restartMethod.method}; give me a few seconds to come back online.`,
+      text: `⚙️ Restarting dna via ${restartMethod.method}; give me a few seconds to come back online.`,
     },
   };
 };

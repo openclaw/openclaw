@@ -1,5 +1,5 @@
 import Testing
-@testable import MoltbotDiscovery
+@testable import DNADiscovery
 
 @Suite
 struct WideAreaGatewayDiscoveryTests {
@@ -20,15 +20,15 @@ struct WideAreaGatewayDiscoveryTests {
                 let nameserver = args.first(where: { $0.hasPrefix("@") }) ?? ""
                 if recordType == "PTR" {
                     if nameserver == "@100.123.224.76" {
-                        return "steipetacstudio-gateway._moltbot-gw._tcp.clawdbot.internal.\n"
+                        return "steipetacstudio-gateway._dna-gw._tcp.dna.internal.\n"
                     }
                     return ""
                 }
                 if recordType == "SRV" {
-                    return "0 0 18789 steipetacstudio.clawdbot.internal."
+                    return "0 0 18789 steipetacstudio.dna.internal."
                 }
                 if recordType == "TXT" {
-                    return "\"displayName=Peter\\226\\128\\153s Mac Studio (Moltbot)\" \"gatewayPort=18789\" \"tailnetDns=peters-mac-studio-1.sheep-coho.ts.net\" \"cliPath=/Users/steipete/moltbot/src/entry.ts\""
+                    return "\"displayName=Peter\\226\\128\\153s Mac Studio (DNA)\" \"gatewayPort=18789\" \"tailnetDns=peters-mac-studio-1.sheep-coho.ts.net\" \"cliPath=/Users/steipete/dna/src/entry.ts\""
                 }
                 return ""
             })
@@ -39,11 +39,11 @@ struct WideAreaGatewayDiscoveryTests {
 
         #expect(beacons.count == 1)
         let beacon = beacons[0]
-        let expectedDisplay = "Peter\u{2019}s Mac Studio (Moltbot)"
+        let expectedDisplay = "Peter\u{2019}s Mac Studio (DNA)"
         #expect(beacon.displayName == expectedDisplay)
         #expect(beacon.port == 18789)
         #expect(beacon.gatewayPort == 18789)
         #expect(beacon.tailnetDns == "peters-mac-studio-1.sheep-coho.ts.net")
-        #expect(beacon.cliPath == "/Users/steipete/moltbot/src/entry.ts")
+        #expect(beacon.cliPath == "/Users/steipete/dna/src/entry.ts")
     }
 }

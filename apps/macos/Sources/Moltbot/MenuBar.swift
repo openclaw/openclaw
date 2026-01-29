@@ -8,7 +8,7 @@ import Security
 import SwiftUI
 
 @main
-struct MoltbotApp: App {
+struct DNAApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var state: AppState
     private static let logger = Logger(subsystem: "bot.molt", category: "app")
@@ -32,7 +32,7 @@ struct MoltbotApp: App {
     }
 
     init() {
-        MoltbotLogging.bootstrapIfNeeded()
+        DNALogging.bootstrapIfNeeded()
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
     }

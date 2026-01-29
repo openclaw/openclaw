@@ -1,7 +1,7 @@
-import MoltbotProtocol
+import DNAProtocol
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite
 @MainActor
@@ -68,7 +68,7 @@ struct WorkActivityStoreTests {
             meta: nil,
             args: [
                 "command": AnyCodable("echo hi\necho bye"),
-                "path": AnyCodable("\(home)/Projects/moltbot"),
+                "path": AnyCodable("\(home)/Projects/dna"),
             ])
 
         #expect(store.current?.label == "bash: echo hi")

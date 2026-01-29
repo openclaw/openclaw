@@ -1,4 +1,4 @@
-import { MarkdownConfigSchema } from "clawdbot/plugin-sdk";
+import { MarkdownConfigSchema } from "dna/plugin-sdk";
 import { z } from "zod";
 
 /**

@@ -35,7 +35,7 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions.js")>();
   return {
     ...actual,
-    resolveStorePath: vi.fn(() => "/tmp/moltbot-sessions.json"),
+    resolveStorePath: vi.fn(() => "/tmp/dna-sessions.json"),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     resolveSessionKey: vi.fn(),
   };
@@ -64,7 +64,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/dna-sessions.json" },
       channels: {
         discord: {
           dm: { enabled: true, policy: "open" },
@@ -144,7 +144,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/dna-sessions.json" },
       channels: {
         discord: {
           dm: { enabled: true, policy: "open" },
@@ -224,7 +224,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/dna-sessions.json" },
       channels: {
         discord: {
           dm: { enabled: true, policy: "open" },
@@ -289,7 +289,7 @@ describe("discord tool result dispatch", () => {
             mentionedEveryone: false,
             mentionedUsers: [],
             mentionedRoles: [],
-            author: { id: "bot-id", bot: true, username: "Moltbot" },
+            author: { id: "bot-id", bot: true, username: "DNA" },
           },
         },
         author: { id: "u1", bot: false, username: "Ada" },
@@ -338,7 +338,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/dna-sessions.json" },
       messages: { responsePrefix: "PFX" },
       channels: {
         discord: {
@@ -447,7 +447,7 @@ describe("discord tool result dispatch", () => {
 
     const cfg = {
       agent: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/clawd" },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/dna-sessions.json" },
       channels: {
         discord: {
           dm: { enabled: true, policy: "open" },
@@ -556,7 +556,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/dna-sessions.json" },
       messages: { responsePrefix: "PFX" },
       channels: {
         discord: {

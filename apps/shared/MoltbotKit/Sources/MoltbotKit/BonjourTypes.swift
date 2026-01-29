@@ -1,10 +1,10 @@
 import Foundation
 
-public enum MoltbotBonjour {
+public enum DNABonjour {
     // v0: internal-only, subject to rename.
-    public static let gatewayServiceType = "_moltbot-gw._tcp"
+    public static let gatewayServiceType = "_dna-gw._tcp"
     public static let gatewayServiceDomain = "local."
-    public static let wideAreaGatewayServiceDomain = "moltbot.internal."
+    public static let wideAreaGatewayServiceDomain = "dna.internal."
 
     public static let gatewayServiceDomains = [
         gatewayServiceDomain,

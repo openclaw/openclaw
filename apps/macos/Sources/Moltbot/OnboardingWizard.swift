@@ -1,5 +1,5 @@
-import MoltbotKit
-import MoltbotProtocol
+import DNAKit
+import DNAProtocol
 import Foundation
 import Observation
 import OSLog
@@ -9,10 +9,10 @@ private let onboardingWizardLogger = Logger(subsystem: "bot.molt", category: "on
 
 // MARK: - Swift 6 AnyCodable Bridging Helpers
 
-// Bridge between MoltbotProtocol.AnyCodable and the local module to avoid
+// Bridge between DNAProtocol.AnyCodable and the local module to avoid
 // Swift 6 strict concurrency type conflicts.
 
-private typealias ProtocolAnyCodable = MoltbotProtocol.AnyCodable
+private typealias ProtocolAnyCodable = DNAProtocol.AnyCodable
 
 private func bridgeToLocal(_ value: ProtocolAnyCodable) -> AnyCodable {
     if let data = try? JSONEncoder().encode(value),
@@ -187,7 +187,7 @@ final class OnboardingWizardModel {
     }
 
     private func shouldSkipWizard() -> Bool {
-        let root = MoltbotConfigFile.loadDict()
+        let root = DNAConfigFile.loadDict()
         if let wizard = root["wizard"] as? [String: Any], !wizard.isEmpty {
             return true
         }

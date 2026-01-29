@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `moltbot node` (headless node host)"
+summary: "CLI reference for `dna node` (headless node host)"
 read_when:
   - Running the headless node host
   - Pairing a non-macOS node for system.run
 ---
 
-# `moltbot node`
+# `dna node`
 
 Run a **headless node host** that connects to the Gateway WebSocket and exposes
 `system.run` / `system.which` on this machine.
@@ -44,7 +44,7 @@ Disable it on the node if needed:
 ## Run (foreground)
 
 ```bash
-moltbot node run --host <gateway-host> --port 18789
+dna node run --host <gateway-host> --port 18789
 ```
 
 Options:
@@ -60,7 +60,7 @@ Options:
 Install a headless node host as a user service.
 
 ```bash
-moltbot node install --host <gateway-host> --port 18789
+dna node install --host <gateway-host> --port 18789
 ```
 
 Options:
@@ -76,13 +76,13 @@ Options:
 Manage the service:
 
 ```bash
-moltbot node status
-moltbot node stop
-moltbot node restart
-moltbot node uninstall
+dna node status
+dna node stop
+dna node restart
+dna node uninstall
 ```
 
-Use `moltbot node run` for a foreground node host (no service).
+Use `dna node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
 
@@ -92,17 +92,17 @@ The first connection creates a pending node pair request on the Gateway.
 Approve it via:
 
 ```bash
-moltbot nodes pending
-moltbot nodes approve <requestId>
+dna nodes pending
+dna nodes approve <requestId>
 ```
 
 The node host stores its node id, token, display name, and gateway connection info in
-`~/.clawdbot/node.json`.
+`~/.dna/node.json`.
 
 ## Exec approvals
 
 `system.run` is gated by local exec approvals:
 
-- `~/.clawdbot/exec-approvals.json`
+- `~/.dna/exec-approvals.json`
 - [Exec approvals](/tools/exec-approvals)
-- `moltbot approvals --node <id|name|ip>` (edit from the Gateway)
+- `dna approvals --node <id|name|ip>` (edit from the Gateway)

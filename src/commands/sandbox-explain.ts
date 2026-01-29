@@ -4,7 +4,7 @@ import {
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -33,7 +33,7 @@ type SandboxExplainOptions = {
 const SANDBOX_DOCS_URL = "https://docs.molt.bot/sandbox";
 
 function normalizeExplainSessionKey(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   agentId: string;
   session?: string;
 }): string {
@@ -53,7 +53,7 @@ function normalizeExplainSessionKey(params: {
 }
 
 function inferProviderFromSessionKey(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   sessionKey: string;
 }): string | undefined {
   const parsed = parseAgentSessionKey(params.sessionKey);
@@ -71,7 +71,7 @@ function inferProviderFromSessionKey(params: {
 }
 
 function resolveActiveChannel(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   agentId: string;
   sessionKey: string;
 }): string | undefined {

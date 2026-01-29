@@ -13,7 +13,7 @@ export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
 export type DiscordMessagePreflightContext = {
   cfg: LoadedConfig;
-  discordConfig: NonNullable<import("../../config/config.js").MoltbotConfig["channels"]>["discord"];
+  discordConfig: NonNullable<import("../../config/config.js").DNAConfig["channels"]>["discord"];
   accountId: string;
   token: string;
   runtime: RuntimeEnv;

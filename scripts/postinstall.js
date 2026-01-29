@@ -278,7 +278,7 @@ function main() {
 
 try {
   const skip =
-    process.env.CLAWDBOT_SKIP_POSTINSTALL === "1" ||
+    process.env.DNA_SKIP_POSTINSTALL === "1" ||
     process.env.VITEST === "true" ||
     process.env.NODE_ENV === "test";
 

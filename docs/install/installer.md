@@ -8,7 +8,7 @@ read_when:
 
 # Installer internals
 
-Moltbot ships two installer scripts (served from `molt.bot`):
+DNA ships two installer scripts (served from `molt.bot`):
 
 - `https://molt.bot/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
 - `https://molt.bot/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
@@ -26,7 +26,7 @@ Windows (PowerShell) help:
 & ([scriptblock]::Create((iwr -useb https://molt.bot/install.ps1))) -?
 ```
 
-If the installer completes but `moltbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
+If the installer completes but `dna` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
 
 ## install.sh (recommended)
 
@@ -35,11 +35,11 @@ What it does (high level):
 - Detect OS (macOS / Linux / WSL).
 - Ensure Node.js **22+** (macOS via Homebrew; Linux via NodeSource).
 - Choose install method:
-  - `npm` (default): `npm install -g moltbot@latest`
+  - `npm` (default): `npm install -g dna@latest`
   - `git`: clone/build a source checkout and install a wrapper script
 - On Linux: avoid global npm permission errors by switching npm’s prefix to `~/.npm-global` when needed.
-- If upgrading an existing install: runs `moltbot doctor --non-interactive` (best effort).
-- For git installs: runs `moltbot doctor --non-interactive` after install/update (best effort).
+- If upgrading an existing install: runs `dna doctor --non-interactive` (best effort).
+- For git installs: runs `dna doctor --non-interactive` after install/update (best effort).
 - Mitigates `sharp` native install gotchas by defaulting `SHARP_IGNORE_GLOBAL_LIBVIPS=1` (avoids building against system libvips).
 
 If you *want* `sharp` to link against a globally-installed libvips (or you’re debugging), set:
@@ -50,12 +50,12 @@ SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://molt.bot/install.sh | bash
 
 ### Discoverability / “git install” prompt
 
-If you run the installer while **already inside a Moltbot source checkout** (detected via `package.json` + `pnpm-workspace.yaml`), it prompts:
+If you run the installer while **already inside a DNA source checkout** (detected via `package.json` + `pnpm-workspace.yaml`), it prompts:
 
 - update and use this checkout (`git`)
 - or migrate to the global npm install (`npm`)
 
-In non-interactive contexts (no TTY / `--no-prompt`), you must pass `--install-method git|npm` (or set `CLAWDBOT_INSTALL_METHOD`), otherwise the script exits with code `2`.
+In non-interactive contexts (no TTY / `--no-prompt`), you must pass `--install-method git|npm` (or set `DNA_INSTALL_METHOD`), otherwise the script exits with code `2`.
 
 ### Why Git is needed
 
@@ -73,7 +73,7 @@ On some Linux setups (especially after installing Node via the system package ma
 
 ## install-cli.sh (non-root CLI installer)
 
-This script installs `moltbot` into a prefix (default: `~/.clawdbot`) and also installs a dedicated Node runtime under that prefix, so it can work on machines where you don’t want to touch the system Node/npm.
+This script installs `dna` into a prefix (default: `~/.dna`) and also installs a dedicated Node runtime under that prefix, so it can work on machines where you don’t want to touch the system Node/npm.
 
 Help:
 
@@ -87,9 +87,9 @@ What it does (high level):
 
 - Ensure Node.js **22+** (winget/Chocolatey/Scoop or manual).
 - Choose install method:
-  - `npm` (default): `npm install -g moltbot@latest`
+  - `npm` (default): `npm install -g dna@latest`
   - `git`: clone/build a source checkout and install a wrapper script
-- Runs `moltbot doctor --non-interactive` on upgrades and git installs (best effort).
+- Runs `dna doctor --non-interactive` on upgrades and git installs (best effort).
 
 Examples:
 
@@ -102,13 +102,13 @@ iwr -useb https://molt.bot/install.ps1 | iex -InstallMethod git
 ```
 
 ```powershell
-iwr -useb https://molt.bot/install.ps1 | iex -InstallMethod git -GitDir "C:\\moltbot"
+iwr -useb https://molt.bot/install.ps1 | iex -InstallMethod git -GitDir "C:\\dna"
 ```
 
 Environment variables:
 
-- `CLAWDBOT_INSTALL_METHOD=git|npm`
-- `CLAWDBOT_GIT_DIR=...`
+- `DNA_INSTALL_METHOD=git|npm`
+- `DNA_GIT_DIR=...`
 
 Git requirement:
 
@@ -118,5 +118,5 @@ Git for Windows link (`https://git-scm.com/download/win`) and exit.
 Common Windows issues:
 
 - **npm error spawn git / ENOENT**: install Git for Windows and reopen PowerShell, then rerun the installer.
-- **"moltbot" is not recognized**: your npm global bin folder is not on PATH. Most systems use
+- **"dna" is not recognized**: your npm global bin folder is not on PATH. Most systems use
   `%AppData%\\npm`. You can also run `npm config get prefix` and add `\\bin` to PATH, then reopen PowerShell.

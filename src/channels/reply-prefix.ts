@@ -1,5 +1,5 @@
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
 import {
   extractShortModelName,
@@ -16,7 +16,7 @@ export type ReplyPrefixContextBundle = {
 };
 
 export function createReplyPrefixContext(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   agentId: string;
 }): ReplyPrefixContextBundle {
   const { cfg, agentId } = params;

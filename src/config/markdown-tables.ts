@@ -1,6 +1,6 @@
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import type { MoltbotConfig } from "./config.js";
+import type { DNAConfig } from "./config.js";
 import type { MarkdownTableMode } from "./types.base.js";
 
 type MarkdownConfigEntry = {
@@ -44,7 +44,7 @@ function resolveMarkdownModeFromSection(
 }
 
 export function resolveMarkdownTableMode(params: {
-  cfg?: Partial<MoltbotConfig>;
+  cfg?: Partial<DNAConfig>;
   channel?: string | null;
   accountId?: string | null;
 }): MarkdownTableMode {

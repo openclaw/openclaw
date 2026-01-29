@@ -1,6 +1,6 @@
 import AppKit
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 @MainActor

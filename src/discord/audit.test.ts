@@ -27,7 +27,7 @@ describe("discord audit", () => {
           },
         },
       },
-    } as unknown as import("../config/config.js").MoltbotConfig;
+    } as unknown as import("../config/config.js").DNAConfig;
 
     const collected = collectDiscordAuditChannelIds({
       cfg,

@@ -1,4 +1,4 @@
-import MoltbotKit
+import DNAKit
 import Foundation
 
 enum ChatPayloadDecoding {

@@ -5,7 +5,7 @@ import { LEGACY_MANIFEST_KEY } from "../../compat/legacy-names.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import { parseBooleanValue } from "../../utils/boolean.js";
 import type {
-  MoltbotSkillMetadata,
+  DNASkillMetadata,
   ParsedSkillFrontmatter,
   SkillEntry,
   SkillInstallSpec,
@@ -72,17 +72,17 @@ function parseFrontmatterBool(value: string | undefined, fallback: boolean): boo
   return parsed === undefined ? fallback : parsed;
 }
 
-export function resolveMoltbotMetadata(
+export function resolveDNAMetadata(
   frontmatter: ParsedSkillFrontmatter,
-): MoltbotSkillMetadata | undefined {
+): DNASkillMetadata | undefined {
   const raw = getFrontmatterValue(frontmatter, "metadata");
   if (!raw) return undefined;
   try {
-    const parsed = JSON5.parse(raw) as { moltbot?: unknown } & Partial<
+    const parsed = JSON5.parse(raw) as { dna?: unknown } & Partial<
       Record<typeof LEGACY_MANIFEST_KEY, unknown>
     >;
     if (!parsed || typeof parsed !== "object") return undefined;
-    const metadataRaw = parsed.moltbot ?? parsed[LEGACY_MANIFEST_KEY];
+    const metadataRaw = parsed.dna ?? parsed[LEGACY_MANIFEST_KEY];
     if (!metadataRaw || typeof metadataRaw !== "object") return undefined;
     const metadataObj = metadataRaw as Record<string, unknown>;
     const requiresRaw =

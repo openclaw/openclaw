@@ -67,7 +67,7 @@ enum SessionActions {
                 urls.append(dir.appendingPathComponent("\(sessionId).jsonl"))
             }
             let home = FileManager().homeDirectoryForCurrentUser
-            urls.append(home.appendingPathComponent(".clawdbot/sessions/\(sessionId).jsonl"))
+            urls.append(home.appendingPathComponent(".dna/sessions/\(sessionId).jsonl"))
             return urls
         }()
 

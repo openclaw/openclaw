@@ -26,7 +26,7 @@ beforeEach(() => {
 
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset().mockResolvedValue(undefined);
-  resolveMoltbotPackageRoot.mockReset().mockResolvedValue(null);
+  resolveDNAPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue({
     status: "skipped",
     mode: "unknown",
@@ -34,7 +34,7 @@ beforeEach(() => {
     durationMs: 0,
   });
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
-    path: "/tmp/moltbot.json",
+    path: "/tmp/dna.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -55,7 +55,7 @@ beforeEach(() => {
     killed: false,
   });
   ensureAuthProfileStore.mockReset().mockReturnValue({ version: 1, profiles: {} });
-  loadMoltbotPlugins.mockReset().mockReturnValue({ plugins: [], diagnostics: [] });
+  loadDNAPlugins.mockReset().mockReturnValue({ plugins: [], diagnostics: [] });
   migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
     config: raw as Record<string, unknown>,
     changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -76,11 +76,11 @@ beforeEach(() => {
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
-  originalStateDir = process.env.CLAWDBOT_STATE_DIR;
-  originalUpdateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
-  process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-doctor-state-"));
-  process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+  originalStateDir = process.env.DNA_STATE_DIR;
+  originalUpdateInProgress = process.env.DNA_UPDATE_IN_PROGRESS;
+  process.env.DNA_UPDATE_IN_PROGRESS = "1";
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "dna-doctor-state-"));
+  process.env.DNA_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
   });
@@ -90,14 +90,14 @@ beforeEach(() => {
 afterEach(() => {
   setStdinTty(originalIsTTY);
   if (originalStateDir === undefined) {
-    delete process.env.CLAWDBOT_STATE_DIR;
+    delete process.env.DNA_STATE_DIR;
   } else {
-    process.env.CLAWDBOT_STATE_DIR = originalStateDir;
+    process.env.DNA_STATE_DIR = originalStateDir;
   }
   if (originalUpdateInProgress === undefined) {
-    delete process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
+    delete process.env.DNA_UPDATE_IN_PROGRESS;
   } else {
-    process.env.CLAWDBOT_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+    process.env.DNA_UPDATE_IN_PROGRESS = originalUpdateInProgress;
   }
   if (tempStateDir) {
     fs.rmSync(tempStateDir, { recursive: true, force: true });
@@ -110,7 +110,7 @@ const confirm = vi.fn().mockResolvedValue(true);
 const select = vi.fn().mockResolvedValue("node");
 const note = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
-const resolveMoltbotPackageRoot = vi.fn().mockResolvedValue(null);
+const resolveDNAPackageRoot = vi.fn().mockResolvedValue(null);
 const runGatewayUpdate = vi.fn().mockResolvedValue({
   status: "skipped",
   mode: "unknown",
@@ -132,10 +132,10 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
 });
 
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
-const loadMoltbotPlugins = vi.fn().mockReturnValue({ plugins: [], diagnostics: [] });
+const loadDNAPlugins = vi.fn().mockReturnValue({ plugins: [], diagnostics: [] });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
-  path: "/tmp/moltbot.json",
+  path: "/tmp/dna.json",
   exists: false,
   raw: null,
   parsed: {},
@@ -175,13 +175,13 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadMoltbotPlugins,
+  loadDNAPlugins,
 }));
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    CONFIG_PATH: "/tmp/moltbot.json",
+    CONFIG_PATH: "/tmp/dna.json",
     createConfigIO,
     readConfigFileSnapshot,
     writeConfigFile,
@@ -216,8 +216,8 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
 
-vi.mock("../infra/moltbot-root.js", () => ({
-  resolveMoltbotPackageRoot,
+vi.mock("../infra/dna-root.js", () => ({
+  resolveDNAPackageRoot,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -333,7 +333,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 describe("doctor command", () => {
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {
     readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/moltbot.json",
+      path: "/tmp/dna.json",
       exists: true,
       raw: "{}",
       parsed: {},

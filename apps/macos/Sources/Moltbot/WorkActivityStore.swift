@@ -1,5 +1,5 @@
-import MoltbotKit
-import MoltbotProtocol
+import DNAKit
+import DNAProtocol
 import Foundation
 import Observation
 import SwiftUI
@@ -56,7 +56,7 @@ final class WorkActivityStore {
         phase: String,
         name: String?,
         meta: String?,
-        args: [String: MoltbotProtocol.AnyCodable]?)
+        args: [String: DNAProtocol.AnyCodable]?)
     {
         let toolKind = Self.mapToolKind(name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
@@ -225,7 +225,7 @@ final class WorkActivityStore {
     private static func buildLabel(
         name: String?,
         meta: String?,
-        args: [String: MoltbotProtocol.AnyCodable]?) -> String
+        args: [String: DNAProtocol.AnyCodable]?) -> String
     {
         let wrappedArgs = self.wrapToolArgs(args)
         let display = ToolDisplayRegistry.resolve(name: name ?? "tool", args: wrappedArgs, meta: meta)
@@ -236,17 +236,17 @@ final class WorkActivityStore {
         return display.label
     }
 
-    private static func wrapToolArgs(_ args: [String: MoltbotProtocol.AnyCodable]?) -> MoltbotKit.AnyCodable? {
+    private static func wrapToolArgs(_ args: [String: DNAProtocol.AnyCodable]?) -> DNAKit.AnyCodable? {
         guard let args else { return nil }
         let converted: [String: Any] = args.mapValues { self.unwrapJSONValue($0.value) }
-        return MoltbotKit.AnyCodable(converted)
+        return DNAKit.AnyCodable(converted)
     }
 
     private static func unwrapJSONValue(_ value: Any) -> Any {
-        if let dict = value as? [String: MoltbotProtocol.AnyCodable] {
+        if let dict = value as? [String: DNAProtocol.AnyCodable] {
             return dict.mapValues { self.unwrapJSONValue($0.value) }
         }
-        if let array = value as? [MoltbotProtocol.AnyCodable] {
+        if let array = value as? [DNAProtocol.AnyCodable] {
             return array.map { self.unwrapJSONValue($0.value) }
         }
         if let dict = value as? [String: Any] {

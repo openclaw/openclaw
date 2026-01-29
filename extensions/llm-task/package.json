@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/llm-task",
+  "name": "@dna/llm-task",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot JSON-only LLM task plugin",
-  "moltbot": {
+  "description": "DNA JSON-only LLM task plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ]

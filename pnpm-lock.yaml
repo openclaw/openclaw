@@ -314,7 +314,7 @@ importers:
         specifier: ^10.5.0
         version: 10.5.0
     devDependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
 
@@ -322,7 +322,7 @@ importers:
 
   extensions/line:
     devDependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
 
@@ -348,7 +348,7 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
 
@@ -356,7 +356,7 @@ importers:
 
   extensions/memory-core:
     devDependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
 
@@ -383,7 +383,7 @@ importers:
       '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.2.2
         version: 1.2.2
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
       express:
@@ -397,7 +397,7 @@ importers:
 
   extensions/nostr:
     dependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
       nostr-tools:
@@ -439,7 +439,7 @@ importers:
         specifier: ^4.3.5
         version: 4.3.6
     devDependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
 
@@ -459,7 +459,7 @@ importers:
 
   extensions/zalo:
     dependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
       undici:
@@ -471,13 +471,13 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
 
-  packages/clawdbot:
+  packages/dna:
     dependencies:
-      moltbot:
+      dna:
         specifier: workspace:*
         version: link:../..
 
@@ -3214,7 +3214,7 @@ packages:
   class-variance-authority@0.7.1:
     resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
 
-  clawdbot@2026.1.24-3:
+  dna@2026.1.24-3:
     resolution: {integrity: sha512-zt9BzhWXduq8ZZR4rfzQDurQWAgmijTTyPZCQGrn5ew6wCEwhxxEr2/NHG7IlCwcfRsKymsY4se9KMhoNz0JtQ==}
     engines: {node: '>=22.12.0'}
     hasBin: true
@@ -9098,7 +9098,7 @@ snapshots:
     dependencies:
       clsx: 2.1.1
 
-  clawdbot@2026.1.24-3(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3):
+  dna@2026.1.24-3(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3):
     dependencies:
       '@agentclientprotocol/sdk': 0.13.1(zod@4.3.6)
       '@aws-sdk/client-bedrock': 3.975.0

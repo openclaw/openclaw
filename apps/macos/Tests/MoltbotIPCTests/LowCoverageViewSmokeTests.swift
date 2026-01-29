@@ -1,9 +1,9 @@
 import AppKit
-import MoltbotProtocol
+import DNAProtocol
 import SwiftUI
 import Testing
 
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 @MainActor

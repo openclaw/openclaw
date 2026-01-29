@@ -1,4 +1,4 @@
-import type { ChannelGroupContext } from "clawdbot/plugin-sdk";
+import type { ChannelGroupContext } from "dna/plugin-sdk";
 
 import { resolveMattermostAccount } from "./mattermost/accounts.js";
 

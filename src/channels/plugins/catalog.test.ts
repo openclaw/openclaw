@@ -8,7 +8,7 @@ import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from ".
 describe("channel plugin catalog", () => {
   it("includes Microsoft Teams", () => {
     const entry = getChannelPluginCatalogEntry("msteams");
-    expect(entry?.install.npmSpec).toBe("@moltbot/msteams");
+    expect(entry?.install.npmSpec).toBe("@dna/msteams");
     expect(entry?.meta.aliases).toContain("teams");
   });
 
@@ -18,15 +18,15 @@ describe("channel plugin catalog", () => {
   });
 
   it("includes external catalog entries", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-catalog-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dna-catalog-"));
     const catalogPath = path.join(dir, "catalog.json");
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
         entries: [
           {
-            name: "@moltbot/demo-channel",
-            moltbot: {
+            name: "@dna/demo-channel",
+            dna: {
               channel: {
                 id: "demo-channel",
                 label: "Demo Channel",
@@ -36,7 +36,7 @@ describe("channel plugin catalog", () => {
                 order: 999,
               },
               install: {
-                npmSpec: "@moltbot/demo-channel",
+                npmSpec: "@dna/demo-channel",
               },
             },
           },

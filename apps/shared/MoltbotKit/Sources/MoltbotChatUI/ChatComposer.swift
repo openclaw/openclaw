@@ -8,9 +8,9 @@ import UniformTypeIdentifiers
 #endif
 
 @MainActor
-struct MoltbotChatComposer: View {
-    @Bindable var viewModel: MoltbotChatViewModel
-    let style: MoltbotChatView.Style
+struct DNAChatComposer: View {
+    @Bindable var viewModel: DNAChatViewModel
+    let style: DNAChatView.Style
     let showsSessionSwitcher: Bool
 
     #if !os(macOS)
@@ -54,21 +54,21 @@ struct MoltbotChatComposer: View {
                         topTrailing: 0),
                     style: .continuous)
                 shape
-                    .fill(MoltbotChatTheme.composerBackground)
-                    .overlay(shape.strokeBorder(MoltbotChatTheme.composerBorder, lineWidth: 1))
+                    .fill(DNAChatTheme.composerBackground)
+                    .overlay(shape.strokeBorder(DNAChatTheme.composerBorder, lineWidth: 1))
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             } else {
                 let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 shape
-                    .fill(MoltbotChatTheme.composerBackground)
-                    .overlay(shape.strokeBorder(MoltbotChatTheme.composerBorder, lineWidth: 1))
+                    .fill(DNAChatTheme.composerBackground)
+                    .overlay(shape.strokeBorder(DNAChatTheme.composerBorder, lineWidth: 1))
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             }
             #else
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             shape
-                .fill(MoltbotChatTheme.composerBackground)
-                .overlay(shape.strokeBorder(MoltbotChatTheme.composerBorder, lineWidth: 1))
+                .fill(DNAChatTheme.composerBackground)
+                .overlay(shape.strokeBorder(DNAChatTheme.composerBorder, lineWidth: 1))
                 .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             #endif
         }
@@ -144,11 +144,11 @@ struct MoltbotChatComposer: View {
             HStack(spacing: 6) {
                 ForEach(
                     self.viewModel.attachments,
-                    id: \MoltbotPendingAttachment.id)
-                { (att: MoltbotPendingAttachment) in
+                    id: \DNAPendingAttachment.id)
+                { (att: DNAPendingAttachment) in
                     HStack(spacing: 6) {
                         if let img = att.preview {
-                            MoltbotPlatformImageFactory.image(img)
+                            DNAPlatformImageFactory.image(img)
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
@@ -181,7 +181,7 @@ struct MoltbotChatComposer: View {
             self.editorOverlay
 
             Rectangle()
-                .fill(MoltbotChatTheme.divider)
+                .fill(DNAChatTheme.divider)
                 .frame(height: 1)
                 .padding(.horizontal, 2)
 
@@ -197,10 +197,10 @@ struct MoltbotChatComposer: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(MoltbotChatTheme.composerField)
+                .fill(DNAChatTheme.composerField)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(MoltbotChatTheme.composerBorder)))
+                        .strokeBorder(DNAChatTheme.composerBorder)))
         .padding(self.editorPadding)
     }
 
@@ -217,7 +217,7 @@ struct MoltbotChatComposer: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(MoltbotChatTheme.subtleCard)
+        .background(DNAChatTheme.subtleCard)
         .clipShape(Capsule())
     }
 

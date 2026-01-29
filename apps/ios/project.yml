@@ -1,4 +1,4 @@
-name: Moltbot
+name: DNA
 options:
   bundleIdPrefix: bot.molt
   deploymentTarget:
@@ -10,33 +10,33 @@ settings:
     SWIFT_VERSION: "6.0"
 
 packages:
-  MoltbotKit:
-    path: ../shared/MoltbotKit
+  DNAKit:
+    path: ../shared/DNAKit
   Swabble:
     path: ../../Swabble
 
 schemes:
-  Moltbot:
+  DNA:
     shared: true
     build:
       targets:
-        Moltbot: all
+        DNA: all
     test:
       targets:
-        - MoltbotTests
+        - DNATests
 
 targets:
-  Moltbot:
+  DNA:
     type: application
     platform: iOS
     sources:
       - path: Sources
     dependencies:
-      - package: MoltbotKit
-      - package: MoltbotKit
-        product: MoltbotChatUI
-      - package: MoltbotKit
-        product: MoltbotProtocol
+      - package: DNAKit
+      - package: DNAKit
+        product: DNAChatUI
+      - package: DNAKit
+        product: DNAProtocol
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -79,7 +79,7 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Moltbot
+        CFBundleDisplayName: DNA
         CFBundleIconName: AppIcon
         CFBundleShortVersionString: "2026.1.29"
         CFBundleVersion: "20260129"
@@ -88,16 +88,16 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: Moltbot discovers and connects to your Moltbot gateway on the local network.
+        NSLocalNetworkUsageDescription: DNA discovers and connects to your DNA gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
-          - _moltbot-gw._tcp
-        NSCameraUsageDescription: Moltbot can capture photos or short video clips when requested via the gateway.
-        NSLocationWhenInUseUsageDescription: Moltbot uses your location when you allow location sharing.
-        NSLocationAlwaysAndWhenInUseUsageDescription: Moltbot can share your location in the background when you enable Always.
-        NSMicrophoneUsageDescription: Moltbot needs microphone access for voice wake.
-        NSSpeechRecognitionUsageDescription: Moltbot uses on-device speech recognition for voice wake.
+          - _dna-gw._tcp
+        NSCameraUsageDescription: DNA can capture photos or short video clips when requested via the gateway.
+        NSLocationWhenInUseUsageDescription: DNA uses your location when you allow location sharing.
+        NSLocationAlwaysAndWhenInUseUsageDescription: DNA can share your location in the background when you enable Always.
+        NSMicrophoneUsageDescription: DNA needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: DNA uses on-device speech recognition for voice wake.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -109,13 +109,13 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
-  MoltbotTests:
+  DNATests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
     dependencies:
-      - target: Moltbot
+      - target: DNA
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -124,11 +124,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: bot.molt.ios.tests
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Moltbot.app/Moltbot"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DNA.app/DNA"
         BUNDLE_LOADER: "$(TEST_HOST)"
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: MoltbotTests
+        CFBundleDisplayName: DNATests
         CFBundleShortVersionString: "2026.1.29"
         CFBundleVersion: "20260129"

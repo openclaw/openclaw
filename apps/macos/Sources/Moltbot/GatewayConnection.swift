@@ -1,6 +1,6 @@
-import MoltbotChatUI
-import MoltbotKit
-import MoltbotProtocol
+import DNAChatUI
+import DNAKit
+import DNAProtocol
 import Foundation
 import OSLog
 
@@ -272,7 +272,7 @@ actor GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func sessionDefaultString(_ defaults: [String: MoltbotProtocol.AnyCodable]?, key: String) -> String {
+    private func sessionDefaultString(_ defaults: [String: DNAProtocol.AnyCodable]?, key: String) -> String {
         let raw = defaults?[key]?.value as? String
         return (raw ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     }
@@ -503,7 +503,7 @@ extension GatewayConnection {
 
     func healthOK(timeoutMs: Int = 8000) async throws -> Bool {
         let data = try await self.requestRaw(method: .health, timeoutMs: Double(timeoutMs))
-        return (try? self.decoder.decode(MoltbotGatewayHealthOK.self, from: data))?.ok ?? true
+        return (try? self.decoder.decode(DNAGatewayHealthOK.self, from: data))?.ok ?? true
     }
 
     // MARK: - Skills
@@ -548,13 +548,13 @@ extension GatewayConnection {
         keys: [String],
         limit: Int? = nil,
         maxChars: Int? = nil,
-        timeoutMs: Int? = nil) async throws -> MoltbotSessionsPreviewPayload
+        timeoutMs: Int? = nil) async throws -> DNASessionsPreviewPayload
     {
         let resolvedKeys = keys
             .map { self.canonicalizeSessionKey($0) }
             .filter { !$0.isEmpty }
         if resolvedKeys.isEmpty {
-            return MoltbotSessionsPreviewPayload(ts: 0, previews: [])
+            return DNASessionsPreviewPayload(ts: 0, previews: [])
         }
         var params: [String: AnyCodable] = ["keys": AnyCodable(resolvedKeys)]
         if let limit { params["limit"] = AnyCodable(limit) }
@@ -571,7 +571,7 @@ extension GatewayConnection {
     func chatHistory(
         sessionKey: String,
         limit: Int? = nil,
-        timeoutMs: Int? = nil) async throws -> MoltbotChatHistoryPayload
+        timeoutMs: Int? = nil) async throws -> DNAChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
@@ -588,8 +588,8 @@ extension GatewayConnection {
         message: String,
         thinking: String,
         idempotencyKey: String,
-        attachments: [MoltbotChatAttachmentPayload],
-        timeoutMs: Int = 30000) async throws -> MoltbotChatSendResponse
+        attachments: [DNAChatAttachmentPayload],
+        timeoutMs: Int = 30000) async throws -> DNAChatSendResponse
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = [

@@ -1,7 +1,7 @@
 {
-  "name": "@moltbot/twitch",
+  "name": "@dna/twitch",
   "version": "2026.1.29",
-  "description": "Moltbot Twitch channel plugin",
+  "description": "DNA Twitch channel plugin",
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.0.3",
@@ -10,9 +10,9 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
-    "moltbot": "workspace:*"
+    "dna": "workspace:*"
   },
-  "moltbot": {
+  "dna": {
     "extensions": [
       "./index.ts"
     ]

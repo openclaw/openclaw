@@ -15,30 +15,30 @@ type CommandOptions = Record<string, unknown>;
 
 const SANDBOX_EXAMPLES = {
   main: [
-    ["moltbot sandbox list", "List all sandbox containers."],
-    ["moltbot sandbox list --browser", "List only browser containers."],
-    ["moltbot sandbox recreate --all", "Recreate all containers."],
-    ["moltbot sandbox recreate --session main", "Recreate a specific session."],
-    ["moltbot sandbox recreate --agent mybot", "Recreate agent containers."],
-    ["moltbot sandbox explain", "Explain effective sandbox config."],
+    ["dna sandbox list", "List all sandbox containers."],
+    ["dna sandbox list --browser", "List only browser containers."],
+    ["dna sandbox recreate --all", "Recreate all containers."],
+    ["dna sandbox recreate --session main", "Recreate a specific session."],
+    ["dna sandbox recreate --agent mybot", "Recreate agent containers."],
+    ["dna sandbox explain", "Explain effective sandbox config."],
   ],
   list: [
-    ["moltbot sandbox list", "List all sandbox containers."],
-    ["moltbot sandbox list --browser", "List only browser containers."],
-    ["moltbot sandbox list --json", "JSON output."],
+    ["dna sandbox list", "List all sandbox containers."],
+    ["dna sandbox list --browser", "List only browser containers."],
+    ["dna sandbox list --json", "JSON output."],
   ],
   recreate: [
-    ["moltbot sandbox recreate --all", "Recreate all containers."],
-    ["moltbot sandbox recreate --session main", "Recreate a specific session."],
-    ["moltbot sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
-    ["moltbot sandbox recreate --browser --all", "Recreate only browser containers."],
-    ["moltbot sandbox recreate --all --force", "Skip confirmation."],
+    ["dna sandbox recreate --all", "Recreate all containers."],
+    ["dna sandbox recreate --session main", "Recreate a specific session."],
+    ["dna sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
+    ["dna sandbox recreate --browser --all", "Recreate only browser containers."],
+    ["dna sandbox recreate --all --force", "Skip confirmation."],
   ],
   explain: [
-    ["moltbot sandbox explain", "Show effective sandbox config."],
-    ["moltbot sandbox explain --session agent:main:main", "Explain a specific session."],
-    ["moltbot sandbox explain --agent work", "Explain an agent sandbox."],
-    ["moltbot sandbox explain --json", "JSON output."],
+    ["dna sandbox explain", "Show effective sandbox config."],
+    ["dna sandbox explain --session agent:main:main", "Explain a specific session."],
+    ["dna sandbox explain --agent work", "Explain an agent sandbox."],
+    ["dna sandbox explain --json", "JSON output."],
   ],
 } as const;
 

@@ -3,11 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
-import { discoverMoltbotPlugins } from "./discovery.js";
+import { discoverDNAPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
   applyTestPluginDefaults,
@@ -23,8 +23,8 @@ import { createPluginRuntime } from "./runtime/index.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
-  MoltbotPluginDefinition,
-  MoltbotPluginModule,
+  DNAPluginDefinition,
+  DNAPluginModule,
   PluginDiagnostic,
   PluginLogger,
 } from "./types.js";
@@ -32,7 +32,7 @@ import type {
 export type PluginLoadResult = PluginRegistry;
 
 export type PluginLoadOptions = {
-  config?: MoltbotConfig;
+  config?: DNAConfig;
   workspaceDir?: string;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
@@ -99,8 +99,8 @@ function validatePluginConfig(params: {
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
-  definition?: MoltbotPluginDefinition;
-  register?: MoltbotPluginDefinition["register"];
+  definition?: DNAPluginDefinition;
+  register?: DNAPluginDefinition["register"];
 } {
   const resolved =
     moduleExport &&
@@ -110,11 +110,11 @@ function resolvePluginModuleExport(moduleExport: unknown): {
       : moduleExport;
   if (typeof resolved === "function") {
     return {
-      register: resolved as MoltbotPluginDefinition["register"],
+      register: resolved as DNAPluginDefinition["register"],
     };
   }
   if (resolved && typeof resolved === "object") {
-    const def = resolved as MoltbotPluginDefinition;
+    const def = resolved as DNAPluginDefinition;
     const register = def.register ?? def.activate;
     return { definition: def, register };
   }
@@ -162,7 +162,7 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
-export function loadMoltbotPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+export function loadDNAPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const cfg = applyTestPluginDefaults(options.config ?? {});
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
@@ -190,7 +190,7 @@ export function loadMoltbotPlugins(options: PluginLoadOptions = {}): PluginRegis
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
   });
 
-  const discovery = discoverMoltbotPlugins({
+  const discovery = discoverDNAPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
   });
@@ -210,8 +210,8 @@ export function loadMoltbotPlugins(options: PluginLoadOptions = {}): PluginRegis
     ...(pluginSdkAlias
       ? {
           alias: {
-            "clawdbot/plugin-sdk": pluginSdkAlias,
-            "moltbot/plugin-sdk": pluginSdkAlias,
+            "dna/plugin-sdk": pluginSdkAlias,
+            "dna/plugin-sdk": pluginSdkAlias,
           },
         }
       : {}),
@@ -290,9 +290,9 @@ export function loadMoltbotPlugins(options: PluginLoadOptions = {}): PluginRegis
       continue;
     }
 
-    let mod: MoltbotPluginModule | null = null;
+    let mod: DNAPluginModule | null = null;
     try {
-      mod = jiti(candidate.source) as MoltbotPluginModule;
+      mod = jiti(candidate.source) as DNAPluginModule;
     } catch (err) {
       logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
       record.status = "error";

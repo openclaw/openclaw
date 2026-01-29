@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/googlechat",
+  "name": "@dna/googlechat",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Google Chat channel plugin",
-  "moltbot": {
+  "description": "DNA Google Chat channel plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ],
@@ -22,7 +22,7 @@
       "order": 55
     },
     "install": {
-      "npmSpec": "@moltbot/googlechat",
+      "npmSpec": "@dna/googlechat",
       "localPath": "extensions/googlechat",
       "defaultChoice": "npm"
     }
@@ -31,9 +31,9 @@
     "google-auth-library": "^10.5.0"
   },
   "devDependencies": {
-    "moltbot": "workspace:*"
+    "dna": "workspace:*"
   },
   "peerDependencies": {
-    "moltbot": ">=2026.1.26"
+    "dna": ">=2026.1.26"
   }
 }

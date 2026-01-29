@@ -6,7 +6,7 @@ read_when:
 # Channels & routing
 
 
-Moltbot routes replies **back to the channel where a message came from**. The
+DNA routes replies **back to the channel where a message came from**. The
 model does not choose a channel; routing is deterministic and controlled by the
 host configuration.
 
@@ -53,7 +53,7 @@ The matched agent determines which workspace and session store are used.
 
 ## Broadcast groups (run multiple agents)
 
-Broadcast groups let you run **multiple agents** for the same peer **when Moltbot would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
+Broadcast groups let you run **multiple agents** for the same peer **when DNA would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
 
 Config:
 
@@ -92,9 +92,9 @@ Example:
 
 ## Session storage
 
-Session stores live under the state directory (default `~/.clawdbot`):
+Session stores live under the state directory (default `~/.dna`):
 
-- `~/.clawdbot/agents/<agentId>/sessions/sessions.json`
+- `~/.dna/agents/<agentId>/sessions/sessions.json`
 - JSONL transcripts live alongside the store
 
 You can override the store path via `session.store` and `{agentId}` templating.

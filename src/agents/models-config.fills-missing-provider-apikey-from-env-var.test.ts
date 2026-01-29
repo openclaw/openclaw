@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "moltbot-models-" });
+  return withTempHomeBase(fn, { prefix: "dna-models-" });
 }
 
-const MODELS_CONFIG: MoltbotConfig = {
+const MODELS_CONFIG: DNAConfig = {
   models: {
     providers: {
       "custom-proxy": {
@@ -49,10 +49,10 @@ describe("models-config", () => {
       const prevKey = process.env.MINIMAX_API_KEY;
       process.env.MINIMAX_API_KEY = "sk-minimax-test";
       try {
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
-        const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+        const { ensureDNAModelsJson } = await import("./models-config.js");
+        const { resolveDNAAgentDir } = await import("./agent-paths.js");
 
-        const cfg: MoltbotConfig = {
+        const cfg: DNAConfig = {
           models: {
             providers: {
               minimax: {
@@ -74,9 +74,9 @@ describe("models-config", () => {
           },
         };
 
-        await ensureMoltbotModelsJson(cfg);
+        await ensureDNAModelsJson(cfg);
 
-        const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
+        const modelPath = path.join(resolveDNAAgentDir(), "models.json");
         const raw = await fs.readFile(modelPath, "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
@@ -93,10 +93,10 @@ describe("models-config", () => {
   it("merges providers by default", async () => {
     await withTempHome(async () => {
       vi.resetModules();
-      const { ensureMoltbotModelsJson } = await import("./models-config.js");
-      const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+      const { ensureDNAModelsJson } = await import("./models-config.js");
+      const { resolveDNAAgentDir } = await import("./agent-paths.js");
 
-      const agentDir = resolveMoltbotAgentDir();
+      const agentDir = resolveDNAAgentDir();
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         path.join(agentDir, "models.json"),
@@ -128,7 +128,7 @@ describe("models-config", () => {
         "utf8",
       );
 
-      await ensureMoltbotModelsJson(MODELS_CONFIG);
+      await ensureDNAModelsJson(MODELS_CONFIG);
 
       const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
       const parsed = JSON.parse(raw) as {

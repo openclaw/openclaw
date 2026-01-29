@@ -4,16 +4,16 @@ import path from "node:path";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
-import { createMoltbotCodingTools } from "./pi-tools.js";
+import { createDNACodingTools } from "./pi-tools.js";
 
-const defaultTools = createMoltbotCodingTools();
+const defaultTools = createDNACodingTools();
 
-describe("createMoltbotCodingTools", () => {
+describe("createDNACodingTools", () => {
   it("keeps read tool image metadata intact", async () => {
     const readTool = defaultTools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-read-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-read-"));
     try {
       const imagePath = path.join(tmpDir, "sample.png");
       const png = await sharp({
@@ -46,14 +46,14 @@ describe("createMoltbotCodingTools", () => {
     }
   });
   it("returns text content without image blocks for text files", async () => {
-    const tools = createMoltbotCodingTools();
+    const tools = createDNACodingTools();
     const readTool = tools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-read-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-read-"));
     try {
       const textPath = path.join(tmpDir, "sample.txt");
-      const contents = "Hello from moltbot read tool.";
+      const contents = "Hello from dna read tool.";
       await fs.writeFile(textPath, contents, "utf8");
 
       const result = await readTool?.execute("tool-2", {
@@ -75,14 +75,14 @@ describe("createMoltbotCodingTools", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "sandbox:test",
-      workspaceDir: path.join(os.tmpdir(), "moltbot-sandbox"),
-      agentWorkspaceDir: path.join(os.tmpdir(), "moltbot-workspace"),
+      workspaceDir: path.join(os.tmpdir(), "dna-sandbox"),
+      agentWorkspaceDir: path.join(os.tmpdir(), "dna-workspace"),
       workspaceAccess: "none",
-      containerName: "moltbot-sbx-test",
+      containerName: "dna-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "moltbot-sandbox:bookworm-slim",
-        containerPrefix: "moltbot-sbx-",
+        image: "dna-sandbox:bookworm-slim",
+        containerPrefix: "dna-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: [],
@@ -97,7 +97,7 @@ describe("createMoltbotCodingTools", () => {
       },
       browserAllowHostControl: false,
     };
-    const tools = createMoltbotCodingTools({ sandbox });
+    const tools = createDNACodingTools({ sandbox });
     expect(tools.some((tool) => tool.name === "exec")).toBe(true);
     expect(tools.some((tool) => tool.name === "read")).toBe(false);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
@@ -106,14 +106,14 @@ describe("createMoltbotCodingTools", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "sandbox:test",
-      workspaceDir: path.join(os.tmpdir(), "moltbot-sandbox"),
-      agentWorkspaceDir: path.join(os.tmpdir(), "moltbot-workspace"),
+      workspaceDir: path.join(os.tmpdir(), "dna-sandbox"),
+      agentWorkspaceDir: path.join(os.tmpdir(), "dna-workspace"),
       workspaceAccess: "ro",
-      containerName: "moltbot-sbx-test",
+      containerName: "dna-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "moltbot-sandbox:bookworm-slim",
-        containerPrefix: "moltbot-sbx-",
+        image: "dna-sandbox:bookworm-slim",
+        containerPrefix: "dna-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: [],
@@ -128,13 +128,13 @@ describe("createMoltbotCodingTools", () => {
       },
       browserAllowHostControl: false,
     };
-    const tools = createMoltbotCodingTools({ sandbox });
+    const tools = createDNACodingTools({ sandbox });
     expect(tools.some((tool) => tool.name === "read")).toBe(true);
     expect(tools.some((tool) => tool.name === "write")).toBe(false);
     expect(tools.some((tool) => tool.name === "edit")).toBe(false);
   });
   it("filters tools by agent tool policy even without sandbox", () => {
-    const tools = createMoltbotCodingTools({
+    const tools = createDNACodingTools({
       config: { tools: { deny: ["browser"] } },
     });
     expect(tools.some((tool) => tool.name === "exec")).toBe(true);

@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/imessage",
+  "name": "@dna/imessage",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot iMessage channel plugin",
-  "moltbot": {
+  "description": "DNA iMessage channel plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ]

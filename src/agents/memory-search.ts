@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import type { MoltbotConfig, MemorySearchConfig } from "../config/config.js";
+import type { DNAConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -280,7 +280,7 @@ function mergeConfig(
 }
 
 export function resolveMemorySearchConfig(
-  cfg: MoltbotConfig,
+  cfg: DNAConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
   const defaults = cfg.agents?.defaults?.memorySearch;

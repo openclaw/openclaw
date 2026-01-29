@@ -81,36 +81,36 @@ vi.mock("./progress.js", () => ({
 
 describe("daemon-cli coverage", () => {
   const originalEnv = {
-    CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
-    CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
-    CLAWDBOT_GATEWAY_PORT: process.env.CLAWDBOT_GATEWAY_PORT,
-    CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
+    DNA_STATE_DIR: process.env.DNA_STATE_DIR,
+    DNA_CONFIG_PATH: process.env.DNA_CONFIG_PATH,
+    DNA_GATEWAY_PORT: process.env.DNA_GATEWAY_PORT,
+    DNA_PROFILE: process.env.DNA_PROFILE,
   };
 
   beforeEach(() => {
-    process.env.CLAWDBOT_STATE_DIR = "/tmp/moltbot-cli-state";
-    process.env.CLAWDBOT_CONFIG_PATH = "/tmp/moltbot-cli-state/moltbot.json";
-    delete process.env.CLAWDBOT_GATEWAY_PORT;
-    delete process.env.CLAWDBOT_PROFILE;
+    process.env.DNA_STATE_DIR = "/tmp/dna-cli-state";
+    process.env.DNA_CONFIG_PATH = "/tmp/dna-cli-state/dna.json";
+    delete process.env.DNA_GATEWAY_PORT;
+    delete process.env.DNA_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
   });
 
   afterEach(() => {
-    if (originalEnv.CLAWDBOT_STATE_DIR !== undefined)
-      process.env.CLAWDBOT_STATE_DIR = originalEnv.CLAWDBOT_STATE_DIR;
-    else delete process.env.CLAWDBOT_STATE_DIR;
+    if (originalEnv.DNA_STATE_DIR !== undefined)
+      process.env.DNA_STATE_DIR = originalEnv.DNA_STATE_DIR;
+    else delete process.env.DNA_STATE_DIR;
 
-    if (originalEnv.CLAWDBOT_CONFIG_PATH !== undefined)
-      process.env.CLAWDBOT_CONFIG_PATH = originalEnv.CLAWDBOT_CONFIG_PATH;
-    else delete process.env.CLAWDBOT_CONFIG_PATH;
+    if (originalEnv.DNA_CONFIG_PATH !== undefined)
+      process.env.DNA_CONFIG_PATH = originalEnv.DNA_CONFIG_PATH;
+    else delete process.env.DNA_CONFIG_PATH;
 
-    if (originalEnv.CLAWDBOT_GATEWAY_PORT !== undefined)
-      process.env.CLAWDBOT_GATEWAY_PORT = originalEnv.CLAWDBOT_GATEWAY_PORT;
-    else delete process.env.CLAWDBOT_GATEWAY_PORT;
+    if (originalEnv.DNA_GATEWAY_PORT !== undefined)
+      process.env.DNA_GATEWAY_PORT = originalEnv.DNA_GATEWAY_PORT;
+    else delete process.env.DNA_GATEWAY_PORT;
 
-    if (originalEnv.CLAWDBOT_PROFILE !== undefined)
-      process.env.CLAWDBOT_PROFILE = originalEnv.CLAWDBOT_PROFILE;
-    else delete process.env.CLAWDBOT_PROFILE;
+    if (originalEnv.DNA_PROFILE !== undefined)
+      process.env.DNA_PROFILE = originalEnv.DNA_PROFILE;
+    else delete process.env.DNA_PROFILE;
   });
 
   it("probes gateway status by default", async () => {
@@ -140,10 +140,10 @@ describe("daemon-cli coverage", () => {
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
-        CLAWDBOT_PROFILE: "dev",
-        CLAWDBOT_STATE_DIR: "/tmp/moltbot-daemon-state",
-        CLAWDBOT_CONFIG_PATH: "/tmp/moltbot-daemon-state/moltbot.json",
-        CLAWDBOT_GATEWAY_PORT: "19001",
+        DNA_PROFILE: "dev",
+        DNA_STATE_DIR: "/tmp/dna-daemon-state",
+        DNA_CONFIG_PATH: "/tmp/dna-daemon-state/dna.json",
+        DNA_GATEWAY_PORT: "19001",
       },
       sourcePath: "/tmp/bot.molt.gateway.plist",
     });

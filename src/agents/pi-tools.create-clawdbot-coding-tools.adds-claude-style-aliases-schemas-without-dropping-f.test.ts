@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
-import { createMoltbotCodingTools } from "./pi-tools.js";
+import { createDNACodingTools } from "./pi-tools.js";
 
-describe("createMoltbotCodingTools", () => {
+describe("createDNACodingTools", () => {
   it("uses workspaceDir for Read tool path resolution", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-ws-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-ws-"));
     try {
       // Create a test file in the "workspace"
       const testFile = "test-workspace-file.txt";
@@ -15,7 +15,7 @@ describe("createMoltbotCodingTools", () => {
       await fs.writeFile(path.join(tmpDir, testFile), testContent, "utf8");
 
       // Create tools with explicit workspaceDir
-      const tools = createMoltbotCodingTools({ workspaceDir: tmpDir });
+      const tools = createDNACodingTools({ workspaceDir: tmpDir });
       const readTool = tools.find((tool) => tool.name === "read");
       expect(readTool).toBeDefined();
 
@@ -34,13 +34,13 @@ describe("createMoltbotCodingTools", () => {
     }
   });
   it("uses workspaceDir for Write tool path resolution", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-ws-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-ws-"));
     try {
       const testFile = "test-write-file.txt";
       const testContent = "written via workspace path";
 
       // Create tools with explicit workspaceDir
-      const tools = createMoltbotCodingTools({ workspaceDir: tmpDir });
+      const tools = createDNACodingTools({ workspaceDir: tmpDir });
       const writeTool = tools.find((tool) => tool.name === "write");
       expect(writeTool).toBeDefined();
 
@@ -58,7 +58,7 @@ describe("createMoltbotCodingTools", () => {
     }
   });
   it("uses workspaceDir for Edit tool path resolution", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-ws-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-ws-"));
     try {
       const testFile = "test-edit-file.txt";
       const originalContent = "hello world";
@@ -66,7 +66,7 @@ describe("createMoltbotCodingTools", () => {
       await fs.writeFile(path.join(tmpDir, testFile), originalContent, "utf8");
 
       // Create tools with explicit workspaceDir
-      const tools = createMoltbotCodingTools({ workspaceDir: tmpDir });
+      const tools = createDNACodingTools({ workspaceDir: tmpDir });
       const editTool = tools.find((tool) => tool.name === "edit");
       expect(editTool).toBeDefined();
 
@@ -85,9 +85,9 @@ describe("createMoltbotCodingTools", () => {
     }
   });
   it("accepts Claude Code parameter aliases for read/write/edit", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-alias-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-alias-"));
     try {
-      const tools = createMoltbotCodingTools({ workspaceDir: tmpDir });
+      const tools = createDNACodingTools({ workspaceDir: tmpDir });
       const readTool = tools.find((tool) => tool.name === "read");
       const writeTool = tools.find((tool) => tool.name === "write");
       const editTool = tools.find((tool) => tool.name === "edit");

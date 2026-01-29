@@ -6,16 +6,16 @@ describe("buildPairingReply", () => {
   let previousProfile: string | undefined;
 
   beforeEach(() => {
-    previousProfile = process.env.CLAWDBOT_PROFILE;
-    process.env.CLAWDBOT_PROFILE = "isolated";
+    previousProfile = process.env.DNA_PROFILE;
+    process.env.DNA_PROFILE = "isolated";
   });
 
   afterEach(() => {
     if (previousProfile === undefined) {
-      delete process.env.CLAWDBOT_PROFILE;
+      delete process.env.DNA_PROFILE;
       return;
     }
-    process.env.CLAWDBOT_PROFILE = previousProfile;
+    process.env.DNA_PROFILE = previousProfile;
   });
 
   const cases = [
@@ -51,9 +51,9 @@ describe("buildPairingReply", () => {
       const text = buildPairingReply(testCase);
       expect(text).toContain(testCase.idLine);
       expect(text).toContain(`Pairing code: ${testCase.code}`);
-      // CLI commands should respect CLAWDBOT_PROFILE when set (most tests run with isolated profile)
+      // CLI commands should respect DNA_PROFILE when set (most tests run with isolated profile)
       const commandRe = new RegExp(
-        `(?:moltbot|moltbot) --profile isolated pairing approve ${testCase.channel} <code>`,
+        `(?:dna|dna) --profile isolated pairing approve ${testCase.channel} <code>`,
       );
       expect(text).toMatch(commandRe);
     });

@@ -1,7 +1,7 @@
-import MoltbotIPC
+import DNAIPC
 import CoreLocation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite(.serialized)
 @MainActor

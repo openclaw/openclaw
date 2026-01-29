@@ -3,15 +3,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "MoltbotKit",
+    name: "DNAKit",
     platforms: [
         .iOS(.v18),
         .macOS(.v15),
     ],
     products: [
-        .library(name: "MoltbotProtocol", targets: ["MoltbotProtocol"]),
-        .library(name: "MoltbotKit", targets: ["MoltbotKit"]),
-        .library(name: "MoltbotChatUI", targets: ["MoltbotChatUI"]),
+        .library(name: "DNAProtocol", targets: ["DNAProtocol"]),
+        .library(name: "DNAKit", targets: ["DNAKit"]),
+        .library(name: "DNAChatUI", targets: ["DNAChatUI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.0"),
@@ -19,18 +19,18 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MoltbotProtocol",
-            path: "Sources/MoltbotProtocol",
+            name: "DNAProtocol",
+            path: "Sources/DNAProtocol",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
-            name: "MoltbotKit",
+            name: "DNAKit",
             dependencies: [
-                "MoltbotProtocol",
+                "DNAProtocol",
                 .product(name: "ElevenLabsKit", package: "ElevenLabsKit"),
             ],
-            path: "Sources/MoltbotKit",
+            path: "Sources/DNAKit",
             resources: [
                 .process("Resources"),
             ],
@@ -38,22 +38,22 @@ let package = Package(
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
-            name: "MoltbotChatUI",
+            name: "DNAChatUI",
             dependencies: [
-                "MoltbotKit",
+                "DNAKit",
                 .product(
                     name: "Textual",
                     package: "textual",
                     condition: .when(platforms: [.macOS, .iOS])),
             ],
-            path: "Sources/MoltbotChatUI",
+            path: "Sources/DNAChatUI",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .testTarget(
-            name: "MoltbotKitTests",
-            dependencies: ["MoltbotKit", "MoltbotChatUI"],
-            path: "Tests/MoltbotKitTests",
+            name: "DNAKitTests",
+            dependencies: ["DNAKit", "DNAChatUI"],
+            path: "Tests/DNAKitTests",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),

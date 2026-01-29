@@ -9,7 +9,7 @@ import {
   extensionForMime,
   extractOriginalFilename,
   getFileExtension,
-} from "clawdbot/plugin-sdk";
+} from "dna/plugin-sdk";
 
 /**
  * Detect MIME type from URL extension or data URL.

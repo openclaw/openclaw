@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/copilot-proxy",
+  "name": "@dna/copilot-proxy",
   "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Copilot Proxy provider plugin",
-  "moltbot": {
+  "description": "DNA Copilot Proxy provider plugin",
+  "dna": {
     "extensions": [
       "./index.ts"
     ]

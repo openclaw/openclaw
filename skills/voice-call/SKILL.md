@@ -1,7 +1,7 @@
 ---
 name: voice-call
-description: Start voice calls via the Moltbot voice-call plugin.
-metadata: {"moltbot":{"emoji":"📞","skillKey":"voice-call","requires":{"config":["plugins.entries.voice-call.enabled"]}}}
+description: Start voice calls via the DNA voice-call plugin.
+metadata: {"dna":{"emoji":"📞","skillKey":"voice-call","requires":{"config":["plugins.entries.voice-call.enabled"]}}}
 ---
 
 # Voice Call
@@ -11,8 +11,8 @@ Use the voice-call plugin to start or inspect calls (Twilio, Telnyx, Plivo, or m
 ## CLI
 
 ```bash
-moltbot voicecall call --to "+15555550123" --message "Hello from Moltbot"
-moltbot voicecall status --call-id <id>
+dna voicecall call --to "+15555550123" --message "Hello from DNA"
+dna voicecall status --call-id <id>
 ```
 
 ## Tool

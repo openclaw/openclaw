@@ -1,8 +1,8 @@
-import MoltbotKit
+import DNAKit
 import Foundation
 import os
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite struct GatewayChannelRequestTests {
     private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {

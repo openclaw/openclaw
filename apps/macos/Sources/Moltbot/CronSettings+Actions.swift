@@ -1,4 +1,4 @@
-import MoltbotProtocol
+import DNAProtocol
 import Foundation
 
 extension CronSettings {

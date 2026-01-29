@@ -13,7 +13,7 @@ enum CLIInstaller {
         fileManager: FileManager) -> String?
     {
         for basePath in searchPaths {
-            let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("moltbot").path
+            let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("dna").path
             var isDirectory: ObjCBool = false
 
             guard fileManager.fileExists(atPath: candidate, isDirectory: &isDirectory),
@@ -37,14 +37,14 @@ enum CLIInstaller {
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {
         let expected = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
         let prefix = Self.installPrefix()
-        await statusHandler("Installing moltbot CLI…")
+        await statusHandler("Installing dna CLI…")
         let cmd = self.installScriptCommand(version: expected, prefix: prefix)
         let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: nil, timeout: 900)
 
         if response.success {
             let parsed = self.parseInstallEvents(response.stdout)
             let installedVersion = parsed.last { $0.event == "done" }?.version
-            let summary = installedVersion.map { "Installed moltbot \($0)." } ?? "Installed moltbot."
+            let summary = installedVersion.map { "Installed dna \($0)." } ?? "Installed dna."
             await statusHandler(summary)
             return
         }
@@ -62,7 +62,7 @@ enum CLIInstaller {
 
     private static func installPrefix() -> String {
         FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".clawdbot")
+            .appendingPathComponent(".dna")
             .path
     }
 

@@ -1,5 +1,5 @@
-import MoltbotIPC
-import MoltbotKit
+import DNAIPC
+import DNAKit
 import CoreLocation
 import SwiftUI
 
@@ -12,7 +12,7 @@ struct PermissionsSettings: View {
         VStack(alignment: .leading, spacing: 14) {
             SystemRunSettingsView()
 
-            Text("Allow these so Moltbot can notify and capture when needed.")
+            Text("Allow these so DNA can notify and capture when needed.")
                 .padding(.top, 4)
 
             PermissionStatusList(status: self.status, refresh: self.refresh)
@@ -31,9 +31,9 @@ struct PermissionsSettings: View {
 }
 
 private struct LocationAccessSettings: View {
-    @AppStorage(locationModeKey) private var locationModeRaw: String = MoltbotLocationMode.off.rawValue
+    @AppStorage(locationModeKey) private var locationModeRaw: String = DNALocationMode.off.rawValue
     @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
-    @State private var lastLocationModeRaw: String = MoltbotLocationMode.off.rawValue
+    @State private var lastLocationModeRaw: String = DNALocationMode.off.rawValue
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -41,9 +41,9 @@ private struct LocationAccessSettings: View {
                 .font(.body)
 
             Picker("", selection: self.$locationModeRaw) {
-                Text("Off").tag(MoltbotLocationMode.off.rawValue)
-                Text("While Using").tag(MoltbotLocationMode.whileUsing.rawValue)
-                Text("Always").tag(MoltbotLocationMode.always.rawValue)
+                Text("Off").tag(DNALocationMode.off.rawValue)
+                Text("While Using").tag(DNALocationMode.whileUsing.rawValue)
+                Text("Always").tag(DNALocationMode.always.rawValue)
             }
             .labelsHidden()
             .pickerStyle(.menu)
@@ -62,7 +62,7 @@ private struct LocationAccessSettings: View {
         .onChange(of: self.locationModeRaw) { _, newValue in
             let previous = self.lastLocationModeRaw
             self.lastLocationModeRaw = newValue
-            guard let mode = MoltbotLocationMode(rawValue: newValue) else { return }
+            guard let mode = DNALocationMode(rawValue: newValue) else { return }
             Task {
                 let granted = await self.requestLocationAuthorization(mode: mode)
                 if !granted {
@@ -75,11 +75,11 @@ private struct LocationAccessSettings: View {
         }
     }
 
-    private var locationMode: MoltbotLocationMode {
-        MoltbotLocationMode(rawValue: self.locationModeRaw) ?? .off
+    private var locationMode: DNALocationMode {
+        DNALocationMode(rawValue: self.locationModeRaw) ?? .off
     }
 
-    private func requestLocationAuthorization(mode: MoltbotLocationMode) async -> Bool {
+    private func requestLocationAuthorization(mode: DNALocationMode) async -> Bool {
         guard mode != .off else { return true }
         guard CLLocationManager.locationServicesEnabled() else {
             await MainActor.run { LocationPermissionHelper.openSettings() }

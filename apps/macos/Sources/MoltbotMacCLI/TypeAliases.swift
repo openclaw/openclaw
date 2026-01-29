@@ -1,5 +1,5 @@
-import MoltbotKit
-import MoltbotProtocol
+import DNAKit
+import DNAProtocol
 
-typealias ProtoAnyCodable = MoltbotProtocol.AnyCodable
-typealias KitAnyCodable = MoltbotKit.AnyCodable
+typealias ProtoAnyCodable = DNAProtocol.AnyCodable
+typealias KitAnyCodable = DNAKit.AnyCodable

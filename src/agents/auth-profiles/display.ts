@@ -1,8 +1,8 @@
-import type { MoltbotConfig } from "../../config/config.js";
+import type { DNAConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 
 export function resolveAuthProfileDisplayLabel(params: {
-  cfg?: MoltbotConfig;
+  cfg?: DNAConfig;
   store: AuthProfileStore;
   profileId: string;
 }): string {

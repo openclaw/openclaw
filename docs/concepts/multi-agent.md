@@ -15,12 +15,12 @@ An **agent** is a fully scoped brain with its own:
 
 - **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
 - **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
-- **Session store** (chat history + routing state) under `~/.clawdbot/agents/<agentId>/sessions`.
+- **Session store** (chat history + routing state) under `~/.dna/agents/<agentId>/sessions`.
 
 Auth profiles are **per-agent**. Each agent reads from its own:
 
 ```
-~/.clawdbot/agents/<agentId>/agent/auth-profiles.json
+~/.dna/agents/<agentId>/agent/auth-profiles.json
 ```
 
 Main agent credentials are **not** shared automatically. Never reuse `agentDir`
@@ -28,7 +28,7 @@ across agents (it causes auth/session collisions). If you want to share creds,
 copy `auth-profiles.json` into the other agent's `agentDir`.
 
 Skills are per-agent via each workspace’s `skills/` folder, with shared skills
-available from `~/.clawdbot/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+available from `~/.dna/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
@@ -39,27 +39,27 @@ reach other host locations unless sandboxing is enabled. See
 
 ## Paths (quick map)
 
-- Config: `~/.clawdbot/moltbot.json` (or `CLAWDBOT_CONFIG_PATH`)
-- State dir: `~/.clawdbot` (or `CLAWDBOT_STATE_DIR`)
+- Config: `~/.dna/dna.json` (or `DNA_CONFIG_PATH`)
+- State dir: `~/.dna` (or `DNA_STATE_DIR`)
 - Workspace: `~/clawd` (or `~/clawd-<agentId>`)
-- Agent dir: `~/.clawdbot/agents/<agentId>/agent` (or `agents.list[].agentDir`)
-- Sessions: `~/.clawdbot/agents/<agentId>/sessions`
+- Agent dir: `~/.dna/agents/<agentId>/agent` (or `agents.list[].agentDir`)
+- Sessions: `~/.dna/agents/<agentId>/sessions`
 
 ### Single-agent mode (default)
 
-If you do nothing, Moltbot runs a single agent:
+If you do nothing, DNA runs a single agent:
 
 - `agentId` defaults to **`main`**.
 - Sessions are keyed as `agent:main:<mainKey>`.
-- Workspace defaults to `~/clawd` (or `~/clawd-<profile>` when `CLAWDBOT_PROFILE` is set).
-- State defaults to `~/.clawdbot/agents/main/agent`.
+- Workspace defaults to `~/clawd` (or `~/clawd-<profile>` when `DNA_PROFILE` is set).
+- State defaults to `~/.dna/agents/main/agent`.
 
 ## Agent helper
 
 Use the agent wizard to add a new isolated agent:
 
 ```bash
-moltbot agents add work
+dna agents add work
 ```
 
 Then add `bindings` (or let the wizard do it) to route inbound messages.
@@ -67,7 +67,7 @@ Then add `bindings` (or let the wizard do it) to route inbound messages.
 Verify with:
 
 ```bash
-moltbot agents list --bindings
+dna agents list --bindings
 ```
 
 ## Multiple agents = multiple people, multiple personalities
@@ -139,7 +139,7 @@ multiple phone numbers without mixing sessions.
 
 ## Example: two WhatsApps → two agents
 
-`~/.clawdbot/moltbot.json` (JSON5):
+`~/.dna/dna.json` (JSON5):
 
 ```js
 {
@@ -150,13 +150,13 @@ multiple phone numbers without mixing sessions.
         default: true,
         name: "Home",
         workspace: "~/clawd-home",
-        agentDir: "~/.clawdbot/agents/home/agent",
+        agentDir: "~/.dna/agents/home/agent",
       },
       {
         id: "work",
         name: "Work",
         workspace: "~/clawd-work",
-        agentDir: "~/.clawdbot/agents/work/agent",
+        agentDir: "~/.dna/agents/work/agent",
       },
     ],
   },
@@ -189,12 +189,12 @@ multiple phone numbers without mixing sessions.
     whatsapp: {
       accounts: {
         personal: {
-          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/personal
-          // authDir: "~/.clawdbot/credentials/whatsapp/personal",
+          // Optional override. Default: ~/.dna/credentials/whatsapp/personal
+          // authDir: "~/.dna/credentials/whatsapp/personal",
         },
         biz: {
-          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
-          // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+          // Optional override. Default: ~/.dna/credentials/whatsapp/biz
+          // authDir: "~/.dna/credentials/whatsapp/biz",
         },
       },
     },

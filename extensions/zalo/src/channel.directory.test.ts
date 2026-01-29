@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
+import type { DNAConfig } from "dna/plugin-sdk";
 
 import { zaloPlugin } from "./channel.js";
 
@@ -12,7 +12,7 @@ describe("zalo directory", () => {
           allowFrom: ["zalo:123", "zl:234", "345"],
         },
       },
-    } as unknown as MoltbotConfig;
+    } as unknown as DNAConfig;
 
     expect(zaloPlugin.directory).toBeTruthy();
     expect(zaloPlugin.directory?.listPeers).toBeTruthy();

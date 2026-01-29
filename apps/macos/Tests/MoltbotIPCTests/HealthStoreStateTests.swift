@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite struct HealthStoreStateTests {
     @Test @MainActor func linkedChannelProbeFailureDegradesState() async throws {

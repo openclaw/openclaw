@@ -1,4 +1,4 @@
-export type MoltbotVersion = {
+export type DNAVersion = {
   major: number;
   minor: number;
   patch: number;
@@ -7,7 +7,7 @@ export type MoltbotVersion = {
 
 const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-(\d+))?/;
 
-export function parseMoltbotVersion(raw: string | null | undefined): MoltbotVersion | null {
+export function parseDNAVersion(raw: string | null | undefined): DNAVersion | null {
   if (!raw) return null;
   const match = raw.trim().match(VERSION_RE);
   if (!match) return null;
@@ -20,12 +20,12 @@ export function parseMoltbotVersion(raw: string | null | undefined): MoltbotVers
   };
 }
 
-export function compareMoltbotVersions(
+export function compareDNAVersions(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number | null {
-  const parsedA = parseMoltbotVersion(a);
-  const parsedB = parseMoltbotVersion(b);
+  const parsedA = parseDNAVersion(a);
+  const parsedB = parseDNAVersion(b);
   if (!parsedA || !parsedB) return null;
   if (parsedA.major !== parsedB.major) return parsedA.major < parsedB.major ? -1 : 1;
   if (parsedA.minor !== parsedB.minor) return parsedA.minor < parsedB.minor ? -1 : 1;

@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { LEGACY_MANIFEST_KEY } from "../compat/legacy-names.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { shouldIncludeHook } from "./config.js";
 import {
   parseFrontmatter,
-  resolveMoltbotMetadata,
+  resolveDNAMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
 import type {
@@ -22,13 +22,13 @@ import type {
 
 type HookPackageManifest = {
   name?: string;
-  moltbot?: { hooks?: string[] };
+  dna?: { hooks?: string[] };
   [LEGACY_MANIFEST_KEY]?: { hooks?: string[] };
 };
 
 function filterHookEntries(
   entries: HookEntry[],
-  config?: MoltbotConfig,
+  config?: DNAConfig,
   eligibility?: HookEligibilityContext,
 ): HookEntry[] {
   return entries.filter((entry) => shouldIncludeHook({ entry, config, eligibility }));
@@ -46,7 +46,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {
-  const raw = manifest.moltbot?.hooks ?? manifest[LEGACY_MANIFEST_KEY]?.hooks;
+  const raw = manifest.dna?.hooks ?? manifest[LEGACY_MANIFEST_KEY]?.hooks;
   if (!Array.isArray(raw)) return [];
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
@@ -169,7 +169,7 @@ export function loadHookEntriesFromDir(params: {
         pluginId: params.pluginId,
       },
       frontmatter,
-      metadata: resolveMoltbotMetadata(frontmatter),
+      metadata: resolveDNAMetadata(frontmatter),
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
     return entry;
@@ -179,7 +179,7 @@ export function loadHookEntriesFromDir(params: {
 function loadHookEntries(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: DNAConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
   },
@@ -195,23 +195,23 @@ function loadHookEntries(
   const bundledHooks = bundledHooksDir
     ? loadHooksFromDir({
         dir: bundledHooksDir,
-        source: "moltbot-bundled",
+        source: "dna-bundled",
       })
     : [];
   const extraHooks = extraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadHooksFromDir({
       dir: resolved,
-      source: "moltbot-workspace", // Extra dirs treated as workspace
+      source: "dna-workspace", // Extra dirs treated as workspace
     });
   });
   const managedHooks = loadHooksFromDir({
     dir: managedHooksDir,
-    source: "moltbot-managed",
+    source: "dna-managed",
   });
   const workspaceHooks = loadHooksFromDir({
     dir: workspaceHooksDir,
-    source: "moltbot-workspace",
+    source: "dna-workspace",
   });
 
   const merged = new Map<string, Hook>();
@@ -232,7 +232,7 @@ function loadHookEntries(
     return {
       hook,
       frontmatter,
-      metadata: resolveMoltbotMetadata(frontmatter),
+      metadata: resolveDNAMetadata(frontmatter),
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
   });
@@ -241,7 +241,7 @@ function loadHookEntries(
 export function buildWorkspaceHookSnapshot(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: DNAConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
     entries?: HookEntry[];
@@ -265,7 +265,7 @@ export function buildWorkspaceHookSnapshot(
 export function loadWorkspaceHookEntries(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: DNAConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
   },

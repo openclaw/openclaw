@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 @Suite struct GatewayEnvironmentTests {
     @Test func semverParsesCommonForms() {
@@ -34,7 +34,7 @@ import Testing
     @Test func gatewayPortDefaultsAndRespectsOverride() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
-            env: ["CLAWDBOT_CONFIG_PATH": configPath],
+            env: ["DNA_CONFIG_PATH": configPath],
             defaults: ["gatewayPort": nil])
         {
             let defaultPort = GatewayEnvironment.gatewayPort()

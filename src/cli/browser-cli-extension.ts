@@ -33,7 +33,7 @@ export async function installChromeExtension(opts?: {
 }): Promise<{ path: string }> {
   const src = opts?.sourceDir ?? bundledExtensionRootDir();
   if (!hasManifest(src)) {
-    throw new Error("Bundled Chrome extension is missing. Reinstall Moltbot and try again.");
+    throw new Error("Bundled Chrome extension is missing. Reinstall DNA and try again.");
   }
 
   const stateDir = opts?.stateDir ?? STATE_DIR;
@@ -88,7 +88,7 @@ export function registerBrowserExtensionCommands(
             "Next:",
             `- Chrome → chrome://extensions → enable “Developer mode”`,
             `- “Load unpacked” → select: ${displayPath}`,
-            `- Pin “Moltbot Browser Relay”, then click it on the tab (badge shows ON)`,
+            `- Pin “DNA Browser Relay”, then click it on the tab (badge shows ON)`,
             "",
             `${theme.muted("Docs:")} ${formatDocsLink("/tools/chrome-extension", "docs.molt.bot/tools/chrome-extension")}`,
           ].join("\n"),
@@ -106,7 +106,7 @@ export function registerBrowserExtensionCommands(
         defaultRuntime.error(
           danger(
             [
-              `Chrome extension is not installed. Run: "${formatCliCommand("moltbot browser extension install")}"`,
+              `Chrome extension is not installed. Run: "${formatCliCommand("dna browser extension install")}"`,
               `Docs: ${formatDocsLink("/tools/chrome-extension", "docs.molt.bot/tools/chrome-extension")}`,
             ].join("\n"),
           ),

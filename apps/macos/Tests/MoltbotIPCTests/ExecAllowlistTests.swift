@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Moltbot
+@testable import DNA
 
 struct ExecAllowlistTests {
     @Test func matchUsesResolvedPath() {

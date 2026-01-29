@@ -1,7 +1,7 @@
 import Foundation
 import Testing
-@testable import MoltbotKit
-import MoltbotProtocol
+@testable import DNAKit
+import DNAProtocol
 
 struct GatewayNodeSessionTests {
     @Test

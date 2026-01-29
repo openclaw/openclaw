@@ -1,4 +1,4 @@
-# Pre-commit hooks for clawdbot
+# Pre-commit hooks for dna
 # Install: prek install
 # Run manually: prek run --all-files
 #

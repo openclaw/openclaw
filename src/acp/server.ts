@@ -27,12 +27,12 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): void {
   const token =
     opts.gatewayToken ??
     (isRemoteMode ? remote?.token?.trim() : undefined) ??
-    process.env.CLAWDBOT_GATEWAY_TOKEN ??
+    process.env.DNA_GATEWAY_TOKEN ??
     auth.token;
   const password =
     opts.gatewayPassword ??
     (isRemoteMode ? remote?.password?.trim() : undefined) ??
-    process.env.CLAWDBOT_GATEWAY_PASSWORD ??
+    process.env.DNA_GATEWAY_PASSWORD ??
     auth.password;
 
   let agent: AcpGatewayAgent | null = null;
@@ -122,7 +122,7 @@ function parseArgs(args: string[]): AcpServerOptions {
 }
 
 function printHelp(): void {
-  console.log(`Usage: moltbot acp [options]
+  console.log(`Usage: dna acp [options]
 
 Gateway-backed ACP server for IDE integration.
 

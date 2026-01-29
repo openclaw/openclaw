@@ -7,8 +7,8 @@ extension ProcessInfo {
     }
 
     var isNixMode: Bool {
-        if let raw = getenv("CLAWDBOT_NIX_MODE"), String(cString: raw) == "1" { return true }
-        return UserDefaults.standard.bool(forKey: "moltbot.nixMode")
+        if let raw = getenv("DNA_NIX_MODE"), String(cString: raw) == "1" { return true }
+        return UserDefaults.standard.bool(forKey: "dna.nixMode")
     }
 
     var isRunningTests: Bool {

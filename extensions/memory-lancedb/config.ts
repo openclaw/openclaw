@@ -17,7 +17,7 @@ export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "o
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
-const DEFAULT_DB_PATH = join(homedir(), ".clawdbot", "memory", "lancedb");
+const DEFAULT_DB_PATH = join(homedir(), ".dna", "memory", "lancedb");
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -99,7 +99,7 @@ export const memoryConfigSchema = {
     },
     dbPath: {
       label: "Database Path",
-      placeholder: "~/.clawdbot/memory/lancedb",
+      placeholder: "~/.dna/memory/lancedb",
       advanced: true,
     },
     autoCapture: {

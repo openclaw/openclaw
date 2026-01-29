@@ -1,6 +1,6 @@
-import MoltbotChatUI
-import MoltbotKit
-import MoltbotProtocol
+import DNAChatUI
+import DNAKit
+import DNAProtocol
 import OSLog
 import SwiftUI
 
@@ -288,7 +288,7 @@ enum SessionMenuPreviewLoader {
 
     private static func requestPreview(
         keys: [String],
-        maxItems: Int) async throws -> MoltbotSessionsPreviewPayload
+        maxItems: Int) async throws -> DNASessionsPreviewPayload
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
         let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
@@ -331,7 +331,7 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func snapshot(
-        from entry: MoltbotSessionPreviewEntry,
+        from entry: DNASessionPreviewEntry,
         maxItems: Int) -> SessionMenuPreviewSnapshot
     {
         let items = self.previewItems(from: entry, maxItems: maxItems)
@@ -348,7 +348,7 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    private static func cache(payload: MoltbotSessionsPreviewPayload, maxItems: Int) async {
+    private static func cache(payload: DNASessionsPreviewPayload, maxItems: Int) async {
         for entry in payload.previews {
             let snapshot = self.snapshot(from: entry, maxItems: maxItems)
             await SessionPreviewCache.shared.store(snapshot: snapshot, for: entry.key)
@@ -365,7 +365,7 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func previewItems(
-        from entry: MoltbotSessionPreviewEntry,
+        from entry: DNASessionPreviewEntry,
         maxItems: Int) -> [SessionPreviewItem]
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
@@ -381,11 +381,11 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func previewItems(
-        from payload: MoltbotChatHistoryPayload,
+        from payload: DNAChatHistoryPayload,
         maxItems: Int) -> [SessionPreviewItem]
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
-        let raw: [MoltbotKit.AnyCodable] = payload.messages ?? []
+        let raw: [DNAKit.AnyCodable] = payload.messages ?? []
         let messages = self.decodeMessages(raw)
         let built = messages.compactMap { message -> SessionPreviewItem? in
             guard let text = self.previewText(for: message) else { return nil }
@@ -399,10 +399,10 @@ enum SessionMenuPreviewLoader {
         return Array(trimmed.reversed())
     }
 
-    private static func decodeMessages(_ raw: [MoltbotKit.AnyCodable]) -> [MoltbotChatMessage] {
+    private static func decodeMessages(_ raw: [DNAKit.AnyCodable]) -> [DNAChatMessage] {
         raw.compactMap { item in
             guard let data = try? JSONEncoder().encode(item) else { return nil }
-            return try? JSONDecoder().decode(MoltbotChatMessage.self, from: data)
+            return try? JSONDecoder().decode(DNAChatMessage.self, from: data)
         }
     }
 
@@ -421,7 +421,7 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    private static func previewText(for message: MoltbotChatMessage) -> String? {
+    private static func previewText(for message: DNAChatMessage) -> String? {
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return text }
@@ -442,12 +442,12 @@ enum SessionMenuPreviewLoader {
         return nil
     }
 
-    private static func isToolCall(_ message: MoltbotChatMessage) -> Bool {
+    private static func isToolCall(_ message: DNAChatMessage) -> Bool {
         if message.toolName?.nonEmpty != nil { return true }
         return message.content.contains { $0.name?.nonEmpty != nil || $0.type?.lowercased() == "toolcall" }
     }
 
-    private static func toolNames(for message: MoltbotChatMessage) -> [String] {
+    private static func toolNames(for message: DNAChatMessage) -> [String] {
         var names: [String] = []
         for content in message.content {
             if let name = content.name?.nonEmpty {
@@ -460,7 +460,7 @@ enum SessionMenuPreviewLoader {
         return Self.dedupePreservingOrder(names)
     }
 
-    private static func mediaSummary(for message: MoltbotChatMessage) -> String? {
+    private static func mediaSummary(for message: DNAChatMessage) -> String? {
         let types = message.content.compactMap { content -> String? in
             let raw = content.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard let raw, !raw.isEmpty else { return nil }

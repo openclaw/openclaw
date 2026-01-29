@@ -1,6 +1,6 @@
 import AppKit
-import MoltbotIPC
-import MoltbotKit
+import DNAIPC
+import DNAKit
 import Foundation
 
 actor MacNodeRuntime {
@@ -34,39 +34,39 @@ actor MacNodeRuntime {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: MoltbotNodeError(
+                error: DNANodeError(
                     code: .unavailable,
                     message: "CANVAS_DISABLED: enable Canvas in Settings"))
         }
         do {
             switch command {
-            case MoltbotCanvasCommand.present.rawValue,
-                 MoltbotCanvasCommand.hide.rawValue,
-                 MoltbotCanvasCommand.navigate.rawValue,
-                 MoltbotCanvasCommand.evalJS.rawValue,
-                 MoltbotCanvasCommand.snapshot.rawValue:
+            case DNACanvasCommand.present.rawValue,
+                 DNACanvasCommand.hide.rawValue,
+                 DNACanvasCommand.navigate.rawValue,
+                 DNACanvasCommand.evalJS.rawValue,
+                 DNACanvasCommand.snapshot.rawValue:
                 return try await self.handleCanvasInvoke(req)
-            case MoltbotCanvasA2UICommand.reset.rawValue,
-                 MoltbotCanvasA2UICommand.push.rawValue,
-                 MoltbotCanvasA2UICommand.pushJSONL.rawValue:
+            case DNACanvasA2UICommand.reset.rawValue,
+                 DNACanvasA2UICommand.push.rawValue,
+                 DNACanvasA2UICommand.pushJSONL.rawValue:
                 return try await self.handleA2UIInvoke(req)
-            case MoltbotCameraCommand.snap.rawValue,
-                 MoltbotCameraCommand.clip.rawValue,
-                 MoltbotCameraCommand.list.rawValue:
+            case DNACameraCommand.snap.rawValue,
+                 DNACameraCommand.clip.rawValue,
+                 DNACameraCommand.list.rawValue:
                 return try await self.handleCameraInvoke(req)
-            case MoltbotLocationCommand.get.rawValue:
+            case DNALocationCommand.get.rawValue:
                 return try await self.handleLocationInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
-            case MoltbotSystemCommand.run.rawValue:
+            case DNASystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
-            case MoltbotSystemCommand.which.rawValue:
+            case DNASystemCommand.which.rawValue:
                 return try await self.handleSystemWhich(req)
-            case MoltbotSystemCommand.notify.rawValue:
+            case DNASystemCommand.notify.rawValue:
                 return try await self.handleSystemNotify(req)
-            case MoltbotSystemCommand.execApprovalsGet.rawValue:
+            case DNASystemCommand.execApprovalsGet.rawValue:
                 return try await self.handleSystemExecApprovalsGet(req)
-            case MoltbotSystemCommand.execApprovalsSet.rawValue:
+            case DNASystemCommand.execApprovalsSet.rawValue:
                 return try await self.handleSystemExecApprovalsSet(req)
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
@@ -82,9 +82,9 @@ actor MacNodeRuntime {
 
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case MoltbotCanvasCommand.present.rawValue:
-            let params = (try? Self.decodeParams(MoltbotCanvasPresentParams.self, from: req.paramsJSON)) ??
-                MoltbotCanvasPresentParams()
+        case DNACanvasCommand.present.rawValue:
+            let params = (try? Self.decodeParams(DNACanvasPresentParams.self, from: req.paramsJSON)) ??
+                DNACanvasPresentParams()
             let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let url = urlTrimmed.isEmpty ? nil : urlTrimmed
             let placement = params.placement.map {
@@ -98,29 +98,29 @@ actor MacNodeRuntime {
                     placement: placement)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
-        case MoltbotCanvasCommand.hide.rawValue:
+        case DNACanvasCommand.hide.rawValue:
             let sessionKey = self.mainSessionKey
             await MainActor.run {
                 CanvasManager.shared.hide(sessionKey: sessionKey)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
-        case MoltbotCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(MoltbotCanvasNavigateParams.self, from: req.paramsJSON)
+        case DNACanvasCommand.navigate.rawValue:
+            let params = try Self.decodeParams(DNACanvasNavigateParams.self, from: req.paramsJSON)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
                 _ = try CanvasManager.shared.show(sessionKey: sessionKey, path: params.url)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
-        case MoltbotCanvasCommand.evalJS.rawValue:
-            let params = try Self.decodeParams(MoltbotCanvasEvalParams.self, from: req.paramsJSON)
+        case DNACanvasCommand.evalJS.rawValue:
+            let params = try Self.decodeParams(DNACanvasEvalParams.self, from: req.paramsJSON)
             let sessionKey = self.mainSessionKey
             let result = try await CanvasManager.shared.eval(
                 sessionKey: sessionKey,
                 javaScript: params.javaScript)
             let payload = try Self.encodePayload(["result": result] as [String: String])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case MoltbotCanvasCommand.snapshot.rawValue:
-            let params = try? Self.decodeParams(MoltbotCanvasSnapshotParams.self, from: req.paramsJSON)
+        case DNACanvasCommand.snapshot.rawValue:
+            let params = try? Self.decodeParams(DNACanvasSnapshotParams.self, from: req.paramsJSON)
             let format = params?.format ?? .jpeg
             let maxWidth: Int? = {
                 if let raw = params?.maxWidth, raw > 0 { return raw }
@@ -155,10 +155,10 @@ actor MacNodeRuntime {
 
     private func handleA2UIInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case MoltbotCanvasA2UICommand.reset.rawValue:
+        case DNACanvasA2UICommand.reset.rawValue:
             try await self.handleA2UIReset(req)
-        case MoltbotCanvasA2UICommand.push.rawValue,
-             MoltbotCanvasA2UICommand.pushJSONL.rawValue:
+        case DNACanvasA2UICommand.push.rawValue,
+             DNACanvasA2UICommand.pushJSONL.rawValue:
             try await self.handleA2UIPush(req)
         default:
             Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
@@ -170,14 +170,14 @@ actor MacNodeRuntime {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: MoltbotNodeError(
+                error: DNANodeError(
                     code: .unavailable,
                     message: "CAMERA_DISABLED: enable Camera in Settings"))
         }
         switch req.command {
-        case MoltbotCameraCommand.snap.rawValue:
-            let params = (try? Self.decodeParams(MoltbotCameraSnapParams.self, from: req.paramsJSON)) ??
-                MoltbotCameraSnapParams()
+        case DNACameraCommand.snap.rawValue:
+            let params = (try? Self.decodeParams(DNACameraSnapParams.self, from: req.paramsJSON)) ??
+                DNACameraSnapParams()
             let delayMs = min(10000, max(0, params.delayMs ?? 2000))
             let res = try await self.cameraCapture.snap(
                 facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
@@ -197,9 +197,9 @@ actor MacNodeRuntime {
                 width: Int(res.size.width),
                 height: Int(res.size.height)))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case MoltbotCameraCommand.clip.rawValue:
-            let params = (try? Self.decodeParams(MoltbotCameraClipParams.self, from: req.paramsJSON)) ??
-                MoltbotCameraClipParams()
+        case DNACameraCommand.clip.rawValue:
+            let params = (try? Self.decodeParams(DNACameraClipParams.self, from: req.paramsJSON)) ??
+                DNACameraClipParams()
             let res = try await self.cameraCapture.clip(
                 facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
                 durationMs: params.durationMs,
@@ -220,7 +220,7 @@ actor MacNodeRuntime {
                 durationMs: res.durationMs,
                 hasAudio: res.hasAudio))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case MoltbotCameraCommand.list.rawValue:
+        case DNACameraCommand.list.rawValue:
             let devices = await self.cameraCapture.listDevices()
             let payload = try Self.encodePayload(["devices": devices])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
@@ -235,12 +235,12 @@ actor MacNodeRuntime {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: MoltbotNodeError(
+                error: DNANodeError(
                     code: .unavailable,
                     message: "LOCATION_DISABLED: enable Location in Settings"))
         }
-        let params = (try? Self.decodeParams(MoltbotLocationGetParams.self, from: req.paramsJSON)) ??
-            MoltbotLocationGetParams()
+        let params = (try? Self.decodeParams(DNALocationGetParams.self, from: req.paramsJSON)) ??
+            DNALocationGetParams()
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await self.mainActorServices()
@@ -257,7 +257,7 @@ actor MacNodeRuntime {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: MoltbotNodeError(
+                error: DNANodeError(
                     code: .unavailable,
                     message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
         }
@@ -267,7 +267,7 @@ actor MacNodeRuntime {
                 maxAgeMs: params.maxAgeMs,
                 timeoutMs: params.timeoutMs)
             let isPrecise = await services.locationAccuracyAuthorization() == .fullAccuracy
-            let payload = MoltbotLocationPayload(
+            let payload = DNALocationPayload(
                 lat: location.coordinate.latitude,
                 lon: location.coordinate.longitude,
                 accuracyMeters: location.horizontalAccuracy,
@@ -283,14 +283,14 @@ actor MacNodeRuntime {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: MoltbotNodeError(
+                error: DNANodeError(
                     code: .unavailable,
                     message: "LOCATION_TIMEOUT: no fix in time"))
         } catch {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: MoltbotNodeError(
+                error: DNANodeError(
                     code: .unavailable,
                     message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)"))
         }
@@ -345,8 +345,8 @@ actor MacNodeRuntime {
         let sessionKey = self.mainSessionKey
         let json = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: """
         (() => {
-          if (!globalThis.clawdbotA2UI) return JSON.stringify({ ok: false, error: "missing moltbotA2UI" });
-          return JSON.stringify(globalThis.clawdbotA2UI.reset());
+          if (!globalThis.dnaA2UI) return JSON.stringify({ ok: false, error: "missing dnaA2UI" });
+          return JSON.stringify(globalThis.dnaA2UI.reset());
         })()
         """)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -354,29 +354,29 @@ actor MacNodeRuntime {
 
     private func handleA2UIPush(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let command = req.command
-        let messages: [MoltbotKit.AnyCodable]
-        if command == MoltbotCanvasA2UICommand.pushJSONL.rawValue {
-            let params = try Self.decodeParams(MoltbotCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-            messages = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
+        let messages: [DNAKit.AnyCodable]
+        if command == DNACanvasA2UICommand.pushJSONL.rawValue {
+            let params = try Self.decodeParams(DNACanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
+            messages = try DNACanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
         } else {
             do {
-                let params = try Self.decodeParams(MoltbotCanvasA2UIPushParams.self, from: req.paramsJSON)
+                let params = try Self.decodeParams(DNACanvasA2UIPushParams.self, from: req.paramsJSON)
                 messages = params.messages
             } catch {
-                let params = try Self.decodeParams(MoltbotCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-                messages = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
+                let params = try Self.decodeParams(DNACanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
+                messages = try DNACanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
             }
         }
 
         try await self.ensureA2UIHost()
 
-        let messagesJSON = try MoltbotCanvasA2UIJSONL.encodeMessagesJSONArray(messages)
+        let messagesJSON = try DNACanvasA2UIJSONL.encodeMessagesJSONArray(messages)
         let js = """
         (() => {
           try {
-            if (!globalThis.clawdbotA2UI) return JSON.stringify({ ok: false, error: "missing moltbotA2UI" });
+            if (!globalThis.dnaA2UI) return JSON.stringify({ ok: false, error: "missing dnaA2UI" });
             const messages = \(messagesJSON);
-            return JSON.stringify(globalThis.clawdbotA2UI.applyMessages(messages));
+            return JSON.stringify(globalThis.dnaA2UI.applyMessages(messages));
           } catch (e) {
             return JSON.stringify({ ok: false, error: String(e?.message ?? e) });
           }
@@ -408,7 +408,7 @@ actor MacNodeRuntime {
         guard let raw = await GatewayConnection.shared.canvasHostUrl() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let baseUrl = URL(string: trimmed) else { return nil }
-        return baseUrl.appendingPathComponent("__moltbot__/a2ui/").absoluteString + "?platform=macos"
+        return baseUrl.appendingPathComponent("__dna__/a2ui/").absoluteString + "?platform=macos"
     }
 
     private func isA2UIReady(poll: Bool = false) async -> Bool {
@@ -417,7 +417,7 @@ actor MacNodeRuntime {
             do {
                 let sessionKey = self.mainSessionKey
                 let ready = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: """
-                (() => String(Boolean(globalThis.clawdbotA2UI)))()
+                (() => String(Boolean(globalThis.dnaA2UI)))()
                 """)
                 let trimmed = ready.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed == "true" { return true }
@@ -431,7 +431,7 @@ actor MacNodeRuntime {
     }
 
     private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decodeParams(MoltbotSystemRunParams.self, from: req.paramsJSON)
+        let params = try Self.decodeParams(DNASystemRunParams.self, from: req.paramsJSON)
         let command = params.command
         guard !command.isEmpty else {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
@@ -593,7 +593,7 @@ actor MacNodeRuntime {
     }
 
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decodeParams(MoltbotSystemWhichParams.self, from: req.paramsJSON)
+        let params = try Self.decodeParams(DNASystemWhichParams.self, from: req.paramsJSON)
         let bins = params.bins
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -639,7 +639,7 @@ actor MacNodeRuntime {
 
     private func resolveSystemRunApproval(
         req: BridgeInvokeRequest,
-        params: MoltbotSystemRunParams,
+        params: DNASystemRunParams,
         context: ExecRunContext) async -> ExecApprovalOutcome
     {
         let requiresAsk = ExecApprovalHelpers.requiresAsk(
@@ -790,7 +790,7 @@ actor MacNodeRuntime {
     }
 
     private func handleSystemNotify(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decodeParams(MoltbotSystemNotifyParams.self, from: req.paramsJSON)
+        let params = try Self.decodeParams(DNASystemNotifyParams.self, from: req.paramsJSON)
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty, body.isEmpty {
@@ -886,9 +886,9 @@ extension MacNodeRuntime {
         return merged
     }
 
-    private nonisolated static func locationMode() -> MoltbotLocationMode {
+    private nonisolated static func locationMode() -> DNALocationMode {
         let raw = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
-        return MoltbotLocationMode(rawValue: raw) ?? .off
+        return DNALocationMode(rawValue: raw) ?? .off
     }
 
     private nonisolated static func locationPreciseEnabled() -> Bool {
@@ -898,18 +898,18 @@ extension MacNodeRuntime {
 
     private static func errorResponse(
         _ req: BridgeInvokeRequest,
-        code: MoltbotNodeErrorCode,
+        code: DNANodeErrorCode,
         message: String) -> BridgeInvokeResponse
     {
         BridgeInvokeResponse(
             id: req.id,
             ok: false,
-            error: MoltbotNodeError(code: code, message: message))
+            error: DNANodeError(code: code, message: message))
     }
 
     private static func encodeCanvasSnapshot(
         image: NSImage,
-        format: MoltbotCanvasSnapshotFormat,
+        format: DNACanvasSnapshotFormat,
         maxWidth: Int?,
         quality: Double) throws -> Data
     {

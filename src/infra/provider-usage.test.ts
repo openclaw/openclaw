@@ -253,7 +253,7 @@ describe("provider usage loading", () => {
     await withTempHome(
       async (tempHome) => {
         const agentDir = path.join(
-          process.env.CLAWDBOT_STATE_DIR ?? path.join(tempHome, ".clawdbot"),
+          process.env.DNA_STATE_DIR ?? path.join(tempHome, ".dna"),
           "agents",
           "main",
           "agent",
@@ -328,9 +328,9 @@ describe("provider usage loading", () => {
       },
       {
         env: {
-          CLAWDBOT_STATE_DIR: (home) => path.join(home, ".clawdbot"),
+          DNA_STATE_DIR: (home) => path.join(home, ".dna"),
         },
-        prefix: "moltbot-provider-usage-",
+        prefix: "dna-provider-usage-",
       },
     );
   });

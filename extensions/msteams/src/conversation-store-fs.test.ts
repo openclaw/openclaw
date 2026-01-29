@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { PluginRuntime } from "clawdbot/plugin-sdk";
+import type { PluginRuntime } from "dna/plugin-sdk";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -12,10 +12,10 @@ import { setMSTeamsRuntime } from "./runtime.js";
 const runtimeStub = {
   state: {
     resolveStateDir: (env: NodeJS.ProcessEnv = process.env, homedir?: () => string) => {
-      const override = env.CLAWDBOT_STATE_DIR?.trim();
+      const override = env.DNA_STATE_DIR?.trim();
       if (override) return override;
       const resolvedHome = homedir ? homedir() : os.homedir();
-      return path.join(resolvedHome, ".clawdbot");
+      return path.join(resolvedHome, ".dna");
     },
   },
 } as unknown as PluginRuntime;
@@ -26,11 +26,11 @@ describe("msteams conversation store (fs)", () => {
   });
 
   it("filters and prunes expired entries (but keeps legacy ones)", async () => {
-    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "moltbot-msteams-store-"));
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "dna-msteams-store-"));
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      CLAWDBOT_STATE_DIR: stateDir,
+      DNA_STATE_DIR: stateDir,
     };
 
     const store = createMSTeamsConversationStoreFs({ env, ttlMs: 1_000 });

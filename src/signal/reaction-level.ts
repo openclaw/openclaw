@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { DNAConfig } from "../config/config.js";
 import { resolveSignalAccount } from "./accounts.js";
 
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -23,7 +23,7 @@ export type ResolvedSignalReactionLevel = {
  * - "extensive": Agent can react liberally
  */
 export function resolveSignalReactionLevel(params: {
-  cfg: MoltbotConfig;
+  cfg: DNAConfig;
   accountId?: string;
 }): ResolvedSignalReactionLevel {
   const account = resolveSignalAccount({

@@ -1,5 +1,5 @@
 import Testing
-@testable import MoltbotChatUI
+@testable import DNAChatUI
 
 @Suite struct AssistantTextParserTests {
     @Test func splitsThinkAndFinalSegments() {
