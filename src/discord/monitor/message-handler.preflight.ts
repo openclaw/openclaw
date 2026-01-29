@@ -220,6 +220,7 @@ export async function preflightDiscordMessage(
   }
 
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
+  const memberRoleIds = params.data.member?.roles?.map((r: { id: string }) => r.id) ?? [];
   const route = resolveAgentRoute({
     cfg: loadConfig(),
     channel: "discord",
