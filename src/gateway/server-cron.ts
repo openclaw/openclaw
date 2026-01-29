@@ -60,6 +60,8 @@ export function buildGatewayCronService(params: {
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         reason: opts?.reason,
+        agentId: opts?.agentId,
+        forcedByCron: opts?.forcedByCron,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
