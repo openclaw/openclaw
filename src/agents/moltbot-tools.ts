@@ -18,6 +18,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 export function createMoltbotTools(options?: {
   sandboxBrowserBridgeUrl?: string;
@@ -37,6 +38,7 @@ export function createMoltbotTools(options?: {
   agentGroupSpace?: string | null;
   agentDir?: string;
   sandboxRoot?: string;
+  sandboxFsBridge?: SandboxFsBridge;
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: MoltbotConfig;
@@ -58,7 +60,10 @@ export function createMoltbotTools(options?: {
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
-        sandboxRoot: options?.sandboxRoot,
+        sandbox:
+          options?.sandboxRoot && options?.sandboxFsBridge
+            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+            : undefined,
         modelHasVision: options?.modelHasVision,
       })
     : null;

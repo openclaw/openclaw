@@ -1,5 +1,103 @@
 import { spawn } from "node:child_process";
 
+type ExecDockerRawOptions = {
+  allowFailure?: boolean;
+  input?: Buffer | string;
+  signal?: AbortSignal;
+};
+
+export type ExecDockerRawResult = {
+  stdout: Buffer;
+  stderr: Buffer;
+  code: number;
+};
+
+type ExecDockerRawError = Error & {
+  code: number;
+  stdout: Buffer;
+  stderr: Buffer;
+};
+
+function createAbortError(): Error {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+export function execDockerRaw(
+  args: string[],
+  opts?: ExecDockerRawOptions,
+): Promise<ExecDockerRawResult> {
+  return new Promise<ExecDockerRawResult>((resolve, reject) => {
+    const child = spawn("docker", args, {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let aborted = false;
+
+    const signal = opts?.signal;
+    const handleAbort = () => {
+      if (aborted) return;
+      aborted = true;
+      child.kill("SIGTERM");
+    };
+    if (signal) {
+      if (signal.aborted) {
+        handleAbort();
+      } else {
+        signal.addEventListener("abort", handleAbort);
+      }
+    }
+
+    child.stdout?.on("data", (chunk) => {
+      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+
+    child.on("error", (error) => {
+      if (signal) signal.removeEventListener("abort", handleAbort);
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      if (signal) signal.removeEventListener("abort", handleAbort);
+      const stdout = Buffer.concat(stdoutChunks);
+      const stderr = Buffer.concat(stderrChunks);
+      if (aborted || signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
+      const exitCode = code ?? 0;
+      if (exitCode !== 0 && !opts?.allowFailure) {
+        const message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
+        const error: ExecDockerRawError = Object.assign(
+          new Error(message || `docker ${args.join(" ")} failed`),
+          {
+            code: exitCode,
+            stdout,
+            stderr,
+          },
+        );
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr, code: exitCode });
+    });
+
+    const stdin = child.stdin;
+    if (stdin) {
+      if (opts?.input !== undefined) {
+        stdin.end(opts.input);
+      } else {
+        stdin.end();
+      }
+    }
+  });
+}
+
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
@@ -10,28 +108,13 @@ import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from 
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
-  return new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
-    const child = spawn("docker", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("close", (code) => {
-      const exitCode = code ?? 0;
-      if (exitCode !== 0 && !opts?.allowFailure) {
-        reject(new Error(stderr.trim() || `docker ${args.join(" ")} failed`));
-        return;
-      }
-      resolve({ stdout, stderr, code: exitCode });
-    });
-  });
+export async function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
+  const result = await execDockerRaw(args, opts);
+  return {
+    stdout: result.stdout.toString("utf8"),
+    stderr: result.stderr.toString("utf8"),
+    code: result.code,
+  };
 }
 
 export async function readDockerPort(containerName: string, port: number) {

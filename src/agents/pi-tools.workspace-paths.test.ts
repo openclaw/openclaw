@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 import { createMoltbotCodingTools } from "./pi-tools.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -158,6 +159,7 @@ describe("sandboxed workspace paths", () => {
           workspaceAccess: "rw",
           containerName: "moltbot-sbx-test",
           containerWorkdir: "/workspace",
+          fsBridge: createHostSandboxFsBridge(sandboxDir),
           docker: {
             image: "moltbot-sandbox:bookworm-slim",
             containerPrefix: "moltbot-sbx-",

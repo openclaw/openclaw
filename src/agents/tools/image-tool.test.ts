@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MoltbotConfig } from "../../config/config.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
@@ -141,12 +142,13 @@ describe("image tool implicit imageModel config", () => {
     await fs.mkdir(agentDir, { recursive: true });
     await fs.mkdir(sandboxRoot, { recursive: true });
     await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");
+    const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
 
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const cfg: MoltbotConfig = {
       agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
     };
-    const tool = createImageTool({ config: cfg, agentDir, sandboxRoot });
+    const tool = createImageTool({ config: cfg, agentDir, sandbox });
     expect(tool).not.toBeNull();
     if (!tool) throw new Error("expected image tool");
 
@@ -196,7 +198,8 @@ describe("image tool implicit imageModel config", () => {
         },
       },
     };
-    const tool = createImageTool({ config: cfg, agentDir, sandboxRoot });
+    const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
+    const tool = createImageTool({ config: cfg, agentDir, sandbox });
     expect(tool).not.toBeNull();
     if (!tool) throw new Error("expected image tool");
 

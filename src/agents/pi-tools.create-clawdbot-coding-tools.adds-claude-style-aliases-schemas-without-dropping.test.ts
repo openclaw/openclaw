@@ -7,6 +7,7 @@ import "./test-helpers/fast-coding-tools.js";
 import { createMoltbotTools } from "./moltbot-tools.js";
 import { __testing, createMoltbotCodingTools } from "./pi-tools.js";
 import { createSandboxedReadTool } from "./pi-tools.read.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
 const defaultTools = createMoltbotCodingTools();
@@ -453,7 +454,10 @@ describe("createMoltbotCodingTools", () => {
     const outsidePath = path.join(os.tmpdir(), "moltbot-outside.txt");
     await fs.writeFile(outsidePath, "outside", "utf8");
     try {
-      const readTool = createSandboxedReadTool(tmpDir);
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
       await expect(readTool.execute("sandbox-1", { file_path: outsidePath })).rejects.toThrow(
         /sandbox root/i,
       );
