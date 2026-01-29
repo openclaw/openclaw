@@ -125,7 +125,7 @@ the prefix (use `""` to remove it).
 - **DM policy**: `channels.whatsapp.dmPolicy` controls direct chat access (default: `pairing`).
   - Pairing: unknown senders get a pairing code (approve via `moltbot pairing approve whatsapp <code>`; codes expire after 1 hour).
   - Open: requires `channels.whatsapp.allowFrom` to include `"*"`.
-  - Self messages (from the linked WhatsApp number) automatically bypass `channels.whatsapp.dmPolicy` and `channels.whatsapp.allowFrom` checks — your own number is implicitly trusted.
+  - Your linked WhatsApp number is implicitly trusted, so self messages skip ⁠`channels.whatsapp.dmPolicy` and `channels.whatsapp.allowFrom` checks.
 
 ### Personal-number mode (fallback)
 If you run Moltbot on your **personal WhatsApp number**, enable `channels.whatsapp.selfChatMode` (see sample above).
