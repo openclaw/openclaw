@@ -15,6 +15,21 @@ export type GoogleChatDmConfig = {
   allowFrom?: Array<string | number>;
 };
 
+/** Cached space mapping for proactive messaging */
+export type GoogleChatKnownSpace = {
+  /** Space ID (e.g., "spaces/AAAA...") */
+  spaceId: string;
+  /** Space display name */
+  displayName?: string;
+  /** Space type: DM or ROOM */
+  type?: "DM" | "ROOM";
+  /** When this mapping was last updated */
+  lastSeenAt?: number;
+};
+
+/** Known spaces cache for proactive messaging */
+export type GoogleChatKnownSpaces = Record<string, GoogleChatKnownSpace>;
+
 export type GoogleChatGroupConfig = {
   /** If false, disable the bot in this space. (Alias for allow: false.) */
   enabled?: boolean;
@@ -98,6 +113,12 @@ export type GoogleChatAccountConfig = {
    *   If configured, falls back to message mode with a warning.
    */
   typingIndicator?: "none" | "message" | "reaction";
+  /**
+   * Cached space mappings for proactive messaging.
+   * Keys are user IDs (e.g., "users/123..."), values contain the space ID.
+   * Auto-populated when users message the bot.
+   */
+  knownSpaces?: GoogleChatKnownSpaces;
 };
 
 export type GoogleChatConfig = {

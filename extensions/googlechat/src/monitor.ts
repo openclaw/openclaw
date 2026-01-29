@@ -14,6 +14,7 @@ import {
 } from "./api.js";
 import { verifyGoogleChatRequest, type GoogleChatAudienceType } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { extractSpaceInfoFromEvent, buildSpaceCachePatch } from "./space-cache.js";
 import type {
   GoogleChatAnnotation,
   GoogleChatAttachment,
@@ -393,6 +394,18 @@ async function processMessageWithPipeline(params: {
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
   const senderEmail = sender?.email ?? undefined;
+
+  // Cache space mapping for proactive messaging
+  if (senderId && spaceId) {
+    const spaceInfo = extractSpaceInfoFromEvent(event);
+    if (spaceInfo) {
+      const cachePatch = buildSpaceCachePatch(spaceInfo, account.accountId);
+      core.config.patchConfig(cachePatch).catch((err: Error) => {
+        logVerbose(core, runtime, `failed to cache space: ${err.message}`);
+      });
+      logVerbose(core, runtime, `cached space ${spaceId} for user ${senderId}`);
+    }
+  }
 
   const allowBots = account.config.allowBots === true;
   if (!allowBots) {
