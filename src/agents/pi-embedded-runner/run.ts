@@ -56,7 +56,7 @@ import { describeUnknownError } from "./utils.js";
 type ApiKeyInfo = ResolvedProviderAuth;
 
 // Pre-flight context check constants
-const PREFLIGHT_CONTEXT_THRESHOLD_RATIO = 0.75; // Trigger at 75% of context window
+const PREFLIGHT_CONTEXT_THRESHOLD_RATIO = 0.85; // Trigger at 85% of context window (was 0.75)
 const CHARS_PER_TOKEN_ESTIMATE = 4; // Conservative estimate
 
 /**

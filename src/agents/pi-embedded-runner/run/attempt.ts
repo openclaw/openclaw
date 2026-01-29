@@ -7,6 +7,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { updateSessionHeartbeat } from "../../../config/sessions/active-sessions.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
@@ -659,6 +660,17 @@ export async function runEmbeddedAttempt(
         Math.max(1, params.timeoutMs),
       );
 
+      // Update heartbeat every 30 seconds to prevent GC from thinking session is stale
+      let heartbeatInterval: NodeJS.Timeout | undefined;
+      if (params.sessionKey) {
+        heartbeatInterval = setInterval(() => {
+          updateSessionHeartbeat(params.sessionKey!);
+          if (!isProbeSession) {
+            log.info(`session heartbeat: sessionKey=${params.sessionKey} runId=${params.runId}`);
+          }
+        }, 30_000); // 30 seconds
+      }
+
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
       const onAbort = () => {
@@ -834,6 +846,7 @@ export async function runEmbeddedAttempt(
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) clearTimeout(abortWarnTimer);
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
         unsubscribe();
         clearActiveEmbeddedRun(params.sessionId, queueHandle);
         params.abortSignal?.removeEventListener?.("abort", onAbort);

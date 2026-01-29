@@ -50,13 +50,25 @@ export function createTelegramDraftStream(params: {
     if (trimmed === lastSentText) return;
     lastSentText = trimmed;
     lastSentAt = Date.now();
+
+    // Add timeout protection (30 seconds)
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), 30_000);
+
     try {
       await params.api.sendMessageDraft(chatId, draftId, trimmed, threadParams);
     } catch (err) {
-      stopped = true;
-      params.warn?.(
-        `telegram draft stream failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      if (abortController.signal.aborted) {
+        stopped = true;
+        params.warn?.(`telegram draft stream timed out after 30s`);
+      } else {
+        stopped = true;
+        params.warn?.(
+          `telegram draft stream failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   };
 

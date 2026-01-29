@@ -254,7 +254,29 @@ export async function updateSessionStore<T>(
   return await withSessionStoreLock(storePath, async () => {
     // Always re-read inside the lock to avoid clobbering concurrent writers.
     const store = loadSessionStore(storePath, { skipCache: true });
+
+    // Snapshot versions before mutation for optimistic locking
+    const beforeVersions = new Map<string, number>();
+    for (const [key, entry] of Object.entries(store)) {
+      beforeVersions.set(key, entry.version ?? 0);
+    }
+
+    // Apply mutation
     const result = await mutator(store);
+
+    // Check for version conflicts and increment versions
+    for (const [key, entry] of Object.entries(store)) {
+      const beforeVersion = beforeVersions.get(key);
+
+      if (beforeVersion !== undefined) {
+        // Entry existed before mutation - always auto-increment
+        entry.version = beforeVersion + 1;
+      } else {
+        // New entry - initialize version
+        entry.version = 1;
+      }
+    }
+
     await saveSessionStoreUnlocked(storePath, store);
     return result;
   });

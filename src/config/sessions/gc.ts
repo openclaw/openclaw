@@ -3,6 +3,8 @@ import path from "node:path";
 import { resolveUserPath } from "../../utils.js";
 import { loadSessionStore, saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
+import { isSessionActive, cleanupStaleActiveSessions } from "./active-sessions.js";
+import { createSessionCheckpoint, cleanupOldCheckpoints } from "./checkpoint.js";
 
 // Simple logger for session GC
 const log = {
@@ -91,6 +93,15 @@ export async function runSessionGC(opts: {
         result.sessionsDeleted += gcStats.sessionsDeleted;
         result.transcriptsDeleted += gcStats.transcriptsDeleted;
         result.sessionsReset += gcStats.sessionsReset;
+
+        // Clean up old checkpoints (same max age as sessions)
+        if (!opts.dryRun) {
+          try {
+            await cleanupOldCheckpoints(agentId, opts.maxAgeDays);
+          } catch (cleanupErr) {
+            log.error(`Failed to cleanup checkpoints for agent ${agentId}: ${String(cleanupErr)}`);
+          }
+        }
       } catch (err) {
         const errMsg = `Failed to run GC for agent ${agentId}: ${String(err)}`;
         log.error(errMsg);
@@ -160,8 +171,12 @@ async function runSessionGCForAgent(
   // Sort sessions by updatedAt (newest first)
   const sortedSessions = sessions.sort((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0));
 
+  // Clean up stale entries from active sessions registry before checking
+  cleanupStaleActiveSessions();
+
   // Identify sessions to delete
   const sessionsToDelete: Array<[string, SessionEntry]> = [];
+  const skippedActiveSessions: string[] = [];
 
   for (let i = 0; i < sortedSessions.length; i++) {
     const [key, entry] = sortedSessions[i];
@@ -170,6 +185,13 @@ async function runSessionGCForAgent(
     // Skip if session is newer than cutoff
     if (age >= cutoffTime) continue;
 
+    // CRITICAL: Skip if session is currently active
+    if (isSessionActive(key)) {
+      skippedActiveSessions.push(key);
+      log.info(`agent=${agentId}: skipping active session ${key}`);
+      continue;
+    }
+
     // Skip if deleting would violate keepMinSessions constraint
     const remainingCount = sortedSessions.length - sessionsToDelete.length;
     if (remainingCount <= opts.keepMinSessions) {
@@ -177,6 +199,10 @@ async function runSessionGCForAgent(
     }
 
     sessionsToDelete.push([key, entry]);
+  }
+
+  if (skippedActiveSessions.length > 0) {
+    log.info(`agent=${agentId}: skipped ${skippedActiveSessions.length} active sessions during GC`);
   }
 
   // Handle duration-based resets (reset sessions running too long by archiving transcript)
@@ -215,6 +241,21 @@ async function runSessionGCForAgent(
 
   if (sessionsToDelete.length === 0 && stats.sessionsReset === 0) {
     return stats;
+  }
+
+  // Create checkpoints before deletion (enables recovery)
+  if (!opts.dryRun && sessionsToDelete.length > 0) {
+    for (const [key, entry] of sessionsToDelete) {
+      try {
+        await createSessionCheckpoint(agentId, key, entry, "pre-gc");
+        log.info(`agent=${agentId}: created checkpoint for session ${key} before GC deletion`);
+      } catch (checkpointErr) {
+        log.error(
+          `agent=${agentId}: failed to create checkpoint for session ${key}: ${String(checkpointErr)}`,
+        );
+        // Continue with deletion even if checkpoint fails
+      }
+    }
   }
 
   // Delete sessions from store

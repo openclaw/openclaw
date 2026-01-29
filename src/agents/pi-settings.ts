@@ -1,6 +1,6 @@
 import type { MoltbotConfig } from "../config/config.js";
 
-export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
+export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 30_000; // Increased from 20k to 30k for better safety margin
 
 type PiSettingsManagerLike = {
   getCompactionReserveTokens: () => number;

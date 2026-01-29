@@ -308,7 +308,7 @@ export function pruneHistoryForContextShare(params: {
   keptTokens: number;
   budgetTokens: number;
 } {
-  const maxHistoryShare = params.maxHistoryShare ?? 0.5;
+  const maxHistoryShare = params.maxHistoryShare ?? 0.7; // Increased from 0.5 to 0.7 (70% of context for history)
   const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];

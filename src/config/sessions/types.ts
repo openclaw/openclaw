@@ -25,6 +25,11 @@ export type SessionOrigin = {
 
 export type SessionEntry = {
   /**
+   * Version number for optimistic locking (prevents concurrent update corruption).
+   * Incremented on each write to detect conflicts.
+   */
+  version?: number;
+  /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
    * Stored on the main session entry.
    */
