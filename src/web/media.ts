@@ -25,9 +25,7 @@ export type WebMediaResult = {
 type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  /** Allowed root directories for local path reads. "any" skips the check (caller already validated). */
-  localRoots?: string[] | "any";
+  readFile?: (filePath: string) => Promise<Buffer>;
 };
 
 function getDefaultLocalRoots(): string[] {
@@ -165,7 +163,7 @@ async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
-  const { maxBytes, optimizeImages = true, ssrfPolicy, localRoots } = options;
+  const { maxBytes, optimizeImages = true, readFile: readFileOverride } = options;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -267,7 +265,7 @@ async function loadWebMediaInternal(
   await assertLocalMediaAllowed(mediaUrl, localRoots);
 
   // Local path
-  const data = await fs.readFile(mediaUrl);
+  const data = readFileOverride ? await readFileOverride(mediaUrl) : await fs.readFile(mediaUrl);
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = mediaKindFromMime(mime);
   let fileName = path.basename(mediaUrl) || undefined;
@@ -287,24 +285,32 @@ async function loadWebMediaInternal(
 
 export async function loadWebMedia(
   mediaUrl: string,
-  maxBytes?: number,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
+  options?: number | WebMediaOptions,
 ): Promise<WebMediaResult> {
+  if (typeof options === "number" || options === undefined) {
+    return await loadWebMediaInternal(mediaUrl, {
+      maxBytes: options,
+      optimizeImages: true,
+    });
+  }
   return await loadWebMediaInternal(mediaUrl, {
-    maxBytes,
-    optimizeImages: true,
-    ssrfPolicy: options?.ssrfPolicy,
-    localRoots: options?.localRoots,
+    ...options,
+    optimizeImages: options.optimizeImages ?? true,
   });
 }
 
 export async function loadWebMediaRaw(
   mediaUrl: string,
-  maxBytes?: number,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
+  options?: number | WebMediaOptions,
 ): Promise<WebMediaResult> {
+  if (typeof options === "number" || options === undefined) {
+    return await loadWebMediaInternal(mediaUrl, {
+      maxBytes: options,
+      optimizeImages: false,
+    });
+  }
   return await loadWebMediaInternal(mediaUrl, {
-    maxBytes,
+    ...options,
     optimizeImages: false,
     ssrfPolicy: options?.ssrfPolicy,
     localRoots: options?.localRoots,

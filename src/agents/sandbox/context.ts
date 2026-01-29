@@ -13,6 +13,7 @@ import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
+import { createSandboxFsBridge } from "./fs-bridge.js";
 
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
@@ -83,7 +84,7 @@ export async function resolveSandboxContext(params: {
     evaluateEnabled,
   });
 
-  return {
+  const sandboxContext: SandboxContext = {
     enabled: true,
     sessionKey: rawSessionKey,
     workspaceDir,
@@ -96,6 +97,10 @@ export async function resolveSandboxContext(params: {
     browserAllowHostControl: cfg.browser.allowHostControl,
     browser: browser ?? undefined,
   };
+
+  sandboxContext.fsBridge = createSandboxFsBridge({ sandbox: sandboxContext });
+
+  return sandboxContext;
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {
