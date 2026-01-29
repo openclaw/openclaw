@@ -56,6 +56,10 @@ import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  detectDangerousCommand,
+  formatDangerousCommandError,
+} from "../security/dangerous-commands.js";
 
 const DEFAULT_MAX_OUTPUT = clampNumber(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
@@ -753,6 +757,12 @@ export function createExecTool(
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+
+      // SECURITY: Check for dangerous command patterns before any execution
+      const dangerousMatch = detectDangerousCommand(params.command, "high");
+      if (dangerousMatch) {
+        throw new Error(formatDangerousCommandError(dangerousMatch));
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
