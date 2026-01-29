@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { RuntimeEnv } from "../runtime.js";
+import { registerChild } from "../infra/child-registry.js";
 
 export type SignalDaemonOpts = {
   cliPath: string;
@@ -52,6 +53,10 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const child = spawn(opts.cliPath, args, {
     stdio: ["ignore", "pipe", "pipe"],
   });
+
+  // Register with child registry (managedExternally: true because signal daemon has its own lifecycle)
+  registerChild("signal-cli-daemon", child, { managedExternally: true });
+
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
 
