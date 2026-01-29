@@ -44,8 +44,6 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
-  /** If true, send a fallback message when all replies are empty. Default: false */
-  notifyEmptyResponse?: boolean;
 }): Promise<{ delivered: boolean }> {
   const {
     replies,
@@ -60,7 +58,10 @@ export async function deliverReplies(params: {
   } = params;
   const chunkMode = params.chunkMode ?? "length";
   let hasReplied = false;
-  let skippedEmpty = 0;
+  let hasDelivered = false;
+  const markDelivered = () => {
+    hasDelivered = true;
+  };
   const chunkText = (markdown: string) => {
     const markdownChunks =
       chunkMode === "newline"
@@ -88,7 +89,6 @@ export async function deliverReplies(params: {
         continue;
       }
       runtime.error?.(danger("reply missing text/media"));
-      skippedEmpty++;
       continue;
     }
     const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
@@ -118,6 +118,7 @@ export async function deliverReplies(params: {
           linkPreview,
           replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
+        markDelivered();
         if (replyToId && !hasReplied) {
           hasReplied = true;
         }
@@ -169,18 +170,21 @@ export async function deliverReplies(params: {
           runtime,
           fn: () => bot.api.sendAnimation(chatId, file, { ...mediaParams }),
         });
+        markDelivered();
       } else if (kind === "image") {
         await withTelegramApiErrorLogging({
           operation: "sendPhoto",
           runtime,
           fn: () => bot.api.sendPhoto(chatId, file, { ...mediaParams }),
         });
+        markDelivered();
       } else if (kind === "video") {
         await withTelegramApiErrorLogging({
           operation: "sendVideo",
           runtime,
           fn: () => bot.api.sendVideo(chatId, file, { ...mediaParams }),
         });
+        markDelivered();
       } else if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
           wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
@@ -199,6 +203,7 @@ export async function deliverReplies(params: {
               shouldLog: (err) => !isVoiceMessagesForbidden(err),
               fn: () => bot.api.sendVoice(chatId, file, { ...mediaParams }),
             });
+            markDelivered();
           } catch (voiceErr) {
             // Fall back to text if voice messages are forbidden in this chat.
             // This happens when the recipient has Telegram Premium privacy settings
@@ -225,6 +230,7 @@ export async function deliverReplies(params: {
                 replyMarkup,
                 replyQuoteText,
               });
+              markDelivered();
               // Skip this media item; continue with next.
               continue;
             }
@@ -237,6 +243,7 @@ export async function deliverReplies(params: {
             runtime,
             fn: () => bot.api.sendAudio(chatId, file, { ...mediaParams }),
           });
+          markDelivered();
         }
       } else {
         await withTelegramApiErrorLogging({
@@ -244,6 +251,7 @@ export async function deliverReplies(params: {
           runtime,
           fn: () => bot.api.sendDocument(chatId, file, { ...mediaParams }),
         });
+        markDelivered();
       }
       if (replyToId && !hasReplied) {
         hasReplied = true;
@@ -264,6 +272,7 @@ export async function deliverReplies(params: {
             linkPreview,
             replyMarkup: i === 0 ? replyMarkup : undefined,
           });
+          markDelivered();
           if (replyToId && !hasReplied) {
             hasReplied = true;
           }
@@ -273,17 +282,7 @@ export async function deliverReplies(params: {
     }
   }
 
-  // If all replies were empty and notifyEmptyResponse is enabled, send a fallback message
-  // Check both: (1) replies with no content (skippedEmpty), (2) no replies at all (empty array)
-  if (!hasReplied && (skippedEmpty > 0 || replies.length === 0) && params.notifyEmptyResponse) {
-    const fallbackText = "No response generated. Please try again.";
-    await sendTelegramText(bot, chatId, fallbackText, runtime, {
-      messageThreadId,
-    });
-    hasReplied = true;
-  }
-
-  return { delivered: hasReplied };
+  return { delivered: hasDelivered };
 }
 
 export async function resolveMedia(
