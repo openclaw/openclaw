@@ -65,6 +65,19 @@ Note: Some references to "clawdbot" remain in older code/docs during transition.
 - **Incubation phases**: Idea → Foundation → MVP → Launch → Growth
 - **Usage**: Clone template project for each new venture
 
+## NotHockney — Incubation (Jan 2026)
+
+- **What**: AI art gallery with Hockney-inspired generated artwork
+- **Domain**: nothockney.com (Vercel)
+- **Products**:
+  - Canvas prints: $799 (dropshipped via Printful or similar)
+  - Digital downloads: ~$80 (instant high-res download)
+- **Features**: Browse curated gallery + generate your own in same style
+- **Tech stack**: Next.js, Midjourney API, Stripe, Printful integration
+- **Vikunja project**: ID 6
+- **Aesthetic**: Elegant, minimal, gallery-like
+- **Legal**: Style-inspired only, no copyright infringement
+
 ## SaveState — LAUNCHED Jan 27, 2026 🚀
 
 - **What**: Encrypted backup/restore for AI agents ("Time Machine for AI")
