@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60">
+  <defs>
+    <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="50%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+  </defs>
+  <!-- DNA Wordmark -->
+  <text x="100" y="42" text-anchor="middle" font-family="Inter, -apple-system, sans-serif" font-weight="700" font-size="42" fill="url(#primaryGrad)" letter-spacing="-1">DNA</text>
+  <!-- Subtle connecting line between letters -->
+  <path d="M58 30 Q70 28 82 30" stroke="url(#primaryGrad)" stroke-width="2" fill="none" opacity="0.6"/>
+  <path d="M118 30 Q130 32 142 30" stroke="url(#primaryGrad)" stroke-width="2" fill="none" opacity="0.6"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60">
+  <!-- DNA Wordmark - White version for dark backgrounds -->
+  <text x="100" y="42" text-anchor="middle" font-family="Inter, -apple-system, sans-serif" font-weight="700" font-size="42" fill="#FFFFFF" letter-spacing="-1">DNA</text>
+  <!-- Subtle connecting line between letters -->
+  <path d="M58 30 Q70 28 82 30" stroke="#FFFFFF" stroke-width="2" fill="none" opacity="0.4"/>
+  <path d="M118 30 Q130 32 142 30" stroke="#FFFFFF" stroke-width="2" fill="none" opacity="0.4"/>
+</svg>

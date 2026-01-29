@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="50%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+  </defs>
+  <!-- Abstract DNA Helix Icon -->
+  <g transform="translate(60,60)">
+    <!-- Left strand -->
+    <path d="M-30,-35 Q-15,-20 -30,0 Q-15,20 -30,35" 
+          stroke="url(#grad1)" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <!-- Right strand -->
+    <path d="M30,-35 Q15,-20 30,0 Q15,20 30,35" 
+          stroke="url(#grad1)" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <!-- Connecting bars -->
+    <line x1="-22" y1="-25" x2="22" y2="-25" stroke="url(#grad1)" stroke-width="4" stroke-linecap="round" opacity="0.7"/>
+    <line x1="-30" y1="0" x2="30" y2="0" stroke="url(#grad1)" stroke-width="4" stroke-linecap="round" opacity="0.7"/>
+    <line x1="-22" y1="25" x2="22" y2="25" stroke="url(#grad1)" stroke-width="4" stroke-linecap="round" opacity="0.7"/>
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <defs>
+    <linearGradient id="iconGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="100%" style="stop-color:#A78BFA"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="120" height="120" rx="24" fill="#0F0D15"/>
+  <!-- DNA Letter D as icon -->
+  <text x="60" y="82" text-anchor="middle" font-family="Inter, -apple-system, sans-serif" font-weight="700" font-size="72" fill="url(#iconGrad)">D</text>
+  <!-- Helix accent -->
+  <ellipse cx="78" cy="60" rx="8" ry="20" fill="none" stroke="url(#iconGrad)" stroke-width="3" opacity="0.5"/>
+</svg>
