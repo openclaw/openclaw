@@ -334,9 +334,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         const roleRaw = connectParams.role ?? "operator";
         const role =
-          roleRaw === "operator" || roleRaw === "node" || roleRaw === "webchat"
-            ? roleRaw
-            : null;
+          roleRaw === "operator" || roleRaw === "node" || roleRaw === "webchat" ? roleRaw : null;
         if (!role) {
           setHandshakeState("failed");
           setCloseCause("invalid-role", {
