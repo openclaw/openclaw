@@ -283,5 +283,10 @@
       "apps/macos/.build/**",
       "dist/Moltbot.app/**"
     ]
-  }
+  },
+  "trustedDependencies": [
+    "@whiskeysockets/baileys",
+    "node-llama-cpp",
+    "protobufjs"
+  ]
 }
