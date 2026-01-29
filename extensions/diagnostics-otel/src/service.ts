@@ -3,12 +3,12 @@ import type { SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { Resource } from "@opentelemetry/resources";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
-import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 
 import type { DiagnosticEventPayload, OpenClawPluginService } from "openclaw/plugin-sdk";
 import { onDiagnosticEvent, registerLogTransport } from "openclaw/plugin-sdk";
@@ -62,8 +62,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const logsEnabled = otel.logs === true;
       if (!tracesEnabled && !metricsEnabled && !logsEnabled) return;
 
-      const resource = new Resource({
-        [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
+      const resource = resourceFromAttributes({
+        [ATTR_SERVICE_NAME]: serviceName,
       });
 
       const traceUrl = resolveOtelUrl(endpoint, "v1/traces");
@@ -199,14 +199,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           ...(logUrl ? { url: logUrl } : {}),
           ...(headers ? { headers } : {}),
         });
-        logProvider = new LoggerProvider({ resource });
-        logProvider.addLogRecordProcessor(
-          new BatchLogRecordProcessor(logExporter, {
-            ...(typeof otel.flushIntervalMs === "number"
-              ? { scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs) }
-              : {}),
-          }),
-        );
+        const logProcessor = new BatchLogRecordProcessor(logExporter, {
+          ...(typeof otel.flushIntervalMs === "number"
+            ? { scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs) }
+            : {}),
+        });
+        logProvider = new LoggerProvider({
+          resource,
+          processors: [logProcessor],
+        });
         const otelLogger = logProvider.getLogger("openclaw");
 
         stopLogTransport = registerLogTransport((logObj) => {
