@@ -257,8 +257,16 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   opts,
 }: RegisterTelegramNativeCommandsParams) => {
+  const boundRoute =
+    nativeEnabled && nativeSkillsEnabled
+      ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
+      : null;
+  const boundAgentIds =
+    boundRoute && boundRoute.matchedBy.startsWith("binding.") ? [boundRoute.agentId] : null;
   const skillCommands =
-    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
+    nativeEnabled && nativeSkillsEnabled
+      ? listSkillCommandsForAgents(boundAgentIds ? { cfg, agentIds: boundAgentIds } : { cfg })
+      : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "telegram" })
     : [];

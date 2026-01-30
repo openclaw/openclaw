@@ -48,8 +48,12 @@ describe("state + config path candidates", () => {
   it("orders default config candidates in a stable order", () => {
     const home = "/home/test";
     const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
-    expect(candidates[0]).toBe(path.join(home, ".openclaw", "openclaw.json"));
-    expect(candidates).toHaveLength(1);
+    const expectedDirs = [".openclaw", ".clawdbot", ".moltbot", ".moldbot"];
+    const expectedFiles = ["openclaw.json", "clawdbot.json", "moltbot.json", "moldbot.json"];
+    const expected = expectedDirs.flatMap((dir) =>
+      expectedFiles.map((file) => path.join(home, dir, file)),
+    );
+    expect(candidates).toEqual(expected);
   });
 
   it("prefers ~/.openclaw when it exists and legacy dir is missing", async () => {
