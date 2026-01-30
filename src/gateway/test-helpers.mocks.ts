@@ -227,10 +227,8 @@ export const testIsNixMode = hoisted.testIsNixMode;
 export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
+vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
 
   // Create a mock ModelRegistry class that can be controlled via piSdkMock
   class MockModelRegistry extends actual.ModelRegistry {
@@ -262,6 +260,7 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
 
   return {
     ...actual,
+    AuthStorage: actual.AuthStorage,
     ModelRegistry: piSdkMock.enabled ? MockModelRegistry : actual.ModelRegistry,
   };
 });
