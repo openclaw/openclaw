@@ -117,14 +117,14 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - Non‑loopback binds still require auth.
 
 5) **Channels**
-  - WhatsApp: optional QR login.
-  - Telegram: bot token.
-  - Discord: bot token.
-  - Google Chat: service account JSON + webhook audience.
-  - Mattermost (plugin): bot token + base URL.
-   - Signal: optional `signal-cli` install + account config.
-   - iMessage: local `imsg` CLI path + DB access.
-  - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
+   - [WhatsApp](/channels/whatsapp): optional QR login.
+   - [Telegram](/channels/telegram): bot token.
+   - [Discord](/channels/discord): bot token.
+   - [Google Chat](/channels/googlechat): service account JSON + webhook audience.
+   - [Mattermost](/channels/mattermost) (plugin): bot token + base URL.
+   - [Signal](/channels/signal): optional `signal-cli` install + account config.
+   - [iMessage](/channels/imessage): local `imsg` CLI path + DB access.
+   - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
 
 6) **Daemon install**
    - macOS: LaunchAgent
