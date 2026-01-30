@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -40,6 +40,7 @@ import {
   sortProbeResults,
   type AuthProbeSummary,
 } from "./list.probe.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 export async function modelsStatusCommand(
@@ -53,6 +54,7 @@ export async function modelsStatusCommand(
     probeTimeout?: string;
     probeConcurrency?: string;
     probeMaxTokens?: string;
+    agent?: string;
   },
   runtime: RuntimeEnv,
 ) {
@@ -93,8 +95,11 @@ export async function modelsStatusCommand(
   );
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
-  const agentDir = resolveOpenClawAgentDir();
-  const store = ensureAuthProfileStore();
+  const agentId = opts.agent?.trim()
+    ? normalizeAgentId(opts.agent.trim())
+    : resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
+  const store = ensureAuthProfileStore(agentDir);
   const modelsPath = path.join(agentDir, "models.json");
 
   const providersFromStore = new Set(
@@ -304,7 +309,7 @@ export async function modelsStatusCommand(
           aliases,
           allowed,
           auth: {
-            storePath: resolveAuthStorePathForDisplay(),
+            storePath: resolveAuthStorePathForDisplay(agentDir),
             shellEnvFallback: {
               enabled: shellFallbackEnabled,
               appliedKeys: applied,
@@ -411,7 +416,7 @@ export async function modelsStatusCommand(
     `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       theme.info,
-      shortenHomePath(resolveAuthStorePathForDisplay()),
+      shortenHomePath(resolveAuthStorePathForDisplay(agentDir)),
     )}`,
   );
   runtime.log(

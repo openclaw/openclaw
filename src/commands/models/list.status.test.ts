@@ -29,7 +29,8 @@ const mocks = vi.hoisted(() => {
 
   return {
     store,
-    resolveOpenClawAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
+    resolveAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
+    resolveDefaultAgentId: vi.fn().mockReturnValue("main"),
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
     listProfilesForProvider: vi.fn((s: typeof store, provider: string) => {
       return Object.entries(s.profiles)
@@ -71,9 +72,18 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveAgentDir: mocks.resolveAgentDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
+
+vi.mock("../../routing/session-key.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
+  return {
+    ...actual,
+    normalizeAgentId: (id: string) => id.toLowerCase().replace(/\s+/g, "-"),
+  };
+});
 
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
@@ -145,6 +155,23 @@ describe("modelsStatusCommand auth overview", () => {
     expect(
       (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai-codex")),
     ).toBe(true);
+  });
+
+  it("resolves agent dir from --agent flag", async () => {
+    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw-agent-custom");
+    const localRuntime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    try {
+      await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+      expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "jeremiah");
+      const payload = JSON.parse(String((localRuntime.log as vi.Mock).mock.calls[0][0]));
+      expect(payload.agentDir).toBe("/tmp/openclaw-agent-custom");
+    } finally {
+      mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw-agent");
+    }
   });
 
   it("exits non-zero when auth is missing", async () => {
