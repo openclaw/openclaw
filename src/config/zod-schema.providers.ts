@@ -36,6 +36,14 @@ export const ChannelsSchema = z
     imessage: IMessageConfigSchema.optional(),
     bluebubbles: BlueBubblesConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
+    twilioMessaging: z
+      .object({
+        accountSid: z.string().optional(),
+        authToken: z.string().optional(),
+        phoneNumber: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .passthrough() // Allow extension channel configs (nostr, matrix, zalo, etc.)
   .optional();

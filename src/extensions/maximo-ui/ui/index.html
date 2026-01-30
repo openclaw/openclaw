@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maximo Primo</title>
+    <!-- <meta name="theme-color" content="#0a0a0a"> -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./style.css">
+</head>
+
+<body>
+    <header>
+        <h1>MAXIMO PRIMO</h1>
+    </header>
+
+    <div id="chat-container">
+        <!-- Messages will be injected here -->
+    </div>
+
+    <div id="controls">
+        <div class="voice-selector">
+            <select id="engine-select" aria-label="Select Voice Engine">
+                <option value="eburon">Eburon (Qwen3)</option>
+                <option value="orbit">Orbit Pro</option>
+                <option value="orbit_beta">Orbit Beta</option>
+                <option value="tts">Voice Core (Local)</option>
+                <option value="cartesia" selected>Orbit Sonic</option>
+                <option value="gemini">Gemini Live</option>
+            </select>
+        </div>
+        <div id="status-text">Standby</div>
+        <div class="btn-ring">
+            <button id="mic-btn" aria-label="Record Voice">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+            </button>
+            <div class="visualizer"></div>
+        </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+</body>
+
+</html>

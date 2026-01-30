@@ -1,0 +1,63 @@
+0 verbose cli /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@11.7.0
+2 info using node@v24.12.0
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/master/Development/moltbot/.npmrc
+5 warn Unknown project config "allow-build-scripts". This will stop working in the next major version of npm.
+6 silly config load:file:/Users/master/.npmrc
+7 silly config load:file:/usr/local/etc/npmrc
+8 verbose title npm exec pnpm install
+9 verbose argv "exec" "--" "pnpm" "install"
+10 verbose logfile logs-max:10 dir:/Users/master/Development/moltbot/.npm-cache/_logs/2026-01-29T23_14_18_750Z-
+11 verbose logfile /Users/master/Development/moltbot/.npm-cache/_logs/2026-01-29T23_14_18_750Z-debug-0.log
+12 silly logfile done cleaning log files
+13 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+14 http fetch GET 200 https://registry.npmjs.org/npm 355ms
+15 http fetch GET 200 https://registry.npmjs.org/pnpm 386ms (cache miss)
+16 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+17 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+18 silly idealTree buildDeps
+19 silly fetch manifest pnpm@10.28.2
+20 silly packumentCache full:https://registry.npmjs.org/pnpm cache-miss
+21 http fetch GET 200 https://registry.npmjs.org/pnpm 159ms (cache miss)
+22 silly packumentCache full:https://registry.npmjs.org/pnpm set size:undefined disposed:false
+23 silly placeDep ROOT pnpm@10.28.2 OK for:  want: 10.28.2
+24 silly reify moves {}
+25 verbose Error: EPERM: operation not permitted, mkdir '/Users/master/Development/moltbot/.npm-cache/_npx/e6e0ed1aca658cae/node_modules'
+    at async mkdir (node:internal/fs/promises:861:10)
+    at async /usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:572:20
+    at async Promise.allSettled (index 0)
+    at async #reifyPackages (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:309:11)
+    at async Arborist.reify (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:121:5)
+    at async /usr/local/lib/node_modules/npm/node_modules/libnpmexec/lib/with-lock.js:58:19
+26 verbose stack Error: EPERM: operation not permitted, mkdir '/Users/master/Development/moltbot/.npm-cache/_npx/e6e0ed1aca658cae/node_modules'
+26 verbose stack     at async mkdir (node:internal/fs/promises:861:10)
+26 verbose stack     at async /usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:572:20
+26 verbose stack     at async Promise.allSettled (index 0)
+26 verbose stack     at async #reifyPackages (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:309:11)
+26 verbose stack     at async Arborist.reify (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:121:5)
+26 verbose stack     at async /usr/local/lib/node_modules/npm/node_modules/libnpmexec/lib/with-lock.js:58:19
+27 error code EPERM
+28 error syscall mkdir
+29 error path /Users/master/Development/moltbot/.npm-cache/_npx/e6e0ed1aca658cae/node_modules
+30 error errno -1
+31 error
+31 error Your cache folder contains root-owned files, due to a bug in
+31 error previous versions of npm which has since been addressed.
+31 error
+31 error To permanently fix this problem, please run:
+31 error   sudo chown -R 502:20 "/Users/master/Development/moltbot/.npm-cache"
+32 silly unfinished npm timer reify 1769728472301
+33 silly unfinished npm timer reify:createSparse 1769728472486
+34 verbose cwd /Users/master/Development/moltbot
+35 verbose os Darwin 25.2.0
+36 verbose node v24.12.0
+37 verbose npm  v11.7.0
+38 notice
+38 notice New minor version of npm available! 11.7.0 -> 11.8.0
+38 notice Changelog: https://github.com/npm/cli/releases/tag/v11.8.0
+38 notice To update run: npm install -g npm@11.8.0
+38 notice  { force: true, Symbol(proc-log.meta): true }
+39 verbose exit -1
+40 verbose code -1
+41 error A complete log of this run can be found in: /Users/master/Development/moltbot/.npm-cache/_logs/2026-01-29T23_14_18_750Z-debug-0.log

@@ -784,6 +784,7 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
         ? `${plugin.description} (plugin: ${id})`
         : `Plugin entry for ${id}.`,
     };
+
     next[`${basePath}.enabled`] = {
       ...next[`${basePath}.enabled`],
       label: `Enable ${name}`,
@@ -896,9 +897,9 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
     const pluginSchema = asSchemaObject(plugin.configSchema);
     const nextConfigSchema =
       baseConfigSchema &&
-      pluginSchema &&
-      isObjectSchema(baseConfigSchema) &&
-      isObjectSchema(pluginSchema)
+        pluginSchema &&
+        isObjectSchema(baseConfigSchema) &&
+        isObjectSchema(pluginSchema)
         ? mergeObjectSchema(baseConfigSchema, pluginSchema)
         : cloneSchema(plugin.configSchema);
 

@@ -24,25 +24,15 @@ fi
 mkdir -p "${CLAWDBOT_CONFIG_DIR:-$HOME/.clawdbot}"
 mkdir -p "${CLAWDBOT_WORKSPACE_DIR:-$HOME/clawd}"
 
-export CLAWDBOT_CONFIG_DIR="${CLAWDBOT_CONFIG_DIR:-$HOME/.clawdbot}"
-export CLAWDBOT_WORKSPACE_DIR="${CLAWDBOT_WORKSPACE_DIR:-$HOME/clawd}"
+export CLAWDBOT_CONFIG_DIR="$(pwd)/.local_config"
+export CLAWDBOT_WORKSPACE_DIR="$(pwd)/.local_workspace"
 export CLAWDBOT_GATEWAY_PORT="${CLAWDBOT_GATEWAY_PORT:-18789}"
 export CLAWDBOT_BRIDGE_PORT="${CLAWDBOT_BRIDGE_PORT:-18790}"
 export CLAWDBOT_GATEWAY_BIND="${CLAWDBOT_GATEWAY_BIND:-lan}"
 export CLAWDBOT_IMAGE="$IMAGE_NAME"
 export CLAWDBOT_DOCKER_APT_PACKAGES="${CLAWDBOT_DOCKER_APT_PACKAGES:-}"
 
-if [[ -z "${CLAWDBOT_GATEWAY_TOKEN:-}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    CLAWDBOT_GATEWAY_TOKEN="$(openssl rand -hex 32)"
-  else
-    CLAWDBOT_GATEWAY_TOKEN="$(python3 - <<'PY'
-import secrets
-print(secrets.token_hex(32))
-PY
-)"
-  fi
-fi
+  CLAWDBOT_GATEWAY_TOKEN="973819bc7453409687ef496c9d5c42fd63caa38e3443a7d3b8552ff1341b7c68"
 export CLAWDBOT_GATEWAY_TOKEN
 
 COMPOSE_FILES=("$COMPOSE_FILE")
@@ -123,7 +113,7 @@ upsert_env() {
   shift
   local -a keys=("$@")
   local tmp
-  tmp="$(mktemp)"
+  tmp="./.env.tmp"
   declare -A seen=()
 
   if [[ -f "$file" ]]; then
@@ -153,17 +143,17 @@ upsert_env() {
   mv "$tmp" "$file"
 }
 
-upsert_env "$ENV_FILE" \
-  CLAWDBOT_CONFIG_DIR \
-  CLAWDBOT_WORKSPACE_DIR \
-  CLAWDBOT_GATEWAY_PORT \
-  CLAWDBOT_BRIDGE_PORT \
-  CLAWDBOT_GATEWAY_BIND \
-  CLAWDBOT_GATEWAY_TOKEN \
-  CLAWDBOT_IMAGE \
-  CLAWDBOT_EXTRA_MOUNTS \
-  CLAWDBOT_HOME_VOLUME \
-  CLAWDBOT_DOCKER_APT_PACKAGES
+# upsert_env "$ENV_FILE" \
+#   CLAWDBOT_CONFIG_DIR \
+#   CLAWDBOT_WORKSPACE_DIR \
+#   CLAWDBOT_GATEWAY_PORT \
+#   CLAWDBOT_BRIDGE_PORT \
+#   CLAWDBOT_GATEWAY_BIND \
+#   CLAWDBOT_GATEWAY_TOKEN \
+#   CLAWDBOT_IMAGE \
+#   CLAWDBOT_EXTRA_MOUNTS \
+#   CLAWDBOT_HOME_VOLUME \
+#   CLAWDBOT_DOCKER_APT_PACKAGES
 
 echo "==> Building Docker image: $IMAGE_NAME"
 docker build \
