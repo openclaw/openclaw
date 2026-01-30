@@ -156,6 +156,17 @@ function resolveMainSessionKey(
   return null;
 }
 
+function resolveSessionDisplayName(
+  key: string,
+  row?: SessionsListResult["sessions"][number],
+) {
+  const label = row?.label?.trim();
+  if (label) return `${label} (${key})`;
+  const displayName = row?.displayName?.trim();
+  if (displayName) return displayName;
+  return key;
+}
+
 function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
@@ -171,13 +182,19 @@ function resolveSessionOptions(
   // Add main session key first
   if (mainSessionKey) {
     seen.add(mainSessionKey);
-    options.push({ key: mainSessionKey, displayName: resolvedMain?.displayName });
+    options.push({
+      key: mainSessionKey,
+      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain),
+    });
   }
 
   // Add current session key next
   if (!seen.has(sessionKey)) {
     seen.add(sessionKey);
-    options.push({ key: sessionKey, displayName: resolvedCurrent?.displayName });
+    options.push({
+      key: sessionKey,
+      displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent),
+    });
   }
 
   // Add sessions from the result
@@ -185,7 +202,10 @@ function resolveSessionOptions(
     for (const s of sessions.sessions) {
       if (!seen.has(s.key)) {
         seen.add(s.key);
-        options.push({ key: s.key, displayName: s.displayName });
+        options.push({
+          key: s.key,
+          displayName: resolveSessionDisplayName(s.key, s),
+        });
       }
     }
   }
