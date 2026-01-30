@@ -414,7 +414,7 @@ Options:
 - `--json`: output JSON (no styling).
 - `-v`, `--verbose`: include missing requirements detail.
 
-Tip: use `npx clawdhub` to search, install, and sync skills.
+Tip: use `npx clawhub` to search, install, and sync skills.
 
 ### `pairing`
 Approve DM pairing requests across channels.
