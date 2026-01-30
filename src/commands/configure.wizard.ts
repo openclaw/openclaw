@@ -213,9 +213,9 @@ export async function runConfigureWizard(
     const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
     const remoteProbe = remoteUrl
       ? await probeGatewayReachable({
-        url: remoteUrl,
-        token: baseConfig.gateway?.remote?.token,
-      })
+          url: remoteUrl,
+          token: baseConfig.gateway?.remote?.token,
+        })
       : null;
 
     const mode = guardCancel(
