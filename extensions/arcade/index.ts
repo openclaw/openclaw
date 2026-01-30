@@ -1,7 +1,7 @@
 /**
  * OpenClaw Arcade.dev Plugin
  *
- * Provides integration with Arcade.dev for 100+ authorized tools including:
+ * Provides integration with Arcade.dev for 7500+ authorized tools including:
  * - Gmail, Google Calendar, Google Drive, Google Docs
  * - Slack, Discord, Microsoft Teams
  * - GitHub, Figma, Linear, Jira
@@ -64,7 +64,7 @@ let registeredTools: RegisteredTool[] = [];
 const arcadePlugin = {
   id: "arcade",
   name: "Arcade.dev",
-  description: "Connect to Arcade.dev for 100+ authorized tools (Gmail, Slack, GitHub, etc.)",
+  description: "Connect to Arcade.dev for 7500+ authorized tools (Gmail, Slack, GitHub, etc.)",
   configSchema: arcadeConfigSchema,
 
   register(api: OpenClawPluginApi) {

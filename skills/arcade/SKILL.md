@@ -1,13 +1,13 @@
 ---
 name: arcade
-description: Arcade.dev integration - 10,000+ authorized tools across hundreds of services
+description: Arcade.dev integration - 7500+ authorized tools across hundreds of services
 homepage: https://docs.arcade.dev
 metadata: {"openclaw":{"emoji":"🎮","requires":{"env":["ARCADE_API_KEY"]},"primaryEnv":"ARCADE_API_KEY","plugins":["arcade"]}}
 ---
 
 # Arcade.dev Tools
 
-Arcade.dev provides authorized access to 10,000+ tools across hundreds of services including Gmail, Slack, GitHub, Google Calendar, Asana, Jira, Notion, Figma, Stripe, and more. Each tool handles OAuth automatically.
+Arcade.dev provides authorized access to 7500+ tools across hundreds of services including Gmail, Slack, GitHub, Google Calendar, Asana, Jira, Notion, Figma, Stripe, and more. Each tool handles OAuth automatically.
 
 ## Setup
 
@@ -106,7 +106,7 @@ Run `openclaw arcade cache` to see all toolkits. Popular ones include:
 
 ## Best Practices
 
-1. **Initialize cache first**: Run `openclaw arcade init` to load all 10,000+ tools
+1. **Initialize cache first**: Run `openclaw arcade init` to load all 7500+ tools
 2. **Search before guessing**: Use `arcade_list_tools` to find the right tool
 3. **Check auth status**: Some tools require user authorization first
 4. **Handle auth gracefully**: If a tool needs auth, share the URL with the user

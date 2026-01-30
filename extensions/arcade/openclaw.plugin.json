@@ -1,7 +1,7 @@
 {
   "id": "arcade",
   "name": "Arcade.dev",
-  "description": "Connect to Arcade.dev for 100+ authorized tools (Gmail, Slack, GitHub, etc.)",
+  "description": "Connect to Arcade.dev for 7500+ authorized tools (Gmail, Slack, GitHub, etc.)",
   "version": "2026.1.28",
   "configSchema": {
     "type": "object",

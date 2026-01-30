@@ -1,5 +1,5 @@
 ---
-summary: "Arcade.dev plugin: 10,000+ authorized tools (Gmail, Slack, GitHub, etc.) with automatic OAuth"
+summary: "Arcade.dev plugin: 7500+ authorized tools (Gmail, Slack, GitHub, etc.) with automatic OAuth"
 read_when:
   - You want to connect OpenClaw to external services like Gmail, Slack, or GitHub
   - You need to send emails, manage calendars, or interact with third-party APIs
@@ -8,7 +8,7 @@ read_when:
 
 # Arcade.dev (plugin)
 
-Connect OpenClaw to [Arcade.dev](https://arcade.dev) for **10,000+ authorized tools** across hundreds of services. Arcade handles OAuth automatically—no credential management required.
+Connect OpenClaw to [Arcade.dev](https://arcade.dev) for **7500+ authorized tools** across hundreds of services. Arcade handles OAuth automatically—no credential management required.
 
 Popular integrations:
 - **Productivity**: Gmail, Google Calendar, Google Drive, Notion, Asana, Linear, Jira

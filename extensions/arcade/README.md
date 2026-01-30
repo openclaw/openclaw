@@ -1,10 +1,10 @@
 # OpenClaw Arcade.dev Plugin
 
-Connect OpenClaw to [Arcade.dev](https://arcade.dev) for access to **10,000+ authorized tools** across hundreds of services including Gmail, Slack, GitHub, Google Calendar, Notion, Linear, Jira, Stripe, HubSpot, and more.
+Connect OpenClaw to [Arcade.dev](https://arcade.dev) for access to **7500+ authorized tools** across hundreds of services including Gmail, Slack, GitHub, Google Calendar, Notion, Linear, Jira, Stripe, HubSpot, and more.
 
 ## Features
 
-- **10,000+ Tools**: Productivity, communication, development, and business services
+- **7500+ Tools**: Productivity, communication, development, and business services
 - **Automatic OAuth**: Arcade handles all authorization flows securely
 - **Dynamic Registration**: Tools are automatically discovered and registered
 - **JIT Authorization**: Prompts users to authorize when needed
