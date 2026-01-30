@@ -473,6 +473,7 @@ AI/vibe-coded PRs welcome! 🤖
 
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
 [pi-mono](https://github.com/badlogic/pi-mono).
+Special thanks to Adam Doppelt for lobster.bot.
 
 Thanks to all clawtributors:
 
