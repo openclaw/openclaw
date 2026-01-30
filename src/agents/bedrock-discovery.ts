@@ -1,6 +1,7 @@
 import {
   BedrockClient,
   ListFoundationModelsCommand,
+  ListInferenceProfilesCommand,
   type ListFoundationModelsCommandOutput,
 } from "@aws-sdk/client-bedrock";
 
@@ -25,7 +26,9 @@ type BedrockDiscoveryCacheEntry = {
 };
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
+const inferenceProfileCache = new Map<string, string>();
 let hasLoggedBedrockError = false;
+let hasLoggedInferenceProfileError = false;
 
 function normalizeProviderFilter(filter?: string[]): string[] {
   if (!filter || filter.length === 0) return [];
@@ -116,9 +119,52 @@ function toModelDefinition(
   };
 }
 
+/**
+ * Discover available inference profiles and build a mapping from
+ * foundation model IDs to inference profile IDs.
+ *
+ * AWS Bedrock requires inference profile IDs (e.g., us.anthropic.claude-opus-4-5-20251101-v1:0)
+ * for on-demand model invocation, rather than foundation model IDs.
+ */
+async function discoverInferenceProfiles(client: BedrockClient): Promise<Map<string, string>> {
+  const mapping = new Map<string, string>();
+
+  try {
+    const response = await client.send(new ListInferenceProfilesCommand({}));
+
+    for (const profile of response.inferenceProfileSummaries ?? []) {
+      const profileId = profile.inferenceProfileId?.trim();
+      if (!profileId) continue;
+
+      // Extract the base model ID from the inference profile ID
+      // e.g., "us.anthropic.claude-opus-4-5-20251101-v1:0" -> "anthropic.claude-opus-4-5-20251101-v1:0"
+      const dotIndex = profileId.indexOf(".");
+      if (dotIndex > 0) {
+        const prefix = profileId.substring(0, dotIndex); // "us" or "global"
+        const baseModelId = profileId.substring(dotIndex + 1);
+
+        // Prefer regional (us.) profiles over global for lower latency
+        if (!mapping.has(baseModelId) || prefix === "us") {
+          mapping.set(baseModelId, profileId);
+        }
+      }
+    }
+  } catch (error) {
+    // Log once and continue - inference profiles enhance but aren't required
+    if (!hasLoggedInferenceProfileError) {
+      hasLoggedInferenceProfileError = true;
+      console.warn(`[bedrock-discovery] Failed to list inference profiles: ${String(error)}`);
+    }
+  }
+
+  return mapping;
+}
+
 export function resetBedrockDiscoveryCacheForTest(): void {
   discoveryCache.clear();
+  inferenceProfileCache.clear();
   hasLoggedBedrockError = false;
+  hasLoggedInferenceProfileError = false;
 }
 
 export async function discoverBedrockModels(params: {
@@ -157,17 +203,40 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
+    // Discover inference profiles first to map foundation models to their profile IDs
+    const inferenceProfiles = await discoverInferenceProfiles(client);
+
+    // Cache inference profiles for potential external use
+    for (const [baseId, profileId] of inferenceProfiles) {
+      inferenceProfileCache.set(baseId, profileId);
+    }
+
     const response = await client.send(new ListFoundationModelsCommand({}));
     const discovered: ModelDefinitionConfig[] = [];
+
     for (const summary of response.modelSummaries ?? []) {
       if (!shouldIncludeSummary(summary, providerFilter)) continue;
-      discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        }),
-      );
+
+      const modelDef = toModelDefinition(summary, {
+        contextWindow: defaultContextWindow,
+        maxTokens: defaultMaxTokens,
+      });
+
+      // Check if there's an inference profile for this model
+      const inferenceProfileId = inferenceProfiles.get(modelDef.id);
+
+      if (inferenceProfileId) {
+        // Add the inference profile version (preferred for on-demand invocation)
+        discovered.push({
+          ...modelDef,
+          id: inferenceProfileId,
+        });
+      } else {
+        // No inference profile available, use foundation model ID
+        discovered.push(modelDef);
+      }
     }
+
     return discovered.sort((a, b) => a.name.localeCompare(b.name));
   })();
 
