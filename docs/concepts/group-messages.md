@@ -19,7 +19,7 @@ Note: `agents.list[].groupChat.mentionPatterns` is now used by Telegram/Discord/
 - Group system prompt: on the first turn of a group session (and whenever `/activation` changes the mode) we inject a short blurb into the system prompt like `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.` If metadata isn’t available we still tell the agent it’s a group chat.
 
 ## Config example (WhatsApp)
-Add a `groupChat` block to `~/.clawdbot/moltbot.json` so display-name pings work even when WhatsApp strips the visual `@` in the text body:
+Add a `groupChat` block to `~/.openclaw/openclaw.json` so display-name pings work even when WhatsApp strips the visual `@` in the text body:
 
 ```json5
 {
@@ -37,7 +37,7 @@ Add a `groupChat` block to `~/.clawdbot/moltbot.json` so display-name pings work
         groupChat: {
           historyLimit: 50,
           mentionPatterns: [
-            "@?moltbot",
+            "@?openclaw",
             "\\+?15555550123"
           ]
         }
@@ -48,7 +48,7 @@ Add a `groupChat` block to `~/.clawdbot/moltbot.json` so display-name pings work
 ```
 
 Notes:
-- The regexes are case-insensitive; they cover a display-name ping like `@moltbot` and the raw number with or without `+`/spaces.
+- The regexes are case-insensitive; they cover a display-name ping like `@openclaw` and the raw number with or without `+`/spaces.
 - WhatsApp still sends canonical mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a useful safety net.
 
 ### Activation command (owner-only)
@@ -60,19 +60,19 @@ Use the group chat command:
 Only the owner number (from `channels.whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## How to use
-1) Add your WhatsApp account (the one running Moltbot) to the group.
-2) Say `@moltbot …` (or include the number). Only allowlisted senders can trigger it unless you set `groupPolicy: "open"`.
+1) Add your WhatsApp account (the one running OpenClaw) to the group.
+2) Say `@openclaw …` (or include the number). Only allowlisted senders can trigger it unless you set `groupPolicy: "open"`.
 3) The agent prompt will include recent group context plus the trailing `[from: …]` marker so it can address the right person.
 4) Session-level directives (`/verbose on`, `/think high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; send them as standalone messages so they register. Your personal DM session remains independent.
 
 ## Testing / verification
 - Manual smoke:
-  - Send an `@clawd` ping in the group and confirm a reply that references the sender name.
+  - Send an `@openclaw` ping in the group and confirm a reply that references the sender name.
   - Send a second ping and verify the history block is included then cleared on the next turn.
 - Check gateway logs (run with `--verbose`) to see `inbound web message` entries showing `from: <groupJid>` and the `[from: …]` suffix.
 
 ## Known considerations
 - Heartbeats are intentionally skipped for groups to avoid noisy broadcasts.
 - Echo suppression uses the combined batch string; if you send identical text twice without mentions, only the first will get a response.
-- Session store entries will appear as `agent:<agentId>:whatsapp:group:<jid>` in the session store (`~/.clawdbot/agents/<agentId>/sessions/sessions.json` by default); a missing entry just means the group hasn’t triggered a run yet.
+- Session store entries will appear as `agent:<agentId>:whatsapp:group:<jid>` in the session store (`~/.openclaw/agents/<agentId>/sessions/sessions.json` by default); a missing entry just means the group hasn’t triggered a run yet.
 - Typing indicators in groups follow `agents.defaults.typingMode` (default: `message` when unmentioned).

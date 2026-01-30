@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -147,7 +147,7 @@ function normalizeInstallOptions(
 
 function buildSkillStatus(
   entry: SkillEntry,
-  config?: MoltbotConfig,
+  config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
 ): SkillStatusEntry {
@@ -257,7 +257,7 @@ function buildSkillStatus(
 export function buildWorkspaceSkillStatus(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: OpenClawConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
     eligibility?: SkillEligibilityContext;

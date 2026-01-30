@@ -11,7 +11,7 @@ export default defineConfig({
       "apps/macos/**",
       "apps/macos/.build/**",
       "**/vendor/**",
-      "dist/Moltbot.app/**",
+      "dist/OpenClaw.app/**",
     ],
   },
 });

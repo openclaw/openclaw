@@ -37,7 +37,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../config/types.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { buildInlineKeyboard } from "./send.js";
@@ -68,7 +68,7 @@ type TelegramCommandAuthResult = {
 
 type RegisterTelegramNativeCommandsParams = {
   bot: Bot;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   accountId: string;
   telegramCfg: TelegramAccountConfig;
@@ -92,7 +92,7 @@ type RegisterTelegramNativeCommandsParams = {
 async function resolveTelegramCommandAuth(params: {
   msg: NonNullable<TelegramNativeCommandContext["message"]>;
   bot: Bot;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
@@ -257,8 +257,16 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   opts,
 }: RegisterTelegramNativeCommandsParams) => {
+  const boundRoute =
+    nativeEnabled && nativeSkillsEnabled
+      ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
+      : null;
+  const boundAgentIds =
+    boundRoute && boundRoute.matchedBy.startsWith("binding.") ? [boundRoute.agentId] : null;
   const skillCommands =
-    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
+    nativeEnabled && nativeSkillsEnabled
+      ? listSkillCommandsForAgents(boundAgentIds ? { cfg, agentIds: boundAgentIds } : { cfg })
+      : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "telegram" })
     : [];
