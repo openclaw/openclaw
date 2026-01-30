@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/channel-telegram-gramjs",
+  "version": "0.1.0",
+  "description": "Telegram GramJS user account adapter for openclaw",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "telegram": "^2.24.15"
+  }
+}

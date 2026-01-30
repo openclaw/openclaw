@@ -1,0 +1,11 @@
+{
+  "id": "telegram-gramjs",
+  "channels": [
+    "telegram-gramjs"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

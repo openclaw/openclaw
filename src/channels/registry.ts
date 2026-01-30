@@ -6,6 +6,7 @@ import { requireActivePluginRegistry } from "../plugins/runtime.js";
 // register the plugin in its extension entrypoint and keep protocol IDs in sync.
 export const CHAT_CHANNEL_ORDER = [
   "telegram",
+  "telegram-gramjs",
   "whatsapp",
   "discord",
   "googlechat",
@@ -37,6 +38,17 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     selectionDocsPrefix: "",
     selectionDocsOmitLabel: true,
     selectionExtras: [WEBSITE_URL],
+  },
+  "telegram-gramjs": {
+    id: "telegram-gramjs",
+    label: "Telegram (User Account)",
+    selectionLabel: "Telegram (GramJS User Account)",
+    detailLabel: "Telegram User",
+    docsPath: "/channels/telegram-gramjs",
+    docsLabel: "telegram-gramjs",
+    blurb:
+      "user account via MTProto; access all chats including private groups (requires phone auth).",
+    systemImage: "paperplane.fill",
   },
   whatsapp: {
     id: "whatsapp",
@@ -104,6 +116,9 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
   "google-chat": "googlechat",
   gchat: "googlechat",
+  gramjs: "telegram-gramjs",
+  "telegram-user": "telegram-gramjs",
+  "telegram-mtproto": "telegram-gramjs",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {
