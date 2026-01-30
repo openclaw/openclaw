@@ -250,7 +250,7 @@
       "@sinclair/typebox": "0.34.47",
       "hono": "4.11.4",
       "tar": "7.5.4",
-      "@mariozechner/pi-ai": "github:evsong/pi-ai-fork#main"
+      "@mariozechner/pi-ai": "git+https://github.com/evsong/pi-ai-fork.git#main"
     }
   },
   "vitest": {
