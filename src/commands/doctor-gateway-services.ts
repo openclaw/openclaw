@@ -268,7 +268,7 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  const cleanupHints = renderGatewayServiceCleanupHints(extraServices);
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }

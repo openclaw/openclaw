@@ -27,29 +27,50 @@ export type FindExtraGatewayServicesOptions = {
 const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
 const execFileAsync = promisify(execFile);
 
-export function renderGatewayServiceCleanupHints(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
-): string[] {
-  const profile = env.OPENCLAW_PROFILE;
-  switch (process.platform) {
-    case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
+export function renderGatewayServiceCleanupHints(services: ExtraGatewayService[]): string[] {
+  const hints: string[] = [];
+  for (const svc of services) {
+    switch (svc.platform) {
+      case "darwin": {
+        hints.push(`launchctl bootout gui/$UID/${svc.label}`);
+        const plistPath = extractPlistPath(svc.detail);
+        if (plistPath) {
+          hints.push(`rm ${plistPath}`);
+        }
+        break;
+      }
+      case "linux": {
+        const unitName = svc.label.endsWith(".service") ? svc.label : `${svc.label}.service`;
+        hints.push(`systemctl --user disable --now ${unitName}`);
+        const unitPath = extractUnitPath(svc.detail);
+        if (unitPath) {
+          hints.push(`rm ${unitPath}`);
+        }
+        break;
+      }
+      case "win32": {
+        hints.push(`schtasks /Delete /TN "${svc.label}" /F`);
+        break;
+      }
     }
-    case "linux": {
-      const unit = resolveGatewaySystemdServiceName(profile);
-      return [
-        `systemctl --user disable --now ${unit}.service`,
-        `rm ~/.config/systemd/user/${unit}.service`,
-      ];
-    }
-    case "win32": {
-      const task = resolveGatewayWindowsTaskName(profile);
-      return [`schtasks /Delete /TN "${task}" /F`];
-    }
-    default:
-      return [];
   }
+  return hints;
+}
+
+function extractPlistPath(detail: string): string | null {
+  if (!detail.startsWith("plist:")) {
+    return null;
+  }
+  const value = detail.slice("plist:".length).trim();
+  return value.length > 0 ? value : null;
+}
+
+function extractUnitPath(detail: string): string | null {
+  if (!detail.startsWith("unit:")) {
+    return null;
+  }
+  const value = detail.slice("unit:".length).trim();
+  return value.length > 0 ? value : null;
 }
 
 function resolveHomeDir(env: Record<string, string | undefined>): string {
