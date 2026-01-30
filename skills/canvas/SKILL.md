@@ -55,7 +55,7 @@ This is why localhost URLs don't work - the node receives the Tailscale hostname
 
 ## Configuration
 
-In `~/.clawdbot/openclaw.json`:
+In `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -102,7 +102,7 @@ HTML
 
 Check how your gateway is bound:
 ```bash
-cat ~/.clawdbot/openclaw.json | jq '.gateway.bind'
+cat ~/.openclaw/openclaw.json | jq '.gateway.bind'
 ```
 
 Then construct the URL:
@@ -148,7 +148,7 @@ canvas action:hide node:<node-id>
 **Cause:** URL mismatch between server bind and node expectation.
 
 **Debug steps:**
-1. Check server bind: `cat ~/.clawdbot/openclaw.json | jq '.gateway.bind'`
+1. Check server bind: `cat ~/.openclaw/openclaw.json | jq '.gateway.bind'`
 2. Check what port canvas is on: `lsof -i :18793`
 3. Test URL directly: `curl http://<hostname>:18793/__moltbot__/canvas/<file>.html`
 

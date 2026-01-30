@@ -246,11 +246,11 @@ Details: [Nodes](https://docs.openclaw.ai/nodes) · [macOS app](https://docs.ope
 
 Details: [Session tools](https://docs.openclaw.ai/concepts/session-tool)
 
-## Skills registry (ClawdHub)
+## Skills registry (ClawHub)
 
-ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can search for skills automatically and pull in new ones as needed.
+ClawHub is a minimal skill registry. With ClawHub enabled, the agent can search for skills automatically and pull in new ones as needed.
 
-[ClawdHub](https://ClawdHub.com)
+[ClawHub](https://clawhub.com)
 
 ## Chat commands
 
