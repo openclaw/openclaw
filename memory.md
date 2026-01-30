@@ -136,15 +136,26 @@ uv run skills/purelymail/scripts/purelymail-admin.py setup-project example.com
 uv run skills/nano-banana-pro/scripts/generate_image.py --prompt "..." --filename output.png --resolution 2K
 ```
 
-## Mission Control Dashboard
+## Mission Control Dashboard — LIVE ✅
 
 - **What**: Visual dashboard for managing DBH Ventures AI sub-agents
 - **URL**: https://dbh-mission-control.vercel.app
 - **Repo**: github.com/dbhurley/dbh-mission-control (private)
+- **Local code**: /Users/steve/Git/dbh-mission-control/
 - **Tech**: Next.js + Tailwind on Vercel
-- **Features**: Agent sidebar, kanban tasks, documentation panel
-- **Agents defined**: Scout (research), Builder (dev), Scribe (content), Analyst (data), Canvas (design), Sentinel (QA), Steve (orchestrator)
-- **Status**: MVP with mock data — needs integration with Vikunja, OpenClaw, Bear
+- **Features**: Agent sidebar, kanban task board, real-time Vikunja sync
+- **Vikunja integration**: Live! Tasks pulled from projects.timespent.xyz
+- **Agent assignment**: Via Vikunja labels (`agent:scout`, `agent:builder`, etc.)
+- **Agents defined**:
+  - 🐺 Steve (orchestrator) — triage, oversight
+  - 🛠 Builder — development, technical implementation
+  - ✍️ Scribe — content, copywriting, community
+  - 🔍 Scout — research, competitive analysis
+  - 🎨 Canvas — design, UI/UX, visual assets
+  - 📊 Analyst — data, financial modeling
+  - 🛡 Sentinel — QA, security, testing
+- **Current task distribution** (Jan 30): 19 tasks total — Builder (7), Steve (5), Scribe (3), Canvas (2), Scout (2)
+- **Spec**: `memory/mission-control-spec.md`
 
 ## SaveState — LAUNCHED Jan 27, 2026 🚀
 

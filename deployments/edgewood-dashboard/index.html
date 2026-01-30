@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Baldwin Executive Dashboard | One Point Partners</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .tab-btn { 
+            display: inline-block;
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 8px;
+            background-color: #ffffff;
+            color: #374151;
+            border: 2px solid #d1d5db;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-right: 12px;
+        }
+        .tab-btn:hover { 
+            background-color: #eff6ff;
+            border-color: #3b82f6;
+            color: #1d4ed8;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        .tab-btn.active { 
+            background-color: #2563eb;
+            color: #ffffff;
+            border-color: #2563eb;
+            box-shadow: 0 4px 8px rgba(37,99,235,0.3);
+        }
+        .tab-btn.active:hover { 
+            background-color: #1d4ed8;
+        }
+        .card { background: white; border-radius: 12px; border: 1px solid #e5e7eb; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .metric-card { background: white; border-radius: 10px; border: 1px solid #e5e7eb; padding: 16px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .section-title { font-size: 15px; font-weight: 600; color: #111827; margin-bottom: 16px; }
+        .kpi-value { font-size: 24px; font-weight: 700; }
+        .kpi-label { font-size: 11px; font-weight: 500; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+        .status-good { color: #059669; }
+        .status-warn { color: #d97706; }
+        .status-bad { color: #dc2626; }
+        .badge-good { display: inline-flex; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 500; background: #d1fae5; color: #065f46; }
+        .badge-warn { display: inline-flex; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 500; background: #fef3c7; color: #92400e; }
+        .badge-info { display: inline-flex; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 500; background: #dbeafe; color: #1e40af; }
+        .table-header { text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .source-tag { font-size: 10px; color: #9ca3af; font-style: italic; }
+        .no-data { opacity: 0.4; position: relative; }
+        .no-data::after { content: "Data Pending"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #f3f4f6; padding: 4px 12px; border-radius: 4px; font-size: 11px; color: #6b7280; font-weight: 500; }
+        .grayed-section { background: #f9fafb; opacity: 0.6; }
+        .grayed-section .section-title::after { content: " (Data Pending)"; font-weight: 400; color: #9ca3af; font-size: 12px; }
+        .trend-up { color: #059669; }
+        .trend-down { color: #dc2626; }
+    </style>
+</head>
+<body style="background-color: #f3f4f6; min-height: 100vh;">
+    <!-- Header -->
+    <header style="background: white; border-bottom: 1px solid #e5e7eb;">
+        <div style="max-width: 80rem; margin: 0 auto; padding: 16px 24px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 16px;">
+                    <div style="width: 44px; height: 44px; background: #1e40af; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                        <span style="color: white; font-weight: 700; font-size: 20px;">B</span>
+                    </div>
+                    <div>
+                        <h1 style="font-size: 20px; font-weight: 700; color: #111827; margin: 0;">The Baldwin Senior Living</h1>
+                        <p style="font-size: 13px; color: #6b7280; margin: 0;">Woodmont Commons, Londonderry, NH • 190 IL + 40 AL/MC = 230 units</p>
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <p style="font-size: 14px; font-weight: 600; color: #111827; margin: 0;">Q4 2025 / December 2025</p>
+                    <p style="font-size: 12px; color: #6b7280; margin: 0;">Report Generated: January 30, 2026</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Navigation Tabs -->
+        <div style="max-width: 80rem; margin: 0 auto; padding: 20px 24px; background-color: #f9fafb; border-top: 1px solid #e5e7eb;">
+            <nav style="display: flex; flex-wrap: wrap; gap: 16px;">
+                <button class="tab-btn active" onclick="showTab('overview')">Executive Overview</button>
+                <button class="tab-btn" onclick="showTab('financial')">Financial Details</button>
+                <button class="tab-btn" onclick="showTab('operations')">Operations & Staffing</button>
+                <button class="tab-btn" onclick="showTab('bonds')">Bond & Debt Details</button>
+                <button class="tab-btn" onclick="showTab('risk')">Risk & Compliance</button>
+            </nav>
+        </div>
+    </header>
+
+    <main style="max-width: 80rem; margin: 0 auto; padding: 24px;">
+
+        <!-- TAB 1: Executive Overview -->
+        <div id="tab-overview" class="tab-content active">
+            <!-- KPI Row -->
+            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 24px;">
+                <div class="metric-card">
+                    <div class="kpi-label">IL Occupancy</div>
+                    <div class="kpi-value status-good">98.95%</div>
+                    <div style="font-size: 12px; color: #059669; margin-top: 4px;">188 of 190 units</div>
+                    <div class="source-tag">Weekly-Occupancy-2025-12-19.pdf</div>
+                </div>
+                <div class="metric-card">
+                    <div class="kpi-label">AL/MC Occupancy</div>
+                    <div class="kpi-value status-warn">57.50%</div>
+                    <div style="font-size: 12px; color: #d97706; margin-top: 4px;">23 of 40 units</div>
+                    <div class="source-tag">Weekly-Occupancy-2025-12-19.pdf</div>
+                </div>
+                <div class="metric-card">
+                    <div class="kpi-label">Cash Position</div>
+                    <div class="kpi-value">$4.13M</div>
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">As of 12/31/24</div>
+                    <div class="source-tag">2024-Audit-Baldwin.pdf</div>
+                </div>
+                <div class="metric-card">
+                    <div class="kpi-label">IL Waitlist</div>
+                    <div class="kpi-value status-good">7</div>
+                    <div style="font-size: 12px; color: #059669; margin-top: 4px;">99% sold</div>
+                    <div class="source-tag">Monthly-Deposits-2025-11-30.pdf</div>
+                </div>
+                <div class="metric-card">
+                    <div class="kpi-label">2024 Revenue</div>
+                    <div class="kpi-value">$11.22M</div>
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">Full Year 2024</div>
+                    <div class="source-tag">2024-Audit-Baldwin.pdf</div>
+                </div>
+                <div class="metric-card">
+                    <div class="kpi-label">Avg. Resident Age</div>
+                    <div class="kpi-value">80</div>
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">As of Nov 2025</div>
+                    <div class="source-tag">Monthly-Deposits-2025-11-30.pdf</div>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px;">
+                <!-- Census by LOC -->
+                <div class="card">
+                    <h3 class="section-title">Census by Level of Care</h3>
+                    <table style="width: 100%; font-size: 14px;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid #e5e7eb;">
+                                <th class="table-header" style="padding-bottom: 12px;">Level of Care</th>
+                                <th class="table-header" style="padding-bottom: 12px; text-align: center;">Capacity</th>
+                                <th class="table-header" style="padding-bottom: 12px; text-align: center;">Occupied</th>
+                                <th class="table-header" style="padding-bottom: 12px; text-align: center;">Occupancy</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 12px 0; font-weight: 500; color: #111827;">Independent Living</td>
+                                <td style="padding: 12px 0; text-align: center; color: #6b7280;">190</td>
+                                <td style="padding: 12px 0; text-align: center; font-weight: 600; color: #111827;">188</td>
+                                <td style="padding: 12px 0; text-align: center;"><span class="badge-good">98.95%</span></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 12px 0; font-weight: 500; color: #111827;">Assisted Living / MC</td>
+                                <td style="padding: 12px 0; text-align: center; color: #6b7280;">40</td>
+                                <td style="padding: 12px 0; text-align: center; font-weight: 600; color: #111827;">23</td>
+                                <td style="padding: 12px 0; text-align: center;"><span class="badge-warn">57.50%</span></td>
+                            </tr>
+                            <tr style="background: #f9fafb; font-weight: 600;">
+                                <td style="padding: 12px 0; color: #111827;">Total</td>
+                                <td style="padding: 12px 0; text-align: center; color: #111827;">230</td>
+                                <td style="padding: 12px 0; text-align: center; color: #111827;">211</td>
+                                <td style="padding: 12px 0; text-align: center;"><span class="badge-info">91.74%</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Weekly-Occupancy-2025-12-19.pdf</div>
+                </div>
+
+                <!-- Occupancy Trend Chart -->
+                <div class="card">
+                    <h3 class="section-title">IL Occupancy Trend (2024-2025)</h3>
+                    <div style="height: 140px;">
+                        <canvas id="occupancyChart"></canvas>
+                    </div>
+                    <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f3f4f6; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
+                        <div>
+                            <div style="color: #6b7280;">Oct 2023 (Opening)</div>
+                            <div style="font-weight: 600; color: #111827;">2 units (1.05%)</div>
+                        </div>
+                        <div>
+                            <div style="color: #6b7280;">Dec 2025</div>
+                            <div style="font-weight: 600; color: #111827;">188 units (98.95%)</div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 8px;">Source: Weekly-Occupancy-2025-12-19.pdf</div>
+                </div>
+
+                <!-- Financial Summary -->
+                <div class="card">
+                    <h3 class="section-title">FY 2024 Income Summary</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #111827;">IL Service Revenue</div>
+                                <div style="font-size: 11px; color: #6b7280;">Net resident service</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 18px; font-weight: 700; color: #111827;">$8.36M</div>
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #111827;">AL Service Revenue</div>
+                                <div style="font-size: 11px; color: #6b7280;">Net resident service</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 18px; font-weight: 700; color: #111827;">$667K</div>
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #111827;">Entrance Fees Earned</div>
+                                <div style="font-size: 11px; color: #6b7280;">Amortized + cancellations</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 18px; font-weight: 700; color: #111827;">$2.19M</div>
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #ecfdf5; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #065f46;">Total Revenue</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 18px; font-weight: 700; color: #059669;">$11.22M</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Statement of Operations</div>
+                </div>
+            </div>
+
+            <!-- Balance Sheet Summary -->
+            <div style="margin-top: 24px;">
+                <div class="card">
+                    <h3 class="section-title">Balance Sheet Summary (December 31, 2024)</h3>
+                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px;">
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Cash & Equivalents</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$4.13M</div>
+                            <div class="source-tag">2024-Audit-Baldwin.pdf</div>
+                        </div>
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Total Assets</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$188.2M</div>
+                            <div class="source-tag">2024-Audit-Baldwin.pdf</div>
+                        </div>
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Bonds Payable</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$132.3M</div>
+                            <div style="font-size: 10px; color: #6b7280;">Net of current portion</div>
+                            <div class="source-tag">2024-Audit-Baldwin.pdf</div>
+                        </div>
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Refundable Entrance Fees</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$31.8M</div>
+                            <div class="source-tag">2024-Audit-Baldwin.pdf</div>
+                        </div>
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Deferred Entrance Fees</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$36.1M</div>
+                            <div class="source-tag">2024-Audit-Baldwin.pdf</div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Balance Sheet as of December 31, 2024</div>
+                </div>
+            </div>
+
+            <!-- Historical Occupancy Table -->
+            <div style="margin-top: 24px;">
+                <div class="card">
+                    <h3 class="section-title">Historical Occupancy Milestones</h3>
+                    <table style="width: 100%; font-size: 13px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #e5e7eb;">
+                                <th class="table-header" style="padding: 12px 8px;">Date</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: center;">IL Units</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: center;">IL %</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: center;">AL/MC Units</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: center;">AL/MC %</th>
+                                <th class="table-header" style="padding: 12px 8px;">Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Oct 2023</td>
+                                <td style="padding: 10px 8px; text-align: center;">2</td>
+                                <td style="padding: 10px 8px; text-align: center;">1.05%</td>
+                                <td style="padding: 10px 8px; text-align: center;">0</td>
+                                <td style="padding: 10px 8px; text-align: center;">0%</td>
+                                <td style="padding: 10px 8px; color: #6b7280;">Opening (65 IL units placed in service Nov 2023)</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Dec 2023</td>
+                                <td style="padding: 10px 8px; text-align: center;">52</td>
+                                <td style="padding: 10px 8px; text-align: center;">27.37%</td>
+                                <td style="padding: 10px 8px; text-align: center;">0</td>
+                                <td style="padding: 10px 8px; text-align: center;">0%</td>
+                                <td style="padding: 10px 8px; color: #6b7280;">End of first year</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Jun 2024</td>
+                                <td style="padding: 10px 8px; text-align: center;">129</td>
+                                <td style="padding: 10px 8px; text-align: center;">67.89%</td>
+                                <td style="padding: 10px 8px; text-align: center;">6</td>
+                                <td style="padding: 10px 8px; text-align: center;">15.00%</td>
+                                <td style="padding: 10px 8px; color: #6b7280;">AL/MC opened May 2024</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Dec 2024</td>
+                                <td style="padding: 10px 8px; text-align: center;">155</td>
+                                <td style="padding: 10px 8px; text-align: center;">81.58%</td>
+                                <td style="padding: 10px 8px; text-align: center;">11</td>
+                                <td style="padding: 10px 8px; text-align: center;">27.50%</td>
+                                <td style="padding: 10px 8px; color: #6b7280;">End of FY2024</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Jun 2025</td>
+                                <td style="padding: 10px 8px; text-align: center;">169</td>
+                                <td style="padding: 10px 8px; text-align: center;">88.95%</td>
+                                <td style="padding: 10px 8px; text-align: center;">14</td>
+                                <td style="padding: 10px 8px; text-align: center;">35.00%</td>
+                                <td style="padding: 10px 8px; color: #6b7280;">Mid-year 2025</td>
+                            </tr>
+                            <tr style="background: #ecfdf5;">
+                                <td style="padding: 10px 8px; font-weight: 600;">Dec 2025</td>
+                                <td style="padding: 10px 8px; text-align: center; font-weight: 600;">188</td>
+                                <td style="padding: 10px 8px; text-align: center; font-weight: 600; color: #059669;">98.95%</td>
+                                <td style="padding: 10px 8px; text-align: center; font-weight: 600;">23</td>
+                                <td style="padding: 10px 8px; text-align: center; font-weight: 600;">57.50%</td>
+                                <td style="padding: 10px 8px; color: #065f46; font-weight: 500;">Current (IL nearly full, waitlist active)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Weekly-Occupancy-2025-12-19.pdf - Complete historical data from Oct 2023 to Dec 2025</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: Financial Details -->
+        <div id="tab-financial" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                <!-- Statement of Operations -->
+                <div class="card">
+                    <h3 class="section-title">Statement of Operations - FY 2024 vs FY 2023</h3>
+                    <table style="width: 100%; font-size: 13px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #e5e7eb;">
+                                <th class="table-header" style="padding: 12px 8px;">Item</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">FY 2024</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">FY 2023</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">Change</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #f0fdf4;">
+                                <td colspan="4" style="padding: 8px; font-weight: 600; color: #065f46;">REVENUES</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">IL Service Revenue</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$8,361,369</td>
+                                <td style="padding: 8px; text-align: right;">$193,741</td>
+                                <td style="padding: 8px; text-align: right; color: #059669;">+4,216%</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">AL Service Revenue</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$667,057</td>
+                                <td style="padding: 8px; text-align: right;">$0</td>
+                                <td style="padding: 8px; text-align: right; color: #059669;">New</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Entrance Fees Earned</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$2,186,991</td>
+                                <td style="padding: 8px; text-align: right;">$144,949</td>
+                                <td style="padding: 8px; text-align: right; color: #059669;">+1,409%</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #ecfdf5;">
+                                <td style="padding: 8px; font-weight: 600;">Total Revenue</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 700;">$11,215,417</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 600;">$338,690</td>
+                                <td style="padding: 8px; text-align: right; color: #059669; font-weight: 600;">+3,212%</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #fef2f2;">
+                                <td colspan="4" style="padding: 8px; font-weight: 600; color: #991b1b;">EXPENSES</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">General & Administrative</td>
+                                <td style="padding: 8px; text-align: right;">$4,296,511</td>
+                                <td style="padding: 8px; text-align: right;">$360,878</td>
+                                <td style="padding: 8px; text-align: right;"></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Plant Operations</td>
+                                <td style="padding: 8px; text-align: right;">$2,012,114</td>
+                                <td style="padding: 8px; text-align: right;">$377,852</td>
+                                <td style="padding: 8px; text-align: right;"></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Culinary Services</td>
+                                <td style="padding: 8px; text-align: right;">$1,974,989</td>
+                                <td style="padding: 8px; text-align: right;">$245,192</td>
+                                <td style="padding: 8px; text-align: right;"></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Resident Care Services</td>
+                                <td style="padding: 8px; text-align: right;">$936,497</td>
+                                <td style="padding: 8px; text-align: right;">$14,037</td>
+                                <td style="padding: 8px; text-align: right;"></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Depreciation & Amortization</td>
+                                <td style="padding: 8px; text-align: right;">$4,524,466</td>
+                                <td style="padding: 8px; text-align: right;">$321,643</td>
+                                <td style="padding: 8px; text-align: right;"></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Interest Expense</td>
+                                <td style="padding: 8px; text-align: right;">$7,971,835</td>
+                                <td style="padding: 8px; text-align: right;">$633,952</td>
+                                <td style="padding: 8px; text-align: right;"></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #fee2e2;">
+                                <td style="padding: 8px; font-weight: 600;">Total Expenses</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 700;">$22,665,719</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 600;">$2,196,307</td>
+                                <td style="padding: 8px; text-align: right;"></td>
+                            </tr>
+                            <tr style="background: #fef3c7;">
+                                <td style="padding: 8px; font-weight: 600;">Loss from Operations</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 700; color: #dc2626;">($11,450,302)</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 600; color: #dc2626;">($1,857,617)</td>
+                                <td style="padding: 8px; text-align: right; font-size: 11px; color: #92400e;">Expected during fill-up</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Statement of Operations</div>
+                </div>
+
+                <!-- Balance Sheet Comparison -->
+                <div class="card">
+                    <h3 class="section-title">Balance Sheet - FY 2024 vs FY 2023</h3>
+                    <table style="width: 100%; font-size: 13px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #e5e7eb;">
+                                <th class="table-header" style="padding: 12px 8px;">Item</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">12/31/2024</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">12/31/2023</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #eff6ff;">
+                                <td colspan="3" style="padding: 8px; font-weight: 600; color: #1e40af;">ASSETS</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Cash & Cash Equivalents</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$4,126,864</td>
+                                <td style="padding: 8px; text-align: right;">$9,256,889</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Assets Limited as to Use (Current)</td>
+                                <td style="padding: 8px; text-align: right;">$10,917,557</td>
+                                <td style="padding: 8px; text-align: right;">$15,879,985</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Assets Limited as to Use (Long-term)</td>
+                                <td style="padding: 8px; text-align: right;">$5,335,353</td>
+                                <td style="padding: 8px; text-align: right;">$4,765,218</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Property & Equipment, Net</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$167,518,374</td>
+                                <td style="padding: 8px; text-align: right;">$158,372,630</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #dbeafe;">
+                                <td style="padding: 8px; font-weight: 600;">Total Assets</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 700;">$188,185,655</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 600;">$188,346,478</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #fef2f2;">
+                                <td colspan="3" style="padding: 8px; font-weight: 600; color: #991b1b;">LIABILITIES</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Refundable Entrance Fees</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$31,785,206</td>
+                                <td style="padding: 8px; text-align: right;">$10,264,972</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Deferred Entrance Fees</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$36,064,135</td>
+                                <td style="padding: 8px; text-align: right;">$10,910,795</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Bonds Payable (Net)</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 500;">$129,309,199</td>
+                                <td style="padding: 8px; text-align: right;">$151,433,514</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 8px;">Intercompany Payable</td>
+                                <td style="padding: 8px; text-align: right;">$14,764,080</td>
+                                <td style="padding: 8px; text-align: right;">$15,093,587</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #fee2e2;">
+                                <td style="padding: 8px; font-weight: 600;">Total Liabilities</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 700;">$213,842,932</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 600;">$202,192,964</td>
+                            </tr>
+                            <tr style="background: #fef3c7;">
+                                <td style="padding: 8px; font-weight: 600;">Net Deficit</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 700; color: #dc2626;">($25,657,277)</td>
+                                <td style="padding: 8px; text-align: right; font-weight: 600; color: #dc2626;">($13,846,486)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Balance Sheet</div>
+                </div>
+
+                <!-- Entrance Fee Contracts -->
+                <div class="card">
+                    <h3 class="section-title">Entrance Fee Contract Mix (Dec 2024)</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 24px; font-weight: 700; color: #111827;">69</div>
+                            <div style="font-size: 13px; color: #6b7280;">85% Return of Capital (Type A/C)</div>
+                            <div class="source-tag">15% nonrefundable, amortized over life</div>
+                        </div>
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 24px; font-weight: 700; color: #111827;">89</div>
+                            <div style="font-size: 13px; color: #6b7280;">Declining Balance (Type A/C)</div>
+                            <div class="source-tag">2%/mo amortization, 0% after 50 mo</div>
+                        </div>
+                    </div>
+                    <div style="padding: 16px; background: #ecfdf5; border-radius: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="font-weight: 600; color: #065f46;">Total Refundable Entrance Fees</div>
+                                <div style="font-size: 12px; color: #6b7280;">Gross contractual refund obligation</div>
+                            </div>
+                            <div style="font-size: 24px; font-weight: 700; color: #059669;">$31,785,206</div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Notes to Financial Statements (Note 1)</div>
+                </div>
+
+                <!-- Cash Flow Summary -->
+                <div class="card">
+                    <h3 class="section-title">Cash Flow Summary - FY 2024</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #ecfdf5; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #065f46;">Operating Activities</div>
+                                <div style="font-size: 11px; color: #6b7280;">Entrance fees + operations</div>
+                            </div>
+                            <div style="font-size: 18px; font-weight: 700; color: #059669;">+$18.24M</div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #fee2e2; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #991b1b;">Investing Activities</div>
+                                <div style="font-size: 11px; color: #6b7280;">Property & equipment purchases</div>
+                            </div>
+                            <div style="font-size: 18px; font-weight: 700; color: #dc2626;">-$23.53M</div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #fee2e2; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #991b1b;">Financing Activities</div>
+                                <div style="font-size: 11px; color: #6b7280;">Bond proceeds less repayments</div>
+                            </div>
+                            <div style="font-size: 18px; font-weight: 700; color: #dc2626;">-$1.99M</div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f3f4f6; border-radius: 8px; border: 2px solid #d1d5db;">
+                            <div>
+                                <div style="font-weight: 600; color: #111827;">Net Change in Cash</div>
+                            </div>
+                            <div style="font-size: 18px; font-weight: 700; color: #dc2626;">-$7.29M</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 12px; padding: 12px; background: #eff6ff; border-radius: 8px;">
+                        <div style="font-size: 12px; color: #1e40af;">
+                            <strong>Key Insight:</strong> Nonrefundable entrance fees received: $27.34M (2024) vs $11.06M (2023)
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Statement of Cash Flows</div>
+                </div>
+            </div>
+
+            <!-- Expense Breakdown Chart -->
+            <div style="margin-top: 24px;">
+                <div class="card">
+                    <h3 class="section-title">FY 2024 Expense Breakdown</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                        <div style="height: 300px;">
+                            <canvas id="expenseChart"></canvas>
+                        </div>
+                        <div>
+                            <table style="width: 100%; font-size: 13px;">
+                                <thead>
+                                    <tr style="border-bottom: 2px solid #e5e7eb;">
+                                        <th class="table-header" style="padding: 8px;">Category</th>
+                                        <th class="table-header" style="padding: 8px; text-align: right;">Amount</th>
+                                        <th class="table-header" style="padding: 8px; text-align: right;">% of Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                                        <td style="padding: 8px;">Interest Expense</td>
+                                        <td style="padding: 8px; text-align: right;">$7,971,835</td>
+                                        <td style="padding: 8px; text-align: right;">35.2%</td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                                        <td style="padding: 8px;">Depreciation & Amort.</td>
+                                        <td style="padding: 8px; text-align: right;">$4,524,466</td>
+                                        <td style="padding: 8px; text-align: right;">20.0%</td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                                        <td style="padding: 8px;">G&A</td>
+                                        <td style="padding: 8px; text-align: right;">$4,296,511</td>
+                                        <td style="padding: 8px; text-align: right;">19.0%</td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                                        <td style="padding: 8px;">Plant Operations</td>
+                                        <td style="padding: 8px; text-align: right;">$2,012,114</td>
+                                        <td style="padding: 8px; text-align: right;">8.9%</td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                                        <td style="padding: 8px;">Culinary Services</td>
+                                        <td style="padding: 8px; text-align: right;">$1,974,989</td>
+                                        <td style="padding: 8px; text-align: right;">8.7%</td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                                        <td style="padding: 8px;">Resident Care</td>
+                                        <td style="padding: 8px; text-align: right;">$936,497</td>
+                                        <td style="padding: 8px; text-align: right;">4.1%</td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                                        <td style="padding: 8px;">Other (Env, Nursing, AL, Wellness)</td>
+                                        <td style="padding: 8px; text-align: right;">$949,307</td>
+                                        <td style="padding: 8px; text-align: right;">4.2%</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Statement of Operations</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: Operations & Staffing -->
+        <div id="tab-operations" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                <!-- Marketing Update -->
+                <div class="card">
+                    <h3 class="section-title">Marketing Update - November 2025</h3>
+                    <div style="padding: 16px; background: #ecfdf5; border-radius: 8px; margin-bottom: 16px;">
+                        <div style="font-size: 14px; color: #065f46; line-height: 1.6;">
+                            Independent living rates at <strong>99% sold</strong> and <strong>97% occupied</strong> (184 closed). 
+                            Due to high demand, a <strong>waitlist of 7 people</strong> has been established for specific unit types.
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 20px; font-weight: 700; color: #059669;">2</div>
+                            <div style="font-size: 12px; color: #6b7280;">IL Closings in Nov 2025</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 20px; font-weight: 700; color: #111827;">7</div>
+                            <div style="font-size: 12px; color: #6b7280;">On IL Waitlist</div>
+                        </div>
+                    </div>
+                    <div style="padding: 16px; background: #fef3c7; border-radius: 8px;">
+                        <div style="font-size: 14px; color: #92400e; line-height: 1.6;">
+                            <strong>Orchard Inn (AL/MC):</strong> 21/40 units occupied (53%) at end of November. 
+                            Marketing budget shifted toward assisted living. Strengthening partnerships with referral agencies.
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Monthly-Deposits-2025-11-30.pdf - Marketing Update</div>
+                </div>
+
+                <!-- Unit Upgrades Revenue -->
+                <div class="card">
+                    <h3 class="section-title">Unit Upgrade Revenue</h3>
+                    <div style="padding: 20px; background: #ecfdf5; border-radius: 8px; text-align: center; margin-bottom: 16px;">
+                        <div style="font-size: 28px; font-weight: 700; color: #059669;">$553,383</div>
+                        <div style="font-size: 14px; color: #065f46;">Total Unit Upgrades Collected</div>
+                    </div>
+                    <div style="font-size: 13px; color: #6b7280; margin-bottom: 12px;">
+                        Unit upgrades represent additional fees paid by residents for premium finishes, larger balconies, and custom modifications.
+                    </div>
+                    <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                        <div style="font-size: 12px; color: #6b7280;">Upgrades by Unit Type (Top 5):</div>
+                        <div style="margin-top: 8px; font-size: 12px;">
+                            <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+                                <span>D404 (Milford)</span><span style="font-weight: 600;">$29,476</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+                                <span>E404 (Newcastle)</span><span style="font-weight: 600;">$28,156</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+                                <span>E401 (Newcastle)</span><span style="font-weight: 600;">$28,253</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+                                <span>B305 (Newcastle)</span><span style="font-weight: 600;">$27,296</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+                                <span>D310 (Milford)</span><span style="font-weight: 600;">$22,384</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Monthly-Deposits-2025-11-30.pdf - Unit Upgrades</div>
+                </div>
+
+                <div class="card grayed-section">
+                    <h3 class="section-title">Staffing Levels by Department</h3>
+                    <p style="color: #6b7280; font-size: 14px;">Staffing data will be populated when source documents are provided.</p>
+                    <table style="width: 100%; font-size: 14px; opacity: 0.5;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid #e5e7eb;">
+                                <th class="table-header" style="padding-bottom: 12px;">Department</th>
+                                <th class="table-header" style="padding-bottom: 12px; text-align: center;">Budgeted</th>
+                                <th class="table-header" style="padding-bottom: 12px; text-align: center;">Actual</th>
+                                <th class="table-header" style="padding-bottom: 12px; text-align: center;">Open</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="4" style="padding: 20px; text-align: center; color: #9ca3af;">— Data Pending —</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Employee Benefits -->
+                <div class="card">
+                    <h3 class="section-title">Employee Benefits & Retirement</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-weight: 500; color: #111827;">401(k) Plan Contributions</div>
+                            <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+                                <span style="font-size: 13px; color: #6b7280;">FY 2024:</span>
+                                <span style="font-weight: 600;">$22,770</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="font-size: 13px; color: #6b7280;">FY 2023:</span>
+                                <span style="font-weight: 600;">$2,634</span>
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #eff6ff; border-radius: 8px;">
+                            <div style="font-weight: 500; color: #1e40af;">Self-Funded Health Plan (eff. Jan 2024)</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                $50,000 per occurrence stop-loss<br>
+                                $1,000,000 aggregate benefit maximum<br>
+                                <strong>FY 2024 cost:</strong> ~$418,000<br>
+                                <strong>Est. unpaid claims:</strong> ~$106,000
+                            </div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Notes 8 & 12</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: Bond & Debt Details -->
+        <div id="tab-bonds" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                <!-- Bond Structure -->
+                <div class="card">
+                    <h3 class="section-title">Series 2022 Bond Structure</h3>
+                    <table style="width: 100%; font-size: 13px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #e5e7eb;">
+                                <th class="table-header" style="padding: 12px 8px;">Series</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">Outstanding</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: center;">Rate</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: center;">Maturity</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Series 2022A (Senior)</td>
+                                <td style="padding: 10px 8px; text-align: right;">$87,800,000</td>
+                                <td style="padding: 10px 8px; text-align: center;">5.75%</td>
+                                <td style="padding: 10px 8px; text-align: center;">Apr 1, 2029</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Series 2022B (Senior)</td>
+                                <td style="padding: 10px 8px; text-align: right;">$15,000,000</td>
+                                <td style="padding: 10px 8px; text-align: center;">5.75%</td>
+                                <td style="padding: 10px 8px; text-align: center;">Apr 1, 2029</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #f0fdf4;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Series 2022C (Senior)</td>
+                                <td style="padding: 10px 8px; text-align: right; color: #059669;">$0 (Paid Off)</td>
+                                <td style="padding: 10px 8px; text-align: center;">3.75%</td>
+                                <td style="padding: 10px 8px; text-align: center;">Apr 1, 2027</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Series 2022D (Senior)</td>
+                                <td style="padding: 10px 8px; text-align: right;">$12,100,000</td>
+                                <td style="padding: 10px 8px; text-align: center;">5.50%</td>
+                                <td style="padding: 10px 8px; text-align: center;">Apr 1, 2027</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #fef3c7;">
+                                <td style="padding: 10px 8px; font-weight: 500;">Series 2022E (Subordinate)</td>
+                                <td style="padding: 10px 8px; text-align: right;">$17,400,000</td>
+                                <td style="padding: 10px 8px; text-align: center; color: #dc2626; font-weight: 600;">10.00%</td>
+                                <td style="padding: 10px 8px; text-align: center;">Apr 1, 2029</td>
+                            </tr>
+                            <tr style="background: #eff6ff; font-weight: 600;">
+                                <td style="padding: 10px 8px;">Total Outstanding</td>
+                                <td style="padding: 10px 8px; text-align: right;">$132,300,000</td>
+                                <td colspan="2" style="padding: 10px 8px;"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div style="margin-top: 12px; padding: 12px; background: #f9fafb; border-radius: 8px; font-size: 12px;">
+                        <strong>Note:</strong> Series 2022C bonds ($30.22M original) fully paid off via entrance fee redemptions. 
+                        Series 2022D reduced from $23.56M to $12.1M.
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Note 6; Offering-Memorandum.pdf</div>
+                </div>
+
+                <!-- Bond Issuer Details -->
+                <div class="card">
+                    <h3 class="section-title">Bond Issue Details</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280;">Issuer</div>
+                            <div style="font-weight: 500; color: #111827;">Business Finance Authority of NH</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280;">Issue Date</div>
+                            <div style="font-weight: 500; color: #111827;">April 21, 2022</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280;">Maximum Issue Amount</div>
+                            <div style="font-weight: 500; color: #111827;">$188,700,000</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280;">Trustee</div>
+                            <div style="font-weight: 500; color: #111827;">UMB Bank, N.A.</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280;">Bond Counsel</div>
+                            <div style="font-weight: 500; color: #111827;">Hinckley, Allen & Snyder LLP</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280;">Underwriter</div>
+                            <div style="font-weight: 500; color: #111827;">Odeon Capital Group LLC</div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Offering-Memorandum.pdf (dated April 19, 2022)</div>
+                </div>
+
+                <!-- Security Structure -->
+                <div class="card">
+                    <h3 class="section-title">Security & Support Structure</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="padding: 12px; background: #ecfdf5; border-radius: 8px; border-left: 4px solid #059669;">
+                            <div style="font-weight: 600; color: #065f46;">Senior Mortgage (1st Lien)</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">Secures Senior Bonds (2022A-D)</div>
+                        </div>
+                        <div style="padding: 12px; background: #fef3c7; border-radius: 8px; border-left: 4px solid #d97706;">
+                            <div style="font-weight: 600; color: #92400e;">Second Mortgage (2nd Lien)</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">Secures Subordinate Bonds (2022E)</div>
+                        </div>
+                        <div style="padding: 12px; background: #eff6ff; border-radius: 8px; border-left: 4px solid #2563eb;">
+                            <div style="font-weight: 600; color: #1e40af;">Gross Revenue Pledge</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">All entrance fees, monthly fees, and other revenues</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px; border-left: 4px solid #6b7280;">
+                            <div style="font-weight: 600; color: #111827;">Support Agreement</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">Edgewood Retirement Community, Inc. (up to $10M)</div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px; border-left: 4px solid #6b7280;">
+                            <div style="font-weight: 600; color: #111827;">Recoverable Grant</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">$10M from Edgewood (5% interest after stabilization)</div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Offering-Memorandum.pdf; 2024-Audit-Baldwin.pdf - Note 6</div>
+                </div>
+
+                <!-- Debt Service Schedule -->
+                <div class="card">
+                    <h3 class="section-title">Debt Maturity Schedule</h3>
+                    <table style="width: 100%; font-size: 13px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #e5e7eb;">
+                                <th class="table-header" style="padding: 12px 8px;">Year</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">Principal</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">Def. Fin. Costs</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">Net</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">2025</td>
+                                <td style="padding: 10px 8px; text-align: right;">$0</td>
+                                <td style="padding: 10px 8px; text-align: right;">($879,829)</td>
+                                <td style="padding: 10px 8px; text-align: right;">($979,258)</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">2026</td>
+                                <td style="padding: 10px 8px; text-align: right;">$0</td>
+                                <td style="padding: 10px 8px; text-align: right;">($879,829)</td>
+                                <td style="padding: 10px 8px; text-align: right;">($979,258)</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6; background: #fef3c7;">
+                                <td style="padding: 10px 8px; font-weight: 500;">2027</td>
+                                <td style="padding: 10px 8px; text-align: right; font-weight: 600;">$12,100,000</td>
+                                <td style="padding: 10px 8px; text-align: right;">($879,829)</td>
+                                <td style="padding: 10px 8px; text-align: right;">$11,120,742</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">2028</td>
+                                <td style="padding: 10px 8px; text-align: right;">$0</td>
+                                <td style="padding: 10px 8px; text-align: right;">($451,239)</td>
+                                <td style="padding: 10px 8px; text-align: right;">($550,668)</td>
+                            </tr>
+                            <tr style="background: #fee2e2;">
+                                <td style="padding: 10px 8px; font-weight: 600;">2029</td>
+                                <td style="padding: 10px 8px; text-align: right; font-weight: 700;">$120,200,000</td>
+                                <td style="padding: 10px 8px; text-align: right;">($451,238)</td>
+                                <td style="padding: 10px 8px; text-align: right; font-weight: 700;">$119,718,383</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div style="margin-top: 12px; padding: 12px; background: #fef2f2; border-radius: 8px; font-size: 12px; color: #991b1b;">
+                        <strong>⚠️ Balloon Payment:</strong> $120.2M due April 1, 2029 (2022A + 2022B + 2022E)
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Note 6</div>
+                </div>
+            </div>
+
+            <!-- Related Party -->
+            <div style="margin-top: 24px;">
+                <div class="card">
+                    <h3 class="section-title">Related Party Obligations</h3>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Recoverable Grant (Edgewood)</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$10,000,000</div>
+                            <div style="font-size: 11px; color: #6b7280;">5% interest after stabilization</div>
+                        </div>
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Unsecured Loans (Edgewood)</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$3,526,662</div>
+                            <div style="font-size: 11px; color: #6b7280;">Down from $5.09M in 2023</div>
+                        </div>
+                        <div style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #6b7280; text-transform: uppercase; margin-bottom: 4px;">Management Fees (ESSG)</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #111827;">$708,000</div>
+                            <div style="font-size: 11px; color: #6b7280;">Annual (admin, tech, shared costs)</div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Note 11 (Related Party Transactions)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 5: Risk & Compliance -->
+        <div id="tab-risk" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                <!-- Covenant Status -->
+                <div class="card">
+                    <h3 class="section-title">Bond Covenant Requirements</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #eff6ff; border-radius: 8px; border-left: 4px solid #2563eb;">
+                            <div>
+                                <div style="font-weight: 500; color: #1e40af;">Debt Service Coverage Ratio</div>
+                                <div style="font-size: 12px; color: #6b7280;">Minimum: 1.20x (effective 2026)</div>
+                            </div>
+                            <span class="badge-info">Testing begins 2026</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #eff6ff; border-radius: 8px; border-left: 4px solid #2563eb;">
+                            <div>
+                                <div style="font-weight: 500; color: #1e40af;">Days Cash on Hand</div>
+                                <div style="font-size: 12px; color: #6b7280;">Min: 90 days (w/ Support) / 100 days (w/o Support)</div>
+                            </div>
+                            <span class="badge-info">Testing begins 2026</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #ecfdf5; border-radius: 8px; border-left: 4px solid #059669;">
+                            <div>
+                                <div style="font-weight: 500; color: #065f46;">Marketing Covenant</div>
+                                <div style="font-size: 12px; color: #6b7280;">Reserved units requirement</div>
+                            </div>
+                            <span class="badge-good">✓ Met</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <div>
+                                <div style="font-weight: 500; color: #111827;">NH Liquid Reserves (RSA 420-D:8)</div>
+                                <div style="font-size: 12px; color: #6b7280;">12 mo P&I + 2 mo operating (CCRC residents)</div>
+                            </div>
+                            <span class="badge-info">Required</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 12px; padding: 12px; background: #fef3c7; border-radius: 8px; font-size: 12px;">
+                        <strong>Note:</strong> Financial covenants become effective starting 2026 (post-stabilization). 
+                        The Stabilization Date is the earlier of achieving 90% IL occupancy or June 30, 2026.
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Offering-Memorandum.pdf - Continuing Covenants Agreements</div>
+                </div>
+
+                <!-- Assets Limited as to Use -->
+                <div class="card">
+                    <h3 class="section-title">Assets Limited as to Use (Trust Funds)</h3>
+                    <table style="width: 100%; font-size: 13px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #e5e7eb;">
+                                <th class="table-header" style="padding: 12px 8px;">Fund</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">12/31/2024</th>
+                                <th class="table-header" style="padding: 12px 8px; text-align: right;">12/31/2023</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">Debt Service Reserve Fund</td>
+                                <td style="padding: 10px 8px; text-align: right; font-weight: 600;">$5,335,353</td>
+                                <td style="padding: 10px 8px; text-align: right;">$2,862,592</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">Entrance Fee Fund</td>
+                                <td style="padding: 10px 8px; text-align: right; font-weight: 600;">$6,838,745</td>
+                                <td style="padding: 10px 8px; text-align: right;">$8,450,887</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">Funded Interest</td>
+                                <td style="padding: 10px 8px; text-align: right;">$2,421,081</td>
+                                <td style="padding: 10px 8px; text-align: right;">$1,614,252</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">Working Capital Fund</td>
+                                <td style="padding: 10px 8px; text-align: right;">$1,601,099</td>
+                                <td style="padding: 10px 8px; text-align: right;">$5,002,154</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">Project Fund</td>
+                                <td style="padding: 10px 8px; text-align: right;">$907</td>
+                                <td style="padding: 10px 8px; text-align: right;">$2,673,947</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #f3f4f6;">
+                                <td style="padding: 10px 8px;">Other (R&R, Tax/Insurance, COI)</td>
+                                <td style="padding: 10px 8px; text-align: right;">$55,725</td>
+                                <td style="padding: 10px 8px; text-align: right;">$41,371</td>
+                            </tr>
+                            <tr style="background: #eff6ff; font-weight: 600;">
+                                <td style="padding: 10px 8px;">Total</td>
+                                <td style="padding: 10px 8px; text-align: right;">$16,252,910</td>
+                                <td style="padding: 10px 8px; text-align: right;">$20,645,203</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf - Note 4</div>
+                </div>
+
+                <!-- Risk Factors -->
+                <div class="card">
+                    <h3 class="section-title">Key Risk Factors</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="padding: 12px; background: #fee2e2; border-radius: 8px; border-left: 4px solid #dc2626;">
+                            <div style="font-weight: 600; color: #991b1b;">2029 Balloon Payment</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                $120.2M due April 1, 2029. Will require refinancing or substantial cash accumulation.
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #fef3c7; border-radius: 8px; border-left: 4px solid #d97706;">
+                            <div style="font-weight: 600; color: #92400e;">AL/MC Fill-Up</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                Currently at 57.5% occupancy (23/40). Marketing budget shifted but requires continued focus.
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #fef3c7; border-radius: 8px; border-left: 4px solid #d97706;">
+                            <div style="font-weight: 600; color: #92400e;">Operating Losses (Expected)</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                FY 2024 loss of $11.45M is expected during fill-up phase. Interest expense ($7.97M) is largest expense.
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #eff6ff; border-radius: 8px; border-left: 4px solid #2563eb;">
+                            <div style="font-weight: 600; color: #1e40af;">10% Subordinate Rate</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                Series 2022E bonds carry 10% interest rate, significantly higher than senior bonds.
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #f9fafb; border-radius: 8px; border-left: 4px solid #6b7280;">
+                            <div style="font-weight: 600; color: #111827;">Refund Obligations</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                $31.8M in refundable entrance fees. NH RSA 420-D:8 requires hardship refunds within 12-24 months.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: Offering-Memorandum.pdf - Certain Bondholders' Risks; 2024-Audit-Baldwin.pdf</div>
+                </div>
+
+                <!-- Positive Factors -->
+                <div class="card">
+                    <h3 class="section-title">Positive Indicators</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="padding: 12px; background: #ecfdf5; border-radius: 8px; border-left: 4px solid #059669;">
+                            <div style="font-weight: 600; color: #065f46;">IL Near Full Occupancy</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                98.95% IL occupancy (188/190), with waitlist established. Remarkable fill-up in ~2 years.
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #ecfdf5; border-radius: 8px; border-left: 4px solid #059669;">
+                            <div style="font-weight: 600; color: #065f46;">Strong Entrance Fee Collections</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                $27.34M in nonrefundable entrance fees received in 2024 (vs $11.06M in 2023).
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #ecfdf5; border-radius: 8px; border-left: 4px solid #059669;">
+                            <div style="font-weight: 600; color: #065f46;">Bond Principal Reduction</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                Bonds reduced from $155.1M to $132.3M via entrance fee redemptions (Series 2022C/D).
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #ecfdf5; border-radius: 8px; border-left: 4px solid #059669;">
+                            <div style="font-weight: 600; color: #065f46;">Operating Cash Flow Positive</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                +$18.24M from operations in 2024 (entrance fees driving positive operating cash).
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #ecfdf5; border-radius: 8px; border-left: 4px solid #059669;">
+                            <div style="font-weight: 600; color: #065f46;">Support Agreement Active</div>
+                            <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                Edgewood provides up to $10M support plus $3.5M unsecured loans for stabilization.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="source-tag" style="margin-top: 12px;">Source: 2024-Audit-Baldwin.pdf; Weekly-Occupancy-2025-12-19.pdf</div>
+                </div>
+            </div>
+
+            <!-- Compliance Reports Note -->
+            <div style="margin-top: 24px;">
+                <div class="card" style="background: #fffbeb; border-color: #fcd34d;">
+                    <h3 class="section-title" style="color: #92400e;">📋 Note: Quarterly Compliance Reports</h3>
+                    <p style="color: #78716c; font-size: 14px; margin-bottom: 12px;">
+                        The following compliance reports are available but contain image-based content requiring manual review:
+                    </p>
+                    <ul style="color: #78716c; font-size: 13px; margin-left: 20px;">
+                        <li>2025-Q3-Compliance.pdf (Nov 2025)</li>
+                        <li>2025-Q2-Compliance.pdf (Aug 2025)</li>
+                        <li>2025-Q1-Compliance.pdf (May 2025)</li>
+                        <li>2024-Q4-Compliance.pdf (Feb 2025)</li>
+                    </ul>
+                    <p style="color: #78716c; font-size: 13px; margin-top: 12px;">
+                        These reports contain detailed covenant calculations, quarterly financials, and management certifications. 
+                        Data from these reports should be extracted manually and added to this dashboard.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer style="background: white; border-top: 1px solid #e5e7eb; margin-top: 32px;">
+        <div style="max-width: 80rem; margin: 0 auto; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 32px; height: 32px; background: #1e40af; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
+                    <span style="color: white; font-weight: 600; font-size: 14px;">OP</span>
+                </div>
+                <span style="font-size: 13px; font-weight: 500; color: #4b5563;">Prepared by One Point Partners</span>
+            </div>
+            <div style="font-size: 12px; color: #6b7280;">
+                Data sources: Weekly-Occupancy-2025-12-19.pdf • Monthly-Deposits-2025-11-30.pdf • 2024-Audit-Baldwin.pdf • 2023-Audit-Baldwin.pdf • Offering-Memorandum.pdf
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('tab-' + tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Occupancy Trend Chart - Full Historical Data
+        const ctx = document.getElementById('occupancyChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['Oct\'23', 'Dec\'23', 'Mar\'24', 'Jun\'24', 'Sep\'24', 'Dec\'24', 'Mar\'25', 'Jun\'25', 'Sep\'25', 'Dec\'25'],
+                datasets: [{
+                    label: 'IL Units Occupied',
+                    data: [2, 52, 86, 129, 142, 155, 162, 169, 181, 188],
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#2563eb'
+                }, {
+                    label: 'AL/MC Units',
+                    data: [0, 0, 0, 6, 8, 11, 13, 14, 17, 23],
+                    borderColor: '#d97706',
+                    backgroundColor: 'rgba(217, 119, 6, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#d97706'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { 
+                        display: true,
+                        position: 'top',
+                        labels: { font: { size: 10 } }
+                    }
+                },
+                scales: {
+                    y: {
+                        min: 0,
+                        max: 200,
+                        ticks: {
+                            font: { size: 10 },
+                            stepSize: 50
+                        },
+                        grid: { color: 'rgba(0,0,0,0.05)' }
+                    },
+                    x: {
+                        ticks: { font: { size: 9 } },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+
+        // Expense Breakdown Chart
+        const expCtx = document.getElementById('expenseChart');
+        if (expCtx) {
+            new Chart(expCtx.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Interest', 'Depreciation', 'G&A', 'Plant Ops', 'Culinary', 'Resident Care', 'Other'],
+                    datasets: [{
+                        data: [7971835, 4524466, 4296511, 2012114, 1974989, 936497, 949307],
+                        backgroundColor: [
+                            '#dc2626',
+                            '#6b7280',
+                            '#2563eb',
+                            '#059669',
+                            '#d97706',
+                            '#8b5cf6',
+                            '#ec4899'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { font: { size: 11 } }
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
