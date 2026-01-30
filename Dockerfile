@@ -39,5 +39,6 @@ USER node
 
 # Default: run the gateway server (most common container use case)
 # --allow-unconfigured: starts without pre-existing config (configure via Control UI)
+# --bind lan: binds to all interfaces (0.0.0.0) for container networking
 # Override with: docker run moltbot node dist/index.js <other-command>
-CMD ["node", "dist/index.js", "gateway", "--bind", "0.0.0.0", "--port", "18789", "--allow-unconfigured"]
+CMD ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789", "--allow-unconfigured"]
