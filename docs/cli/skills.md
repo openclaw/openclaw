@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `moltbot skills` (list/info/check) and skill eligibility"
+summary: "CLI reference for `openclaw skills` (list/info/check) and skill eligibility"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to debug missing binaries/env/config for skills
 ---
 
-# `moltbot skills`
+# `openclaw skills`
 
 Inspect skills (bundled + workspace + managed overrides) and see what’s eligible vs missing requirements.
 
@@ -17,9 +17,9 @@ Related:
 ## Commands
 
 ```bash
-moltbot skills list
-moltbot skills list --eligible
-moltbot skills info <name>
-moltbot skills check
+openclaw skills list
+openclaw skills list --eligible
+openclaw skills info <name>
+openclaw skills check
 ```
 

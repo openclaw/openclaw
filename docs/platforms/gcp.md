@@ -1,18 +1,18 @@
 ---
-summary: "Run Moltbot Gateway 24/7 on a GCP Compute Engine VM (Docker) with durable state"
+summary: "Run OpenClaw Gateway 24/7 on a GCP Compute Engine VM (Docker) with durable state"
 read_when:
-  - You want Moltbot running 24/7 on GCP
+  - You want OpenClaw running 24/7 on GCP
   - You want a production-grade, always-on Gateway on your own VM
   - You want full control over persistence, binaries, and restart behavior
 ---
 
-# Moltbot on GCP Compute Engine (Docker, Production VPS Guide)
+# OpenClaw on GCP Compute Engine (Docker, Production VPS Guide)
 
 ## Goal
 
-Run a persistent Moltbot Gateway on a GCP Compute Engine VM using Docker, with durable state, baked-in binaries, and safe restart behavior.
+Run a persistent OpenClaw Gateway on a GCP Compute Engine VM using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
-If you want "Moltbot 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
+If you want "OpenClaw 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
 Pricing varies by machine type and region; pick the smallest VM that fits your workload and scale up if you hit OOMs.
 
 ## What are we doing (simple terms)?
@@ -20,8 +20,8 @@ Pricing varies by machine type and region; pick the smallest VM that fits your w
 - Create a GCP project and enable billing
 - Create a Compute Engine VM
 - Install Docker (isolated app runtime)
-- Start the Moltbot Gateway in Docker
-- Persist `~/.clawdbot` + `~/clawd` on the host (survives restarts/rebuilds)
+- Start the OpenClaw Gateway in Docker
+- Persist `~/.openclaw` + `~/.openclaw/workspace` on the host (survives restarts/rebuilds)
 - Access the Control UI from your laptop via an SSH tunnel
 
 The Gateway can be accessed via:
@@ -40,7 +40,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 2) Create Compute Engine VM (e2-small, Debian 12, 20GB)
 3) SSH into the VM
 4) Install Docker
-5) Clone Moltbot repository
+5) Clone OpenClaw repository
 6) Create persistent host directories
 7) Configure `.env` and `docker-compose.yml`
 8) Bake required binaries, build, and launch
@@ -87,8 +87,8 @@ All steps can be done via the web UI at https://console.cloud.google.com
 **CLI:**
 
 ```bash
-gcloud projects create my-moltbot-project --name="Moltbot Gateway"
-gcloud config set project my-moltbot-project
+gcloud projects create my-openclaw-project --name="OpenClaw Gateway"
+gcloud config set project my-openclaw-project
 ```
 
 Enable billing at https://console.cloud.google.com/billing (required for Compute Engine).
@@ -120,7 +120,7 @@ gcloud services enable compute.googleapis.com
 **CLI:**
 
 ```bash
-gcloud compute instances create moltbot-gateway \
+gcloud compute instances create openclaw-gateway \
   --zone=us-central1-a \
   --machine-type=e2-small \
   --boot-disk-size=20GB \
@@ -131,7 +131,7 @@ gcloud compute instances create moltbot-gateway \
 **Console:**
 
 1. Go to Compute Engine > VM instances > Create instance
-2. Name: `moltbot-gateway`
+2. Name: `openclaw-gateway`
 3. Region: `us-central1`, Zone: `us-central1-a`
 4. Machine type: `e2-small`
 5. Boot disk: Debian 12, 20GB
@@ -144,7 +144,7 @@ gcloud compute instances create moltbot-gateway \
 **CLI:**
 
 ```bash
-gcloud compute ssh moltbot-gateway --zone=us-central1-a
+gcloud compute ssh openclaw-gateway --zone=us-central1-a
 ```
 
 **Console:**
@@ -173,7 +173,7 @@ exit
 Then SSH back in:
 
 ```bash
-gcloud compute ssh moltbot-gateway --zone=us-central1-a
+gcloud compute ssh openclaw-gateway --zone=us-central1-a
 ```
 
 Verify:
@@ -185,11 +185,11 @@ docker compose version
 
 ---
 
-## 6) Clone the Moltbot repository
+## 6) Clone the OpenClaw repository
 
 ```bash
-git clone https://github.com/moltbot/moltbot.git
-cd moltbot
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
 ```
 
 This guide assumes you will build a custom image to guarantee binary persistence.
@@ -202,8 +202,8 @@ Docker containers are ephemeral.
 All long-lived state must live on the host.
 
 ```bash
-mkdir -p ~/.clawdbot
-mkdir -p ~/clawd
+mkdir -p ~/.openclaw
+mkdir -p ~/.openclaw/workspace
 ```
 
 ---
@@ -213,16 +213,16 @@ mkdir -p ~/clawd
 Create `.env` in the repository root.
 
 ```bash
-CLAWDBOT_IMAGE=moltbot:latest
-CLAWDBOT_GATEWAY_TOKEN=change-me-now
-CLAWDBOT_GATEWAY_BIND=lan
-CLAWDBOT_GATEWAY_PORT=18789
+OPENCLAW_IMAGE=openclaw:latest
+OPENCLAW_GATEWAY_TOKEN=change-me-now
+OPENCLAW_GATEWAY_BIND=lan
+OPENCLAW_GATEWAY_PORT=18789
 
-CLAWDBOT_CONFIG_DIR=/home/$USER/.clawdbot
-CLAWDBOT_WORKSPACE_DIR=/home/$USER/clawd
+OPENCLAW_CONFIG_DIR=/home/$USER/.openclaw
+OPENCLAW_WORKSPACE_DIR=/home/$USER/.openclaw/workspace
 
 GOG_KEYRING_PASSWORD=change-me-now
-XDG_CONFIG_HOME=/home/node/.clawdbot
+XDG_CONFIG_HOME=/home/node/.openclaw
 ```
 
 Generate strong secrets:
@@ -241,8 +241,8 @@ Create or update `docker-compose.yml`.
 
 ```yaml
 services:
-  moltbot-gateway:
-    image: ${CLAWDBOT_IMAGE}
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE}
     build: .
     restart: unless-stopped
     env_file:
@@ -251,19 +251,19 @@ services:
       - HOME=/home/node
       - NODE_ENV=production
       - TERM=xterm-256color
-      - CLAWDBOT_GATEWAY_BIND=${CLAWDBOT_GATEWAY_BIND}
-      - CLAWDBOT_GATEWAY_PORT=${CLAWDBOT_GATEWAY_PORT}
-      - CLAWDBOT_GATEWAY_TOKEN=${CLAWDBOT_GATEWAY_TOKEN}
+      - OPENCLAW_GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND}
+      - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT}
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
       - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
       - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
       - PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     volumes:
-      - ${CLAWDBOT_CONFIG_DIR}:/home/node/.clawdbot
-      - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
       # Recommended: keep the Gateway loopback-only on the VM; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
-      - "127.0.0.1:${CLAWDBOT_GATEWAY_PORT}:18789"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
 
       # Optional: only if you run iOS/Android nodes against this VM and need Canvas host.
       # If you expose this publicly, read /gateway/security and firewall accordingly.
@@ -274,9 +274,9 @@ services:
         "dist/index.js",
         "gateway",
         "--bind",
-        "${CLAWDBOT_GATEWAY_BIND}",
+        "${OPENCLAW_GATEWAY_BIND}",
         "--port",
-        "${CLAWDBOT_GATEWAY_PORT}"
+        "${OPENCLAW_GATEWAY_PORT}"
       ]
 ```
 
@@ -347,15 +347,15 @@ CMD ["node","dist/index.js"]
 
 ```bash
 docker compose build
-docker compose up -d moltbot-gateway
+docker compose up -d openclaw-gateway
 ```
 
 Verify binaries:
 
 ```bash
-docker compose exec moltbot-gateway which gog
-docker compose exec moltbot-gateway which goplaces
-docker compose exec moltbot-gateway which wacli
+docker compose exec openclaw-gateway which gog
+docker compose exec openclaw-gateway which goplaces
+docker compose exec openclaw-gateway which wacli
 ```
 
 Expected output:
@@ -371,7 +371,7 @@ Expected output:
 ## 12) Verify Gateway
 
 ```bash
-docker compose logs -f moltbot-gateway
+docker compose logs -f openclaw-gateway
 ```
 
 Success:
@@ -387,7 +387,7 @@ Success:
 Create an SSH tunnel to forward the Gateway port:
 
 ```bash
-gcloud compute ssh moltbot-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:18789
+gcloud compute ssh openclaw-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:18789
 ```
 
 Open in your browser:
@@ -400,17 +400,17 @@ Paste your gateway token.
 
 ## What persists where (source of truth)
 
-Moltbot runs in Docker, but Docker is not the source of truth.
+OpenClaw runs in Docker, but Docker is not the source of truth.
 All long-lived state must survive restarts, rebuilds, and reboots.
 
 | Component | Location | Persistence mechanism | Notes |
 |---|---|---|---|
-| Gateway config | `/home/node/.clawdbot/` | Host volume mount | Includes `moltbot.json`, tokens |
-| Model auth profiles | `/home/node/.clawdbot/` | Host volume mount | OAuth tokens, API keys |
-| Skill configs | `/home/node/.clawdbot/skills/` | Host volume mount | Skill-level state |
-| Agent workspace | `/home/node/clawd/` | Host volume mount | Code and agent artifacts |
-| WhatsApp session | `/home/node/.clawdbot/` | Host volume mount | Preserves QR login |
-| Gmail keyring | `/home/node/.clawdbot/` | Host volume + password | Requires `GOG_KEYRING_PASSWORD` |
+| Gateway config | `/home/node/.openclaw/` | Host volume mount | Includes `openclaw.json`, tokens |
+| Model auth profiles | `/home/node/.openclaw/` | Host volume mount | OAuth tokens, API keys |
+| Skill configs | `/home/node/.openclaw/skills/` | Host volume mount | Skill-level state |
+| Agent workspace | `/home/node/.openclaw/workspace/` | Host volume mount | Code and agent artifacts |
+| WhatsApp session | `/home/node/.openclaw/` | Host volume mount | Preserves QR login |
+| Gmail keyring | `/home/node/.openclaw/` | Host volume + password | Requires `GOG_KEYRING_PASSWORD` |
 | External binaries | `/usr/local/bin/` | Docker image | Must be baked at build time |
 | Node runtime | Container filesystem | Docker image | Rebuilt every image build |
 | OS packages | Container filesystem | Docker image | Do not install at runtime |
@@ -420,10 +420,10 @@ All long-lived state must survive restarts, rebuilds, and reboots.
 
 ## Updates
 
-To update Moltbot on the VM:
+To update OpenClaw on the VM:
 
 ```bash
-cd ~/moltbot
+cd ~/openclaw
 git pull
 docker compose build
 docker compose up -d
@@ -453,15 +453,15 @@ If using e2-micro and hitting OOM, upgrade to e2-small or e2-medium:
 
 ```bash
 # Stop the VM first
-gcloud compute instances stop moltbot-gateway --zone=us-central1-a
+gcloud compute instances stop openclaw-gateway --zone=us-central1-a
 
 # Change machine type
-gcloud compute instances set-machine-type moltbot-gateway \
+gcloud compute instances set-machine-type openclaw-gateway \
   --zone=us-central1-a \
   --machine-type=e2-small
 
 # Start the VM
-gcloud compute instances start moltbot-gateway --zone=us-central1-a
+gcloud compute instances start openclaw-gateway --zone=us-central1-a
 ```
 
 ---
@@ -474,14 +474,14 @@ For automation or CI/CD pipelines, create a dedicated service account with minim
 
 1. Create a service account:
    ```bash
-   gcloud iam service-accounts create moltbot-deploy \
-     --display-name="Moltbot Deployment"
+   gcloud iam service-accounts create openclaw-deploy \
+     --display-name="OpenClaw Deployment"
    ```
 
 2. Grant Compute Instance Admin role (or narrower custom role):
    ```bash
-   gcloud projects add-iam-policy-binding my-moltbot-project \
-     --member="serviceAccount:moltbot-deploy@my-moltbot-project.iam.gserviceaccount.com" \
+   gcloud projects add-iam-policy-binding my-openclaw-project \
+     --member="serviceAccount:openclaw-deploy@my-openclaw-project.iam.gserviceaccount.com" \
      --role="roles/compute.instanceAdmin.v1"
    ```
 

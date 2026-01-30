@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "Moltbot",
+  "name": "OpenClaw",
   "theme": "mint",
   "logo": {
     "light": "/assets/pixel-lobster.svg",
@@ -13,11 +13,11 @@
   "topbarLinks": [
     {
       "name": "GitHub",
-      "url": "https://github.com/moltbot/moltbot"
+      "url": "https://github.com/openclaw/openclaw"
     },
     {
       "name": "Releases",
-      "url": "https://github.com/moltbot/moltbot/releases"
+      "url": "https://github.com/openclaw/openclaw/releases"
     }
   ],
   "redirects": [
@@ -68,6 +68,14 @@
     {
       "source": "/minimax/",
       "destination": "/providers/minimax"
+    },
+    {
+      "source": "/xiaomi",
+      "destination": "/providers/xiaomi"
+    },
+    {
+      "source": "/xiaomi/",
+      "destination": "/providers/xiaomi"
     },
     {
       "source": "/openai",
@@ -351,7 +359,15 @@
     },
     {
       "source": "/clawd",
-      "destination": "/start/clawd"
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/start/clawd",
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/start/clawd/",
+      "destination": "/start/openclaw"
     },
     {
       "source": "/clawdhub",
@@ -824,7 +840,7 @@
           "start/wizard",
           "start/setup",
           "start/pairing",
-          "start/clawd",
+          "start/openclaw",
           "start/showcase",
           "start/hubs",
           "start/onboarding",

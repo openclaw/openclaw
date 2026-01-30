@@ -69,7 +69,6 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   }
 
   const linkStarts = new Map<number, RenderLink[]>();
-  const linkEnds = new Map<number, RenderLink[]>();
   if (options.buildLink) {
     for (const link of ir.links) {
       if (link.start === link.end) continue;
@@ -80,47 +79,78 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       const openBucket = linkStarts.get(rendered.start);
       if (openBucket) openBucket.push(rendered);
       else linkStarts.set(rendered.start, [rendered]);
-      const closeBucket = linkEnds.get(rendered.end);
-      if (closeBucket) closeBucket.push(rendered);
-      else linkEnds.set(rendered.end, [rendered]);
     }
   }
 
   const points = [...boundaries].sort((a, b) => a - b);
-  const stack: MarkdownStyleSpan[] = [];
+  // Unified stack for both styles and links, tracking close string and end position
+  const stack: { close: string; end: number }[] = [];
+  type OpeningItem =
+    | { end: number; open: string; close: string; kind: "link"; index: number }
+    | {
+        end: number;
+        open: string;
+        close: string;
+        kind: "style";
+        style: MarkdownStyle;
+        index: number;
+      };
   let out = "";
 
   for (let i = 0; i < points.length; i += 1) {
     const pos = points[i];
 
+    // Close ALL elements (styles and links) in LIFO order at this position
     while (stack.length && stack[stack.length - 1]?.end === pos) {
-      const span = stack.pop();
-      if (!span) break;
-      const marker = styleMarkers[span.style];
-      if (marker) out += marker.close;
+      const item = stack.pop();
+      if (item) out += item.close;
     }
 
-    const closingLinks = linkEnds.get(pos);
-    if (closingLinks && closingLinks.length > 0) {
-      for (const link of closingLinks) {
-        out += link.close;
-      }
-    }
+    const openingItems: OpeningItem[] = [];
 
     const openingLinks = linkStarts.get(pos);
     if (openingLinks && openingLinks.length > 0) {
-      for (const link of openingLinks) {
-        out += link.open;
+      for (const [index, link] of openingLinks.entries()) {
+        openingItems.push({
+          end: link.end,
+          open: link.open,
+          close: link.close,
+          kind: "link",
+          index,
+        });
       }
     }
 
     const openingStyles = startsAt.get(pos);
     if (openingStyles) {
-      for (const span of openingStyles) {
+      for (const [index, span] of openingStyles.entries()) {
         const marker = styleMarkers[span.style];
         if (!marker) continue;
-        stack.push(span);
-        out += marker.open;
+        openingItems.push({
+          end: span.end,
+          open: marker.open,
+          close: marker.close,
+          kind: "style",
+          style: span.style,
+          index,
+        });
+      }
+    }
+
+    if (openingItems.length > 0) {
+      openingItems.sort((a, b) => {
+        if (a.end !== b.end) return b.end - a.end;
+        if (a.kind !== b.kind) return a.kind === "link" ? -1 : 1;
+        if (a.kind === "style" && b.kind === "style") {
+          return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
+        }
+        return a.index - b.index;
+      });
+
+      // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
+      for (const item of openingItems) {
+        out += item.open;
+        stack.push({ close: item.close, end: item.end });
       }
     }
 

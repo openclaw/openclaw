@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function resolveBundledPluginsDir(): string | undefined {
-  const override = process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR?.trim();
+  const override = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) return override;
 
   // bun --compile: ship a sibling `extensions/` next to the executable.

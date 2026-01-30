@@ -174,7 +174,7 @@ describe("cli program (nodes media)", () => {
 
     const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
     const mediaPath = out.replace(/^MEDIA:/, "").trim();
-    expect(mediaPath).toMatch(/moltbot-camera-clip-front-.*\.mp4$/);
+    expect(mediaPath).toMatch(/openclaw-camera-clip-front-.*\.mp4$/);
 
     try {
       await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
@@ -421,7 +421,7 @@ describe("cli program (nodes media)", () => {
 
     const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
     const mediaPath = out.replace(/^MEDIA:/, "").trim();
-    expect(mediaPath).toMatch(/moltbot-canvas-snapshot-.*\.png$/);
+    expect(mediaPath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
 
     try {
       await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");

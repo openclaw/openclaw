@@ -1,29 +1,29 @@
 # Changelog
 
-## 2026.1.27-beta.1
+## 2026.1.29
 
 ### Changes
-- Version alignment with core Moltbot release numbers.
+- Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.23
 
 ### Changes
-- Version alignment with core Moltbot release numbers.
+- Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.22
 
 ### Changes
-- Version alignment with core Moltbot release numbers.
+- Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.21
 
 ### Changes
-- Version alignment with core Moltbot release numbers.
+- Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.20
 
 ### Changes
-- Version alignment with core Moltbot release numbers.
+- Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.19-1
 

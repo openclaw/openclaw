@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "moltbot-models-" });
+  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
 }
 
-const MODELS_CONFIG: MoltbotConfig = {
+const MODELS_CONFIG: OpenClawConfig = {
   models: {
     providers: {
       "custom-proxy": {
@@ -53,6 +53,7 @@ describe("models-config", () => {
       const previousMoonshot = process.env.MOONSHOT_API_KEY;
       const previousSynthetic = process.env.SYNTHETIC_API_KEY;
       const previousVenice = process.env.VENICE_API_KEY;
+      const previousXiaomi = process.env.XIAOMI_API_KEY;
       delete process.env.COPILOT_GITHUB_TOKEN;
       delete process.env.GH_TOKEN;
       delete process.env.GITHUB_TOKEN;
@@ -61,13 +62,14 @@ describe("models-config", () => {
       delete process.env.MOONSHOT_API_KEY;
       delete process.env.SYNTHETIC_API_KEY;
       delete process.env.VENICE_API_KEY;
+      delete process.env.XIAOMI_API_KEY;
 
       try {
         vi.resetModules();
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
 
         const agentDir = path.join(home, "agent-empty");
-        const result = await ensureMoltbotModelsJson(
+        const result = await ensureOpenClawModelsJson(
           {
             models: { providers: {} },
           },
@@ -93,18 +95,20 @@ describe("models-config", () => {
         else process.env.SYNTHETIC_API_KEY = previousSynthetic;
         if (previousVenice === undefined) delete process.env.VENICE_API_KEY;
         else process.env.VENICE_API_KEY = previousVenice;
+        if (previousXiaomi === undefined) delete process.env.XIAOMI_API_KEY;
+        else process.env.XIAOMI_API_KEY = previousXiaomi;
       }
     });
   });
   it("writes models.json for configured providers", async () => {
     await withTempHome(async () => {
       vi.resetModules();
-      const { ensureMoltbotModelsJson } = await import("./models-config.js");
-      const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+      const { ensureOpenClawModelsJson } = await import("./models-config.js");
+      const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
 
-      await ensureMoltbotModelsJson(MODELS_CONFIG);
+      await ensureOpenClawModelsJson(MODELS_CONFIG);
 
-      const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
+      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<string, { baseUrl?: string }>;
@@ -119,12 +123,12 @@ describe("models-config", () => {
       const prevKey = process.env.MINIMAX_API_KEY;
       process.env.MINIMAX_API_KEY = "sk-minimax-test";
       try {
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
-        const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
+        const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
 
-        await ensureMoltbotModelsJson({});
+        await ensureOpenClawModelsJson({});
 
-        const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
+        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
         const raw = await fs.readFile(modelPath, "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<
@@ -153,12 +157,12 @@ describe("models-config", () => {
       const prevKey = process.env.SYNTHETIC_API_KEY;
       process.env.SYNTHETIC_API_KEY = "sk-synthetic-test";
       try {
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
-        const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
+        const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
 
-        await ensureMoltbotModelsJson({});
+        await ensureOpenClawModelsJson({});
 
-        const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
+        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
         const raw = await fs.readFile(modelPath, "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<
