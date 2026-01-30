@@ -118,4 +118,27 @@ describe("telegramMessageActions", () => {
 
     expect(handleTelegramAction).not.toHaveBeenCalled();
   });
+
+  it("accepts numeric messageId and channelId for reactions", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+
+    await telegramMessageActions.handleAction({
+      action: "react",
+      params: {
+        channelId: 123,
+        messageId: 456,
+        emoji: "ok",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
+    const call = handleTelegramAction.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.action).toBe("react");
+    expect(String(call.chatId)).toBe("123");
+    expect(String(call.messageId)).toBe("456");
+    expect(call.emoji).toBe("ok");
+  });
 });
