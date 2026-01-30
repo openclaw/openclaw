@@ -1111,6 +1111,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)
 - Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.
 - Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
+- Agents: strip null-valued optional parameters from tool calls for provider compatibility.
 - Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
 - Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
 - Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
