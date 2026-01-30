@@ -84,7 +84,7 @@ Message context lines include `discord message id` and `channel` fields you can 
 {
   "action": "stickerUpload",
   "guildId": "999",
-  "name": "moltbot_wave",
+  "name": "openclaw_wave",
   "description": "OpenClaw waving hello",
   "tags": "👋",
   "mediaUrl": "file:///tmp/wave.png"
