@@ -65,7 +65,9 @@ vi.mock("@opentelemetry/exporter-logs-otlp-http", () => ({
 vi.mock("@opentelemetry/sdk-logs", () => ({
   BatchLogRecordProcessor: class {},
   LoggerProvider: class {
-    addLogRecordProcessor = vi.fn();
+    constructor(_options?: unknown) {
+      // v2.x: processors are passed in constructor
+    }
     getLogger = vi.fn(() => ({
       emit: logEmit,
     }));
@@ -83,16 +85,13 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 }));
 
 vi.mock("@opentelemetry/resources", () => ({
-  Resource: class {
-    // eslint-disable-next-line @typescript-eslint/no-useless-constructor
-    constructor(_value?: unknown) {}
-  },
+  resourceFromAttributes: vi.fn((attributes?: unknown) => ({
+    attributes,
+  })),
 }));
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({
-  SemanticResourceAttributes: {
-    SERVICE_NAME: "service.name",
-  },
+  ATTR_SERVICE_NAME: "service.name",
 }));
 
 vi.mock("openclaw/plugin-sdk", async () => {
