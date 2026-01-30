@@ -51,7 +51,7 @@ type GatewayHost = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
-  refreshSessionsAfterChat: boolean;
+  refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
 };
@@ -196,8 +196,9 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       void flushChatQueueForEvent(
         host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
       );
-      if (host.refreshSessionsAfterChat) {
-        host.refreshSessionsAfterChat = false;
+      const runId = payload?.runId;
+      if (runId && host.refreshSessionsAfterChat.has(runId)) {
+        host.refreshSessionsAfterChat.delete(runId);
         if (state === "final") {
           void loadSessions(host as unknown as OpenClawApp, { activeMinutes: 0 });
         }
