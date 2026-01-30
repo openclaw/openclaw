@@ -66,9 +66,7 @@ export type GatewayClientInfo = {
   instanceId?: string;
 };
 
-const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(
-  Object.values(ALL_GATEWAY_CLIENT_IDS),
-);
+const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(Object.values(ALL_GATEWAY_CLIENT_IDS));
 const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY_CLIENT_MODES));
 
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
