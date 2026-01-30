@@ -52,11 +52,39 @@ describe("buildAuthHealthSummary", () => {
     );
 
     expect(statuses["anthropic:ok"]).toBe("ok");
-    expect(statuses["anthropic:expiring"]).toBe("expiring");
-    expect(statuses["anthropic:expired"]).toBe("expired");
+    // OAuth credentials with refresh tokens are auto-renewable, so they report "ok"
+    expect(statuses["anthropic:expiring"]).toBe("ok");
+    expect(statuses["anthropic:expired"]).toBe("ok");
     expect(statuses["anthropic:api"]).toBe("static");
 
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
-    expect(provider?.status).toBe("expired");
+    expect(provider?.status).toBe("ok");
+  });
+
+  it("reports expired for OAuth without a refresh token", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "google:no-refresh": {
+          type: "oauth" as const,
+          provider: "google-antigravity",
+          access: "access",
+          refresh: "",
+          expires: now - 10_000,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const statuses = Object.fromEntries(
+      summary.profiles.map((profile) => [profile.profileId, profile.status]),
+    );
+
+    expect(statuses["google:no-refresh"]).toBe("expired");
   });
 });
