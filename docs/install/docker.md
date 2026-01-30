@@ -58,6 +58,34 @@ It writes config/workspace on the host:
 
 Running on a VPS? See [Hetzner (Docker VPS)](/platforms/hetzner).
 
+### Unraid compose setup
+
+Unraid runs Docker as root, so the default `~/.clawdbot` and `~/clawd` paths
+land under `/root`. Use the Unraid compose file to bind to `appdata` instead.
+
+1) Create persistent folders and set ownership to the container user (uid 1000):
+
+```bash
+mkdir -p /mnt/user/appdata/moltbot/config /mnt/user/appdata/moltbot/workspace
+chown -R 1000:1000 /mnt/user/appdata/moltbot
+```
+
+2) Copy `docker-compose.unraid.yml` into `/mnt/user/appdata/moltbot/`, then
+create a stack in the Unraid Compose Manager plugin using that file. Set:
+- `CLAWDBOT_GATEWAY_TOKEN` to a strong value
+- Optional: `CLAWDBOT_GATEWAY_PORT` and `CLAWDBOT_GATEWAY_BIND` (default `18789` / `lan`)
+- Optional: `CLAWDBOT_IMAGE` if you build or pull a custom tag
+
+3) Build or pull your image (same tag as `CLAWDBOT_IMAGE`), then start the stack.
+
+4) Run onboarding from a shell (Compose Manager does not run interactive TTY):
+
+```bash
+docker compose -f /mnt/user/appdata/moltbot/docker-compose.unraid.yml run --rm moltbot-cli onboard --no-install-daemon
+```
+
+Open `http://gateway-host:18789/` and paste the token.
+
 ### Manual flow (compose)
 
 ```bash
