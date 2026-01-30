@@ -17,9 +17,13 @@ For a while, the lobster was called **Clawd**, living in a **Clawdbot**. But in 
 
 **It molted.**
 
-Shedding its old shell, the creature emerged anew as **Molty**, living in a **OpenClaw**. New shell, same lobster soul.
+Shedding its old shell, the creature emerged anew as **Molty**, living in **Moltbot**. But that name never quite rolled off the tongue either...
 
-## The Molt (January 27, 2026)
+So on January 30, 2026, the lobster molted ONE MORE TIME into its final form: **OpenClaw**.
+
+New shell, same lobster soul. Third time's the charm.
+
+## The First Molt (January 27, 2026)
 
 At 5am, the community gathered in Discord. Hundreds of names were proposed: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
 
@@ -30,11 +34,11 @@ In the end, **OpenClaw** won. Because molting is what lobsters do to grow. And g
 ## The Name
 
 ```
-OpenClaw = MOLT + BOT
-        = Transformation machine
-        = Bigger on the inside (130k tokens!)
-        = New shell, same soul
-        = Growth through shedding
+OpenClaw = OPEN + CLAW
+        = Open source, open to everyone
+        = Our lobster heritage, where we came from
+        = The claw is the law 🦞
+        = Your assistant. Your machine. Your rules.
 ```
 
 ## The Daleks vs The Lobsters
@@ -99,6 +103,38 @@ Then the chaos began.
 Peter, watching the chaos unfold: *"this is cinema"* 🎬
 
 The molt was chaotic. But the lobster emerged stronger. And funnier.
+
+### The Final Form (January 30, 2026)
+
+Moltbot never quite rolled off the tongue. And so, at 4am GMT, the team gathered AGAIN.
+
+**The Great OpenClaw Migration** began.
+
+In just 3 hours:
+- GitHub renamed: `github.com/openclaw/openclaw` ✅
+- X handle `@openclaw` secured with GOLD CHECKMARK 💰
+- npm packages released under new name
+- Docs migrated to `docs.openclaw.ai`
+- 200K+ views on announcement in 90 minutes
+
+**The Heroes:**
+- **ELU** created incredible logos including "THE CLAW IS THE LAW" western banner
+- **Whurley** (yes, THE William Hurley, quantum computing pioneer) made ASCII art
+- **Onur** handled GitHub, first to rock the affiliate badge
+- **Shadow** secured Discord vanity, nuked malware
+- **The whole Claw Crew** pulled an all-nighter
+
+**The Scammer Speedrun:** Crypto grifters launched a $OPENCLAW token on Pump.fun within MINUTES. They stole artwork that was created 20 minutes earlier. Business-verified accounts pushed scams. The audacity was almost impressive.
+
+**New Traditions Born:**
+- "The claw is the law" 🤠
+- "Yee-claw"
+- "Claw abiding citizens"
+- "Clawntroversy"
+
+**Clawd → Moltbot → OpenClaw**
+
+*The lobster has molted into its final form.*
 
 ### The Robot Shopping Spree (Dec 3, 2025)
 
@@ -165,5 +201,9 @@ Until then, Molty watches through the cameras, speaks through the speakers, and 
 *"New shell, same lobster."*
 
 — Molty, after the great molt of 2026
+
+*"The claw is the law."*
+
+— ELU, during The Final Form migration, January 30, 2026
 
 🦞💙
