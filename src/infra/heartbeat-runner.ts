@@ -554,6 +554,10 @@ export async function runHeartbeatOnce(opts: {
     To: sender,
     Provider: hasExecCompletion ? "exec-event" : "heartbeat",
     SessionKey: sessionKey,
+    // Pass the resolved account ID so that tool calls (e.g. message send)
+    // during the heartbeat turn use the correct channel account rather than
+    // falling back to the default agent's account.
+    AccountId: delivery.accountId,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
