@@ -22,7 +22,7 @@ services:
         "dist/index.js",
         "gateway",
         "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-localhost}",
+        "${OPENCLAW_GATEWAY_BIND:-loopback}",
         "--port",
         "${OPENCLAW_GATEWAY_PORT:-18789}"
       ]
