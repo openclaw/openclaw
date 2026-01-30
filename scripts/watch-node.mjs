@@ -5,7 +5,8 @@ import process from "node:process";
 const args = process.argv.slice(2);
 const env = { ...process.env };
 const cwd = process.cwd();
-const compiler = env.OPENCLAW_TS_COMPILER === "tsc" ? "tsc" : "tsgo";
+const compilerOverride = env.OPENCLAW_TS_COMPILER ?? env.CLAWDBOT_TS_COMPILER;
+const compiler = compilerOverride === "tsc" ? "tsc" : "tsgo";
 const projectArgs = ["--project", "tsconfig.json"];
 
 const initialBuild = spawnSync("pnpm", ["exec", compiler, ...projectArgs], {
