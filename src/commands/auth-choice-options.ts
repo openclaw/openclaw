@@ -120,6 +120,60 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
   },
+  {
+    value: "google",
+    label: "Google",
+    hint: "Gemini API key + OAuth",
+    choices: ["gemini-api-key", "google-antigravity", "google-gemini-cli"],
+  },
+  {
+    value: "copilot",
+    label: "Copilot",
+    hint: "GitHub + local proxy",
+    choices: ["github-copilot", "copilot-proxy"],
+  },
+  {
+    value: "openrouter",
+    label: "OpenRouter",
+    hint: "API key",
+    choices: ["openrouter-api-key"],
+  },
+  {
+    value: "ai-gateway",
+    label: "Vercel AI Gateway",
+    hint: "API key",
+    choices: ["ai-gateway-api-key"],
+  },
+  {
+    value: "cloudflare-ai-gateway",
+    label: "Cloudflare AI Gateway",
+    hint: "Account ID + Gateway ID + API key",
+    choices: ["cloudflare-ai-gateway-api-key"],
+  },
+  {
+    value: "moonshot",
+    label: "Moonshot AI",
+    hint: "Kimi K2 + Kimi Code",
+    choices: ["moonshot-api-key", "kimi-code-api-key"],
+  },
+  {
+    value: "zai",
+    label: "Z.AI (GLM 4.7)",
+    hint: "API key",
+    choices: ["zai-api-key"],
+  },
+  {
+    value: "xiaomi",
+    label: "Xiaomi",
+    hint: "API key",
+    choices: ["xiaomi-api-key"],
+  },
+  {
+    value: "opencode-zen",
+    label: "OpenCode Zen",
+    hint: "API key",
+    choices: ["opencode-zen"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -145,6 +199,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "ai-gateway-api-key",
     label: "Vercel AI Gateway API key",
+  });
+  options.push({
+    value: "cloudflare-ai-gateway-api-key",
+    label: "Cloudflare AI Gateway",
+    hint: "Account ID + Gateway ID + API key",
   });
   options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
   options.push({ value: "kimi-code-api-key", label: "Kimi Coding API key" });

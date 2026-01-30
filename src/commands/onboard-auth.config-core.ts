@@ -13,6 +13,7 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
+  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
@@ -108,6 +109,47 @@ export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig 
               }
             : undefined),
           primary: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyCloudflareAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF] = {
+    ...models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF],
+    alias: models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Cloudflare AI Gateway",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyCloudflareAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyCloudflareAiGatewayProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
         },
       },
     },
