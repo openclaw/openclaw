@@ -251,3 +251,5 @@ export function renderConfigForm(props: ConfigFormProps) {
     </div>
   `;
 }
+
+export const SECTION_META = sectionIcons;
