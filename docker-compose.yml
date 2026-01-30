@@ -28,8 +28,8 @@ services:
       [
         "node",
         "dist/index.js",
+        "gateway",        
         "--allow-unconfigured",
-        "gateway",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND}",
         "--port",
