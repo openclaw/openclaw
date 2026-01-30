@@ -11,6 +11,7 @@ import {
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  stripReasoningReplaySignatures,
 } from "../pi-embedded-helpers.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { log } from "./logger.js";
@@ -335,6 +336,7 @@ export async function sanitizeSessionHistory(params: {
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedThinking)
     : sanitizedThinking;
+  const strippedReplaySignatures = stripReasoningReplaySignatures(repairedTools);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
@@ -350,8 +352,8 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+      ? downgradeOpenAIReasoningBlocks(strippedReplaySignatures)
+      : strippedReplaySignatures;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

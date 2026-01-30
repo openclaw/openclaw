@@ -54,6 +54,78 @@ function hasFollowingNonThinkingBlock(
  * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`; if that metadata
  * is incomplete, drop the block to keep history usable.
  */
+// Plain string signatures used by OpenAI-compatible providers (Kimi, llama.cpp, etc.)
+// to stream thinking content. These must NOT be replayed as message fields because
+// providers like Kimi K2.5 reject request messages containing reasoning_content.
+const REASONING_REPLAY_FIELDS = new Set(["reasoning_content", "reasoning", "reasoning_text"]);
+
+function isPlainReasoningSignature(value: unknown): boolean {
+  return typeof value === "string" && REASONING_REPLAY_FIELDS.has(value.trim());
+}
+
+/**
+ * Strip plain reasoning field signatures (e.g. `reasoning_content`) from thinking blocks.
+ *
+ * OpenAI-compatible providers stream thinking via fields like `reasoning_content`.
+ * Pi-ai stores the field name in `thinkingSignature` and replays it as
+ * `assistantMsg[signature] = "..."`. Providers like Kimi K2.5 reject this in request
+ * messages (especially when tool_calls are present).
+ *
+ * This strips the signature so pi-ai won't replay it, while preserving the thinking
+ * content itself. OpenAI Responses API JSON signatures (`{id: "rs_...", type: "reasoning"}`)
+ * are preserved — they use a different replay mechanism.
+ */
+export function stripReasoningReplaySignatures(messages: AgentMessage[]): AgentMessage[] {
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    let changed = false;
+    type AssistantContentBlock = (typeof assistantMsg.content)[number];
+
+    const nextContent: AssistantContentBlock[] = [];
+    for (const block of assistantMsg.content) {
+      if (!block || typeof block !== "object") {
+        nextContent.push(block as AssistantContentBlock);
+        continue;
+      }
+      const record = block as OpenAIThinkingBlock;
+      if (record.type !== "thinking" || !isPlainReasoningSignature(record.thinkingSignature)) {
+        nextContent.push(block as AssistantContentBlock);
+        continue;
+      }
+      // Clone the block without thinkingSignature
+      const { thinkingSignature: _, ...rest } = record;
+      nextContent.push(rest as AssistantContentBlock);
+      changed = true;
+    }
+
+    if (!changed) {
+      out.push(msg);
+    } else {
+      out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+    }
+  }
+
+  return out;
+}
+
 export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentMessage[] {
   const out: AgentMessage[] = [];
 
