@@ -1,0 +1,29 @@
+# Build artifacts
+dist/
+*.js.map
+coverage/
+.vitest/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Platform-specific builds
+apps/macos/.build/
+apps/android/build/
+apps/ios/build/
+
+# Temporary files
+*.log
+.DS_Store
+*.tmp
+tmp/
+
+# Large caches
+.serena/cache/
+
+# Secrets (should already be in .gitignore)
+.env
+credentials/
+*.key
+*.pem
