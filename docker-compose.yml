@@ -29,7 +29,6 @@ services:
         "node",
         "dist/index.js",
         "gateway",
-        "--allow-unconfigured",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND}",
         "--port",
