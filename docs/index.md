@@ -47,6 +47,10 @@ The dashboard is the browser Control UI for chat, config, nodes, sessions, and m
 Local default: http://127.0.0.1:18789/
 Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 
+<p align="center">
+  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+</p>
+
 ## How it works
 
 ```
