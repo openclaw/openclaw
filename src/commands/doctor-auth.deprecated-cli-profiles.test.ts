@@ -24,18 +24,18 @@ function makePrompter(confirmValue: boolean): DoctorPrompter {
 }
 
 beforeEach(() => {
-  originalAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
   originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-"));
-  process.env.CLAWDBOT_AGENT_DIR = tempAgentDir;
+  tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 });
 
 afterEach(() => {
   if (originalAgentDir === undefined) {
-    delete process.env.CLAWDBOT_AGENT_DIR;
+    delete process.env.OPENCLAW_AGENT_DIR;
   } else {
-    process.env.CLAWDBOT_AGENT_DIR = originalAgentDir;
+    process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
   }
   if (originalPiAgentDir === undefined) {
     delete process.env.PI_CODING_AGENT_DIR;

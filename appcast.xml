@@ -1,55 +1,187 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>Moltbot</title>
+        <title>OpenClaw</title>
+        <item>
+            <title>2026.1.29</title>
+            <pubDate>Fri, 30 Jan 2026 06:24:15 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <sparkle:version>8345</sparkle:version>
+            <sparkle:shortVersionString>2026.1.29</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>OpenClaw 2026.1.29</h2>
+Status: stable.
+<h3>Changes</h3>
+<ul>
+<li>Rebrand: rename the npm package/CLI to <code>openclaw</code>, add a <code>openclaw</code> compatibility shim, and move extensions to the <code>@openclaw/*</code> scope.</li>
+<li>Onboarding: strengthen security warning copy for beta + access control expectations.</li>
+<li>Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.</li>
+<li>Config: auto-migrate legacy state/config paths and keep config resolution consistent across legacy filenames.</li>
+<li>Gateway: warn on hook tokens via query params; document header auth preference. (#2200) Thanks @YuriNachos.</li>
+<li>Gateway: add dangerous Control UI device auth bypass flag + audit warnings. (#2248)</li>
+<li>Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.</li>
+<li>Web UI: keep sub-agent announce replies visible in WebChat. (#1977) Thanks @andrescardonas7.</li>
+<li>Browser: route browser control via gateway/node; remove standalone browser control command and control URL config.</li>
+<li>Browser: route <code>browser.request</code> via node proxies when available; honor proxy timeouts; derive browser ports from <code>gateway.port</code>.</li>
+<li>Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.</li>
+<li>Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.</li>
+<li>Telegram: support plugin sendPayload channelData (media/buttons) and validate plugin commands. (#1917) Thanks @JoshuaLelon.</li>
+<li>Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.</li>
+<li>Telegram: add optional silent send flag (disable notifications). (#2382) Thanks @Suksham-sharma.</li>
+<li>Telegram: support editing sent messages via message(action="edit"). (#2394) Thanks @marcelomar21.</li>
+<li>Telegram: support quote replies for message tool and inbound context. (#2900) Thanks @aduk059.</li>
+<li>Telegram: add sticker receive/send with vision caching. (#2629) Thanks @longjos.</li>
+<li>Telegram: send sticker pixels to vision models. (#2650)</li>
+<li>Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.</li>
+<li>Discord: add configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.</li>
+<li>Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.</li>
+<li>Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.</li>
+<li>Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.</li>
+<li>Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.</li>
+<li>Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.</li>
+<li>Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.</li>
+<li>Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)</li>
+<li>Memory Search: allow extra paths for memory indexing (ignores symlinks). (#3600) Thanks @kira-ariaki.</li>
+<li>Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.</li>
+<li>Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.</li>
+<li>Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.</li>
+<li>Routing: add per-account DM session scope and document multi-account isolation. (#3095) Thanks @jarvis-sam.</li>
+<li>Routing: precompile session key regexes. (#1697) Thanks @Ray0907.</li>
+<li>CLI: use Node's module compile cache for faster startup. (#2808) Thanks @pi0.</li>
+<li>Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.</li>
+<li>TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.</li>
+<li>macOS: finish OpenClaw app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.</li>
+<li>Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy com.clawdbot migrations). Thanks @thewilloftheshadow.</li>
+<li>macOS: limit project-local <code>node_modules/.bin</code> PATH preference to debug builds (reduce PATH hijacking risk).</li>
+<li>macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.</li>
+<li>macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.</li>
+<li>Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.</li>
+<li>Build: bundle A2UI assets during build and stop tracking generated bundles. (#2455) Thanks @0oAstro.</li>
+<li>CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.</li>
+<li>Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.</li>
+<li>Gateway: prefer newest session metadata when combining stores. (#1823) Thanks @emanuelst.</li>
+<li>Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.</li>
+<li>Docs: add migration guide for moving to a new machine. (#2381)</li>
+<li>Docs: add Northflank one-click deployment guide. (#2167) Thanks @AdeboyeDN.</li>
+<li>Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.</li>
+<li>Docs: add Render deployment guide. (#1975) Thanks @anurag.</li>
+<li>Docs: add Claude Max API Proxy guide. (#1875) Thanks @atalovesyou.</li>
+<li>Docs: add DigitalOcean deployment guide. (#1870) Thanks @0xJonHoldsCrypto.</li>
+<li>Docs: add Oracle Cloud (OCI) platform guide + cross-links. (#2333) Thanks @hirefrank.</li>
+<li>Docs: add Raspberry Pi install guide. (#1871) Thanks @0xJonHoldsCrypto.</li>
+<li>Docs: add GCP Compute Engine deployment guide. (#1848) Thanks @hougangdev.</li>
+<li>Docs: add LINE channel guide. Thanks @thewilloftheshadow.</li>
+<li>Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.</li>
+<li>Docs: keep docs header sticky so navbar stays visible while scrolling. (#2445) Thanks @chenyuan99.</li>
+<li>Docs: update exe.dev install instructions. (#https://github.com/openclaw/openclaw/pull/3047) Thanks @zackerthescar.</li>
+</ul>
+<h3>Breaking</h3>
+<ul>
+<li><strong>BREAKING:</strong> Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)</li>
+<li>Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.</li>
+<li>Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.</li>
+<li>Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.</li>
+<li>Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.</li>
+<li>Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.</li>
+<li>Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.</li>
+<li>Telegram: include AccountId in native command context for multi-agent routing. (#2942) Thanks @Chloe-VP.</li>
+<li>Telegram: handle video note attachments in media extraction. (#2905) Thanks @mylukin.</li>
+<li>TTS: read OPENAI_TTS_BASE_URL at runtime instead of module load to honor config.env. (#3341) Thanks @hclsys.</li>
+<li>macOS: auto-scroll to bottom when sending a new message while scrolled up. (#2471) Thanks @kennyklee.</li>
+<li>Web UI: auto-expand the chat compose textarea while typing (with sensible max height). (#2950) Thanks @shivamraut101.</li>
+<li>Gateway: prevent crashes on transient network errors (fetch failures, timeouts, DNS). Added fatal error detection to only exit on truly critical errors. Fixes #2895, #2879, #2873. (#2980) Thanks @elliotsecops.</li>
+<li>Agents: guard channel tool listActions to avoid plugin crashes. (#2859) Thanks @mbelinky.</li>
+<li>Discord: stop resolveDiscordTarget from passing directory params into messaging target parsers. Fixes #3167. Thanks @thewilloftheshadow.</li>
+<li>Discord: avoid resolving bare channel names to user DMs when a username matches. Thanks @thewilloftheshadow.</li>
+<li>Discord: fix directory config type import for target resolution. Thanks @thewilloftheshadow.</li>
+<li>Providers: update MiniMax API endpoint and compatibility mode. (#3064) Thanks @hlbbbbbbb.</li>
+<li>Telegram: treat more network errors as recoverable in polling. (#3013) Thanks @ryancontent.</li>
+<li>Discord: resolve usernames to user IDs for outbound messages. (#2649) Thanks @nonggialiang.</li>
+<li>Providers: update Moonshot Kimi model references to kimi-k2.5. (#2762) Thanks @MarvinCui.</li>
+<li>Gateway: suppress AbortError and transient network errors in unhandled rejections. (#2451) Thanks @Glucksberg.</li>
+<li>TTS: keep /tts status replies on text-only commands and avoid duplicate block-stream audio. (#2451) Thanks @Glucksberg.</li>
+<li>Security: pin npm overrides to keep tar@7.5.4 for install toolchains.</li>
+<li>Security: properly test Windows ACL audit for config includes. (#2403) Thanks @dominicnunez.</li>
+<li>CLI: recognize versioned Node executables when parsing argv. (#2490) Thanks @David-Marsh-Photo.</li>
+<li>CLI: avoid prompting for gateway runtime under the spinner. (#2874)</li>
+<li>BlueBubbles: coalesce inbound URL link preview messages. (#1981) Thanks @tyler6204.</li>
+<li>Cron: allow payloads containing "heartbeat" in event filter. (#2219) Thanks @dwfinkelstein.</li>
+<li>CLI: avoid loading config for global help/version while registering plugin commands. (#2212) Thanks @dial481.</li>
+<li>Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.</li>
+<li>Agents: release session locks on process termination and cover more signals. (#2483) Thanks @janeexai.</li>
+<li>Agents: skip cooldowned providers during model failover. (#2143) Thanks @YiWang24.</li>
+<li>Telegram: harden polling + retry behavior for transient network errors and Node 22 transport issues. (#2420) Thanks @techboss.</li>
+<li>Telegram: ignore non-forum group message_thread_id while preserving DM thread sessions. (#2731) Thanks @dylanneve1.</li>
+<li>Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.</li>
+<li>Telegram: centralize API error logging for delivery and bot calls. (#2492) Thanks @altryne.</li>
+<li>Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.</li>
+<li>Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.</li>
+<li>Media: fix text attachment MIME misclassification with CSV/TSV inference and UTF-16 detection; add XML attribute escaping for file output. (#3628) Thanks @frankekn.</li>
+<li>Build: align memory-core peer dependency with lockfile.</li>
+<li>Security: add mDNS discovery mode with minimal default to reduce information disclosure. (#1882) Thanks @orlyjamie.</li>
+<li>Security: harden URL fetches with DNS pinning to reduce rebinding risk. Thanks Chris Zheng.</li>
+<li>Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.</li>
+<li>Security: wrap external hook content by default with a per-hook opt-out. (#1827) Thanks @mertcicekci0.</li>
+<li>Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).</li>
+<li>Gateway: treat loopback + non-local Host connections as remote unless trusted proxy headers are present.</li>
+<li>Onboarding: remove unsupported gateway auth "off" choice from onboarding/configure flows and CLI flags.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.1.29/OpenClaw-2026.1.29.zip" length="22458204" type="application/octet-stream" sparkle:edSignature="HqHwZHQyG/CEfBuQnQ/RffJQPKpSbCVrho9C6rgt93S5ek4AH6hUhB3BBKY8sbX1IVFATKK5QZZNE0YPAf7eBw=="/>
+        </item>
         <item>
             <title>2026.1.24-1</title>
             <pubDate>Sun, 25 Jan 2026 14:05:25 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/moltbot/moltbot/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
             <sparkle:version>7952</sparkle:version>
             <sparkle:shortVersionString>2026.1.24-1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Moltbot 2026.1.24-1</h2>
+            <description><![CDATA[<h2>OpenClaw 2026.1.24-1</h2>
 <h3>Fixes</h3>
 <ul>
 <li>Packaging: include dist/shared output in npm tarball (fixes missing reasoning-tags import on install).</li>
 </ul>
-<p><a href="https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/moltbot/moltbot/releases/download/v2026.1.24-1/Moltbot-2026.1.24-1.zip" length="12396699" type="application/octet-stream" sparkle:edSignature="VaEdWIgEJBrZLIp2UmigoQ6vaq4P/jNFXpHYXvXHD5MsATS0CqBl6ugyyxRq+/GbpUqmdgdlht4dTUVbLRw6BA=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.1.24-1/OpenClaw-2026.1.24-1.zip" length="12396699" type="application/octet-stream" sparkle:edSignature="VaEdWIgEJBrZLIp2UmigoQ6vaq4P/jNFXpHYXvXHD5MsATS0CqBl6ugyyxRq+/GbpUqmdgdlht4dTUVbLRw6BA=="/>
         </item>
         <item>
             <title>2026.1.24</title>
             <pubDate>Sun, 25 Jan 2026 13:31:05 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/moltbot/moltbot/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
             <sparkle:version>7944</sparkle:version>
             <sparkle:shortVersionString>2026.1.24</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Moltbot 2026.1.24</h2>
+            <description><![CDATA[<h2>OpenClaw 2026.1.24</h2>
 <h3>Highlights</h3>
 <ul>
-<li>Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.molt.bot/providers/ollama https://docs.molt.bot/providers/venice</li>
+<li>Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.openclaw.ai/providers/ollama https://docs.openclaw.ai/providers/venice</li>
 <li>Channels: LINE plugin (Messaging API) with rich replies + quick replies. (#1630) Thanks @plum-dawg.</li>
-<li>TTS: Edge fallback (keyless) + <code>/tts</code> auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.molt.bot/tts</li>
-<li>Exec approvals: approve in-chat via <code>/approve</code> across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands</li>
-<li>Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.molt.bot/channels/telegram</li>
+<li>TTS: Edge fallback (keyless) + <code>/tts</code> auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.openclaw.ai/tts</li>
+<li>Exec approvals: approve in-chat via <code>/approve</code> across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.openclaw.ai/tools/exec-approvals https://docs.openclaw.ai/tools/slash-commands</li>
+<li>Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.openclaw.ai/channels/telegram</li>
 </ul>
 <h3>Changes</h3>
 <ul>
 <li>Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.</li>
-<li>TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.molt.bot/tts</li>
-<li>TTS: add auto mode enum (off/always/inbound/tagged) with per-session <code>/tts</code> override. (#1667) Thanks @sebslight. https://docs.molt.bot/tts</li>
+<li>TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.openclaw.ai/tts</li>
+<li>TTS: add auto mode enum (off/always/inbound/tagged) with per-session <code>/tts</code> override. (#1667) Thanks @sebslight. https://docs.openclaw.ai/tts</li>
 <li>Telegram: treat DM topics as separate sessions and keep DM history limits stable with thread suffixes. (#1597) Thanks @rohannagpal.</li>
-<li>Telegram: add <code>channels.telegram.linkPreview</code> to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.molt.bot/channels/telegram</li>
-<li>Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.molt.bot/tools/web</li>
+<li>Telegram: add <code>channels.telegram.linkPreview</code> to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.openclaw.ai/channels/telegram</li>
+<li>Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.openclaw.ai/tools/web</li>
 <li>UI: refresh Control UI dashboard design system (typography, colors, spacing). (#1786) Thanks @mousberg.</li>
-<li>Exec approvals: forward approval prompts to chat with <code>/approve</code> for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands</li>
+<li>Exec approvals: forward approval prompts to chat with <code>/approve</code> for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.openclaw.ai/tools/exec-approvals https://docs.openclaw.ai/tools/slash-commands</li>
 <li>Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.</li>
-<li>Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.molt.bot/diagnostics/flags</li>
+<li>Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.openclaw.ai/diagnostics/flags</li>
 <li>Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).</li>
 <li>Docs: add verbose installer troubleshooting guidance.</li>
 <li>Docs: add macOS VM guide with local/hosted options + VPS/nodes guidance. (#1693) Thanks @f-trycua.</li>
-<li>Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.molt.bot/bedrock</li>
+<li>Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.openclaw.ai/bedrock</li>
 <li>Docs: update Fly.io guide notes.</li>
 <li>Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.</li>
 </ul>
@@ -61,10 +193,10 @@
 <li>Web UI: hide internal <code>message_id</code> hints in chat bubbles.</li>
 <li>Gateway: allow Control UI token-only auth to skip device pairing even when device identity is present (<code>gateway.controlUi.allowInsecureAuth</code>). (#1679) Thanks @steipete.</li>
 <li>Matrix: decrypt E2EE media attachments with preflight size guard. (#1744) Thanks @araa47.</li>
-<li>BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.molt.bot/channels/bluebubbles</li>
+<li>BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.openclaw.ai/channels/bluebubbles</li>
 <li>BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.</li>
 <li>Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.</li>
-<li>Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.molt.bot/channels/signal</li>
+<li>Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.openclaw.ai/channels/signal</li>
 <li>Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.</li>
 <li>Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)</li>
 <li>Telegram: honor per-account proxy for outbound API calls. (#1774) Thanks @radek-paclt.</li>
@@ -93,96 +225,9 @@
 <li>Tests: avoid fake-timer dependency in embedded runner stream mock to reduce CI flakes. (#1597) Thanks @rohannagpal.</li>
 <li>Tests: increase embedded runner ordering test timeout to reduce CI flakes. (#1597) Thanks @rohannagpal.</li>
 </ul>
-<p><a href="https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/moltbot/moltbot/releases/download/v2026.1.24/Moltbot-2026.1.24.zip" length="12396700" type="application/octet-stream" sparkle:edSignature="u+XzKD3YwV8s79gIr7LK4OtDCcmp/b+cjNC6SHav3/1CVJegh02SsBKatrampox32XGx8P2+8c/+fHV+qpkHCA=="/>
-        </item>
-        <item>
-            <title>2026.1.23</title>
-            <pubDate>Sat, 24 Jan 2026 13:02:18 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/moltbot/moltbot/main/appcast.xml</link>
-            <sparkle:version>7750</sparkle:version>
-            <sparkle:shortVersionString>2026.1.23</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Moltbot 2026.1.23</h2>
-<h3>Highlights</h3>
-<ul>
-<li>TTS: allow model-driven TTS tags by default for expressive audio replies (laughter, singing cues, etc.).</li>
-</ul>
-<h3>Changes</h3>
-<ul>
-<li>Gateway: add /tools/invoke HTTP endpoint for direct tool calls and document it. (#1575) Thanks @vignesh07.</li>
-<li>Agents: keep system prompt time zone-only and move current time to <code>session_status</code> for better cache hits.</li>
-<li>Agents: remove redundant bash tool alias from tool registration/display. (#1571) Thanks @Takhoffman.</li>
-<li>Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node).</li>
-<li>Heartbeat: add per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer.</li>
-<li>Plugins: add optional llm-task JSON-only tool for workflows. (#1498) Thanks @vignesh07.</li>
-<li>CLI: restart the gateway by default after <code>moltbot update</code>; add <code>--no-restart</code> to skip it.</li>
-<li>CLI: add live auth probes to <code>moltbot models status</code> for per-profile verification.</li>
-<li>CLI: add <code>moltbot system</code> for system events + heartbeat controls; remove standalone <code>wake</code>.</li>
-<li>Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3.</li>
-<li>Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc.</li>
-<li>Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc.</li>
-<li>Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.</li>
-<li>Tlon: add Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a.</li>
-<li>Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt.</li>
-<li>TTS: move Telegram TTS into core with auto-replies, commands, and gateway methods. (#1559) Thanks @Glucksberg.</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>Sessions: accept non-UUID sessionIds for history/send/status while preserving agent scoping. (#1518)</li>
-<li>Gateway: compare Linux process start time to avoid PID recycling lock loops; keep locks unless stale. (#1572) Thanks @steipete.</li>
-<li>Messaging: mirror outbound sends into target session keys (threads + dmScope) and create session entries on send. (#1520)</li>
-<li>Sessions: normalize session key casing to lowercase for consistent routing.</li>
-<li>BlueBubbles: normalize group session keys for outbound mirroring. (#1520)</li>
-<li>Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.</li>
-<li>Slack: honor open groupPolicy for unlisted channels in message + slash gating. (#1563) Thanks @itsjaydesu.</li>
-<li>Agents: show tool error fallback when the last assistant turn only invoked tools (prevents silent stops).</li>
-<li>Agents: ignore IDENTITY.md template placeholders when parsing identity to avoid placeholder replies. (#1556)</li>
-<li>Agents: drop orphaned OpenAI Responses reasoning blocks on model switches. (#1562) Thanks @roshanasingh4.</li>
-<li>Docker: update gateway command in docker-compose and Hetzner guide. (#1514)</li>
-<li>Sessions: reject array-backed session stores to prevent silent wipes. (#1469)</li>
-<li>Voice wake: auto-save wake words on blur/submit across iOS/Android and align limits with macOS.</li>
-<li>UI: keep the Control UI sidebar visible while scrolling long pages. (#1515) Thanks @pookNast.</li>
-<li>UI: cache Control UI markdown rendering + memoize chat text extraction to reduce Safari typing jank.</li>
-<li>Tailscale: retry serve/funnel with sudo only for permission errors and keep original failure details. (#1551) Thanks @sweepies.</li>
-<li>Agents: add CLI log hint to "agent failed before reply" messages. (#1550) Thanks @sweepies.</li>
-<li>Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.</li>
-<li>Discord: retry rate-limited allowlist resolution + command deploy to avoid gateway crashes.</li>
-<li>Mentions: ignore mentionPattern matches when another explicit mention is present in group chats (Slack/Discord/Telegram/WhatsApp).</li>
-<li>Gateway: accept null optional fields in exec approval requests. (#1511) Thanks @pvoo.</li>
-<li>Exec: honor tools.exec ask/security defaults for elevated approvals (avoid unwanted prompts).</li>
-<li>TUI: forward unknown slash commands (for example, <code>/context</code>) to the Gateway.</li>
-<li>TUI: include Gateway slash commands in autocomplete and <code>/help</code>.</li>
-<li>CLI: skip usage lines in <code>moltbot models status</code> when provider usage is unavailable.</li>
-<li>CLI: suppress diagnostic session/run noise during auth probes.</li>
-<li>CLI: hide auth probe timeout warnings from embedded runs.</li>
-<li>CLI: render auth probe results as a table in <code>moltbot models status</code>.</li>
-<li>CLI: suppress probe-only embedded logs unless <code>--verbose</code> is set.</li>
-<li>CLI: move auth probe errors below the table to reduce wrapping.</li>
-<li>CLI: prevent ANSI color bleed when table cells wrap.</li>
-<li>CLI: explain when auth profiles are excluded by auth.order in probe details.</li>
-<li>CLI: drop the em dash when the banner tagline wraps to a second line.</li>
-<li>CLI: inline auth probe errors in status rows to reduce wrapping.</li>
-<li>Telegram: render markdown in media captions. (#1478)</li>
-<li>Agents: honor enqueue overrides for embedded runs to avoid queue deadlocks in tests.</li>
-<li>Agents: trigger model fallback when auth profiles are all in cooldown or unavailable. (#1522)</li>
-<li>Daemon: use platform PATH delimiters when building minimal service paths.</li>
-<li>Tests: skip embedded runner ordering assertion on Windows to avoid CI timeouts.</li>
-<li>Linux: include env-configured user bin roots in systemd PATH and align PATH audits. (#1512) Thanks @robbyczgw-cla.</li>
-<li>TUI: render Gateway slash-command replies as system output (for example, <code>/context</code>).</li>
-<li>Media: only parse <code>MEDIA:</code> tags when they start the line to avoid stripping prose mentions. (#1206)</li>
-<li>Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.</li>
-<li>Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)</li>
-<li>Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.</li>
-<li>MS Teams (plugin): remove <code>.default</code> suffix from Graph scopes to avoid double-appending. (#1507) Thanks @Evizero.</li>
-<li>MS Teams (plugin): remove <code>.default</code> suffix from Bot Framework probe scope to avoid double-appending. (#1574) Thanks @Evizero.</li>
-<li>Browser: keep extension relay tabs controllable when the extension reuses a session id after switching tabs. (#1160)</li>
-<li>Agents: warn and ignore tool allowlists that only reference unknown or unloaded plugin tools. (#1566)</li>
-</ul>
-<p><a href="https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/moltbot/moltbot/releases/download/v2026.1.23/Moltbot-2026.1.23.zip" length="22326233" type="application/octet-stream" sparkle:edSignature="p40dFczUfmMpsif4BrEUYVqUPG2WiBXleWgefwu4WiqjuyXbw7CAaH5CpQKig/k2qRLlE59kX7AR/qJqmy+yCA=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.1.24/OpenClaw-2026.1.24.zip" length="12396700" type="application/octet-stream" sparkle:edSignature="u+XzKD3YwV8s79gIr7LK4OtDCcmp/b+cjNC6SHav3/1CVJegh02SsBKatrampox32XGx8P2+8c/+fHV+qpkHCA=="/>
         </item>
     </channel>
 </rss>

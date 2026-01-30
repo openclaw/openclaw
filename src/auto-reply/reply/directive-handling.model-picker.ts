@@ -1,5 +1,5 @@
 import { type ModelRef, normalizeProviderId } from "../../agents/model-selection.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 export type ModelPickerCatalogEntry = {
   provider: string;
@@ -68,7 +68,7 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
 
 export function resolveProviderEndpointLabel(
   provider: string,
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
 ): { endpoint?: string; api?: string } {
   const normalized = normalizeProviderId(provider);
   const providers = (cfg.models?.providers ?? {}) as Record<

@@ -1,6 +1,6 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, ProxyAgent, type Dispatcher } from "undici";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -210,7 +210,30 @@ export async function resolvePinnedHostname(
   };
 }
 
+function resolveProxyUrl(): string | undefined {
+  return (
+    process.env.https_proxy ||
+    process.env.HTTPS_PROXY ||
+    process.env.http_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.all_proxy ||
+    process.env.ALL_PROXY ||
+    undefined
+  );
+}
+
 export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+  const proxyUrl = resolveProxyUrl();
+  if (proxyUrl) {
+    // Use ProxyAgent with pinned DNS lookup for SSRF protection + proxy support
+    const normalizedProxy = proxyUrl.replace(/^socks5h:\/\//, "socks5://");
+    return new ProxyAgent({
+      uri: normalizedProxy,
+      requestTls: {
+        lookup: pinned.lookup,
+      },
+    });
+  }
   return new Agent({
     connect: {
       lookup: pinned.lookup,

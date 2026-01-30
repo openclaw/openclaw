@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { defaultSlotIdForKey } from "./slots.js";
 import type { PluginRecord } from "./registry.js";
 
@@ -49,7 +49,7 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
 };
 
 export const normalizePluginsConfig = (
-  config?: MoltbotConfig["plugins"],
+  config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
   const memorySlot = normalizeSlotValue(config?.slots?.memory);
   return {
@@ -64,13 +64,13 @@ export const normalizePluginsConfig = (
   };
 };
 
-const hasExplicitMemorySlot = (plugins?: MoltbotConfig["plugins"]) =>
+const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
 
-const hasExplicitMemoryEntry = (plugins?: MoltbotConfig["plugins"]) =>
+const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
-const hasExplicitPluginConfig = (plugins?: MoltbotConfig["plugins"]) => {
+const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (!plugins) return false;
   if (typeof plugins.enabled === "boolean") return true;
   if (Array.isArray(plugins.allow) && plugins.allow.length > 0) return true;
@@ -83,9 +83,9 @@ const hasExplicitPluginConfig = (plugins?: MoltbotConfig["plugins"]) => {
 };
 
 export function applyTestPluginDefaults(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-): MoltbotConfig {
+): OpenClawConfig {
   if (!env.VITEST) return cfg;
   const plugins = cfg.plugins;
   const explicitConfig = hasExplicitPluginConfig(plugins);
@@ -119,7 +119,7 @@ export function applyTestPluginDefaults(
 }
 
 export function isTestDefaultMemorySlotDisabled(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (!env.VITEST) return false;
