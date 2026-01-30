@@ -185,7 +185,7 @@ export async function doctorCommand(
   cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
   noteSandboxScopeWarnings(cfg);
 
-  await maybeScanExtraGatewayServices(options);
+  await maybeScanExtraGatewayServices(options, runtime, prompter);
   await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(cfg);

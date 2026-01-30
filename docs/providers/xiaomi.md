@@ -1,14 +1,14 @@
 ---
-summary: "Use Xiaomi MiMo (mimo-v2-flash) with Moltbot"
+summary: "Use Xiaomi MiMo (mimo-v2-flash) with OpenClaw"
 read_when:
-  - You want Xiaomi MiMo models in Moltbot
+  - You want Xiaomi MiMo models in OpenClaw
   - You need XIAOMI_API_KEY setup
 ---
 # Xiaomi MiMo
 
 Xiaomi MiMo is the API platform for **MiMo** models. It provides REST APIs compatible with
 OpenAI and Anthropic formats and uses API keys for authentication. Create your API key in
-the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys). Moltbot uses
+the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys). OpenClaw uses
 the `xiaomi` provider with a Xiaomi MiMo API key.
 
 ## Model overview
@@ -20,9 +20,9 @@ the `xiaomi` provider with a Xiaomi MiMo API key.
 ## CLI setup
 
 ```bash
-moltbot onboard --auth-choice xiaomi-api-key
+openclaw onboard --auth-choice xiaomi-api-key
 # or non-interactive
-moltbot onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
+openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 ```
 
 ## Config snippet
