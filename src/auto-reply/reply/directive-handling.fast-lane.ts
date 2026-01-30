@@ -1,5 +1,5 @@
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -12,7 +12,7 @@ export async function applyInlineDirectivesFastLane(params: {
   directives: InlineDirectives;
   commandAuthorized: boolean;
   ctx: MsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId?: string;
   isGroup: boolean;
   sessionEntry: SessionEntry;
@@ -35,7 +35,7 @@ export async function applyInlineDirectivesFastLane(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
-  agentCfg?: NonNullable<MoltbotConfig["agents"]>["defaults"];
+  agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];
   modelState: {
     resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
     allowedModelKeys: Set<string>;

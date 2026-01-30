@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import { ensureMoltbotModelsJson } from "./models-config.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -67,10 +67,10 @@ const _makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies MoltbotConfig;
+  }) satisfies OpenClawConfig;
 
-const _ensureModels = (cfg: MoltbotConfig, agentDir: string) =>
-  ensureMoltbotModelsJson(cfg, agentDir) as unknown;
+const _ensureModels = (cfg: OpenClawConfig, agentDir: string) =>
+  ensureOpenClawModelsJson(cfg, agentDir) as unknown;
 
 const _textFromContent = (content: unknown) => {
   if (typeof content === "string") return content;
@@ -101,7 +101,7 @@ describe("resolveSessionAgentIds", () => {
     agents: {
       list: [{ id: "main" }, { id: "beta", default: true }],
     },
-  } as MoltbotConfig;
+  } as OpenClawConfig;
 
   it("falls back to the configured default when sessionKey is missing", () => {
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({

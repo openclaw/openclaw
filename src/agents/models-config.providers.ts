@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
@@ -14,7 +14,7 @@ import {
 } from "./synthetic-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 
-type ModelsConfig = NonNullable<MoltbotConfig["models"]>;
+type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
@@ -28,6 +28,17 @@ const MINIMAX_API_COST = {
   output: 60,
   cacheRead: 2,
   cacheWrite: 10,
+};
+
+const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
+export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
+const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
+const XIAOMI_DEFAULT_MAX_TOKENS = 8192;
+const XIAOMI_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
 };
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
@@ -341,6 +352,24 @@ function buildSyntheticProvider(): ProviderConfig {
   };
 }
 
+export function buildXiaomiProvider(): ProviderConfig {
+  return {
+    baseUrl: XIAOMI_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: XIAOMI_DEFAULT_MODEL_ID,
+        name: "Xiaomi MiMo V2 Flash",
+        reasoning: false,
+        input: ["text"],
+        cost: XIAOMI_DEFAULT_COST,
+        contextWindow: XIAOMI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: XIAOMI_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -410,6 +439,13 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
+  const xiaomiKey =
+    resolveEnvApiKeyVarName("xiaomi") ??
+    resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
+  if (xiaomiKey) {
+    providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
   // Ollama provider - only add if explicitly configured
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
@@ -459,15 +495,15 @@ export async function resolveImplicitCopilotProvider(params: {
 
   // pi-coding-agent's ModelRegistry marks a model "available" only if its
   // `AuthStorage` has auth configured for that provider (via auth.json/env/etc).
-  // Our Copilot auth lives in Moltbot's auth-profiles store instead, so we also
+  // Our Copilot auth lives in OpenClaw's auth-profiles store instead, so we also
   // write a runtime-only auth.json entry for pi-coding-agent to pick up.
   //
-  // This is safe because it's (1) within Moltbot's agent dir, (2) contains the
+  // This is safe because it's (1) within OpenClaw's agent dir, (2) contains the
   // GitHub token (not the exchanged Copilot token), and (3) matches existing
   // patterns for OAuth-like providers in pi-coding-agent.
   // Note: we deliberately do not write pi-coding-agent's `auth.json` here.
-  // Moltbot uses its own auth store and exchanges tokens at runtime.
-  // `models list` uses Moltbot's auth heuristics for availability.
+  // OpenClaw uses its own auth store and exchanges tokens at runtime.
+  // `models list` uses OpenClaw's auth heuristics for availability.
 
   // We intentionally do NOT define custom models for Copilot in models.json.
   // pi-coding-agent treats providers with models as replacements requiring apiKey.
@@ -480,7 +516,7 @@ export async function resolveImplicitCopilotProvider(params: {
 
 export async function resolveImplicitBedrockProvider(params: {
   agentDir: string;
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;

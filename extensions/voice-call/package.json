@@ -1,14 +1,14 @@
 {
-  "name": "@moltbot/voice-call",
-  "version": "2026.1.27-beta.1",
+  "name": "@openclaw/voice-call",
+  "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot voice-call plugin",
+  "description": "OpenClaw voice-call plugin",
   "dependencies": {
     "@sinclair/typebox": "0.34.47",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
   },
-  "moltbot": {
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

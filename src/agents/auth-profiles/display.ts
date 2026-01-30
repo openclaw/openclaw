@@ -1,8 +1,8 @@
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 
 export function resolveAuthProfileDisplayLabel(params: {
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   store: AuthProfileStore;
   profileId: string;
 }): string {

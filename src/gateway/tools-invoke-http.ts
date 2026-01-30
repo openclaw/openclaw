@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { createMoltbotTools } from "../agents/moltbot-tools.js";
+import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   filterToolsByPolicy,
   resolveEffectiveToolPolicy,
@@ -18,6 +18,7 @@ import {
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
+import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -33,6 +34,7 @@ import {
 } from "./http-common.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
+const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
 type ToolsInvokeBody = {
   tool?: unknown;
@@ -45,6 +47,26 @@ type ToolsInvokeBody = {
 function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
   if (typeof body.sessionKey === "string" && body.sessionKey.trim()) return body.sessionKey.trim();
   return undefined;
+}
+
+function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): string[] {
+  if (!process.env.VITEST) return [];
+  const reasons: string[] = [];
+  const plugins = cfg.plugins;
+  const slotRaw = plugins?.slots?.memory;
+  const slotDisabled =
+    slotRaw === null || (typeof slotRaw === "string" && slotRaw.trim().toLowerCase() === "none");
+  const pluginsDisabled = plugins?.enabled === false;
+  const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
+
+  if (pluginsDisabled) reasons.push("plugins.enabled=false");
+  if (slotDisabled) {
+    reasons.push(slotRaw === null ? "plugins.slots.memory=null" : 'plugins.slots.memory="none"');
+  }
+  if (!pluginsDisabled && !slotDisabled && defaultDisabled) {
+    reasons.push("memory plugin disabled by test default");
+  }
+  return reasons;
 }
 
 function mergeActionIntoArgsIfSupported(params: {
@@ -103,6 +125,23 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
+  if (process.env.VITEST && MEMORY_TOOL_NAMES.has(toolName)) {
+    const reasons = resolveMemoryToolDisableReasons(cfg);
+    if (reasons.length > 0) {
+      const suffix = reasons.length > 0 ? ` (${reasons.join(", ")})` : "";
+      sendJson(res, 400, {
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message:
+            `memory tools are disabled in tests${suffix}. ` +
+            'Enable by setting plugins.slots.memory="memory-core" (and ensure plugins.enabled is not false).',
+        },
+      });
+      return true;
+    }
+  }
+
   const action = typeof body.action === "string" ? body.action.trim() : undefined;
 
   const argsRaw = body.args;
@@ -117,8 +156,10 @@ export async function handleToolsInvokeHttpRequest(
     !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
-  const messageChannel = normalizeMessageChannel(getHeader(req, "x-moltbot-message-channel") ?? "");
-  const accountId = getHeader(req, "x-moltbot-account-id")?.trim() || undefined;
+  const messageChannel = normalizeMessageChannel(
+    getHeader(req, "x-openclaw-message-channel") ?? "",
+  );
+  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
 
   const {
     agentId,
@@ -155,7 +196,7 @@ export async function handleToolsInvokeHttpRequest(
     : undefined;
 
   // Build tool list (core + plugin tools).
-  const allTools = createMoltbotTools({
+  const allTools = createOpenClawTools({
     agentSessionKey: sessionKey,
     agentChannel: messageChannel ?? undefined,
     agentAccountId: accountId,

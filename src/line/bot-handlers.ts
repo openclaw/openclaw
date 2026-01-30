@@ -8,7 +8,7 @@ import type {
   PostbackEvent,
   EventSource,
 } from "@line/bot-sdk";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
@@ -33,7 +33,7 @@ interface MediaRef {
 }
 
 export interface LineHandlerContext {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   runtime: RuntimeEnv;
   mediaMaxBytes: number;

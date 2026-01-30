@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/nostr",
-  "version": "2026.1.27-beta.1",
+  "name": "@openclaw/nostr",
+  "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Nostr channel plugin for NIP-04 encrypted DMs",
-  "moltbot": {
+  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ],
@@ -18,13 +18,13 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/nostr",
+      "npmSpec": "@openclaw/nostr",
       "localPath": "extensions/nostr",
       "defaultChoice": "npm"
     }
   },
   "dependencies": {
-    "moltbot": "workspace:*",
+    "openclaw": "workspace:*",
     "nostr-tools": "^2.20.0",
     "zod": "^4.3.6"
   }

@@ -1,9 +1,9 @@
 {
-  "name": "@moltbot/google-antigravity-auth",
-  "version": "2026.1.27-beta.1",
+  "name": "@openclaw/google-antigravity-auth",
+  "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Google Antigravity OAuth provider plugin",
-  "moltbot": {
+  "description": "OpenClaw Google Antigravity OAuth provider plugin",
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

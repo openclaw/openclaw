@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "clawdbot/plugin-sdk";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk";
 
 type ZalouserAccountStatus = {
   accountId?: unknown;
@@ -60,7 +60,7 @@ export function collectZalouserStatusIssues(
           accountId,
           kind: "auth",
           message: "Not authenticated (no zca session).",
-          fix: "Run: moltbot channels login --channel zalouser",
+          fix: "Run: openclaw channels login --channel zalouser",
         });
       }
       continue;
