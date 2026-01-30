@@ -170,6 +170,7 @@ function makeAttemptResult(
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
     messagingToolSentTargets: [],
+    autoCompactionAttempts: 0,
     cloudCodeAssistFormatError: false,
     ...overrides,
   };
@@ -220,6 +221,20 @@ describe("overflow compaction in run loop", () => {
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining("auto-compaction succeeded"));
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("skips manual compaction when auto-compaction already ran", async () => {
+    const overflowError = new Error("request_too_large: Request size exceeds model context window");
+
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError, autoCompactionAttempts: 1 }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta.error?.kind).toBe("context_overflow");
   });
 
   it("returns error if compaction fails", async () => {
