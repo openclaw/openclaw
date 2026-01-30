@@ -2,114 +2,52 @@
 name: 1password
 description: Set up and use 1Password CLI (op). Use when installing the CLI, enabling desktop app integration, signing in (single or multi-account), or reading/injecting/running secrets via op.
 homepage: https://developer.1password.com/docs/cli/get-started/
-metadata: {"moltbot":{"emoji":"🔐","requires":{"bins":["op"]},"install":[{"id":"brew","kind":"brew","formula":"1password-cli","bins":["op"],"label":"Install 1Password CLI (brew)"}]}}
+metadata: {"openclaw":{"emoji":"🔐","requires":{"bins":["op"]},"install":[{"id":"brew","kind":"brew","formula":"1password-cli","bins":["op"],"label":"Install 1Password CLI (brew)"}]}}
 ---
 
 # 1Password CLI
 
-## Steve's Setup (USE THIS)
+Follow the official CLI get-started steps. Don't guess install commands.
 
-You have a persistent `op-safe` tmux session and `OP_PASSWORD` in your env. **Do NOT use the desktop app UI.**
-
-### Quick Reference
-
-```bash
-# Check if authenticated
-tmux send-keys -t op-safe 'op whoami' Enter && sleep 1 && tmux capture-pane -t op-safe -p -S -5
-
-# If you see "no active session" → re-authenticate (see below)
-# If you see your email → you're good, run commands
-```
-
-### Re-authenticate (when session expires)
-
-```bash
-# Load password from env
-source ~/.clawdbot/.env
-
-# Sign in
-tmux send-keys -t op-safe 'eval $(op signin --account my.1password.com)' Enter
-sleep 1
-tmux send-keys -t op-safe "$OP_PASSWORD" Enter
-sleep 2
-
-# Verify
-tmux send-keys -t op-safe 'op whoami' Enter && sleep 1 && tmux capture-pane -t op-safe -p -S -5
-```
-
-### Read Secrets
-
-```bash
-# List all items
-tmux send-keys -t op-safe 'op item list' Enter && sleep 1 && tmux capture-pane -t op-safe -p -S -30
-
-# Get specific item as JSON
-tmux send-keys -t op-safe 'op item get "item name" --format json' Enter && sleep 2 && tmux capture-pane -t op-safe -p -S -50
-
-# Get specific field
-tmux send-keys -t op-safe 'op item get "item name" --fields label=password' Enter && sleep 1 && tmux capture-pane -t op-safe -p -S -5
-
-# List items in specific vault
-tmux send-keys -t op-safe 'op item list --vault "MeshGuard"' Enter && sleep 1 && tmux capture-pane -t op-safe -p -S -20
-```
-
-### Account Details
-
-- **Account**: my.1password.com
-- **Email**: steve@withagency.ai
-- **Tmux session**: `op-safe` (persistent, don't kill it)
-- **Password env var**: `OP_PASSWORD` in `~/.clawdbot/.env`
-
-### Vaults Available
-
-- **Steve** — personal secrets, skill configs (clawdbot skill: xxx items)
-- **MeshGuard** — MeshGuard-specific secrets
-
-## Workflow (Step by Step)
-
-1. **Check auth status first:**
-   ```bash
-   tmux send-keys -t op-safe 'op whoami 2>&1' Enter && sleep 1 && tmux capture-pane -t op-safe -p -S -5
-   ```
-
-2. **If expired ("no active session")**, re-auth:
-   ```bash
-   source ~/.clawdbot/.env
-   tmux send-keys -t op-safe 'eval $(op signin --account my.1password.com)' Enter
-   sleep 1
-   tmux send-keys -t op-safe "$OP_PASSWORD" Enter
-   sleep 2
-   ```
-
-3. **Verify auth worked:**
-   ```bash
-   tmux send-keys -t op-safe 'op whoami' Enter && sleep 1 && tmux capture-pane -t op-safe -p -S -5
-   ```
-
-4. **Run your op commands** through tmux send-keys + capture-pane
-
-## Guardrails
-
-- **Never paste secrets into chat or logs** — only reference them by item name
-- **Never run `op` directly** — always use the `op-safe` tmux session
-- **Prefer `op run` / `op inject`** over writing secrets to disk when running scripts
-- **Session expires after ~30 minutes of inactivity** — just re-auth using the steps above
-
-## Troubleshooting
-
-**"no active session found"** → Re-authenticate using the steps above
-
-**tmux session doesn't exist** → Create it:
-```bash
-tmux new-session -d -s op-safe
-```
-
-**Wrong account** → Specify account explicitly:
-```bash
-tmux send-keys -t op-safe 'eval $(op signin --account my.1password.com)' Enter
-```
-
-## References (for setup/install)
+## References
 
 - `references/get-started.md` (install + app integration + sign-in flow)
 - `references/cli-examples.md` (real `op` examples)
+
+## Workflow
+
+1. Check OS + shell.
+2. Verify CLI present: `op --version`.
+3. Confirm desktop app integration is enabled (per get-started) and the app is unlocked.
+4. REQUIRED: create a fresh tmux session for all `op` commands (no direct `op` calls outside tmux).
+5. Sign in / authorize inside tmux: `op signin` (expect app prompt).
+6. Verify access inside tmux: `op whoami` (must succeed before any secret read).
+7. If multiple accounts: use `--account` or `OP_ACCOUNT`.
+
+## REQUIRED tmux session (T-Max)
+
+The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session with a fresh socket/session name.
+
+Example (see `tmux` skill for socket conventions, do not reuse old session names):
+
+```bash
+SOCKET_DIR="${CLAWDBOT_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
+mkdir -p "$SOCKET_DIR"
+SOCKET="$SOCKET_DIR/openclaw-op.sock"
+SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
+
+tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op signin --account my.1password.com" Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op whoami" Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op vault list" Enter
+tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
+tmux -S "$SOCKET" kill-session -t "$SESSION"
+```
+
+## Guardrails
+
+- Never paste secrets into logs, chat, or code.
+- Prefer `op run` / `op inject` over writing secrets to disk.
+- If sign-in without app integration is needed, use `op account add`.
+- If a command returns "account is not signed in", re-run `op signin` inside tmux and authorize in the app.
+- Do not run `op` outside tmux; stop and ask if tmux is unavailable.

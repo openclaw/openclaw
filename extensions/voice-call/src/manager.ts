@@ -19,6 +19,22 @@ import {
 } from "./types.js";
 import { escapeXml, mapVoiceToPolly } from "./voice-mapping.js";
 
+function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
+  const rawOverride = storePath?.trim() || config.store?.trim();
+  if (rawOverride) return resolveUserPath(rawOverride);
+  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
+  const candidates = [preferred].map((dir) => resolveUserPath(dir));
+  const existing =
+    candidates.find((dir) => {
+      try {
+        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
+      } catch {
+        return false;
+      }
+    }) ?? resolveUserPath(preferred);
+  return existing;
+}
+
 /**
  * Manages voice calls: state machine, persistence, and provider coordination.
  */
@@ -44,11 +60,7 @@ export class CallManager {
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
     // Resolve store path with tilde expansion (like other config values)
-    const rawPath =
-      storePath ||
-      config.store ||
-      path.join(os.homedir(), "clawd", "voice-calls");
-    this.storePath = resolveUserPath(rawPath);
+    this.storePath = resolveDefaultStoreBase(config, storePath);
   }
 
   /**

@@ -6,7 +6,7 @@ import type { Command } from "commander";
 
 import { loadConfig } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
-import { getWideAreaZonePath, WIDE_AREA_DISCOVERY_DOMAIN } from "../infra/widearea-dns.js";
+import { getWideAreaZonePath, resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
@@ -97,12 +97,15 @@ export function registerDnsCli(program: Command) {
     .description("DNS helpers for wide-area discovery (Tailscale + CoreDNS)")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dns", "docs.molt.bot/cli/dns")}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dns", "docs.openclaw.ai/cli/dns")}\n`,
     );
 
   dns
     .command("setup")
-    .description("Set up CoreDNS to serve moltbot.internal for unicast DNS-SD (Wide-Area Bonjour)")
+    .description(
+      "Set up CoreDNS to serve your discovery domain for unicast DNS-SD (Wide-Area Bonjour)",
+    )
+    .option("--domain <domain>", "Wide-area discovery domain (e.g. openclaw.internal)")
     .option(
       "--apply",
       "Install/update CoreDNS config and (re)start the service (requires sudo)",
@@ -112,7 +115,15 @@ export function registerDnsCli(program: Command) {
       const cfg = loadConfig();
       const tailnetIPv4 = pickPrimaryTailnetIPv4();
       const tailnetIPv6 = pickPrimaryTailnetIPv6();
-      const zonePath = getWideAreaZonePath();
+      const wideAreaDomain = resolveWideAreaDiscoveryDomain({
+        configDomain: (opts.domain as string | undefined) ?? cfg.discovery?.wideArea?.domain,
+      });
+      if (!wideAreaDomain) {
+        throw new Error(
+          "No wide-area domain configured. Set discovery.wideArea.domain or pass --domain.",
+        );
+      }
+      const zonePath = getWideAreaZonePath(wideAreaDomain);
 
       const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
       defaultRuntime.log(theme.heading("DNS setup"));
@@ -124,7 +135,7 @@ export function registerDnsCli(program: Command) {
             { key: "Value", header: "Value", minWidth: 24, flex: true },
           ],
           rows: [
-            { Key: "Domain", Value: WIDE_AREA_DISCOVERY_DOMAIN },
+            { Key: "Domain", Value: wideAreaDomain },
             { Key: "Zone file", Value: zonePath },
             {
               Key: "Tailnet IP",
@@ -134,12 +145,12 @@ export function registerDnsCli(program: Command) {
         }).trimEnd(),
       );
       defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Recommended ~/.clawdbot/moltbot.json:"));
+      defaultRuntime.log(theme.heading("Recommended ~/.openclaw/openclaw.json:"));
       defaultRuntime.log(
         JSON.stringify(
           {
             gateway: { bind: "auto" },
-            discovery: { wideArea: { enabled: true } },
+            discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
           },
           null,
           2,
@@ -150,7 +161,9 @@ export function registerDnsCli(program: Command) {
       defaultRuntime.log(
         theme.muted(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`),
       );
-      defaultRuntime.log(theme.muted("- Restrict to domain (Split DNS): moltbot.internal"));
+      defaultRuntime.log(
+        theme.muted(`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`),
+      );
 
       if (!opts.apply) {
         defaultRuntime.log("");
@@ -170,7 +183,7 @@ export function registerDnsCli(program: Command) {
       const corefilePath = path.join(etcDir, "Corefile");
       const confDir = path.join(etcDir, "conf.d");
       const importGlob = path.join(confDir, "*.server");
-      const serverPath = path.join(confDir, "moltbot.internal.server");
+      const serverPath = path.join(confDir, `${wideAreaDomain.replace(/\.$/, "")}.server`);
 
       run("brew", ["list", "coredns"], { allowFailure: true });
       run("brew", ["install", "coredns"], {
@@ -189,7 +202,7 @@ export function registerDnsCli(program: Command) {
       const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string => Boolean(v?.trim()));
 
       const server = [
-        `${WIDE_AREA_DISCOVERY_DOMAIN.replace(/\.$/, "")}:53 {`,
+        `${wideAreaDomain.replace(/\.$/, "")}:53 {`,
         `  bind ${bindArgs.join(" ")}`,
         `  file ${zonePath} {`,
         `    reload 10s`,
@@ -210,8 +223,8 @@ export function registerDnsCli(program: Command) {
         const serial = `${y}${m}${d}01`;
 
         const zoneLines = [
-          `; created by moltbot dns setup (will be overwritten by the gateway when wide-area discovery is enabled)`,
-          `$ORIGIN ${WIDE_AREA_DISCOVERY_DOMAIN}`,
+          `; created by openclaw dns setup (will be overwritten by the gateway when wide-area discovery is enabled)`,
+          `$ORIGIN ${wideAreaDomain}`,
           `$TTL 60`,
           `@ IN SOA ns1 hostmaster ${serial} 7200 3600 1209600 60`,
           `@ IN NS ns1`,
@@ -233,7 +246,7 @@ export function registerDnsCli(program: Command) {
         defaultRuntime.log("");
         defaultRuntime.log(
           theme.muted(
-            "Note: enable discovery.wideArea.enabled in ~/.clawdbot/moltbot.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
+            "Note: enable discovery.wideArea.enabled in ~/.openclaw/openclaw.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
           ),
         );
       }
