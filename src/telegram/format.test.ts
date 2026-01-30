@@ -50,7 +50,9 @@ describe("markdownToTelegramHtml", () => {
 
   it("properly nests overlapping bold and autolink (#4071)", () => {
     const res = markdownToTelegramHtml("**start https://example.com** end");
-    expect(res).toMatch(/<b>start <a href="https:\/\/example\.com">https:\/\/example\.com<\/a><\/b> end/);
+    expect(res).toMatch(
+      /<b>start <a href="https:\/\/example\.com">https:\/\/example\.com<\/a><\/b> end/,
+    );
   });
 
   it("properly nests link inside bold", () => {
