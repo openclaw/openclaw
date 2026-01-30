@@ -365,12 +365,23 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
     .join("\n");
 }
 
+function safeParseTtsPrefs(raw: string): TtsUserPrefs {
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const obj = parsed as Record<string, unknown>;
+  const tts = obj.tts;
+  if (tts !== undefined && (typeof tts !== "object" || tts === null || Array.isArray(tts))) {
+    return {};
+  }
+  return obj as TtsUserPrefs;
+}
+
 function readPrefs(prefsPath: string): TtsUserPrefs {
   try {
     if (!existsSync(prefsPath)) {
       return {};
     }
-    return JSON.parse(readFileSync(prefsPath, "utf8")) as TtsUserPrefs;
+    return safeParseTtsPrefs(readFileSync(prefsPath, "utf8"));
   } catch {
     return {};
   }
