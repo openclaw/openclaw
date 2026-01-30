@@ -3,12 +3,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { LEGACY_CANVAS_HANDLER_NAME } from "../compat/legacy-names.js";
 import { detectMime } from "../media/mime.js";
 
-export const A2UI_PATH = "/__moltbot__/a2ui";
-export const CANVAS_HOST_PATH = "/__moltbot__/canvas";
-export const CANVAS_WS_PATH = "/__moltbot/ws";
+export const A2UI_PATH = "/__openclaw__/a2ui";
+
+export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
+
+export const CANVAS_WS_PATH = "/__openclaw__/ws";
 
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
@@ -92,15 +93,14 @@ async function resolveA2uiFilePath(rootReal: string, urlPath: string) {
 }
 
 export function injectCanvasLiveReload(html: string): string {
-  const legacyHandlerName = LEGACY_CANVAS_HANDLER_NAME;
   const snippet = `
 <script>
 (() => {
   // Cross-platform action bridge helper.
   // Works on:
-  // - iOS: window.webkit.messageHandlers.(current|legacy)CanvasA2UIAction.postMessage(...)
-  // - Android: window.(current|legacy)CanvasA2UIAction.postMessage(...)
-  const handlerNames = ["moltbotCanvasA2UIAction", "${legacyHandlerName}"];
+  // - iOS: window.webkit.messageHandlers.openclawCanvasA2UIAction.postMessage(...)
+  // - Android: window.openclawCanvasA2UIAction.postMessage(...)
+  const handlerNames = ["openclawCanvasA2UIAction"];
   function postToNode(payload) {
     try {
       const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
@@ -127,13 +127,11 @@ export function injectCanvasLiveReload(html: string): string {
     const action = { ...userAction, id };
     return postToNode({ userAction: action });
   }
-  globalThis.Moltbot = globalThis.Moltbot ?? {};
-  globalThis.Moltbot.postMessage = postToNode;
-  globalThis.Moltbot.sendUserAction = sendUserAction;
-  globalThis.moltbotPostMessage = postToNode;
-  globalThis.moltbotSendUserAction = sendUserAction;
-  globalThis.clawdbotPostMessage = postToNode;
-  globalThis.clawdbotSendUserAction = sendUserAction;
+  globalThis.OpenClaw = globalThis.OpenClaw ?? {};
+  globalThis.OpenClaw.postMessage = postToNode;
+  globalThis.OpenClaw.sendUserAction = sendUserAction;
+  globalThis.openclawPostMessage = postToNode;
+  globalThis.openclawSendUserAction = sendUserAction;
 
   try {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -161,9 +159,9 @@ export async function handleA2uiHttpRequest(
   if (!urlRaw) return false;
 
   const url = new URL(urlRaw, "http://localhost");
-  if (url.pathname !== A2UI_PATH && !url.pathname.startsWith(`${A2UI_PATH}/`)) {
-    return false;
-  }
+  const basePath =
+    url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`) ? A2UI_PATH : undefined;
+  if (!basePath) return false;
 
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -180,7 +178,7 @@ export async function handleA2uiHttpRequest(
     return true;
   }
 
-  const rel = url.pathname.slice(A2UI_PATH.length);
+  const rel = url.pathname.slice(basePath.length);
   const filePath = await resolveA2uiFilePath(a2uiRootReal, rel || "/");
   if (!filePath) {
     res.statusCode = 404;

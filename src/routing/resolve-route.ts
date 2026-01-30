@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { listBindings } from "./bindings.js";
 import {
   buildAgentMainSessionKey,
@@ -18,7 +18,7 @@ export type RoutePeer = {
 };
 
 export type ResolveAgentRouteInput = {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -89,12 +89,12 @@ export function buildAgentSessionKey(params: {
   });
 }
 
-function listAgents(cfg: MoltbotConfig) {
+function listAgents(cfg: OpenClawConfig) {
   const agents = cfg.agents?.list;
   return Array.isArray(agents) ? agents : [];
 }
 
-function pickFirstExistingAgentId(cfg: MoltbotConfig, agentId: string): string {
+function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string {
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) return sanitizeAgentId(resolveDefaultAgentId(cfg));
   const normalized = normalizeAgentId(trimmed);

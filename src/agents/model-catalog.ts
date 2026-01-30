@@ -1,6 +1,6 @@
-import { type MoltbotConfig, loadConfig } from "../config/config.js";
-import { resolveMoltbotAgentDir } from "./agent-paths.js";
-import { ensureMoltbotModelsJson } from "./models-config.js";
+import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 export type ModelCatalogEntry = {
   id: string;
@@ -39,7 +39,7 @@ export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModul
 }
 
 export async function loadModelCatalog(params?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   useCache?: boolean;
 }): Promise<ModelCatalogEntry[]> {
   if (params?.useCache === false) {
@@ -57,13 +57,13 @@ export async function loadModelCatalog(params?: {
       });
     try {
       const cfg = params?.config ?? loadConfig();
-      await ensureMoltbotModelsJson(cfg);
+      await ensureOpenClawModelsJson(cfg);
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
       // will keep failing until restart).
       const piSdk = await importPiSdk();
-      const agentDir = resolveMoltbotAgentDir();
+      const agentDir = resolveOpenClawAgentDir();
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       const registry = piSdk.discoverModels(authStorage, agentDir) as
         | {

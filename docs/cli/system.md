@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `moltbot system` (system events, heartbeat, presence)"
+summary: "CLI reference for `openclaw system` (system events, heartbeat, presence)"
 read_when:
   - You want to enqueue a system event without creating a cron job
   - You need to enable or disable heartbeats
   - You want to inspect system presence entries
 ---
 
-# `moltbot system`
+# `openclaw system`
 
 System-level helpers for the Gateway: enqueue system events, control heartbeats,
 and view presence.
@@ -14,10 +14,10 @@ and view presence.
 ## Common commands
 
 ```bash
-moltbot system event --text "Check for urgent follow-ups" --mode now
-moltbot system heartbeat enable
-moltbot system heartbeat last
-moltbot system presence
+openclaw system event --text "Check for urgent follow-ups" --mode now
+openclaw system heartbeat enable
+openclaw system heartbeat last
+openclaw system presence
 ```
 
 ## `system event`

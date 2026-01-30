@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SlackChannelConfig } from "../config/types.slack.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
@@ -13,7 +13,7 @@ export type SlackChannelMigrationResult = {
 };
 
 function resolveAccountChannels(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId?: string | null,
 ): { channels?: SlackChannels } {
   if (!accountId) return {};
@@ -43,7 +43,7 @@ export function migrateSlackChannelsInPlace(
 }
 
 export function migrateSlackChannelConfig(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
   oldChannelId: string;
   newChannelId: string;

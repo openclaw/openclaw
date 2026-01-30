@@ -11,29 +11,29 @@ Manage Docker-based sandbox containers for isolated agent execution.
 
 ## Overview
 
-Moltbot can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
+OpenClaw can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
 
 ## Commands
 
-### `moltbot sandbox explain`
+### `openclaw sandbox explain`
 
 Inspect the **effective** sandbox mode/scope/workspace access, sandbox tool policy, and elevated gates (with fix-it config key paths).
 
 ```bash
-moltbot sandbox explain
-moltbot sandbox explain --session agent:main:main
-moltbot sandbox explain --agent work
-moltbot sandbox explain --json
+openclaw sandbox explain
+openclaw sandbox explain --session agent:main:main
+openclaw sandbox explain --agent work
+openclaw sandbox explain --json
 ```
 
-### `moltbot sandbox list`
+### `openclaw sandbox list`
 
 List all sandbox containers with their status and configuration.
 
 ```bash
-moltbot sandbox list
-moltbot sandbox list --browser  # List only browser containers
-moltbot sandbox list --json     # JSON output
+openclaw sandbox list
+openclaw sandbox list --browser  # List only browser containers
+openclaw sandbox list --json     # JSON output
 ```
 
 **Output includes:**
@@ -43,16 +43,16 @@ moltbot sandbox list --json     # JSON output
 - Idle time (time since last use)
 - Associated session/agent
 
-### `moltbot sandbox recreate`
+### `openclaw sandbox recreate`
 
 Remove sandbox containers to force recreation with updated images/config.
 
 ```bash
-moltbot sandbox recreate --all                # Recreate all containers
-moltbot sandbox recreate --session main       # Specific session
-moltbot sandbox recreate --agent mybot        # Specific agent
-moltbot sandbox recreate --browser            # Only browser containers
-moltbot sandbox recreate --all --force        # Skip confirmation
+openclaw sandbox recreate --all                # Recreate all containers
+openclaw sandbox recreate --session main       # Specific session
+openclaw sandbox recreate --agent mybot        # Specific agent
+openclaw sandbox recreate --browser            # Only browser containers
+openclaw sandbox recreate --all --force        # Skip confirmation
 ```
 
 **Options:**
@@ -70,14 +70,14 @@ moltbot sandbox recreate --all --force        # Skip confirmation
 
 ```bash
 # Pull new image
-docker pull moltbot-sandbox:latest
-docker tag moltbot-sandbox:latest moltbot-sandbox:bookworm-slim
+docker pull openclaw-sandbox:latest
+docker tag openclaw-sandbox:latest openclaw-sandbox:bookworm-slim
 
 # Update config to use new image
 # Edit config: agents.defaults.sandbox.docker.image (or agents.list[].sandbox.docker.image)
 
 # Recreate containers
-moltbot sandbox recreate --all
+openclaw sandbox recreate --all
 ```
 
 ### After changing sandbox configuration
@@ -86,15 +86,15 @@ moltbot sandbox recreate --all
 # Edit config: agents.defaults.sandbox.* (or agents.list[].sandbox.*)
 
 # Recreate to apply new config
-moltbot sandbox recreate --all
+openclaw sandbox recreate --all
 ```
 
 ### After changing setupCommand
 
 ```bash
-moltbot sandbox recreate --all
+openclaw sandbox recreate --all
 # or just one agent:
-moltbot sandbox recreate --agent family
+openclaw sandbox recreate --agent family
 ```
 
 
@@ -102,7 +102,7 @@ moltbot sandbox recreate --agent family
 
 ```bash
 # Update only one agent's containers
-moltbot sandbox recreate --agent alfred
+openclaw sandbox recreate --agent alfred
 ```
 
 ## Why is this needed?
@@ -112,14 +112,14 @@ moltbot sandbox recreate --agent alfred
 - Containers are only pruned after 24h of inactivity
 - Regularly-used agents keep old containers running indefinitely
 
-**Solution:** Use `moltbot sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
+**Solution:** Use `openclaw sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
 
-Tip: prefer `moltbot sandbox recreate` over manual `docker rm`. It uses the
+Tip: prefer `openclaw sandbox recreate` over manual `docker rm`. It uses the
 Gateway’s container naming and avoids mismatches when scope/session keys change.
 
 ## Configuration
 
-Sandbox settings live in `~/.clawdbot/moltbot.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
+Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
 
 ```jsonc
 {
@@ -129,8 +129,8 @@ Sandbox settings live in `~/.clawdbot/moltbot.json` under `agents.defaults.sandb
         "mode": "all",                    // off, non-main, all
         "scope": "agent",                 // session, agent, shared
         "docker": {
-          "image": "moltbot-sandbox:bookworm-slim",
-          "containerPrefix": "moltbot-sbx-"
+          "image": "openclaw-sandbox:bookworm-slim",
+          "containerPrefix": "openclaw-sbx-"
           // ... more Docker options
         },
         "prune": {

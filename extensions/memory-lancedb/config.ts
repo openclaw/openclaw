@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -17,7 +18,30 @@ export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "o
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
-const DEFAULT_DB_PATH = join(homedir(), ".clawdbot", "memory", "lancedb");
+const LEGACY_STATE_DIRS: string[] = [];
+
+function resolveDefaultDbPath(): string {
+  const home = homedir();
+  const preferred = join(home, ".openclaw", "memory", "lancedb");
+  try {
+    if (fs.existsSync(preferred)) return preferred;
+  } catch {
+    // best-effort
+  }
+
+  for (const legacy of LEGACY_STATE_DIRS) {
+    const candidate = join(home, legacy, "memory", "lancedb");
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // best-effort
+    }
+  }
+
+  return preferred;
+}
+
+const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -99,7 +123,7 @@ export const memoryConfigSchema = {
     },
     dbPath: {
       label: "Database Path",
-      placeholder: "~/.clawdbot/memory/lancedb",
+      placeholder: "~/.openclaw/memory/lancedb",
       advanced: true,
     },
     autoCapture: {

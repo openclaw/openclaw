@@ -239,7 +239,7 @@ html.theme-transition::view-transition-new(theme) {
   }
 }
 
-moltbot-app {
+openclaw-app {
   display: block;
   position: relative;
   z-index: 1;

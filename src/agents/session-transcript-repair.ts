@@ -46,7 +46,7 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text: "[moltbot] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
       },
     ],
     isError: true,

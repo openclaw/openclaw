@@ -35,11 +35,11 @@ Pending requests expire automatically after **5 minutes**.
 ## CLI workflow (headless friendly)
 
 ```bash
-moltbot nodes pending
-moltbot nodes approve <requestId>
-moltbot nodes reject <requestId>
-moltbot nodes status
-moltbot nodes rename --node <id|name|ip> --name "Living Room iPad"
+openclaw nodes pending
+openclaw nodes approve <requestId>
+openclaw nodes reject <requestId>
+openclaw nodes status
+openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
 `nodes status` shows paired/connected nodes and their capabilities.
@@ -74,12 +74,12 @@ If silent approval fails, it falls back to the normal “Approve/Reject” promp
 
 ## Storage (local, private)
 
-Pairing state is stored under the Gateway state directory (default `~/.clawdbot`):
+Pairing state is stored under the Gateway state directory (default `~/.openclaw`):
 
-- `~/.clawdbot/nodes/paired.json`
-- `~/.clawdbot/nodes/pending.json`
+- `~/.openclaw/nodes/paired.json`
+- `~/.openclaw/nodes/pending.json`
 
-If you override `CLAWDBOT_STATE_DIR`, the `nodes/` folder moves with it.
+If you override `OPENCLAW_STATE_DIR`, the `nodes/` folder moves with it.
 
 Security notes:
 - Tokens are secrets; treat `paired.json` as sensitive.

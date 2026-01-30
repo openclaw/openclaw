@@ -11,11 +11,11 @@ export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const profile = env.CLAWDBOT_PROFILE?.trim();
+  const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && profile.toLowerCase() !== "default") {
-    return path.join(homedir(), `clawd-${profile}`);
+    return path.join(homedir(), ".openclaw", `workspace-${profile}`);
   }
-  return path.join(homedir(), "clawd");
+  return path.join(homedir(), ".openclaw", "workspace");
 }
 
 export const DEFAULT_AGENT_WORKSPACE_DIR = resolveDefaultAgentWorkspaceDir();

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
-import { ensureMoltbotModelsJson } from "./models-config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
 
@@ -68,10 +68,10 @@ const _makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies MoltbotConfig;
+  }) satisfies OpenClawConfig;
 
-const _ensureModels = (cfg: MoltbotConfig, agentDir: string) =>
-  ensureMoltbotModelsJson(cfg, agentDir) as unknown;
+const _ensureModels = (cfg: OpenClawConfig, agentDir: string) =>
+  ensureOpenClawModelsJson(cfg, agentDir) as unknown;
 
 const _textFromContent = (content: unknown) => {
   if (typeof content === "string") return content;
@@ -105,14 +105,14 @@ describe("buildEmbeddedSandboxInfo", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "session:test",
-      workspaceDir: "/tmp/moltbot-sandbox",
-      agentWorkspaceDir: "/tmp/moltbot-workspace",
+      workspaceDir: "/tmp/openclaw-sandbox",
+      agentWorkspaceDir: "/tmp/openclaw-workspace",
       workspaceAccess: "none",
-      containerName: "moltbot-sbx-test",
+      containerName: "openclaw-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "moltbot-sandbox:bookworm-slim",
-        containerPrefix: "moltbot-sbx-",
+        image: "openclaw-sandbox:bookworm-slim",
+        containerPrefix: "openclaw-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: ["/tmp"],
@@ -129,13 +129,13 @@ describe("buildEmbeddedSandboxInfo", () => {
       browser: {
         bridgeUrl: "http://localhost:9222",
         noVncUrl: "http://localhost:6080",
-        containerName: "moltbot-sbx-browser-test",
+        containerName: "openclaw-sbx-browser-test",
       },
     } satisfies SandboxContext;
 
     expect(buildEmbeddedSandboxInfo(sandbox)).toEqual({
       enabled: true,
-      workspaceDir: "/tmp/moltbot-sandbox",
+      workspaceDir: "/tmp/openclaw-sandbox",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
       browserBridgeUrl: "http://localhost:9222",
@@ -147,14 +147,14 @@ describe("buildEmbeddedSandboxInfo", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "session:test",
-      workspaceDir: "/tmp/moltbot-sandbox",
-      agentWorkspaceDir: "/tmp/moltbot-workspace",
+      workspaceDir: "/tmp/openclaw-sandbox",
+      agentWorkspaceDir: "/tmp/openclaw-workspace",
       workspaceAccess: "none",
-      containerName: "moltbot-sbx-test",
+      containerName: "openclaw-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "moltbot-sandbox:bookworm-slim",
-        containerPrefix: "moltbot-sbx-",
+        image: "openclaw-sandbox:bookworm-slim",
+        containerPrefix: "openclaw-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: ["/tmp"],
@@ -178,7 +178,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       }),
     ).toEqual({
       enabled: true,
-      workspaceDir: "/tmp/moltbot-sandbox",
+      workspaceDir: "/tmp/openclaw-sandbox",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
       hostBrowserAllowed: false,

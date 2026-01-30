@@ -11,8 +11,8 @@ import {
 import { CHUTES_TOKEN_ENDPOINT, type ChutesStoredOAuth } from "./chutes-oauth.js";
 
 describe("auth-profiles (chutes)", () => {
-  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousChutesClientId = process.env.CHUTES_CLIENT_ID;
   let tempDir: string | null = null;
@@ -23,10 +23,10 @@ describe("auth-profiles (chutes)", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
       tempDir = null;
     }
-    if (previousStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
-    else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
-    if (previousAgentDir === undefined) delete process.env.CLAWDBOT_AGENT_DIR;
-    else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    if (previousAgentDir === undefined) delete process.env.OPENCLAW_AGENT_DIR;
+    else process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
     if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
     if (previousChutesClientId === undefined) delete process.env.CHUTES_CLIENT_ID;
@@ -34,10 +34,10 @@ describe("auth-profiles (chutes)", () => {
   });
 
   it("refreshes expired Chutes OAuth credentials", async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-chutes-"));
-    process.env.CLAWDBOT_STATE_DIR = tempDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempDir, "agents", "main", "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chutes-"));
+    process.env.OPENCLAW_STATE_DIR = tempDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempDir, "agents", "main", "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
 
     const authProfilePath = path.join(tempDir, "agents", "main", "agent", "auth-profiles.json");
     await fs.mkdir(path.dirname(authProfilePath), { recursive: true });

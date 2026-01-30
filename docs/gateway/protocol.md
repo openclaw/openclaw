@@ -9,7 +9,7 @@ read_when:
 # Gateway protocol (WebSocket)
 
 The Gateway WS protocol is the **single control plane + node transport** for
-Moltbot. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
+OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
 nodes) connect over WebSocket and declare their **role** + **scope** at
 handshake time.
 
@@ -53,7 +53,7 @@ Client → Gateway:
     "permissions": {},
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "moltbot-cli/1.2.3",
+    "userAgent": "openclaw-cli/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",
@@ -111,7 +111,7 @@ When a device token is issued, `hello-ok` also includes:
     "permissions": { "camera.capture": true, "screen.record": false },
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "moltbot-ios/1.2.3",
+    "userAgent": "openclaw-ios/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",
@@ -180,7 +180,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 
 ## Auth
 
-- If `CLAWDBOT_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
+- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
   must match or the socket is closed.
 - After pairing, the Gateway issues a **device token** scoped to the connection
   role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be

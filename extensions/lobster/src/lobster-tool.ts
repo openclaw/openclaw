@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-import type { MoltbotPluginApi } from "../../../src/plugins/types.js";
+import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
 type LobsterEnvelope =
   | {
@@ -168,7 +168,7 @@ function parseEnvelope(stdout: string): LobsterEnvelope {
   throw new Error("lobster returned invalid JSON envelope");
 }
 
-export function createLobsterTool(api: MoltbotPluginApi) {
+export function createLobsterTool(api: OpenClawPluginApi) {
   return {
     name: "lobster",
     description:

@@ -41,7 +41,7 @@ import {
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import { detectMime } from "../media/mime.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { ensureMoltbotCliOnPath } from "../infra/path-env.js";
+import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
@@ -151,9 +151,9 @@ const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
-const execHostEnforced = process.env.CLAWDBOT_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
+const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
-  process.env.CLAWDBOT_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
+  process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
 
 const blockedEnvKeys = new Set([
   "NODE_OPTIONS",
@@ -435,7 +435,7 @@ function resolveEnvPath(env?: Record<string, string>): string[] {
 }
 
 function ensureNodePathEnv(): string {
-  ensureMoltbotCliOnPath({ pathEnv: process.env.PATH ?? "" });
+  ensureOpenClawCliOnPath({ pathEnv: process.env.PATH ?? "" });
   const current = process.env.PATH ?? "";
   if (current.trim()) return current;
   process.env.PATH = DEFAULT_NODE_PATH;
@@ -513,10 +513,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const browserProxyEnabled = browserProxy.enabled && resolvedBrowser.enabled;
   const isRemoteMode = cfg.gateway?.mode === "remote";
   const token =
-    process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
     (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
   const password =
-    process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
+    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
 
   const host = gateway.host ?? "127.0.0.1";

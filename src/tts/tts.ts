@@ -17,7 +17,7 @@ import { EdgeTTS } from "node-edge-tts";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type {
   TtsConfig,
   TtsAutoMode,
@@ -245,7 +245,7 @@ function resolveModelOverridePolicy(
   };
 }
 
-export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
+export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   const raw: TtsConfig = cfg.messages?.tts ?? {};
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
@@ -304,7 +304,7 @@ export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
 
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   if (config.prefsPath?.trim()) return resolveUserPath(config.prefsPath.trim());
-  const envPath = process.env.CLAWDBOT_TTS_PREFS?.trim();
+  const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
   if (envPath) return resolveUserPath(envPath);
   return path.join(CONFIG_DIR, "settings", "tts.json");
 }
@@ -330,7 +330,7 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
-export function buildTtsSystemPromptHint(cfg: MoltbotConfig): string | undefined {
+export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({ config, prefsPath });
@@ -809,7 +809,7 @@ type SummaryModelSelection = {
 };
 
 function resolveSummaryModelRef(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   config: ResolvedTtsConfig,
 ): SummaryModelSelection {
   const defaultRef = resolveDefaultModelForAgent({ cfg });
@@ -833,7 +833,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 async function summarizeText(params: {
   text: string;
   targetLength: number;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
   timeoutMs: number;
 }): Promise<SummarizeResult> {
@@ -1078,7 +1078,7 @@ async function edgeTTS(params: {
 
 export async function textToSpeech(params: {
   text: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
@@ -1249,7 +1249,7 @@ export async function textToSpeech(params: {
 
 export async function textToSpeechTelephony(params: {
   text: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prefsPath?: string;
 }): Promise<TtsTelephonyResult> {
   const config = resolveTtsConfig(params.cfg);
@@ -1343,7 +1343,7 @@ export async function textToSpeechTelephony(params: {
 
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel?: string;
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;

@@ -15,12 +15,12 @@ An **agent** is a fully scoped brain with its own:
 
 - **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
 - **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
-- **Session store** (chat history + routing state) under `~/.clawdbot/agents/<agentId>/sessions`.
+- **Session store** (chat history + routing state) under `~/.openclaw/agents/<agentId>/sessions`.
 
 Auth profiles are **per-agent**. Each agent reads from its own:
 
 ```
-~/.clawdbot/agents/<agentId>/agent/auth-profiles.json
+~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
 Main agent credentials are **not** shared automatically. Never reuse `agentDir`
@@ -28,7 +28,7 @@ across agents (it causes auth/session collisions). If you want to share creds,
 copy `auth-profiles.json` into the other agent's `agentDir`.
 
 Skills are per-agent via each workspace’s `skills/` folder, with shared skills
-available from `~/.clawdbot/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+available from `~/.openclaw/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
@@ -39,27 +39,27 @@ reach other host locations unless sandboxing is enabled. See
 
 ## Paths (quick map)
 
-- Config: `~/.clawdbot/moltbot.json` (or `CLAWDBOT_CONFIG_PATH`)
-- State dir: `~/.clawdbot` (or `CLAWDBOT_STATE_DIR`)
-- Workspace: `~/clawd` (or `~/clawd-<agentId>`)
-- Agent dir: `~/.clawdbot/agents/<agentId>/agent` (or `agents.list[].agentDir`)
-- Sessions: `~/.clawdbot/agents/<agentId>/sessions`
+- Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
+- State dir: `~/.openclaw` (or `OPENCLAW_STATE_DIR`)
+- Workspace: `~/.openclaw/workspace` (or `~/.openclaw/workspace-<agentId>`)
+- Agent dir: `~/.openclaw/agents/<agentId>/agent` (or `agents.list[].agentDir`)
+- Sessions: `~/.openclaw/agents/<agentId>/sessions`
 
 ### Single-agent mode (default)
 
-If you do nothing, Moltbot runs a single agent:
+If you do nothing, OpenClaw runs a single agent:
 
 - `agentId` defaults to **`main`**.
 - Sessions are keyed as `agent:main:<mainKey>`.
-- Workspace defaults to `~/clawd` (or `~/clawd-<profile>` when `CLAWDBOT_PROFILE` is set).
-- State defaults to `~/.clawdbot/agents/main/agent`.
+- Workspace defaults to `~/.openclaw/workspace` (or `~/.openclaw/workspace-<profile>` when `OPENCLAW_PROFILE` is set).
+- State defaults to `~/.openclaw/agents/main/agent`.
 
 ## Agent helper
 
 Use the agent wizard to add a new isolated agent:
 
 ```bash
-moltbot agents add work
+openclaw agents add work
 ```
 
 Then add `bindings` (or let the wizard do it) to route inbound messages.
@@ -67,7 +67,7 @@ Then add `bindings` (or let the wizard do it) to route inbound messages.
 Verify with:
 
 ```bash
-moltbot agents list --bindings
+openclaw agents list --bindings
 ```
 
 ## Multiple agents = multiple people, multiple personalities
@@ -92,8 +92,8 @@ Example:
 {
   agents: {
     list: [
-      { id: "alex", workspace: "~/clawd-alex" },
-      { id: "mia", workspace: "~/clawd-mia" }
+      { id: "alex", workspace: "~/.openclaw/workspace-alex" },
+      { id: "mia", workspace: "~/.openclaw/workspace-mia" }
     ]
   },
   bindings: [
@@ -139,7 +139,7 @@ multiple phone numbers without mixing sessions.
 
 ## Example: two WhatsApps → two agents
 
-`~/.clawdbot/moltbot.json` (JSON5):
+`~/.openclaw/openclaw.json` (JSON5):
 
 ```js
 {
@@ -149,14 +149,14 @@ multiple phone numbers without mixing sessions.
         id: "home",
         default: true,
         name: "Home",
-        workspace: "~/clawd-home",
-        agentDir: "~/.clawdbot/agents/home/agent",
+        workspace: "~/.openclaw/workspace-home",
+        agentDir: "~/.openclaw/agents/home/agent",
       },
       {
         id: "work",
         name: "Work",
-        workspace: "~/clawd-work",
-        agentDir: "~/.clawdbot/agents/work/agent",
+        workspace: "~/.openclaw/workspace-work",
+        agentDir: "~/.openclaw/agents/work/agent",
       },
     ],
   },
@@ -189,12 +189,12 @@ multiple phone numbers without mixing sessions.
     whatsapp: {
       accounts: {
         personal: {
-          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/personal
-          // authDir: "~/.clawdbot/credentials/whatsapp/personal",
+          // Optional override. Default: ~/.openclaw/credentials/whatsapp/personal
+          // authDir: "~/.openclaw/credentials/whatsapp/personal",
         },
         biz: {
-          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
-          // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+          // Optional override. Default: ~/.openclaw/credentials/whatsapp/biz
+          // authDir: "~/.openclaw/credentials/whatsapp/biz",
         },
       },
     },
@@ -213,13 +213,13 @@ Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opu
       {
         id: "chat",
         name: "Everyday",
-        workspace: "~/clawd-chat",
+        workspace: "~/.openclaw/workspace-chat",
         model: "anthropic/claude-sonnet-4-5"
       },
       {
         id: "opus",
         name: "Deep Work",
-        workspace: "~/clawd-opus",
+        workspace: "~/.openclaw/workspace-opus",
         model: "anthropic/claude-opus-4-5"
       }
     ]
@@ -243,8 +243,8 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
 {
   agents: {
     list: [
-      { id: "chat", name: "Everyday", workspace: "~/clawd-chat", model: "anthropic/claude-sonnet-4-5" },
-      { id: "opus", name: "Deep Work", workspace: "~/clawd-opus", model: "anthropic/claude-opus-4-5" }
+      { id: "chat", name: "Everyday", workspace: "~/.openclaw/workspace-chat", model: "anthropic/claude-sonnet-4-5" },
+      { id: "opus", name: "Deep Work", workspace: "~/.openclaw/workspace-opus", model: "anthropic/claude-opus-4-5" }
     ]
   },
   bindings: [
@@ -268,7 +268,7 @@ and a tighter tool policy:
       {
         id: "family",
         name: "Family",
-        workspace: "~/clawd-family",
+        workspace: "~/.openclaw/workspace-family",
         identity: { name: "Family Bot" },
         groupChat: {
           mentionPatterns: ["@family", "@familybot", "@Family Bot"]
@@ -312,7 +312,7 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
     list: [
       {
         id: "personal",
-        workspace: "~/clawd-personal",
+        workspace: "~/.openclaw/workspace-personal",
         sandbox: {
           mode: "off",  // No sandbox for personal agent
         },
@@ -320,7 +320,7 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
       },
       {
         id: "family",
-        workspace: "~/clawd-family",
+        workspace: "~/.openclaw/workspace-family",
         sandbox: {
           mode: "all",     // Always sandboxed
           scope: "agent",  // One container per agent

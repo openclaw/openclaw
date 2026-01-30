@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { CliDeps } from "../cli/deps.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -31,11 +31,11 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "moltbot-cron-" });
+  return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
 }
 
 async function writeSessionStore(home: string) {
-  const dir = path.join(home, ".clawdbot", "sessions");
+  const dir = path.join(home, ".openclaw", "sessions");
   await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(
@@ -60,17 +60,17 @@ async function writeSessionStore(home: string) {
 function makeCfg(
   home: string,
   storePath: string,
-  overrides: Partial<MoltbotConfig> = {},
-): MoltbotConfig {
-  const base: MoltbotConfig = {
+  overrides: Partial<OpenClawConfig> = {},
+): OpenClawConfig {
+  const base: OpenClawConfig = {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "clawd"),
+        workspace: path.join(home, "openclaw"),
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } as MoltbotConfig;
+  } as OpenClawConfig;
   return { ...base, ...overrides };
 }
 

@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "./config.js";
+import type { OpenClawConfig } from "./config.js";
 import {
   getChatChannelMeta,
   listChatChannels,
@@ -17,7 +17,7 @@ type PluginEnableChange = {
 };
 
 export type PluginAutoEnableResult = {
-  config: MoltbotConfig;
+  config: OpenClawConfig;
   changes: string[];
 };
 
@@ -59,7 +59,7 @@ function accountsHaveKeys(value: unknown, keys: string[]): boolean {
 }
 
 function resolveChannelConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   channelId: string,
 ): Record<string, unknown> | null {
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -67,7 +67,7 @@ function resolveChannelConfig(
   return isRecord(entry) ? entry : null;
 }
 
-function isTelegramConfigured(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boolean {
+function isTelegramConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (hasNonEmptyString(env.TELEGRAM_BOT_TOKEN)) return true;
   const entry = resolveChannelConfig(cfg, "telegram");
   if (!entry) return false;
@@ -76,7 +76,7 @@ function isTelegramConfigured(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boole
   return recordHasKeys(entry);
 }
 
-function isDiscordConfigured(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boolean {
+function isDiscordConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (hasNonEmptyString(env.DISCORD_BOT_TOKEN)) return true;
   const entry = resolveChannelConfig(cfg, "discord");
   if (!entry) return false;
@@ -85,7 +85,7 @@ function isDiscordConfigured(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boolea
   return recordHasKeys(entry);
 }
 
-function isSlackConfigured(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boolean {
+function isSlackConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (
     hasNonEmptyString(env.SLACK_BOT_TOKEN) ||
     hasNonEmptyString(env.SLACK_APP_TOKEN) ||
@@ -106,7 +106,7 @@ function isSlackConfigured(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boolean 
   return recordHasKeys(entry);
 }
 
-function isSignalConfigured(cfg: MoltbotConfig): boolean {
+function isSignalConfigured(cfg: OpenClawConfig): boolean {
   const entry = resolveChannelConfig(cfg, "signal");
   if (!entry) return false;
   if (
@@ -122,27 +122,27 @@ function isSignalConfigured(cfg: MoltbotConfig): boolean {
   return recordHasKeys(entry);
 }
 
-function isIMessageConfigured(cfg: MoltbotConfig): boolean {
+function isIMessageConfigured(cfg: OpenClawConfig): boolean {
   const entry = resolveChannelConfig(cfg, "imessage");
   if (!entry) return false;
   if (hasNonEmptyString(entry.cliPath)) return true;
   return recordHasKeys(entry);
 }
 
-function isWhatsAppConfigured(cfg: MoltbotConfig): boolean {
+function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
   if (hasAnyWhatsAppAuth(cfg)) return true;
   const entry = resolveChannelConfig(cfg, "whatsapp");
   if (!entry) return false;
   return recordHasKeys(entry);
 }
 
-function isGenericChannelConfigured(cfg: MoltbotConfig, channelId: string): boolean {
+function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = resolveChannelConfig(cfg, channelId);
   return recordHasKeys(entry);
 }
 
 export function isChannelConfigured(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -164,7 +164,7 @@ export function isChannelConfigured(
   }
 }
 
-function collectModelRefs(cfg: MoltbotConfig): string[] {
+function collectModelRefs(cfg: OpenClawConfig): string[] {
   const refs: string[] = [];
   const pushModelRef = (value: unknown) => {
     if (typeof value === "string" && value.trim()) refs.push(value.trim());
@@ -208,7 +208,7 @@ function extractProviderFromModelRef(value: string): string | null {
   return normalizeProviderId(trimmed.slice(0, slash));
 }
 
-function isProviderConfigured(cfg: MoltbotConfig, providerId: string): boolean {
+function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
 
   const profiles = cfg.auth?.profiles;
@@ -237,7 +237,7 @@ function isProviderConfigured(cfg: MoltbotConfig, providerId: string): boolean {
 }
 
 function resolveConfiguredPlugins(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): PluginEnableChange[] {
   const changes: PluginEnableChange[] = [];
@@ -269,12 +269,12 @@ function resolveConfiguredPlugins(
   return changes;
 }
 
-function isPluginExplicitlyDisabled(cfg: MoltbotConfig, pluginId: string): boolean {
+function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
   const entry = cfg.plugins?.entries?.[pluginId];
   return entry?.enabled === false;
 }
 
-function isPluginDenied(cfg: MoltbotConfig, pluginId: string): boolean {
+function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   const deny = cfg.plugins?.deny;
   return Array.isArray(deny) && deny.includes(pluginId);
 }
@@ -289,7 +289,7 @@ function resolvePreferredOverIds(pluginId: string): string[] {
 }
 
 function shouldSkipPreferredPluginAutoEnable(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   entry: PluginEnableChange,
   configured: PluginEnableChange[],
 ): boolean {
@@ -305,7 +305,7 @@ function shouldSkipPreferredPluginAutoEnable(
   return false;
 }
 
-function ensureAllowlisted(cfg: MoltbotConfig, pluginId: string): MoltbotConfig {
+function ensureAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const allow = cfg.plugins?.allow;
   if (!Array.isArray(allow) || allow.includes(pluginId)) return cfg;
   return {
@@ -317,7 +317,7 @@ function ensureAllowlisted(cfg: MoltbotConfig, pluginId: string): MoltbotConfig 
   };
 }
 
-function enablePluginEntry(cfg: MoltbotConfig, pluginId: string): MoltbotConfig {
+function enablePluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const entries = {
     ...cfg.plugins?.entries,
     [pluginId]: {
@@ -346,7 +346,7 @@ function formatAutoEnableChange(entry: PluginEnableChange): string {
 }
 
 export function applyPluginAutoEnable(params: {
-  config: MoltbotConfig;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;

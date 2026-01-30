@@ -12,10 +12,10 @@ export function resolveGatewayProbeAuth(cfg: ReturnType<typeof loadConfig>): {
     ? typeof remote?.token === "string" && remote.token.trim().length > 0
       ? remote.token.trim()
       : undefined
-    : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+    : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
       (typeof authToken === "string" && authToken.trim().length > 0 ? authToken.trim() : undefined);
   const password =
-    process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
+    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode
       ? typeof remote?.password === "string" && remote.password.trim().length > 0
         ? remote.password.trim()

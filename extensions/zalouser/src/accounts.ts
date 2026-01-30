@@ -1,22 +1,22 @@
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 
 import { runZca, parseJsonOutput } from "./zca.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
 
-function listConfiguredAccountIds(cfg: MoltbotConfig): string[] {
+function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
 
-export function listZalouserAccountIds(cfg: MoltbotConfig): string[] {
+export function listZalouserAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
   return ids.sort((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultZalouserAccountId(cfg: MoltbotConfig): string {
+export function resolveDefaultZalouserAccountId(cfg: OpenClawConfig): string {
   const zalouserConfig = cfg.channels?.zalouser as ZalouserConfig | undefined;
   if (zalouserConfig?.defaultAccount?.trim()) return zalouserConfig.defaultAccount.trim();
   const ids = listZalouserAccountIds(cfg);
@@ -25,7 +25,7 @@ export function resolveDefaultZalouserAccountId(cfg: MoltbotConfig): string {
 }
 
 function resolveAccountConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId: string,
 ): ZalouserAccountConfig | undefined {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
@@ -34,7 +34,7 @@ function resolveAccountConfig(
 }
 
 function mergeZalouserAccountConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId: string,
 ): ZalouserAccountConfig {
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
@@ -56,7 +56,7 @@ export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
 }
 
 export async function resolveZalouserAccount(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): Promise<ResolvedZalouserAccount> {
   const accountId = normalizeAccountId(params.accountId);
@@ -78,7 +78,7 @@ export async function resolveZalouserAccount(params: {
 }
 
 export function resolveZalouserAccountSync(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedZalouserAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -99,7 +99,7 @@ export function resolveZalouserAccountSync(params: {
 }
 
 export async function listEnabledZalouserAccounts(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
 ): Promise<ResolvedZalouserAccount[]> {
   const ids = listZalouserAccountIds(cfg);
   const accounts = await Promise.all(

@@ -35,7 +35,7 @@ vi.mock("../model-auth.js", () => ({
 }));
 
 vi.mock("../models-config.js", () => ({
-  ensureMoltbotModelsJson: vi.fn(async () => {}),
+  ensureOpenClawModelsJson: vi.fn(async () => {}),
 }));
 
 vi.mock("../context-window-guard.js", () => ({
@@ -66,7 +66,7 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 vi.mock("../agent-paths.js", () => ({
-  resolveMoltbotAgentDir: vi.fn(() => "/tmp/agent-dir"),
+  resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent-dir"),
 }));
 
 vi.mock("../auth-profiles.js", () => ({

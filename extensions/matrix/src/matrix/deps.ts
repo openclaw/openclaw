@@ -3,7 +3,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
-import type { RuntimeEnv } from "clawdbot/plugin-sdk";
+import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { getMatrixRuntime } from "../runtime.js";
 
 const MATRIX_SDK_PACKAGE = "@vector-im/matrix-bot-sdk";

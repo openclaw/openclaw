@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { STATE_DIR } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { logVerbose } from "../globals.js";
@@ -146,7 +146,7 @@ const VISION_PROVIDERS = ["openai", "anthropic", "google", "minimax"] as const;
 
 export interface DescribeStickerParams {
   imagePath: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentDir?: string;
   agentId?: string;
 }

@@ -7,7 +7,7 @@ import {
   formatChannelSelectionLine,
   listChatChannels,
 } from "../channels/registry.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { isChannelConfigured } from "../config/plugin-auto-enable.js";
 import type { DmPolicy } from "../config/types.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -82,7 +82,7 @@ async function promptConfiguredAction(params: {
 }
 
 async function promptRemovalAccountId(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
   label: string;
   channel: ChannelChoice;
@@ -105,7 +105,7 @@ async function promptRemovalAccountId(params: {
 }
 
 async function collectChannelStatus(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
 }): Promise<ChannelStatusSummary> {
@@ -157,7 +157,7 @@ async function collectChannelStatus(params: {
 }
 
 export async function noteChannelStatus(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
   options?: SetupChannelsOptions;
   accountOverrides?: Partial<Record<ChannelChoice, string>>;
@@ -188,7 +188,7 @@ async function noteChannelPrimer(
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
-      `Approve with: ${formatCliCommand("moltbot pairing approve <channel> <code>")}`,
+      `Approve with: ${formatCliCommand("openclaw pairing approve <channel> <code>")}`,
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
       'Multi-user DMs: set session.dmScope="per-channel-peer" (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
       `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
@@ -213,11 +213,11 @@ function resolveQuickstartDefault(
 }
 
 async function maybeConfigureDmPolicies(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   selection: ChannelChoice[];
   prompter: WizardPrompter;
   accountIdsByChannel?: Map<ChannelChoice, string>;
-}): Promise<MoltbotConfig> {
+}): Promise<OpenClawConfig> {
   const { selection, prompter, accountIdsByChannel } = params;
   const dmPolicies = selection
     .map((channel) => getChannelOnboardingAdapter(channel)?.dmPolicy)
@@ -235,7 +235,7 @@ async function maybeConfigureDmPolicies(params: {
     await prompter.note(
       [
         "Default: pairing (unknown DMs get a pairing code).",
-        `Approve: ${formatCliCommand(`moltbot pairing approve ${policy.channel} <code>`)}`,
+        `Approve: ${formatCliCommand(`openclaw pairing approve ${policy.channel} <code>`)}`,
         `Allowlist DMs: ${policy.policyKey}="allowlist" + ${policy.allowFromKey} entries.`,
         `Public DMs: ${policy.policyKey}="open" + ${policy.allowFromKey} includes "*".`,
         'Multi-user DMs: set session.dmScope="per-channel-peer" (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
@@ -275,11 +275,11 @@ async function maybeConfigureDmPolicies(params: {
 // Channel-specific prompts moved into onboarding adapters.
 
 export async function setupChannels(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
   options?: SetupChannelsOptions,
-): Promise<MoltbotConfig> {
+): Promise<OpenClawConfig> {
   let next = cfg;
   const forceAllowFromChannels = new Set(options?.forceAllowFromChannels ?? []);
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
@@ -584,7 +584,7 @@ export async function setupChannels(
         {
           value: "__skip__",
           label: "Skip for now",
-          hint: `You can add channels later via \`${formatCliCommand("moltbot channels add")}\``,
+          hint: `You can add channels later via \`${formatCliCommand("openclaw channels add")}\``,
         },
       ],
       initialValue: quickstartDefault,

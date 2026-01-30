@@ -1,6 +1,6 @@
 # Security Policy
 
-If you believe you've found a security issue in Moltbot, please report it privately.
+If you believe you've found a security issue in OpenClaw, please report it privately.
 
 ## Reporting
 
@@ -9,19 +9,19 @@ If you believe you've found a security issue in Moltbot, please report it privat
 
 ## Operational Guidance
 
-For threat model + hardening guidance (including `moltbot security audit --deep` and `--fix`), see:
+For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
 
-- `https://docs.molt.bot/gateway/security`
+- `https://docs.openclaw.ai/gateway/security`
 
 ### Web Interface Safety
 
-Moltbot's web interface is intended for local use only. Do **not** bind it to the public internet; it is not hardened for public exposure.
+OpenClaw's web interface is intended for local use only. Do **not** bind it to the public internet; it is not hardened for public exposure.
 
 ## Runtime Requirements
 
 ### Node.js Version
 
-Moltbot requires **Node.js 22.12.0 or later** (LTS). This version includes important security patches:
+OpenClaw requires **Node.js 22.12.0 or later** (LTS). This version includes important security patches:
 
 - CVE-2025-59466: async_hooks DoS vulnerability
 - CVE-2026-21636: Permission model bypass vulnerability
@@ -34,7 +34,7 @@ node --version  # Should be v22.12.0 or later
 
 ### Docker Security
 
-When running Moltbot in Docker:
+When running OpenClaw in Docker:
 
 1. The official image runs as a non-root user (`node`) for reduced attack surface
 2. Use `--read-only` flag when possible for additional filesystem protection
@@ -44,8 +44,8 @@ Example secure Docker run:
 
 ```bash
 docker run --read-only --cap-drop=ALL \
-  -v moltbot-data:/app/data \
-  moltbot/moltbot:latest
+  -v openclaw-data:/app/data \
+  openclaw/openclaw:latest
 ```
 
 ## Security Scanning

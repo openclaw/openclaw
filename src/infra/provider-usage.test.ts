@@ -253,7 +253,7 @@ describe("provider usage loading", () => {
     await withTempHome(
       async (tempHome) => {
         const agentDir = path.join(
-          process.env.CLAWDBOT_STATE_DIR ?? path.join(tempHome, ".clawdbot"),
+          process.env.OPENCLAW_STATE_DIR ?? path.join(tempHome, ".openclaw"),
           "agents",
           "main",
           "agent",
@@ -328,9 +328,9 @@ describe("provider usage loading", () => {
       },
       {
         env: {
-          CLAWDBOT_STATE_DIR: (home) => path.join(home, ".clawdbot"),
+          OPENCLAW_STATE_DIR: (home) => path.join(home, ".openclaw"),
         },
-        prefix: "moltbot-provider-usage-",
+        prefix: "openclaw-provider-usage-",
       },
     );
   });

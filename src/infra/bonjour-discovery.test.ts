@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { runCommandWithTimeout } from "../process/exec.js";
 import { discoverGatewayBeacons } from "./bonjour-discovery.js";
-import { WIDE_AREA_DISCOVERY_DOMAIN } from "./widearea-dns.js";
+
+const WIDE_AREA_DOMAIN = "openclaw.internal.";
 
 describe("bonjour-discovery", () => {
   it("discovers beacons on darwin across local + wide-area domains", async () => {
@@ -17,8 +18,8 @@ describe("bonjour-discovery", () => {
         if (domain === "local.") {
           return {
             stdout: [
-              "Add 2 3 local. _moltbot-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway",
-              "Add 2 3 local. _moltbot-gw._tcp. Laptop Gateway",
+              "Add 2 3 local. _openclaw-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway",
+              "Add 2 3 local. _openclaw-gw._tcp. Laptop Gateway",
               "",
             ].join("\n"),
             stderr: "",
@@ -27,12 +28,11 @@ describe("bonjour-discovery", () => {
             killed: false,
           };
         }
-        if (domain === WIDE_AREA_DISCOVERY_DOMAIN) {
+        if (domain === WIDE_AREA_DOMAIN) {
           return {
-            stdout: [
-              `Add 2 3 ${WIDE_AREA_DISCOVERY_DOMAIN} _moltbot-gw._tcp. Tailnet Gateway`,
-              "",
-            ].join("\n"),
+            stdout: [`Add 2 3 ${WIDE_AREA_DOMAIN} _openclaw-gw._tcp. Tailnet Gateway`, ""].join(
+              "\n",
+            ),
             stderr: "",
             code: 0,
             signal: null,
@@ -65,7 +65,7 @@ describe("bonjour-discovery", () => {
 
         return {
           stdout: [
-            `${instance}._moltbot-gw._tcp. can be reached at ${host}:18789`,
+            `${instance}._openclaw-gw._tcp. can be reached at ${host}:18789`,
             txtParts.join(" "),
             "",
           ].join("\n"),
@@ -82,6 +82,7 @@ describe("bonjour-discovery", () => {
     const beacons = await discoverGatewayBeacons({
       platform: "darwin",
       timeoutMs: 1234,
+      wideAreaDomain: WIDE_AREA_DOMAIN,
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
@@ -95,12 +96,12 @@ describe("bonjour-discovery", () => {
       ]),
     );
     expect(beacons.map((b) => b.domain)).toEqual(
-      expect.arrayContaining(["local.", WIDE_AREA_DISCOVERY_DOMAIN]),
+      expect.arrayContaining(["local.", WIDE_AREA_DOMAIN]),
     );
 
     const browseCalls = calls.filter((c) => c.argv[0] === "dns-sd" && c.argv[1] === "-B");
     expect(browseCalls.map((c) => c.argv[3])).toEqual(
-      expect.arrayContaining(["local.", WIDE_AREA_DISCOVERY_DOMAIN]),
+      expect.arrayContaining(["local.", WIDE_AREA_DOMAIN]),
     );
     expect(browseCalls.every((c) => c.timeoutMs === 1234)).toBe(true);
   });
@@ -112,7 +113,7 @@ describe("bonjour-discovery", () => {
       const domain = argv[3] ?? "";
       if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
         return {
-          stdout: ["Add 2 3 local. _moltbot-gw._tcp. Studio Gateway", ""].join("\n"),
+          stdout: ["Add 2 3 local. _openclaw-gw._tcp. Studio Gateway", ""].join("\n"),
           stderr: "",
           code: 0,
           signal: null,
@@ -123,7 +124,7 @@ describe("bonjour-discovery", () => {
       if (argv[0] === "dns-sd" && argv[1] === "-L") {
         return {
           stdout: [
-            "Studio Gateway._moltbot-gw._tcp. can be reached at studio.local:18789",
+            "Studio Gateway._openclaw-gw._tcp. can be reached at studio.local:18789",
             "txtvers=1 displayName=Peter\\226\\128\\153s\\032Mac\\032Studio lanHost=studio.local gatewayPort=18789 sshPort=22",
             "",
           ].join("\n"),
@@ -164,8 +165,8 @@ describe("bonjour-discovery", () => {
 
   it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {
     const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
-    const zone = WIDE_AREA_DISCOVERY_DOMAIN.replace(/\.$/, "");
-    const serviceBase = `_moltbot-gw._tcp.${zone}`;
+    const zone = WIDE_AREA_DOMAIN.replace(/\.$/, "");
+    const serviceBase = `_openclaw-gw._tcp.${zone}`;
     const studioService = `studio-gateway.${serviceBase}`;
 
     const run = vi.fn(async (argv: string[], options: { timeoutMs: number }) => {
@@ -231,7 +232,7 @@ describe("bonjour-discovery", () => {
               `"transport=gateway"`,
               `"sshPort=22"`,
               `"tailnetDns=peters-mac-studio-1.sheep-coho.ts.net"`,
-              `"cliPath=/opt/homebrew/bin/moltbot"`,
+              `"cliPath=/opt/homebrew/bin/openclaw"`,
               "",
             ].join(" "),
             stderr: "",
@@ -248,13 +249,14 @@ describe("bonjour-discovery", () => {
     const beacons = await discoverGatewayBeacons({
       platform: "darwin",
       timeoutMs: 1200,
-      domains: [WIDE_AREA_DISCOVERY_DOMAIN],
+      domains: [WIDE_AREA_DOMAIN],
+      wideAreaDomain: WIDE_AREA_DOMAIN,
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
     expect(beacons).toEqual([
       expect.objectContaining({
-        domain: WIDE_AREA_DISCOVERY_DOMAIN,
+        domain: WIDE_AREA_DOMAIN,
         instanceName: "studio-gateway",
         displayName: "Studio",
         host: `studio.${zone}`,
@@ -262,7 +264,7 @@ describe("bonjour-discovery", () => {
         tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net",
         gatewayPort: 18789,
         sshPort: 22,
-        cliPath: "/opt/homebrew/bin/moltbot",
+        cliPath: "/opt/homebrew/bin/openclaw",
       }),
     ]);
 
@@ -286,12 +288,12 @@ describe("bonjour-discovery", () => {
     await discoverGatewayBeacons({
       platform: "darwin",
       timeoutMs: 1,
-      domains: ["local", "moltbot.internal"],
+      domains: ["local", "openclaw.internal"],
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
     expect(calls.filter((c) => c[1] === "-B").map((c) => c[3])).toEqual(
-      expect.arrayContaining(["local.", "moltbot.internal."]),
+      expect.arrayContaining(["local.", "openclaw.internal."]),
     );
 
     calls.length = 0;

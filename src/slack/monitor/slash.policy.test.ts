@@ -61,7 +61,12 @@ function createHarness(overrides?: {
     groupPolicy: overrides?.groupPolicy ?? "open",
     useAccessGroups: true,
     channelsConfig: overrides?.channelsConfig,
-    slashCommand: { enabled: true, name: "clawd", ephemeral: true, sessionPrefix: "slack:slash" },
+    slashCommand: {
+      enabled: true,
+      name: "openclaw",
+      ephemeral: true,
+      sessionPrefix: "slack:slash",
+    },
     textLimit: 4000,
     app,
     isChannelAllowed: () => true,

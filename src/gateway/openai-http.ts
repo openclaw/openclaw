@@ -181,7 +181,7 @@ export async function handleOpenAiHttpRequest(
 
   const payload = coerceRequest(body);
   const stream = Boolean(payload.stream);
-  const model = typeof payload.model === "string" ? payload.model : "moltbot";
+  const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
   const agentId = resolveAgentIdForRequest({ req, model });
@@ -223,7 +223,7 @@ export async function handleOpenAiHttpRequest(
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
-          : "No response from Moltbot.";
+          : "No response from OpenClaw.";
 
       sendJson(res, 200, {
         id: runId,
@@ -344,7 +344,7 @@ export async function handleOpenAiHttpRequest(
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
                 .filter(Boolean)
                 .join("\n\n")
-            : "No response from Moltbot.";
+            : "No response from OpenClaw.";
 
         sawAssistantDelta = true;
         writeSse(res, {

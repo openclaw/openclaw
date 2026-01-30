@@ -1,5 +1,5 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import type { MoltbotConfig, GatewayAuthConfig } from "../config/config.js";
+import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
@@ -37,10 +37,10 @@ export function buildGatewayAuthConfig(params: {
 }
 
 export async function promptAuthConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-): Promise<MoltbotConfig> {
+): Promise<OpenClawConfig> {
   const authChoice = await promptAuthChoiceGrouped({
     prompter,
     store: ensureAuthProfileStore(undefined, {

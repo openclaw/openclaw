@@ -65,7 +65,7 @@ export async function stopBrowserControlService(): Promise<void> {
       }
     }
   } catch (err) {
-    logService.warn(`clawd browser stop failed: ${String(err)}`);
+    logService.warn(`openclaw browser stop failed: ${String(err)}`);
   }
 
   state = null;

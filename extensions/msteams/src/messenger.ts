@@ -6,7 +6,7 @@ import {
   type MSTeamsReplyStyle,
   type ReplyPayload,
   SILENT_REPLY_TOKEN,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";

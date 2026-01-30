@@ -1,5 +1,5 @@
 ---
-summary: "Chrome extension: let Moltbot drive your existing Chrome tab"
+summary: "Chrome extension: let OpenClaw drive your existing Chrome tab"
 read_when:
   - You want the agent to drive an existing Chrome tab (toolbar button)
   - You need remote Gateway + local browser automation via Tailscale
@@ -8,7 +8,7 @@ read_when:
 
 # Chrome extension (browser relay)
 
-The Moltbot Chrome extension lets the agent control your **existing Chrome tabs** (your normal Chrome window) instead of launching a separate clawd-managed Chrome profile.
+The OpenClaw Chrome extension lets the agent control your **existing Chrome tabs** (your normal Chrome window) instead of launching a separate openclaw-managed Chrome profile.
 
 Attach/detach happens via a **single Chrome toolbar button**.
 
@@ -19,20 +19,20 @@ There are three parts:
 - **Local relay server** (loopback CDP): bridges between the control server and the extension (`http://127.0.0.1:18792` by default)
 - **Chrome MV3 extension**: attaches to the active tab using `chrome.debugger` and pipes CDP messages to the relay
 
-Moltbot then controls the attached tab through the normal `browser` tool surface (selecting the right profile).
+OpenClaw then controls the attached tab through the normal `browser` tool surface (selecting the right profile).
 
 ## Install / load (unpacked)
 
 1) Install the extension to a stable local path:
 
 ```bash
-moltbot browser extension install
+openclaw browser extension install
 ```
 
 2) Print the installed extension directory path:
 
 ```bash
-moltbot browser extension path
+openclaw browser extension path
 ```
 
 3) Chrome → `chrome://extensions`
@@ -43,24 +43,24 @@ moltbot browser extension path
 
 ## Updates (no build step)
 
-The extension ships inside the Moltbot release (npm package) as static files. There is no separate “build” step.
+The extension ships inside the OpenClaw release (npm package) as static files. There is no separate “build” step.
 
-After upgrading Moltbot:
-- Re-run `moltbot browser extension install` to refresh the installed files under your Moltbot state directory.
+After upgrading OpenClaw:
+- Re-run `openclaw browser extension install` to refresh the installed files under your OpenClaw state directory.
 - Chrome → `chrome://extensions` → click “Reload” on the extension.
 
 ## Use it (no extra config)
 
-Moltbot ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+OpenClaw ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
 
 Use it:
-- CLI: `moltbot browser --browser-profile chrome tabs`
+- CLI: `openclaw browser --browser-profile chrome tabs`
 - Agent tool: `browser` with `profile="chrome"`
 
 If you want a different name or a different relay port, create your own profile:
 
 ```bash
-moltbot browser create-profile \
+openclaw browser create-profile \
   --name my-chrome \
   --driver extension \
   --cdp-url http://127.0.0.1:18792 \
@@ -69,7 +69,7 @@ moltbot browser create-profile \
 
 ## Attach / detach (toolbar button)
 
-- Open the tab you want Moltbot to control.
+- Open the tab you want OpenClaw to control.
 - Click the extension icon.
   - Badge shows `ON` when attached.
 - Click again to detach.
@@ -82,7 +82,7 @@ moltbot browser create-profile \
 
 ## Badge + common errors
 
-- `ON`: attached; Moltbot can drive that tab.
+- `ON`: attached; OpenClaw can drive that tab.
 - `…`: connecting to the local relay.
 - `!`: relay not reachable (most common: browser relay server isn’t running on this machine).
 
@@ -131,7 +131,7 @@ Options:
 
 Then ensure the tool isn’t denied by tool policy, and (if needed) call `browser` with `target="host"`.
 
-Debugging: `moltbot sandbox explain`
+Debugging: `openclaw sandbox explain`
 
 ## Remote access tips
 
@@ -140,9 +140,9 @@ Debugging: `moltbot sandbox explain`
 
 ## How “extension path” works
 
-`moltbot browser extension path` prints the **installed** on-disk directory containing the extension files.
+`openclaw browser extension path` prints the **installed** on-disk directory containing the extension files.
 
-The CLI intentionally does **not** print a `node_modules` path. Always run `moltbot browser extension install` first to copy the extension to a stable location under your Moltbot state directory.
+The CLI intentionally does **not** print a `node_modules` path. Always run `openclaw browser extension install` first to copy the extension to a stable location under your OpenClaw state directory.
 
 If you move or delete that install directory, Chrome will mark the extension as broken until you reload it from a valid path.
 
@@ -154,7 +154,7 @@ This is powerful and risky. Treat it like giving the model “hands on your brow
   - click/type/navigate in that tab
   - read page content
   - access whatever the tab’s logged-in session can access
-- **This is not isolated** like the dedicated clawd-managed profile.
+- **This is not isolated** like the dedicated openclaw-managed profile.
   - If you attach to your daily-driver profile/tab, you’re granting access to that account state.
 
 Recommendations:

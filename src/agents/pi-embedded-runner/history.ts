@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 
@@ -40,7 +40,7 @@ export function limitHistoryTurns(
  */
 export function getDmHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
-  config: MoltbotConfig | undefined,
+  config: OpenClawConfig | undefined,
 ): number | undefined {
   if (!sessionKey || !config) return undefined;
 
@@ -71,7 +71,7 @@ export function getDmHistoryLimitFromSessionKey(
   };
 
   const resolveProviderConfig = (
-    cfg: MoltbotConfig | undefined,
+    cfg: OpenClawConfig | undefined,
     providerId: string,
   ): { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> } | undefined => {
     const channels = cfg?.channels;

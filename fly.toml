@@ -1,7 +1,7 @@
-# Moltbot Fly.io deployment configuration
+# OpenClaw Fly.io deployment configuration
 # See https://fly.io/docs/reference/configuration/
 
-app = "moltbot"
+app = "openclaw"
 primary_region = "iad"  # change to your closest region
 
 [build]
@@ -10,8 +10,8 @@ primary_region = "iad"  # change to your closest region
 [env]
   NODE_ENV = "production"
   # Fly uses x86, but keep this for consistency
-  CLAWDBOT_PREFER_PNPM = "1"
-  CLAWDBOT_STATE_DIR = "/data"
+  OPENCLAW_PREFER_PNPM = "1"
+  OPENCLAW_STATE_DIR = "/data"
   NODE_OPTIONS = "--max-old-space-size=1536"
 
 [processes]
@@ -30,5 +30,5 @@ primary_region = "iad"  # change to your closest region
   memory = "2048mb"
 
 [mounts]
-  source = "moltbot_data"
+  source = "openclaw_data"
   destination = "/data"

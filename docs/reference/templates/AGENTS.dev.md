@@ -4,7 +4,7 @@ read_when:
   - Using the dev gateway templates
   - Updating the default dev agent identity
 ---
-# AGENTS.md - Moltbot Workspace
+# AGENTS.md - OpenClaw Workspace
 
 This folder is the assistant's working directory.
 

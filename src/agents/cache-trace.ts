@@ -5,7 +5,7 @@ import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { resolveUserPath } from "../utils.js";
@@ -52,7 +52,7 @@ export type CacheTrace = {
 };
 
 type CacheTraceInit = {
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runId?: string;
   sessionId?: string;
@@ -82,17 +82,17 @@ const writers = new Map<string, CacheTraceWriter>();
 function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const env = params.env ?? process.env;
   const config = params.cfg?.diagnostics?.cacheTrace;
-  const envEnabled = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE);
+  const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = config?.filePath?.trim() || env.CLAWDBOT_CACHE_TRACE_FILE?.trim();
+  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
   const includeMessages =
-    parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
-  const includePrompt = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
-  const includeSystem = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
+  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
+  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
 
   return {
     enabled,

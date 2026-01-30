@@ -34,7 +34,7 @@ export function registerSecurityCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.molt.bot/cli/security")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.openclaw.ai/cli/security")}\n`,
     );
 
   security
@@ -66,12 +66,12 @@ export function registerSecurityCli(program: Command) {
       const muted = (text: string) => (rich ? theme.muted(text) : text);
 
       const lines: string[] = [];
-      lines.push(heading("Moltbot security audit"));
+      lines.push(heading("OpenClaw security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
-      lines.push(muted(`Run deeper: ${formatCliCommand("moltbot security audit --deep")}`));
+      lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
 
       if (opts.fix) {
-        lines.push(muted(`Fix: ${formatCliCommand("moltbot security audit --fix")}`));
+        lines.push(muted(`Fix: ${formatCliCommand("openclaw security audit --fix")}`));
         if (!fixResult) {
           lines.push(muted("Fixes: failed to apply (unexpected error)"));
         } else if (

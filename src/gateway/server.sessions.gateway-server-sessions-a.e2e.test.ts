@@ -48,16 +48,16 @@ let port = 0;
 let previousToken: string | undefined;
 
 beforeAll(async () => {
-  previousToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
-  delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
   port = await getFreePort();
   server = await startGatewayServer(port);
 });
 
 afterAll(async () => {
   await server.close();
-  if (previousToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-  else process.env.CLAWDBOT_GATEWAY_TOKEN = previousToken;
+  if (previousToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  else process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
 });
 
 const openClient = async (opts?: Parameters<typeof connectOk>[1]) => {
@@ -74,7 +74,7 @@ describe("gateway server sessions", () => {
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     const now = Date.now();
     const recent = now - 30_000;
@@ -370,7 +370,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.preview returns transcript previews", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sessions-preview-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-preview-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     const sessionId = "sess-preview";
@@ -415,7 +415,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.delete rejects main and aborts active runs", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
 

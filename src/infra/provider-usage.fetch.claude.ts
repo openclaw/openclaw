@@ -104,7 +104,7 @@ export async function fetchClaudeUsage(
     {
       headers: {
         Authorization: `Bearer ${token}`,
-        "User-Agent": "moltbot",
+        "User-Agent": "openclaw",
         Accept: "application/json",
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "oauth-2025-04-20",

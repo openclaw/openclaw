@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createSlackActions } from "./slack.actions.js";
 
 const handleSlackAction = vi.fn(async () => ({ details: { ok: true } }));
@@ -11,7 +11,7 @@ vi.mock("../../agents/tools/slack-actions.js", () => ({
 
 describe("slack actions adapter", () => {
   it("forwards threadId for read", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as MoltbotConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     const actions = createSlackActions("slack");
 
     await actions.handleAction?.({

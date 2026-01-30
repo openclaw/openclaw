@@ -18,7 +18,7 @@ function dedupe(values: string[]): string[] {
 export function resolveCliChannelOptions(): string[] {
   const catalog = listChannelPluginCatalogEntries().map((entry) => entry.id);
   const base = dedupe([...CHAT_CHANNEL_ORDER, ...catalog]);
-  if (isTruthyEnvValue(process.env.CLAWDBOT_EAGER_CHANNEL_OPTIONS)) {
+  if (isTruthyEnvValue(process.env.OPENCLAW_EAGER_CHANNEL_OPTIONS)) {
     ensurePluginRegistryLoaded();
     const pluginIds = listChannelPlugins().map((plugin) => plugin.id);
     return dedupe([...base, ...pluginIds]);

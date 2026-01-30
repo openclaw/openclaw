@@ -26,7 +26,7 @@ const resolveShellFromPath = (name: string) => {
 };
 const defaultShell = isWin
   ? undefined
-  : process.env.CLAWDBOT_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
@@ -337,16 +337,16 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(args).toContain("CLAWDBOT_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
-    expect(commandArg).toContain('export PATH="${CLAWDBOT_PREPEND_PATH}:$PATH"');
+    expect(args).toContain("OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
+    expect(commandArg).toContain('export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"');
     expect(commandArg).toContain("echo hello");
     expect(commandArg).toBe(
-      'export PATH="${CLAWDBOT_PREPEND_PATH}:$PATH"; unset CLAWDBOT_PREPEND_PATH; echo hello',
+      'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; echo hello',
     );
   });
 
   it("does not interpolate PATH into the shell command", () => {
-    const injectedPath = "$(touch /tmp/moltbot-path-injection)";
+    const injectedPath = "$(touch /tmp/openclaw-path-injection)";
     const args = buildDockerExecArgs({
       containerName: "test-container",
       command: "echo hello",
@@ -358,9 +358,9 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(args).toContain(`CLAWDBOT_PREPEND_PATH=${injectedPath}`);
+    expect(args).toContain(`OPENCLAW_PREPEND_PATH=${injectedPath}`);
     expect(commandArg).not.toContain(injectedPath);
-    expect(commandArg).toContain("CLAWDBOT_PREPEND_PATH");
+    expect(commandArg).toContain("OPENCLAW_PREPEND_PATH");
   });
 
   it("does not add PATH export when PATH is not in env", () => {

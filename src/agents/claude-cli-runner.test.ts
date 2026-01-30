@@ -45,7 +45,7 @@ describe("runClaudeCliAgent", () => {
     });
 
     await runClaudeCliAgent({
-      sessionId: "moltbot-session",
+      sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
@@ -71,7 +71,7 @@ describe("runClaudeCliAgent", () => {
     });
 
     await runClaudeCliAgent({
-      sessionId: "moltbot-session",
+      sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",

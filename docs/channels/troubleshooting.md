@@ -9,8 +9,8 @@ read_when:
 Start with:
 
 ```bash
-moltbot doctor
-moltbot channels status --probe
+openclaw doctor
+openclaw channels status --probe
 ```
 
 `channels status --probe` prints warnings when it can detect common channel misconfigurations, and includes small live checks (credentials, some permissions/membership).

@@ -1,4 +1,4 @@
-import type { AllowlistMatch } from "clawdbot/plugin-sdk";
+import type { AllowlistMatch } from "openclaw/plugin-sdk";
 
 function normalizeAllowList(list?: Array<string | number>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);

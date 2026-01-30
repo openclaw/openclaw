@@ -4,14 +4,14 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 export type NonInteractiveApiKeySource = "flag" | "env" | "profile";
 
 async function resolveApiKeyFromProfiles(params: {
   provider: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentDir?: string;
 }): Promise<string | null> {
   const store = ensureAuthProfileStore(params.agentDir);
@@ -36,7 +36,7 @@ async function resolveApiKeyFromProfiles(params: {
 
 export async function resolveNonInteractiveApiKey(params: {
   provider: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   flagValue?: string;
   flagName: string;
   envVar: string;

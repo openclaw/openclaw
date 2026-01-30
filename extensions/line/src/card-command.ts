@@ -1,4 +1,4 @@
-import type { MoltbotPluginApi, LineChannelData, ReplyPayload } from "clawdbot/plugin-sdk";
+import type { LineChannelData, OpenClawPluginApi, ReplyPayload } from "openclaw/plugin-sdk";
 import {
   createActionCard,
   createImageCard,
@@ -7,7 +7,7 @@ import {
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 
@@ -150,7 +150,7 @@ function parseCardArgs(argsStr: string): {
   return result;
 }
 
-export function registerLineCardCommand(api: MoltbotPluginApi): void {
+export function registerLineCardCommand(api: OpenClawPluginApi): void {
   api.registerCommand({
     name: "card",
     description: "Send a rich card message (LINE).",

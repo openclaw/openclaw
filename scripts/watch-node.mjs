@@ -5,7 +5,7 @@ import process from "node:process";
 const args = process.argv.slice(2);
 const env = { ...process.env };
 const cwd = process.cwd();
-const compiler = env.CLAWDBOT_TS_COMPILER === "tsc" ? "tsc" : "tsgo";
+const compiler = env.OPENCLAW_TS_COMPILER === "tsc" ? "tsc" : "tsgo";
 const projectArgs = ["--project", "tsconfig.json"];
 
 const initialBuild = spawnSync("pnpm", ["exec", compiler, ...projectArgs], {
@@ -29,7 +29,7 @@ const compilerProcess = spawn("pnpm", ["exec", compiler, ...watchArgs], {
   stdio: "inherit",
 });
 
-const nodeProcess = spawn(process.execPath, ["--watch", "moltbot.mjs", ...args], {
+const nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args], {
   cwd,
   env,
   stdio: "inherit",

@@ -1,14 +1,14 @@
 ---
 summary: "LINE Messaging API plugin setup, config, and usage"
 read_when:
-  - You want to connect Moltbot to LINE
+  - You want to connect OpenClaw to LINE
   - You need LINE webhook + credential setup
   - You want LINE-specific message options
 ---
 
 # LINE (plugin)
 
-LINE connects to Moltbot via the LINE Messaging API. The plugin runs as a webhook
+LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
@@ -21,13 +21,13 @@ are not supported.
 Install the LINE plugin:
 
 ```bash
-moltbot plugins install @moltbot/line
+openclaw plugins install @openclaw/line
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-moltbot plugins install ./extensions/line
+openclaw plugins install ./extensions/line
 ```
 
 ## Setup
@@ -106,8 +106,8 @@ Direct messages default to pairing. Unknown senders get a pairing code and their
 messages are ignored until approved.
 
 ```bash
-moltbot pairing list line
-moltbot pairing approve line <CODE>
+openclaw pairing list line
+openclaw pairing approve line <CODE>
 ```
 
 Allowlists and policies:

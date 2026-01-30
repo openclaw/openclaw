@@ -6,7 +6,7 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -79,7 +79,7 @@ function applySelectionToSession(params: {
 }
 
 export async function applyResetModelOverride(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;

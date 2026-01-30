@@ -2,7 +2,7 @@ import path from "node:path";
 
 import chokidar, { type FSWatcher } from "chokidar";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
@@ -48,7 +48,7 @@ function emit(event: SkillsChangeEvent) {
   }
 }
 
-function resolveWatchPaths(workspaceDir: string, config?: MoltbotConfig): string[] {
+function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
   const paths: string[] = [];
   if (workspaceDir.trim()) {
     paths.push(path.join(workspaceDir, "skills"));
@@ -97,7 +97,7 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, local);
 }
 
-export function ensureSkillsWatcher(params: { workspaceDir: string; config?: MoltbotConfig }) {
+export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) return;
   const watchEnabled = params.config?.skills?.load?.watch !== false;

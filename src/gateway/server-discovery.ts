@@ -13,14 +13,14 @@ export type ResolveBonjourCliPathOptions = {
 
 export function formatBonjourInstanceName(displayName: string) {
   const trimmed = displayName.trim();
-  if (!trimmed) return "Moltbot";
-  if (/moltbot/i.test(trimmed)) return trimmed;
-  return `${trimmed} (Moltbot)`;
+  if (!trimmed) return "OpenClaw";
+  if (/openclaw/i.test(trimmed)) return trimmed;
+  return `${trimmed} (OpenClaw)`;
 }
 
 export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): string | undefined {
   const env = opts.env ?? process.env;
-  const envPath = env.CLAWDBOT_CLI_PATH?.trim();
+  const envPath = env.OPENCLAW_CLI_PATH?.trim();
   if (envPath) return envPath;
 
   const statSync = opts.statSync ?? fs.statSync;
@@ -34,7 +34,7 @@ export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): 
 
   const execPath = opts.execPath ?? process.execPath;
   const execDir = path.dirname(execPath);
-  const siblingCli = path.join(execDir, "moltbot");
+  const siblingCli = path.join(execDir, "openclaw");
   if (isFile(siblingCli)) return siblingCli;
 
   const argv = opts.argv ?? process.argv;
@@ -46,7 +46,7 @@ export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): 
   const cwd = opts.cwd ?? process.cwd();
   const distCli = path.join(cwd, "dist", "index.js");
   if (isFile(distCli)) return distCli;
-  const binCli = path.join(cwd, "bin", "moltbot.js");
+  const binCli = path.join(cwd, "bin", "openclaw");
   if (isFile(binCli)) return binCli;
 
   return undefined;
@@ -58,7 +58,7 @@ export async function resolveTailnetDnsHint(opts?: {
   enabled?: boolean;
 }): Promise<string | undefined> {
   const env = opts?.env ?? process.env;
-  const envRaw = env.CLAWDBOT_TAILNET_DNS?.trim();
+  const envRaw = env.OPENCLAW_TAILNET_DNS?.trim();
   const envValue = envRaw && envRaw.length > 0 ? envRaw.replace(/\.$/, "") : "";
   if (envValue) return envValue;
   if (opts?.enabled === false) return undefined;

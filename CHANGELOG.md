@@ -1,89 +1,169 @@
 # Changelog
 
-Docs: https://docs.molt.bot
+Docs: https://docs.openclaw.ai
 
-## 2026.1.29
+## 2026.1.27-beta.1
 Status: beta.
 
-### Highlights
-- Rebrand: rename the npm package/CLI to `moltbot`, keep a `moltbot` compatibility shim, move extensions to the `@moltbot/*` scope, and update bot.molt bundle IDs/labels/logging subsystems. Thanks @thewilloftheshadow.
-- New channels/plugins: Twitch plugin; Google Chat (beta) with Workspace Add-on events + typing indicator. (#1612, #1635) Thanks @tyler6204, @iHildy.
-- Security hardening: gateway auth defaults required, hook token query-param deprecation, Windows ACL audits, mDNS minimal discovery, and SSH target option injection fix. (#4001, #2016, #1957, #1882, #2200)
-- WebChat: image paste + image-only sends; keep sub-agent announce replies visible. (#1925, #1977)
-- Tooling: per-sender group tool policies + tools.alsoAllow additive allowlist. (#1757, #1762)
-- Memory Search: allow extra paths for memory indexing. (#3600) Thanks @kira-ariaki.
-
 ### Changes
-- Providers: add Venice AI integration; update Moonshot Kimi references to kimi-k2.5; update MiniMax API endpoint/format. (#2762, #3064)
-- Providers: add Xiaomi MiMo (mimo-v2-flash) support and onboarding flow. (#3454) Thanks @WqyJh.
-- Telegram: quote replies, edit-message action, silent sends, sticker support + vision caching, linkPreview toggle, plugin sendPayload support. (#2900, #2394, #2382, #2548, #1700, #1917)
-- Discord: configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.
-- Browser: route browser control via gateway/node; fallback URL matching for relay targets. (#1999)
-- macOS: add direct gateway transport; preserve custom SSH usernames for remote control; bump Textual to 0.3.1. (#2033, #2046)
-- Routing: add per-account DM session scope + guidance for multi-account setups. (#3095) Thanks @jarvis-sam.
-- Hooks: make session-memory message count configurable. (#2681)
-- Tools: honor tools.exec.safeBins in exec allowlist checks. (#2281)
-- Security: add Control UI device auth bypass flag + audit warnings; warn on hook tokens via query params; add security audit CLI surface. (#2248, #2200)
-- Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
-- Config: apply config.env before ${VAR} substitution. (#1813)
-- Web search: add Brave freshness filter parameter. (#1688) Thanks @JonUleis.
-- Control UI: improve chat session dropdown refresh, URL confirmation flow, config-save guardrails, and chat composer sizing. (#3682, #3578, #1707, #2950)
+- Rebrand: rename the npm package/CLI to `openclaw`, add a `openclaw` compatibility shim, and move extensions to the `@openclaw/*` scope.
 - Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
-- CLI: use Node's compile cache for faster startup; recognize versioned node binaries (e.g., node-22). (#2808, #2490) Thanks @pi0, @David-Marsh-Photo.
+- macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
+- macOS: finish OpenClaw app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.
+- Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy com.clawdbot migrations). Thanks @thewilloftheshadow.
+- Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
 - Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
+- Memory Search: allow extra paths for memory indexing (ignores symlinks). (#3600) Thanks @kira-ariaki.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
+- Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
 - Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.
-- Docs: new deployment guides (Northflank, Render, Oracle, Raspberry Pi, GCP, DigitalOcean), Claude Max API Proxy, Vercel AI Gateway, migration guide, formal verification updates, and Fly private hardening. (#2167, #1975, #2333, #1871, #1848, #1870, #1875, #1901, #2381, #2289)
-- Onboarding: add Venice API key to non-interactive flow; strengthen security warning copy.
+- Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.
+- Docs: add migration guide for moving to a new machine. (#2381)
+- Docs: add Northflank one-click deployment guide. (#2167) Thanks @AdeboyeDN.
+- Gateway: warn on hook tokens via query params; document header auth preference. (#2200) Thanks @YuriNachos.
+- Gateway: add dangerous Control UI device auth bypass flag + audit warnings. (#2248)
+- Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
+- Config: auto-migrate legacy state/config paths and keep config resolution consistent across legacy filenames.
+- Discord: add configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.
+- Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.
+- Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
+- Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
+- Docs: add Render deployment guide. (#1975) Thanks @anurag.
+- Docs: add Claude Max API Proxy guide. (#1875) Thanks @atalovesyou.
+- Docs: add DigitalOcean deployment guide. (#1870) Thanks @0xJonHoldsCrypto.
+- Docs: add Oracle Cloud (OCI) platform guide + cross-links. (#2333) Thanks @hirefrank.
+- Docs: add Raspberry Pi install guide. (#1871) Thanks @0xJonHoldsCrypto.
+- Docs: add GCP Compute Engine deployment guide. (#1848) Thanks @hougangdev.
+- Docs: add LINE channel guide. Thanks @thewilloftheshadow.
+- Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
+- Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
+- Onboarding: strengthen security warning copy for beta + access control expectations.
+- Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
+- Gateway: prefer newest session metadata when combining stores. (#1823) Thanks @emanuelst.
+- Web UI: keep sub-agent announce replies visible in WebChat. (#1977) Thanks @andrescardonas7.
+- CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
+- macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.
+- Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
+- Browser: route browser control via gateway/node; remove standalone browser control command and control URL config.
+- Browser: route `browser.request` via node proxies when available; honor proxy timeouts; derive browser ports from `gateway.port`.
+- Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
+- Build: bundle A2UI assets during build and stop tracking generated bundles. (#2455) Thanks @0oAstro.
+- Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
+- Telegram: support plugin sendPayload channelData (media/buttons) and validate plugin commands. (#1917) Thanks @JoshuaLelon.
+- Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
+- Docs: keep docs header sticky so navbar stays visible while scrolling. (#2445) Thanks @chenyuan99.
+- Docs: update exe.dev install instructions. (#https://github.com/openclaw/openclaw/pull/3047) Thanks @zackerthescar.
+- Security: use Windows ACLs for permission audits and fixes on Windows. (#1957)
+- Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
+- Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
+- TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
+- Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
+- Telegram: add optional silent send flag (disable notifications). (#2382) Thanks @Suksham-sharma.
+- Telegram: support editing sent messages via message(action="edit"). (#2394) Thanks @marcelomar21.
+- Telegram: support quote replies for message tool and inbound context. (#2900) Thanks @aduk059.
+- Telegram: add sticker receive/send with vision caching. (#2629) Thanks @longjos.
+- Telegram: send sticker pixels to vision models. (#2650)
+- Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
+- Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
+- macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
+- CLI: use Node's module compile cache for faster startup. (#2808) Thanks @pi0.
+- Routing: add per-account DM session scope and document multi-account isolation. (#3095) Thanks @jarvis-sam.
 
 ### Breaking
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
-- Security: harden SSH tunnel target parsing to prevent option injection/DoS. (#4001) Thanks @YLChen-007.
-- Security: prevent PATH injection in exec sandbox; harden file serving; pin DNS in URL fetches; verify Twilio webhooks; fix LINE webhook timing-attack edge case; validate Tailscale Serve identity; flag loopback Control UI with auth disabled as critical. (#1616, #1795)
-- Gateway: prevent crashes on transient network errors, suppress AbortError/unhandled rejections, sanitize error responses, clean session locks on exit, and harden reverse proxy handling for unauthenticated proxied connects. (#2980, #2451, #2483, #1795)
-- Config: auto-migrate legacy state/config paths; honor state dir overrides.
-- Packaging: include missing dist/shared and dist/link-understanding outputs in npm tarball installs.
-- Telegram: avoid silent empty replies, improve polling/network recovery, handle video notes, keep DM thread sessions, ignore non-forum message_thread_id, centralize API error logging, include AccountId in native command context. (#3796, #3013, #2905, #2731, #2492, #2942)
-- Telegram: preserve reasoning tags inside code blocks. (#3952) Thanks @vinaygit18.
-- Discord: restore username resolution, resolve outbound usernames to IDs, honor threadId replies, guard forum thread access. (#3131, #2649)
-- BlueBubbles: coalesce URL link previews, improve reaction handling, preserve reply-tag GUIDs. (#1981, #1641)
-- Voice Call: prevent TTS overlap, validate env-var config, return TwiML for conversation calls. (#1713, #1634)
-- Media: fix text attachment MIME classification + XML escaping on Windows. (#3628, #3750)
-- Models: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
-- Web UI: auto-scroll on send; fix textarea sizing; improve chat session refresh. (#2471, #2950, #3682)
-- CLI/TUI: resume sessions cleanly; guard width overflow; avoid spinner prompt race. (#1921, #1686, #2874)
-- Slack: fix file downloads failing on redirects with missing auth header. (#1936)
-- iMessage: normalize messaging targets. (#1708)
-- Signal: fix reactions and add configurable startup timeout. (#1651, #1677)
-- Matrix: decrypt E2EE media with size guard. (#1744)
+- Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)
+- Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.
+- Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
+- Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
+- Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
+- Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
+- Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.
+- Telegram: include AccountId in native command context for multi-agent routing. (#2942) Thanks @Chloe-VP.
+- Telegram: handle video note attachments in media extraction. (#2905) Thanks @mylukin.
+- TTS: read OPENAI_TTS_BASE_URL at runtime instead of module load to honor config.env. (#3341) Thanks @hclsys.
+- macOS: auto-scroll to bottom when sending a new message while scrolled up. (#2471) Thanks @kennyklee.
+- Web UI: auto-expand the chat compose textarea while typing (with sensible max height). (#2950) Thanks @shivamraut101.
+- Gateway: prevent crashes on transient network errors (fetch failures, timeouts, DNS). Added fatal error detection to only exit on truly critical errors. Fixes #2895, #2879, #2873. (#2980) Thanks @elliotsecops.
+- Agents: guard channel tool listActions to avoid plugin crashes. (#2859) Thanks @mbelinky.
+- Discord: stop resolveDiscordTarget from passing directory params into messaging target parsers. Fixes #3167. Thanks @thewilloftheshadow.
+- Discord: avoid resolving bare channel names to user DMs when a username matches. Thanks @thewilloftheshadow.
+- Discord: fix directory config type import for target resolution. Thanks @thewilloftheshadow.
+- Providers: update MiniMax API endpoint and compatibility mode. (#3064) Thanks @hlbbbbbbb.
+- Telegram: treat more network errors as recoverable in polling. (#3013) Thanks @ryancontent.
+- Discord: resolve usernames to user IDs for outbound messages. (#2649) Thanks @nonggialiang.
+- Providers: update Moonshot Kimi model references to kimi-k2.5. (#2762) Thanks @MarvinCui.
+- Gateway: suppress AbortError and transient network errors in unhandled rejections. (#2451) Thanks @Glucksberg.
+- TTS: keep /tts status replies on text-only commands and avoid duplicate block-stream audio. (#2451) Thanks @Glucksberg.
+- Security: pin npm overrides to keep tar@7.5.4 for install toolchains.
+- Security: properly test Windows ACL audit for config includes. (#2403) Thanks @dominicnunez.
+- CLI: recognize versioned Node executables when parsing argv. (#2490) Thanks @David-Marsh-Photo.
+- CLI: avoid prompting for gateway runtime under the spinner. (#2874)
+- BlueBubbles: coalesce inbound URL link preview messages. (#1981) Thanks @tyler6204.
+- Cron: allow payloads containing "heartbeat" in event filter. (#2219) Thanks @dwfinkelstein.
+- CLI: avoid loading config for global help/version while registering plugin commands. (#2212) Thanks @dial481.
+- Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
+- Agents: release session locks on process termination and cover more signals. (#2483) Thanks @janeexai.
+- Agents: skip cooldowned providers during model failover. (#2143) Thanks @YiWang24.
+- Telegram: harden polling + retry behavior for transient network errors and Node 22 transport issues. (#2420) Thanks @techboss.
+- Telegram: ignore non-forum group message_thread_id while preserving DM thread sessions. (#2731) Thanks @dylanneve1.
+- Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
+- Telegram: centralize API error logging for delivery and bot calls. (#2492) Thanks @altryne.
+- Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
+- Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
+- Media: fix text attachment MIME misclassification with CSV/TSV inference and UTF-16 detection; add XML attribute escaping for file output. (#3628) Thanks @frankekn.
+- Build: align memory-core peer dependency with lockfile.
+- Security: add mDNS discovery mode with minimal default to reduce information disclosure. (#1882) Thanks @orlyjamie.
+- Security: harden URL fetches with DNS pinning to reduce rebinding risk. Thanks Chris Zheng.
+- Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
+- Security: wrap external hook content by default with a per-hook opt-out. (#1827) Thanks @mertcicekci0.
+- Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).
+- Gateway: treat loopback + non-local Host connections as remote unless trusted proxy headers are present.
+- Onboarding: remove unsupported gateway auth "off" choice from onboarding/configure flows and CLI flags.
 
+## 2026.1.24-3
+
+### Fixes
+- Slack: fix image downloads failing due to missing Authorization header on cross-origin redirects. (#1936) Thanks @sanderhelgesen.
+- Gateway: harden reverse proxy handling for local-client detection and unauthenticated proxied connects. (#1795) Thanks @orlyjamie.
+- Security audit: flag loopback Control UI with auth disabled as critical. (#1795) Thanks @orlyjamie.
+- CLI: resume claude-cli sessions and stream CLI replies to TUI clients. (#1921) Thanks @rmorse.
+
+## 2026.1.24-2
+
+### Fixes
+- Packaging: include dist/link-understanding output in npm tarball (fixes missing apply.js import on install).
+
+## 2026.1.24-1
+
+### Fixes
+- Packaging: include dist/shared output in npm tarball (fixes missing reasoning-tags import on install).
 
 ## 2026.1.24
 
 ### Highlights
-- Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.molt.bot/providers/ollama https://docs.molt.bot/providers/venice
+- Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.openclaw.ai/providers/ollama https://docs.openclaw.ai/providers/venice
 - Channels: LINE plugin (Messaging API) with rich replies + quick replies. (#1630) Thanks @plum-dawg.
-- TTS: Edge fallback (keyless) + `/tts` auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.molt.bot/tts
-- Exec approvals: approve in-chat via `/approve` across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands
-- Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.molt.bot/channels/telegram
+- TTS: Edge fallback (keyless) + `/tts` auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.openclaw.ai/tts
+- Exec approvals: approve in-chat via `/approve` across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.openclaw.ai/tools/exec-approvals https://docs.openclaw.ai/tools/slash-commands
+- Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.openclaw.ai/channels/telegram
 
 ### Changes
 - Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.
-- TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.molt.bot/tts
-- TTS: add auto mode enum (off/always/inbound/tagged) with per-session `/tts` override. (#1667) Thanks @sebslight. https://docs.molt.bot/tts
+- TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.openclaw.ai/tts
+- TTS: add auto mode enum (off/always/inbound/tagged) with per-session `/tts` override. (#1667) Thanks @sebslight. https://docs.openclaw.ai/tts
 - Telegram: treat DM topics as separate sessions and keep DM history limits stable with thread suffixes. (#1597) Thanks @rohannagpal.
-- Telegram: add `channels.telegram.linkPreview` to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.molt.bot/channels/telegram
-- Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.molt.bot/tools/web
+- Telegram: add `channels.telegram.linkPreview` to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.openclaw.ai/channels/telegram
+- Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.openclaw.ai/tools/web
 - UI: refresh Control UI dashboard design system (colors, icons, typography). (#1745, #1786) Thanks @EnzeD, @mousberg.
-- Exec approvals: forward approval prompts to chat with `/approve` for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands
+- Exec approvals: forward approval prompts to chat with `/approve` for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.openclaw.ai/tools/exec-approvals https://docs.openclaw.ai/tools/slash-commands
 - Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.
-- Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.molt.bot/diagnostics/flags
+- Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.openclaw.ai/diagnostics/flags
 - Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).
 - Docs: add verbose installer troubleshooting guidance.
 - Docs: add macOS VM guide with local/hosted options + VPS/nodes guidance. (#1693) Thanks @f-trycua.
-- Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.molt.bot/bedrock
+- Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.openclaw.ai/bedrock
 - Docs: update Fly.io guide notes.
 - Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.
 
@@ -94,11 +174,11 @@ Status: beta.
 - Web UI: hide internal `message_id` hints in chat bubbles.
 - Gateway: allow Control UI token-only auth to skip device pairing even when device identity is present (`gateway.controlUi.allowInsecureAuth`). (#1679) Thanks @steipete.
 - Matrix: decrypt E2EE media attachments with preflight size guard. (#1744) Thanks @araa47.
-- BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.molt.bot/channels/bluebubbles
+- BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.openclaw.ai/channels/bluebubbles
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
 - iMessage: normalize chat_id/chat_guid/chat_identifier prefixes case-insensitively and keep service-prefixed handles stable. (#1708) Thanks @aaronn.
 - Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.
-- Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.molt.bot/channels/signal
+- Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.openclaw.ai/channels/signal
 - Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.
 - Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)
 - Telegram: honor per-account proxy for outbound API calls. (#1774) Thanks @radek-paclt.
@@ -136,25 +216,25 @@ Status: beta.
 ## 2026.1.23
 
 ### Highlights
-- TTS: move Telegram TTS into core + enable model-driven TTS tags by default for expressive audio replies. (#1559) Thanks @Glucksberg. https://docs.molt.bot/tts
-- Gateway: add `/tools/invoke` HTTP endpoint for direct tool calls (auth + tool policy enforced). (#1575) Thanks @vignesh07. https://docs.molt.bot/gateway/tools-invoke-http-api
-- Heartbeat: per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer. https://docs.molt.bot/gateway/heartbeat
-- Deploy: add Fly.io deployment support + guide. (#1570) https://docs.molt.bot/platforms/fly
-- Channels: add Tlon/Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a. https://docs.molt.bot/channels/tlon
+- TTS: move Telegram TTS into core + enable model-driven TTS tags by default for expressive audio replies. (#1559) Thanks @Glucksberg. https://docs.openclaw.ai/tts
+- Gateway: add `/tools/invoke` HTTP endpoint for direct tool calls (auth + tool policy enforced). (#1575) Thanks @vignesh07. https://docs.openclaw.ai/gateway/tools-invoke-http-api
+- Heartbeat: per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer. https://docs.openclaw.ai/gateway/heartbeat
+- Deploy: add Fly.io deployment support + guide. (#1570) https://docs.openclaw.ai/platforms/fly
+- Channels: add Tlon/Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a. https://docs.openclaw.ai/channels/tlon
 
 ### Changes
-- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt. https://docs.molt.bot/multi-agent-sandbox-tools
-- Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3. https://docs.molt.bot/bedrock
-- CLI: add `moltbot system` for system events + heartbeat controls; remove standalone `wake`. (commit 71203829d) https://docs.molt.bot/cli/system
-- CLI: add live auth probes to `moltbot models status` for per-profile verification. (commit 40181afde) https://docs.molt.bot/cli/models
-- CLI: restart the gateway by default after `moltbot update`; add `--no-restart` to skip it. (commit 2c85b1b40)
+- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt. https://docs.openclaw.ai/multi-agent-sandbox-tools
+- Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3. https://docs.openclaw.ai/bedrock
+- CLI: add `openclaw system` for system events + heartbeat controls; remove standalone `wake`. (commit 71203829d) https://docs.openclaw.ai/cli/system
+- CLI: add live auth probes to `openclaw models status` for per-profile verification. (commit 40181afde) https://docs.openclaw.ai/cli/models
+- CLI: restart the gateway by default after `openclaw update`; add `--no-restart` to skip it. (commit 2c85b1b40)
 - Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node). (commit c3cb26f7c)
-- Plugins: add optional `llm-task` JSON-only tool for workflows. (#1498) Thanks @vignesh07. https://docs.molt.bot/tools/llm-task
+- Plugins: add optional `llm-task` JSON-only tool for workflows. (#1498) Thanks @vignesh07. https://docs.openclaw.ai/tools/llm-task
 - Markdown: add per-channel table conversion (bullets for Signal/WhatsApp, code blocks elsewhere). (#1495) Thanks @odysseus0.
 - Agents: keep system prompt time zone-only and move current time to `session_status` for better cache hits. (commit 66eec295b)
 - Agents: remove redundant bash tool alias from tool registration/display. (#1571) Thanks @Takhoffman.
-- Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc. https://docs.molt.bot/automation/cron-vs-heartbeat
-- Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc. https://docs.molt.bot/gateway/heartbeat
+- Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc. https://docs.openclaw.ai/automation/cron-vs-heartbeat
+- Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc. https://docs.openclaw.ai/gateway/heartbeat
 
 ### Fixes
 - Sessions: accept non-UUID sessionIds for history/send/status while preserving agent scoping. (#1518)
@@ -187,7 +267,7 @@ Status: beta.
 - UI: keep the Control UI sidebar visible while scrolling long pages. (#1515) Thanks @pookNast.
 - UI: cache Control UI markdown rendering + memoize chat text extraction to reduce Safari typing jank. (commit d57cb2e1a)
 - TUI: forward unknown slash commands, include Gateway commands in autocomplete, and render slash replies as system output. (commit 1af227b61, commit 8195497ce, commit 6fba598ea)
-- CLI: auth probe output polish (table output, inline errors, reduced noise, and wrap fixes in `moltbot models status`). (commit da3f2b489, commit 00ae21bed, commit 31e59cd58, commit f7dc27f2d, commit 438e782f8, commit 886752217, commit aabe0bed3, commit 81535d512, commit c63144ab1)
+- CLI: auth probe output polish (table output, inline errors, reduced noise, and wrap fixes in `openclaw models status`). (commit da3f2b489, commit 00ae21bed, commit 31e59cd58, commit f7dc27f2d, commit 438e782f8, commit 886752217, commit aabe0bed3, commit 81535d512, commit c63144ab1)
 - Media: only parse `MEDIA:` tags when they start the line to avoid stripping prose mentions. (#1206)
 - Media: preserve PNG alpha when possible; fall back to JPEG when still over size cap. (#1491) Thanks @robbyczgw-cla.
 - Skills: gate bird Homebrew install to macOS. (#1569) Thanks @bradleypriest.
@@ -232,35 +312,35 @@ Status: beta.
 ## 2026.1.21-2
 
 ### Fixes
-- Control UI: ignore bootstrap identity placeholder text for avatar values and fall back to the default avatar. https://docs.molt.bot/cli/agents https://docs.molt.bot/web/control-ui
+- Control UI: ignore bootstrap identity placeholder text for avatar values and fall back to the default avatar. https://docs.openclaw.ai/cli/agents https://docs.openclaw.ai/web/control-ui
 - Slack: remove deprecated `filetype` field from `files.uploadV2` to eliminate API warnings. (#1447)
 
 ## 2026.1.21
 
 ### Changes
-- Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.molt.bot/tools/lobster
-- Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.molt.bot/tools/lobster
+- Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.openclaw.ai/tools/lobster
+- Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.openclaw.ai/tools/lobster
 - Heartbeat: allow running heartbeats in an explicit session key. (#1256) Thanks @zknicker.
 - CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
 - CLI: exec approvals mutations render tables instead of raw JSON.
 - Exec approvals: support wildcard agent allowlists (`*`) across all agents.
 - Exec approvals: allowlist matches resolved binary paths only, add safe stdin-only bins, and tighten allowlist shell parsing.
 - Nodes: expose node PATH in status/describe and bootstrap PATH for node-host execution.
-- CLI: flatten node service commands under `moltbot node` and remove `service node` docs.
-- CLI: move gateway service commands under `moltbot gateway` and add `gateway probe` for reachability.
+- CLI: flatten node service commands under `openclaw node` and remove `service node` docs.
+- CLI: move gateway service commands under `openclaw gateway` and add `gateway probe` for reachability.
 - Sessions: add per-channel reset overrides via `session.resetByChannel`. (#1353) Thanks @cash-echo-bot.
 - Agents: add identity avatar config support and Control UI avatar rendering. (#1329, #1424) Thanks @dlauer.
 - UI: show per-session assistant identity in the Control UI. (#1420) Thanks @robbyczgw-cla.
-- CLI: add `moltbot update wizard` for interactive channel selection and restart prompts. https://docs.molt.bot/cli/update
+- CLI: add `openclaw update wizard` for interactive channel selection and restart prompts. https://docs.openclaw.ai/cli/update
 - Signal: add typing indicators and DM read receipts via signal-cli.
 - MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.
 - Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
-- Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.molt.bot/gateway/troubleshooting
+- Docs: add troubleshooting entry for gateway.mode blocking gateway start. https://docs.openclaw.ai/gateway/troubleshooting
 - Docs: add /model allowlist troubleshooting note. (#1405)
 - Docs: add per-message Gmail search example for gog. (#1220) Thanks @mbelinky.
 
 ### Breaking
-- **BREAKING:** Control UI now rejects insecure HTTP without device identity by default. Use HTTPS (Tailscale Serve) or set `gateway.controlUi.allowInsecureAuth: true` to allow token-only auth. https://docs.molt.bot/web/control-ui#insecure-http
+- **BREAKING:** Control UI now rejects insecure HTTP without device identity by default. Use HTTPS (Tailscale Serve) or set `gateway.controlUi.allowInsecureAuth: true` to allow token-only auth. https://docs.openclaw.ai/web/control-ui#insecure-http
 - **BREAKING:** Envelope and system event timestamps now default to host-local time (was UTC) so agents don’t have to constantly convert.
 
 ### Fixes
@@ -286,68 +366,68 @@ Status: beta.
 ## 2026.1.20
 
 ### Changes
-- Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.molt.bot/web/control-ui
-- Control UI: drop the legacy list view. (#1345) https://docs.molt.bot/web/control-ui
-- TUI: add syntax highlighting for code blocks. (#1200) https://docs.molt.bot/tui
-- TUI: session picker shows derived titles, fuzzy search, relative times, and last message preview. (#1271) https://docs.molt.bot/tui
-- TUI: add a searchable model picker for quicker model selection. (#1198) https://docs.molt.bot/tui
-- TUI: add input history (up/down) for submitted messages. (#1348) https://docs.molt.bot/tui
-- ACP: add `moltbot acp` for IDE integrations. https://docs.molt.bot/cli/acp
-- ACP: add `moltbot acp client` interactive harness for debugging. https://docs.molt.bot/cli/acp
-- Skills: add download installs with OS-filtered options. https://docs.molt.bot/tools/skills
-- Skills: add the local sherpa-onnx-tts skill. https://docs.molt.bot/tools/skills
-- Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback. https://docs.molt.bot/concepts/memory
-- Memory: add SQLite embedding cache to speed up reindexing and frequent updates. https://docs.molt.bot/concepts/memory
-- Memory: add OpenAI batch indexing for embeddings when configured. https://docs.molt.bot/concepts/memory
-- Memory: enable OpenAI batch indexing by default for OpenAI embeddings. https://docs.molt.bot/concepts/memory
-- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2). https://docs.molt.bot/concepts/memory
-- Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default. https://docs.molt.bot/concepts/memory
-- Memory: add `--verbose` logging for memory status + batch indexing details. https://docs.molt.bot/concepts/memory
-- Memory: add native Gemini embeddings provider for memory search. (#1151) https://docs.molt.bot/concepts/memory
-- Browser: allow config defaults for efficient snapshots in the tool/CLI. (#1336) https://docs.molt.bot/tools/browser
-- Nostr: add the Nostr channel plugin with profile management + onboarding defaults. (#1323) https://docs.molt.bot/channels/nostr
-- Matrix: migrate to matrix-bot-sdk with E2EE support, location handling, and group allowlist upgrades. (#1298) https://docs.molt.bot/channels/matrix
-- Slack: add HTTP webhook mode via Bolt HTTP receiver. (#1143) https://docs.molt.bot/channels/slack
-- Telegram: enrich forwarded-message context with normalized origin details + legacy fallback. (#1090) https://docs.molt.bot/channels/telegram
+- Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.openclaw.ai/web/control-ui
+- Control UI: drop the legacy list view. (#1345) https://docs.openclaw.ai/web/control-ui
+- TUI: add syntax highlighting for code blocks. (#1200) https://docs.openclaw.ai/tui
+- TUI: session picker shows derived titles, fuzzy search, relative times, and last message preview. (#1271) https://docs.openclaw.ai/tui
+- TUI: add a searchable model picker for quicker model selection. (#1198) https://docs.openclaw.ai/tui
+- TUI: add input history (up/down) for submitted messages. (#1348) https://docs.openclaw.ai/tui
+- ACP: add `openclaw acp` for IDE integrations. https://docs.openclaw.ai/cli/acp
+- ACP: add `openclaw acp client` interactive harness for debugging. https://docs.openclaw.ai/cli/acp
+- Skills: add download installs with OS-filtered options. https://docs.openclaw.ai/tools/skills
+- Skills: add the local sherpa-onnx-tts skill. https://docs.openclaw.ai/tools/skills
+- Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback. https://docs.openclaw.ai/concepts/memory
+- Memory: add SQLite embedding cache to speed up reindexing and frequent updates. https://docs.openclaw.ai/concepts/memory
+- Memory: add OpenAI batch indexing for embeddings when configured. https://docs.openclaw.ai/concepts/memory
+- Memory: enable OpenAI batch indexing by default for OpenAI embeddings. https://docs.openclaw.ai/concepts/memory
+- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2). https://docs.openclaw.ai/concepts/memory
+- Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default. https://docs.openclaw.ai/concepts/memory
+- Memory: add `--verbose` logging for memory status + batch indexing details. https://docs.openclaw.ai/concepts/memory
+- Memory: add native Gemini embeddings provider for memory search. (#1151) https://docs.openclaw.ai/concepts/memory
+- Browser: allow config defaults for efficient snapshots in the tool/CLI. (#1336) https://docs.openclaw.ai/tools/browser
+- Nostr: add the Nostr channel plugin with profile management + onboarding defaults. (#1323) https://docs.openclaw.ai/channels/nostr
+- Matrix: migrate to matrix-bot-sdk with E2EE support, location handling, and group allowlist upgrades. (#1298) https://docs.openclaw.ai/channels/matrix
+- Slack: add HTTP webhook mode via Bolt HTTP receiver. (#1143) https://docs.openclaw.ai/channels/slack
+- Telegram: enrich forwarded-message context with normalized origin details + legacy fallback. (#1090) https://docs.openclaw.ai/channels/telegram
 - Discord: fall back to `/skill` when native command limits are exceeded. (#1287)
 - Discord: expose `/skill` globally. (#1287)
-- Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) https://docs.molt.bot/plugins/zalouser
-- Plugins: require manifest-embedded config schemas with preflight validation warnings. (#1272) https://docs.molt.bot/plugins/manifest
-- Plugins: move channel catalog metadata into plugin manifests. (#1290) https://docs.molt.bot/plugins/manifest
-- Plugins: align Nextcloud Talk policy helpers with core patterns. (#1290) https://docs.molt.bot/plugins/manifest
-- Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) https://docs.molt.bot/web/control-ui
-- Agents/UI: add agent avatar support in identity config, IDENTITY.md, and the Control UI. (#1329) https://docs.molt.bot/gateway/configuration
-- Plugins: add plugin slots with a dedicated memory slot selector. https://docs.molt.bot/plugins/agent-tools
-- Plugins: ship the bundled BlueBubbles channel plugin (disabled by default). https://docs.molt.bot/channels/bluebubbles
+- Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) https://docs.openclaw.ai/plugins/zalouser
+- Plugins: require manifest-embedded config schemas with preflight validation warnings. (#1272) https://docs.openclaw.ai/plugins/manifest
+- Plugins: move channel catalog metadata into plugin manifests. (#1290) https://docs.openclaw.ai/plugins/manifest
+- Plugins: align Nextcloud Talk policy helpers with core patterns. (#1290) https://docs.openclaw.ai/plugins/manifest
+- Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) https://docs.openclaw.ai/web/control-ui
+- Agents/UI: add agent avatar support in identity config, IDENTITY.md, and the Control UI. (#1329) https://docs.openclaw.ai/gateway/configuration
+- Plugins: add plugin slots with a dedicated memory slot selector. https://docs.openclaw.ai/plugins/agent-tools
+- Plugins: ship the bundled BlueBubbles channel plugin (disabled by default). https://docs.openclaw.ai/channels/bluebubbles
 - Plugins: migrate bundled messaging extensions to the plugin SDK and resolve plugin-sdk imports in the loader.
-- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime. https://docs.molt.bot/channels/zalo
-- Plugins: migrate the Zalo Personal plugin to the shared plugin SDK runtime. https://docs.molt.bot/plugins/zalouser
-- Plugins: allow optional agent tools with explicit allowlists and add the plugin tool authoring guide. https://docs.molt.bot/plugins/agent-tools
+- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime. https://docs.openclaw.ai/channels/zalo
+- Plugins: migrate the Zalo Personal plugin to the shared plugin SDK runtime. https://docs.openclaw.ai/plugins/zalouser
+- Plugins: allow optional agent tools with explicit allowlists and add the plugin tool authoring guide. https://docs.openclaw.ai/plugins/agent-tools
 - Plugins: auto-enable bundled channel/provider plugins when configuration is present.
-- Plugins: sync plugin sources on channel switches and update npm-installed plugins during `moltbot update`.
-- Plugins: share npm plugin update logic between `moltbot update` and `moltbot plugins update`.
+- Plugins: sync plugin sources on channel switches and update npm-installed plugins during `openclaw update`.
+- Plugins: share npm plugin update logic between `openclaw update` and `openclaw plugins update`.
 
 - Gateway/API: add `/v1/responses` (OpenResponses) with item-based input + semantic streaming events. (#1229)
 - Gateway/API: expand `/v1/responses` to support file/image inputs, tool_choice, usage, and output limits. (#1229)
-- Usage: add `/usage cost` summaries and macOS menu cost charts. https://docs.molt.bot/reference/api-usage-costs
-- Security: warn when <=300B models run without sandboxing while web tools are enabled. https://docs.molt.bot/cli/security
-- Exec: add host/security/ask routing for gateway + node exec. https://docs.molt.bot/tools/exec
-- Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node). https://docs.molt.bot/tools/exec
-- Exec approvals: migrate approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists + skill auto-allow toggle, and add approvals UI + node exec lifecycle events. https://docs.molt.bot/tools/exec-approvals
-- Nodes: add headless node host (`moltbot node start`) for `system.run`/`system.which`. https://docs.molt.bot/cli/node
-- Nodes: add node daemon service install/status/start/stop/restart. https://docs.molt.bot/cli/node
+- Usage: add `/usage cost` summaries and macOS menu cost charts. https://docs.openclaw.ai/reference/api-usage-costs
+- Security: warn when <=300B models run without sandboxing while web tools are enabled. https://docs.openclaw.ai/cli/security
+- Exec: add host/security/ask routing for gateway + node exec. https://docs.openclaw.ai/tools/exec
+- Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node). https://docs.openclaw.ai/tools/exec
+- Exec approvals: migrate approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists + skill auto-allow toggle, and add approvals UI + node exec lifecycle events. https://docs.openclaw.ai/tools/exec-approvals
+- Nodes: add headless node host (`openclaw node start`) for `system.run`/`system.which`. https://docs.openclaw.ai/cli/node
+- Nodes: add node daemon service install/status/start/stop/restart. https://docs.openclaw.ai/cli/node
 - Bridge: add `skills.bins` RPC to support node host auto-allow skill bins.
-- Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) https://docs.molt.bot/concepts/session
-- Sessions: allow `sessions_spawn` to override thinking level for sub-agent runs. https://docs.molt.bot/tools/subagents
-- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers. https://docs.molt.bot/concepts/groups
-- Models: add Qwen Portal OAuth provider support. (#1120) https://docs.molt.bot/providers/qwen
-- Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels. https://docs.molt.bot/start/onboarding
-- Docs: clarify allowlist input types and onboarding behavior for messaging channels. https://docs.molt.bot/start/onboarding
-- Docs: refresh Android node discovery docs for the Gateway WS service type. https://docs.molt.bot/platforms/android
-- Docs: surface Amazon Bedrock in provider lists and clarify Bedrock auth env vars. (#1289) https://docs.molt.bot/bedrock
-- Docs: clarify WhatsApp voice notes. https://docs.molt.bot/channels/whatsapp
-- Docs: clarify Windows WSL portproxy LAN access notes. https://docs.molt.bot/platforms/windows
-- Docs: refresh bird skill install metadata and usage notes. (#1302) https://docs.molt.bot/tools/browser-login
+- Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) https://docs.openclaw.ai/concepts/session
+- Sessions: allow `sessions_spawn` to override thinking level for sub-agent runs. https://docs.openclaw.ai/tools/subagents
+- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers. https://docs.openclaw.ai/concepts/groups
+- Models: add Qwen Portal OAuth provider support. (#1120) https://docs.openclaw.ai/providers/qwen
+- Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels. https://docs.openclaw.ai/start/onboarding
+- Docs: clarify allowlist input types and onboarding behavior for messaging channels. https://docs.openclaw.ai/start/onboarding
+- Docs: refresh Android node discovery docs for the Gateway WS service type. https://docs.openclaw.ai/platforms/android
+- Docs: surface Amazon Bedrock in provider lists and clarify Bedrock auth env vars. (#1289) https://docs.openclaw.ai/bedrock
+- Docs: clarify WhatsApp voice notes. https://docs.openclaw.ai/channels/whatsapp
+- Docs: clarify Windows WSL portproxy LAN access notes. https://docs.openclaw.ai/platforms/windows
+- Docs: refresh bird skill install metadata and usage notes. (#1302) https://docs.openclaw.ai/tools/browser-login
 - Agents: add local docs path resolution and include docs/mirror/source/community pointers in the system prompt.
 - Agents: clarify node_modules read-only guidance in agent instructions.
 - Config: stamp last-touched metadata on write and warn if the config is newer than the running build.
@@ -364,7 +444,7 @@ Status: beta.
 - Swabble: use the tagged Commander Swift package release.
 
 ### Breaking
-- **BREAKING:** Reject invalid/unknown config entries and refuse to start the gateway for safety. Run `moltbot doctor --fix` to repair, then update plugins (`moltbot plugins update`) if you use any.
+- **BREAKING:** Reject invalid/unknown config entries and refuse to start the gateway for safety. Run `openclaw doctor --fix` to repair, then update plugins (`openclaw plugins update`) if you use any.
 
 ### Fixes
 - Discovery: shorten Bonjour DNS-SD service type to `_moltbot-gw._tcp` and update discovery clients/docs.
@@ -394,7 +474,7 @@ Status: beta.
 - Plugins: add Nextcloud Talk manifest for plugin config validation. (#1297)
 - Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.
 - CLI: preserve cron delivery settings when editing message payloads. (#1322)
-- CLI: keep `moltbot logs` output resilient to broken pipes while preserving progress output.
+- CLI: keep `openclaw logs` output resilient to broken pipes while preserving progress output.
 - CLI: avoid duplicating --profile/--dev flags when formatting commands.
 - CLI: centralize CLI command registration to keep fast-path routing and program wiring in sync. (#1207)
 - CLI: keep banners on routed commands, restore config guarding outside fast-path routing, and tighten fast-path flag parsing while skipping console capture for extra speed. (#1195)
@@ -412,7 +492,7 @@ Status: beta.
 - TUI: show generic empty-state text for searchable pickers. (#1201)
 - TUI: highlight model search matches and stabilize search ordering.
 - Configure: hide OpenRouter auto routing model from the model picker. (#1182)
-- Memory: show total file counts + scan issues in `moltbot memory status`.
+- Memory: show total file counts + scan issues in `openclaw memory status`.
 - Memory: fall back to non-batch embeddings after repeated batch failures.
 - Memory: apply OpenAI batch defaults even without explicit remote config.
 - Memory: index atomically so failed reindex preserves the previous memory database. (#1151)
@@ -422,7 +502,7 @@ Status: beta.
 - Memory: split overly long lines to keep embeddings under token limits.
 - Memory: skip empty chunks to avoid invalid embedding inputs.
 - Memory: split embedding batches to avoid OpenAI token limits during indexing.
-- Memory: probe sqlite-vec availability in `moltbot memory status`.
+- Memory: probe sqlite-vec availability in `openclaw memory status`.
 - Exec approvals: enforce allowlist when ask is off.
 - Exec approvals: prefer raw command for node approvals/events.
 - Tools: show exec elevated flag before the command and keep it outside markdown in tool summaries.
@@ -472,20 +552,20 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ## 2026.1.16-1
 
 ### Highlights
-- Hooks: add hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake. https://docs.molt.bot/hooks
-- Media: add inbound media understanding (image/audio/video) with provider + CLI fallbacks. https://docs.molt.bot/nodes/media-understanding
-- Plugins: add Zalo Personal plugin (`@moltbot/zalouser`) and unify channel directory for plugins. (#1032) — thanks @suminhthanh. https://docs.molt.bot/plugins/zalouser
-- Models: add Vercel AI Gateway auth choice + onboarding updates. (#1016) — thanks @timolins. https://docs.molt.bot/providers/vercel-ai-gateway
-- Sessions: add `session.identityLinks` for cross-platform DM session li  nking. (#1033) — thanks @thewilloftheshadow. https://docs.molt.bot/concepts/session
-- Web search: add `country`/`language` parameters (schema + Brave API) and docs. (#1046) — thanks @YuriNachos. https://docs.molt.bot/tools/web
+- Hooks: add hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake. https://docs.openclaw.ai/hooks
+- Media: add inbound media understanding (image/audio/video) with provider + CLI fallbacks. https://docs.openclaw.ai/nodes/media-understanding
+- Plugins: add Zalo Personal plugin (`@openclaw/zalouser`) and unify channel directory for plugins. (#1032) — thanks @suminhthanh. https://docs.openclaw.ai/plugins/zalouser
+- Models: add Vercel AI Gateway auth choice + onboarding updates. (#1016) — thanks @timolins. https://docs.openclaw.ai/providers/vercel-ai-gateway
+- Sessions: add `session.identityLinks` for cross-platform DM session li  nking. (#1033) — thanks @thewilloftheshadow. https://docs.openclaw.ai/concepts/session
+- Web search: add `country`/`language` parameters (schema + Brave API) and docs. (#1046) — thanks @YuriNachos. https://docs.openclaw.ai/tools/web
 
 ### Breaking
-- **BREAKING:** `moltbot message` and message tool now require `target` (dropping `to`/`channelId` for destinations). (#1034) — thanks @tobalsan.
+- **BREAKING:** `openclaw message` and message tool now require `target` (dropping `to`/`channelId` for destinations). (#1034) — thanks @tobalsan.
 - **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.
 - **BREAKING:** Drop legacy `chatType: "room"` support; use `chatType: "channel"`.
 - **BREAKING:** remove legacy provider-specific target resolution fallbacks; target resolution is centralized with plugin hints + directory lookups.
-- **BREAKING:** `moltbot hooks` is now `moltbot webhooks`; hooks live under `moltbot hooks`. https://docs.molt.bot/cli/webhooks
-- **BREAKING:** `moltbot plugins install <path>` now copies into `~/.clawdbot/extensions` (use `--link` to keep path-based loading).
+- **BREAKING:** `openclaw hooks` is now `openclaw webhooks`; hooks live under `openclaw hooks`. https://docs.openclaw.ai/cli/webhooks
+- **BREAKING:** `openclaw plugins install <path>` now copies into `~/.clawdbot/extensions` (use `--link` to keep path-based loading).
 
 ### Changes
 - Plugins: ship bundled plugins disabled by default and allow overrides by installed versions. (#1066) — thanks @ItzR3NO.
@@ -495,7 +575,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Tools: send Chrome-like headers by default for `web_fetch` to improve extraction on bot-sensitive sites.
 - Tools: Firecrawl fallback now uses bot-circumvention + cache by default; remove basic HTML fallback when extraction fails.
 - Tools: default `exec` exit notifications and auto-migrate legacy `tools.bash` to `tools.exec`.
-- Tools: add `exec` PTY support for interactive sessions. https://docs.molt.bot/tools/exec
+- Tools: add `exec` PTY support for interactive sessions. https://docs.openclaw.ai/tools/exec
 - Tools: add tmux-style `process send-keys` and bracketed paste helpers for PTY sessions.
 - Tools: add `process submit` helper to send CR for PTY sessions.
 - Tools: respond to PTY cursor position queries to unblock interactive TUIs.
@@ -503,7 +583,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Skills: update coding-agent guidance to prefer PTY-enabled exec runs and simplify tmux usage.
 - TUI: refresh session token counts after runs complete or fail. (#1079) — thanks @d-ploutarchos.
 - Status: trim `/status` to current-provider usage only and drop the OAuth/token block.
-- Directory: unify `moltbot directory` across channels and plugin channels.
+- Directory: unify `openclaw directory` across channels and plugin channels.
 - UI: allow deleting sessions from the Control UI.
 - Memory: add sqlite-vec vector acceleration with CLI status details.
 - Memory: add experimental session transcript indexing for memory_search (opt-in via memorySearch.experimental.sessionMemory + sources).
@@ -519,7 +599,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Docs: add `/help` hub, Node/npm PATH guide, and expand directory CLI docs.
 - Config: support env var substitution in config values. (#1044) — thanks @sebslight.
 - Health: add per-agent session summaries and account-level health details, and allow selective probes. (#1047) — thanks @gumadeiras.
-- Hooks: add hook pack installs (npm/path/zip/tar) with `moltbot.hooks` manifests and `moltbot hooks install/update`.
+- Hooks: add hook pack installs (npm/path/zip/tar) with `openclaw.hooks` manifests and `openclaw hooks install/update`.
 - Plugins: add zip installs and `--link` to avoid copying local paths.
 
 ### Fixes
@@ -550,10 +630,10 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Sessions: hard-stop `sessions.delete` cleanup.
 - Channels: treat replies to the bot as implicit mentions across supported channels.
 - Channels: normalize object-format capabilities in channel capability parsing.
-- Security: default-deny slash/control commands unless a channel computed `CommandAuthorized` (fixes accidental “open” behavior), and ensure WhatsApp + Zalo plugin channels gate inline `/…` tokens correctly. https://docs.molt.bot/gateway/security
+- Security: default-deny slash/control commands unless a channel computed `CommandAuthorized` (fixes accidental “open” behavior), and ensure WhatsApp + Zalo plugin channels gate inline `/…` tokens correctly. https://docs.openclaw.ai/gateway/security
 - Security: redact sensitive text in gateway WS logs.
 - Tools: cap pending `exec` process output to avoid unbounded buffers.
-- CLI: speed up `moltbot sandbox-explain` by avoiding heavy plugin imports when normalizing channel ids.
+- CLI: speed up `openclaw sandbox-explain` by avoiding heavy plugin imports when normalizing channel ids.
 - Browser: remote profile tab operations prefer persistent Playwright and avoid silent HTTP fallbacks. (#1057) — thanks @mukhtharcm.
 - Browser: remote profile tab ops follow-up: shared Playwright loader, Playwright-based focus, and more coverage (incl. opt-in live Browserless test). (follow-up to #1057) — thanks @mukhtharcm.
 - Browser: refresh extension relay tab metadata after navigation so `/json/list` stays current. (#1073) — thanks @roshanasingh4.
@@ -579,19 +659,19 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ## 2026.1.15
 
 ### Highlights
-- Plugins: add provider auth registry + `moltbot models auth login` for plugin-driven OAuth/API key flows.
+- Plugins: add provider auth registry + `openclaw models auth login` for plugin-driven OAuth/API key flows.
 - Browser: improve remote CDP/Browserless support (auth passthrough, `wss` upgrade, timeouts, clearer errors).
 - Heartbeat: per-agent configuration + 24h duplicate suppression. (#980) — thanks @voidserf.
 - Security: audit warns on weak model tiers; app nodes store auth tokens encrypted (Keychain/SecurePrefs).
 
 ### Breaking
 - **BREAKING:** iOS minimum version is now 18.0 to support Textual markdown rendering in native chat. (#702)
-- **BREAKING:** Microsoft Teams is now a plugin; install `@moltbot/msteams` via `moltbot plugins install @moltbot/msteams`.
+- **BREAKING:** Microsoft Teams is now a plugin; install `@openclaw/msteams` via `openclaw plugins install @openclaw/msteams`.
 - **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.
 
 ### Changes
 - UI/Apps: move channel/config settings to schema-driven forms and rename Connections → Channels. (#1040) — thanks @thewilloftheshadow.
-- CLI: set process titles to `moltbot-<command>` for clearer process listings.
+- CLI: set process titles to `openclaw-<command>` for clearer process listings.
 - CLI/macOS: sync remote SSH target/identity to config and let `gateway status` auto-infer SSH targets (ssh-config aware).
 - Telegram: scope inline buttons with allowlist default + callback gating in DMs/groups.
 - Telegram: default reaction notifications to own.
@@ -599,13 +679,13 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Repo: ignore local identity files to avoid accidental commits. (#1001) — thanks @gerardward2007.
 - Sessions/Security: add `session.dmScope` for multi-user DM isolation and audit warnings. (#948) — thanks @Alphonse-arianee.
-- Plugins: add provider auth registry + `moltbot models auth login` for plugin-driven OAuth/API key flows.
+- Plugins: add provider auth registry + `openclaw models auth login` for plugin-driven OAuth/API key flows.
 - Onboarding: switch channels setup to a single-select loop with per-channel actions and disabled hints in the picker.
 - TUI: show provider/model labels for the active session and default model.
 - Heartbeat: add per-agent heartbeat configuration and multi-agent docs example.
 - UI: show gateway auth guidance + doc link on unauthorized Control UI connections.
 - UI: add session deletion action in Control UI sessions list. (#1017) — thanks @Szpadel.
-- Security: warn on weak model tiers (Haiku, below GPT-5, below Claude 4.5) in `moltbot security audit`.
+- Security: warn on weak model tiers (Haiku, below GPT-5, below Claude 4.5) in `openclaw security audit`.
 - Apps: store node auth tokens encrypted (Keychain/SecurePrefs).
 - Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
@@ -615,8 +695,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Docs: add Date & Time guide and update prompt/timezone configuration docs.
 - Messages: debounce rapid inbound messages across channels with per-connector overrides. (#971) — thanks @juanpablodlc.
 - Messages: allow media-only sends (CLI/tool) and show Telegram voice recording status for voice notes. (#957) — thanks @rdev.
-- Auth/Status: keep auth profiles sticky per session (rotate on compaction/new), surface provider usage headers in `/status` and `moltbot models status`, and update docs.
-- CLI: add `--json` output for `moltbot daemon` lifecycle/install commands.
+- Auth/Status: keep auth profiles sticky per session (rotate on compaction/new), surface provider usage headers in `/status` and `openclaw models status`, and update docs.
+- CLI: add `--json` output for `openclaw daemon` lifecycle/install commands.
 - Memory: make `node-llama-cpp` an optional dependency (avoid Node 25 install failures) and improve local-embeddings fallback/errors.
 - Browser: add `snapshot refs=aria` (Playwright aria-ref ids) for self-resolving refs across `snapshot` → `act`.
 - Browser: `profile="chrome"` now defaults to host control and returns clearer “attach a tab” errors.
@@ -639,10 +719,10 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - iMessage: treat missing `imsg rpc` support as fatal to avoid restart loops.
 - Auth: merge main auth profiles into per-agent stores for sub-agents and document inheritance. (#1013) — thanks @marcmarg.
 - Agents: avoid JSON Schema `format` collisions in tool params by renaming snapshot format fields. (#1013) — thanks @marcmarg.
-- Fix: make `moltbot update` auto-update global installs when installed via a package manager.
+- Fix: make `openclaw update` auto-update global installs when installed via a package manager.
 - Fix: list model picker entries as provider/model pairs for explicit selection. (#970) — thanks @mcinteerj.
 - Fix: align OpenAI image-gen defaults with DALL-E 3 standard quality and document output formats. (#880) — thanks @mkbehr.
-- Fix: persist `gateway.mode=local` after selecting Local run mode in `moltbot configure`, even if no other sections are chosen.
+- Fix: persist `gateway.mode=local` after selecting Local run mode in `openclaw configure`, even if no other sections are chosen.
 - Daemon: fix profile-aware service label resolution (env-driven) and add coverage for launchd/systemd/schtasks. (#969) — thanks @bjesuiter.
 - Agents: avoid false positives when logging unsupported Google tool schema keywords.
 - Agents: skip Gemini history downgrades for google-antigravity to preserve tool calls. (#894) — thanks @mukhtharcm.
@@ -668,13 +748,13 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Web search: `web_search`/`web_fetch` tools (Brave API) + first-time setup in onboarding/configure.
 - Browser control: Chrome extension relay takeover mode + remote browser control support.
 - Plugins: channel plugins (gateway HTTP hooks) + Zalo plugin + onboarding install flow. (#854) — thanks @longmaba.
-- Security: expanded `moltbot security audit` (+ `--fix`), detect-secrets CI scan, and a `SECURITY.md` reporting policy.
+- Security: expanded `openclaw security audit` (+ `--fix`), detect-secrets CI scan, and a `SECURITY.md` reporting policy.
 
 ### Changes
 - Docs: clarify per-agent auth stores, sandboxed skill binaries, and elevated semantics.
 - Docs: add FAQ entries for missing provider auth after adding agents and Gemini thinking signature errors.
 - Agents: add optional auth-profile copy prompt on `agents add` and improve auth error messaging.
-- Security: expand `moltbot security audit` checks (model hygiene, config includes, plugin allowlists, exposure matrix) and extend `--fix` to tighten more sensitive state paths.
+- Security: expand `openclaw security audit` checks (model hygiene, config includes, plugin allowlists, exposure matrix) and extend `--fix` to tighten more sensitive state paths.
 - Security: add `SECURITY.md` reporting policy.
 - Channels: add Matrix plugin (external) with docs + onboarding hooks.
 - Plugins: add Zalo channel plugin with gateway HTTP hooks and onboarding install prompt. (#854) — thanks @longmaba.
@@ -684,7 +764,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Security: add detect-secrets CI scan and baseline guidance. (#227) — thanks @Hyaxia.
 - Tools: add `web_search`/`web_fetch` (Brave API), auto-enable `web_fetch` for sandboxed sessions, and remove the `brave-search` skill.
 - CLI/Docs: add a web tools configure section for storing Brave API keys and update onboarding tips.
-- Browser: add Chrome extension relay takeover mode (toolbar button), plus `moltbot browser extension install/path` and remote browser control (standalone server + token auth).
+- Browser: add Chrome extension relay takeover mode (toolbar button), plus `openclaw browser extension install/path` and remote browser control (standalone server + token auth).
 
 ### Fixes
 - Sessions: refactor session store updates to lock + mutate per-entry, add chat.inject, and harden subagent cleanup flow. (#944) — thanks @tyler6204.
@@ -781,19 +861,19 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 
 ### New & Improved
 - Memory: add custom OpenAI-compatible embedding endpoints; support OpenAI/local `node-llama-cpp` embeddings with per-agent overrides and provider metadata in tools/CLI. (#819) — thanks @mukhtharcm.
-- Memory: new `moltbot memory` CLI plus `memory_search`/`memory_get` tools with snippets + line ranges; index stored under `~/.clawdbot/memory/{agentId}.sqlite` with watch-on-by-default.
+- Memory: new `openclaw memory` CLI plus `memory_search`/`memory_get` tools with snippets + line ranges; index stored under `~/.clawdbot/memory/{agentId}.sqlite` with watch-on-by-default.
 - Agents: strengthen memory recall guidance; make workspace bootstrap truncation configurable (default 20k) with warnings; add default sub-agent model config.
 - Tools/Sandbox: add tool profiles + group shorthands; support tool-policy groups in `tools.sandbox.tools`; drop legacy `memory` shorthand; allow Docker bind mounts via `docker.binds`. (#790) — thanks @akonyer.
 - Tools: add provider/model-specific tool policy overrides (`tools.byProvider`) to trim tool exposure per provider.
 - Tools: add browser `scrollintoview` action; allow Claude/Gemini tool param aliases; allow thinking `xhigh` for GPT-5.2/Codex with safe downgrades. (#793) — thanks @hsrvc; (#444) — thanks @grp06.
-- Gateway/CLI: add Tailscale binary discovery, custom bind mode, and probe auth retry; add `moltbot dashboard` auto-open flow; default native slash commands to `"auto"` with per-provider overrides. (#740) — thanks @jeffersonwarrior.
+- Gateway/CLI: add Tailscale binary discovery, custom bind mode, and probe auth retry; add `openclaw dashboard` auto-open flow; default native slash commands to `"auto"` with per-provider overrides. (#740) — thanks @jeffersonwarrior.
 - Auth/Onboarding: add Chutes OAuth (PKCE + refresh + onboarding choice); normalize API key inputs; default TUI onboarding to `deliver: false`. (#726) — thanks @FrieSei; (#791) — thanks @roshanasingh4.
 - Providers: add `discord.allowBots`; trim legacy MiniMax M2 from default catalogs; route MiniMax vision to the Coding Plan VLM endpoint (also accepts `@/path/to/file.png` inputs). (#802) — thanks @zknicker.
 - Gateway: allow Tailscale Serve identity headers to satisfy token auth; rebuild Control UI assets when protocol schema is newer. (#823) — thanks @roshanasingh4; (#786) — thanks @meaningfool.
 - Heartbeat: default `ackMaxChars` to 300 so short `HEARTBEAT_OK` replies stay internal.
 
 ### Installer
-- Install: run `moltbot doctor --non-interactive` after git installs/updates and nudge daemon restarts when detected.
+- Install: run `openclaw doctor --non-interactive` after git installs/updates and nudge daemon restarts when detected.
 
 ### Fixes
 - Doctor: warn on pnpm workspace mismatches, missing Control UI assets, and missing tsx binaries; offer UI rebuilds.
@@ -814,7 +894,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Telegram: preserve forum topic thread ids, persist polling offsets, respect account bindings in webhook mode, and show typing indicator in General topics. (#727, #739) — thanks @thewilloftheshadow; (#821) — thanks @gumadeiras; (#779) — thanks @azade-c.
 - Slack: accept slash commands with or without leading `/` for custom command configs. (#798) — thanks @thewilloftheshadow.
 - Cron: persist disabled jobs correctly; accept `jobId` aliases for update/run/remove params. (#205, #252) — thanks @thewilloftheshadow.
-- Gateway/CLI: honor `CLAWDBOT_LAUNCHD_LABEL` / `CLAWDBOT_SYSTEMD_UNIT` overrides; `agents.list` respects explicit config; reduce noisy loopback WS logs during tests; run `moltbot doctor --non-interactive` during updates. (#781) — thanks @ronyrus.
+- Gateway/CLI: honor `CLAWDBOT_LAUNCHD_LABEL` / `CLAWDBOT_SYSTEMD_UNIT` overrides; `agents.list` respects explicit config; reduce noisy loopback WS logs during tests; run `openclaw doctor --non-interactive` during updates. (#781) — thanks @ronyrus.
 - Onboarding/Control UI: refuse invalid configs (run doctor first); quote Windows browser URLs for OAuth; keep chat scroll position unless the user is near the bottom. (#764) — thanks @mukhtharcm; (#794) — thanks @roshanasingh4; (#217) — thanks @thewilloftheshadow.
 - Tools/UI: harden tool input schemas for strict providers; drop null-only union variants for Gemini schema cleanup; treat `maxChars: 0` as unlimited; keep TUI last streamed response instead of "(no output)". (#782) — thanks @AbhisekBasu1; (#796) — thanks @gabriel-trigo; (#747) — thanks @thewilloftheshadow.
 - Connections UI: polish multi-account account cards. (#816) — thanks @steipete.
@@ -843,7 +923,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Auto-reply: add compact `/model` picker (models + available providers) and show provider endpoints in `/model status`.
 - Control UI: add Config tab model presets (MiniMax M2.1, GLM 4.7, Kimi) for one-click setup.
 - Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, and config schema + Control UI labels (uiHints).
-- Plugins: add `moltbot plugins install` (path/tgz/npm), plus `list|info|enable|disable|doctor` UX.
+- Plugins: add `openclaw plugins install` (path/tgz/npm), plus `list|info|enable|disable|doctor` UX.
 - Plugins: voice-call plugin now real (Twilio/log), adds start/status RPC/CLI/tool + tests.
 - Docs: add plugins doc + cross-links from tools/skills/gateway config.
 - Docs: add beginner-friendly plugin quick start + expand Voice Call plugin docs.
@@ -856,7 +936,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Agents: add pre-compaction memory flush config (`agents.defaults.compaction.*`) with a soft threshold + system prompt.
 - Config: add `$include` directive for modular config files. (#731) — thanks @pasogott.
 - Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.
-- macOS: prompt to install the global `moltbot` CLI when missing in local mode; install via `molt.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
+- macOS: prompt to install the global `openclaw` CLI when missing in local mode; install via `openclaw.ai/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
 - Docs: add gog calendar event color IDs from `gog calendar colors`. (#715) — thanks @mjrussell.
 - Cron/CLI: add `--model` flag to cron add/edit commands. (#711) — thanks @mjrussell.
 - Cron/CLI: trim model overrides on cron edits and document main-session guidance. (#711) — thanks @mjrussell.
@@ -870,7 +950,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ### Installer
 - Postinstall: replace `git apply` with builtin JS patcher (works npm/pnpm/bun; no git dependency) plus regression tests.
 - Postinstall: skip pnpm patch fallback when the new patcher is active.
-- Installer tests: add root+non-root docker smokes, CI workflow to fetch molt.bot scripts and run install sh/cli with onboarding skipped.
+- Installer tests: add root+non-root docker smokes, CI workflow to fetch openclaw.ai scripts and run install sh/cli with onboarding skipped.
 - Installer UX: support `CLAWDBOT_NO_ONBOARD=1` for non-interactive installs; fix npm prefix on Linux and auto-install git.
 - Installer UX: add `install.sh --help` with flags/env and git install hint.
 - Installer UX: add `--install-method git|npm` and auto-detect source checkouts (prompt to update git checkout vs migrate to npm).
@@ -886,7 +966,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Auth: read Codex keychain credentials and make the lookup platform-aware.
 - macOS/Release: avoid bundling dist artifacts in relay builds and generate appcasts from zip-only sources.
 - Doctor: surface plugin diagnostics in the report.
-- Plugins: treat `plugins.load.paths` directory entries as package roots when they contain `package.json` + `moltbot.extensions`; load plugin packages from config dirs; extract archives without system tar.
+- Plugins: treat `plugins.load.paths` directory entries as package roots when they contain `package.json` + `openclaw.extensions`; load plugin packages from config dirs; extract archives without system tar.
 - Config: expand `~` in `CLAWDBOT_CONFIG_PATH` and common path-like config fields (including `plugins.load.paths`); guard invalid `$include` paths. (#731) — thanks @pasogott.
 - Agents: stop pre-creating session transcripts so first user messages persist in JSONL history.
 - Agents: skip pre-compaction memory flush when the session workspace is read-only.
@@ -915,9 +995,9 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ## 2026.1.10
 
 ### Highlights
-- CLI: `moltbot status` now table-based + shows OS/update/gateway/daemon/agents/sessions; `status --all` adds a full read-only debug report (tables, log tails, Tailscale summary, and scan progress via OSC-9 + spinner).
+- CLI: `openclaw status` now table-based + shows OS/update/gateway/daemon/agents/sessions; `status --all` adds a full read-only debug report (tables, log tails, Tailscale summary, and scan progress via OSC-9 + spinner).
 - CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.
-- CLI: add `moltbot update` (safe-ish git checkout update) + `--update` shorthand. (#673) — thanks @fm1randa.
+- CLI: add `openclaw update` (safe-ish git checkout update) + `--update` shorthand. (#673) — thanks @fm1randa.
 - Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680).
 
 ### Changes
@@ -927,7 +1007,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Agents/Browser: add `browser.target` (sandbox/host/custom) with sandbox host-control gating via `agents.defaults.sandbox.browser.allowHostControl`, allowlists for custom control URLs/hosts/ports, and expand browser tool docs (remote control, profiles, internals).
 - Onboarding/Models: add catalog-backed default model picker to onboarding + configure. (#611) — thanks @jonasjancarik.
 - Agents/OpenCode Zen: update fallback models + defaults, keep legacy alias mappings. (#669) — thanks @magimetal.
-- CLI: add `moltbot reset` and `moltbot uninstall` flows (interactive + non-interactive) plus docker cleanup smoke test.
+- CLI: add `openclaw reset` and `openclaw uninstall` flows (interactive + non-interactive) plus docker cleanup smoke test.
 - Providers: move provider wiring to a plugin architecture. (#661).
 - Providers: unify group history context wrappers across providers with per-provider/per-account `historyLimit` overrides (fallback to `messages.groupChat.historyLimit`). Set `0` to disable. (#672).
 - Gateway/Heartbeat: optionally deliver heartbeat `Reasoning:` output (`agents.defaults.heartbeat.includeReasoning`). (#690)
@@ -936,7 +1016,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ### Fixes
 - Auto-reply: suppress draft/typing streaming for `NO_REPLY` (silent system ops) so it doesn’t leak partial output.
 - CLI/Status: expand tables to full terminal width; clarify provider setup vs runtime warnings; richer per-provider detail; token previews in `status` while keeping `status --all` redacted; add troubleshooting link footer; keep log tails pasteable; show gateway auth used when reachable; surface provider runtime errors (Signal/iMessage/Slack); harden `tailscale status --json` parsing; make `status --all` scan progress determinate; and replace the footer with a 3-line “Next steps” recommendation (share/debug/probe).
-- CLI/Gateway: clarify that `moltbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
+- CLI/Gateway: clarify that `openclaw gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
 - CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
 - Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists; allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
 - Heartbeat: strip markup-wrapped `HEARTBEAT_OK` so acks don’t leak to external providers (e.g., Telegram).
@@ -949,7 +1029,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Agents/Pi: inject config `temperature`/`maxTokens` into streaming without replacing the session streamFn; cover with live maxTokens probe. (#732) — thanks @peschee.
 - macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.
 - Agents: enforce single-writer session locks and drop orphan tool results to prevent tool-call ID failures (MiniMax/Anthropic-compatible APIs).
-- Docs: make `moltbot status` the first diagnostic step, clarify `status --deep` behavior, and document `/whoami` + `/id`.
+- Docs: make `openclaw status` the first diagnostic step, clarify `status --deep` behavior, and document `/whoami` + `/id`.
 - Docs/Testing: clarify live tool+image probes and how to list your testable `provider/model` ids.
 - Tests/Live: make gateway bash+read probes resilient to provider formatting while still validating real tool calls.
 - WhatsApp: detect @lid mentions in groups using authDir reverse mapping + resolve self JID E.164 for mention gating. (#692) — thanks @peschee.
@@ -969,7 +1049,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - WhatsApp: expose group participant IDs to the model so reactions can target the right sender.
 - Cron: `wakeMode: "now"` waits for heartbeat completion (and retries when the main lane is busy). (#666) — thanks @roshanasingh4.
 - Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone `reasoning` items that trigger 400 “required following item”) and replay reasoning items in Responses/Codex Responses history for tool-call-only turns.
-- Sandbox: add `moltbot sandbox explain` (effective policy inspector + fix-it keys); improve “sandbox jail” tool-policy/elevated errors with actionable config key paths; link to docs.
+- Sandbox: add `openclaw sandbox explain` (effective policy inspector + fix-it keys); improve “sandbox jail” tool-policy/elevated errors with actionable config key paths; link to docs.
 - Hooks/Gmail: keep Tailscale serve path at `/` while preserving the public path. (#668) — thanks @antons.
 - Hooks/Gmail: allow Tailscale target URLs to preserve internal serve paths.
 - Auth: update Claude Code keychain credentials in-place during refresh sync; share JSON file helpers; add CLI fallback coverage.
@@ -981,12 +1061,12 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Gateway/Control UI: sniff image attachments for chat.send, drop non-images, and log mismatches. (#670) — thanks @cristip73.
 - macOS: force `restart-mac.sh --sign` to require identities and keep bundled Node signed for relay verification. (#580) — thanks @jeffersonwarrior.
 - Gateway/Agent: accept image attachments on `agent` (multimodal message) and add live gateway image probe (`CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1`).
-- CLI: `moltbot sessions` now includes `elev:*` + `usage:*` flags in the table output.
+- CLI: `openclaw sessions` now includes `elev:*` + `usage:*` flags in the table output.
 - CLI/Pairing: accept positional provider for `pairing list|approve` (npm-run compatible); update docs/bot hints.
-- Branding: normalize legacy casing/branding to “Moltbot” (CLI, status, docs).
+- Branding: normalize legacy casing/branding to “OpenClaw” (CLI, status, docs).
 - Auto-reply: fix native `/model` not updating the actual chat session (Telegram/Slack/Discord). (#646)
-- Doctor: offer to run `moltbot update` first on git installs (keeps doctor output aligned with latest).
-- Doctor: avoid false legacy workspace warning when install dir is `~/moltbot`. (#660)
+- Doctor: offer to run `openclaw update` first on git installs (keeps doctor output aligned with latest).
+- Doctor: avoid false legacy workspace warning when install dir is `~/openclaw`. (#660)
 - iMessage: fix reasoning persistence across DMs; avoid partial/duplicate replies when reasoning is enabled. (#655) — thanks @antons.
 - Models/Auth: allow MiniMax API configs without `models.providers.minimax.apiKey` (auth profiles / `MINIMAX_API_KEY`). (#656) — thanks @mneves75.
 - Agents: avoid duplicate replies when the message tool sends. (#659) — thanks @mickahouan.
@@ -1017,12 +1097,12 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Control UI/TUI: queued messages, session links, reasoning view, mobile polish, logs UX.
 
 ### Breaking
-- CLI: `moltbot message` now subcommands (`message send|poll|...`) and requires `--provider` unless only one provider configured.
+- CLI: `openclaw message` now subcommands (`message send|poll|...`) and requires `--provider` unless only one provider configured.
 - Commands/Tools: `/restart` and gateway restart tool disabled by default; enable with `commands.restart=true`.
 
 ### New Features and Changes
 - Models/Auth: OpenCode Zen onboarding (#623) — thanks @magimetal; MiniMax Anthropic-compatible API + hosted onboarding (#590, #495) — thanks @mneves75, @tobiasbischoff.
-- Models/Auth: setup-token + token auth profiles; `moltbot models auth order {get,set,clear}`; per-agent auth candidates in `/model status`; OAuth expiry checks in doctor/status.
+- Models/Auth: setup-token + token auth profiles; `openclaw models auth order {get,set,clear}`; per-agent auth candidates in `/model status`; OAuth expiry checks in doctor/status.
 - Agent/System: claude-cli runner; `session_status` tool (and sandbox allow); adaptive context pruning default; system prompt messaging guidance + no auto self-update; eligible skills list injection; sub-agent context trimmed.
 - Commands: `/commands` list; `/models` alias; `/usage` alias; `/debug` runtime overrides + effective config view; `/config` chat updates + `/config get`; `config --section`.
 - CLI/Gateway: unified message tool + message subcommands; gateway discover (local + wide-area DNS-SD) with JSON/timeout; gateway status human-readable + JSON + SSH loopback; wide-area records include gatewayPort/sshPort/cliPath + tailnet DNS fallback.
@@ -1080,7 +1160,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
   - Previously, if you didn’t configure an allowlist, your bot could be **open to anyone** (especially discoverable Telegram bots).
   - New default: DM pairing (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`).
   - To keep old “open to everyone” behavior: set `dmPolicy="open"` and include `"*"` in the relevant `allowFrom` (Discord/Slack: `discord.dm.allowFrom` / `slack.dm.allowFrom`).
-  - Approve requests via `moltbot pairing list <provider>` + `moltbot pairing approve <provider> <code>`.
+  - Approve requests via `openclaw pairing list <provider>` + `openclaw pairing approve <provider> <code>`.
 - Sandbox: default `agent.sandbox.scope` to `"agent"` (one container/workspace per agent). Use `"session"` for per-session isolation; `"shared"` disables cross-session isolation.
 - Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
 - Model config schema changes (auth profiles + model lists); doctor auto-migrates and the gateway rewrites legacy configs on startup.
@@ -1094,7 +1174,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - **Agent loop + compaction:** compaction/pruning tuning, overflow handling, safer bootstrap context, and per-provider threading/confirmations; opt-in tool-result pruning + compact tracking.
 - **Sandbox + tools:** per-agent sandbox overrides, workspaceAccess controls, session tool visibility, tool policy overrides, process isolation, and tool schema/timeout/reaction unification.
 - **Providers (Telegram/WhatsApp/Discord/Slack/Signal/iMessage):** retry/backoff, threading, reactions, media groups/attachments, mention gating, typing behavior, and error/log stability; long polling + forum topic isolation for Telegram.
-- **Gateway/CLI UX:** `moltbot logs`, cron list colors/aliases, docs search, agents list/add/delete flows, status usage snapshots, runtime/auth source display, and `/status`/commands auth unification.
+- **Gateway/CLI UX:** `openclaw logs`, cron list colors/aliases, docs search, agents list/add/delete flows, status usage snapshots, runtime/auth source display, and `/status`/commands auth unification.
 - **Control UI/Web:** logs tab, focus mode polish, config form resilience, streaming stability, tool output caps, windowed chat history, and reconnect/password URL auth.
 - **macOS/Android/TUI/Build:** macOS gateway races, QR bundling, JSON5 config safety, Voice Wake hardening; Android EXIF rotation + APK naming/versioning; TUI key handling; tooling/bundling fixes.
 - **Packaging/compat:** npm dist folder coverage, Node 25 qrcode-terminal import fixes, Bun/Playwright/WebSocket patches, and Docker Bun install.
@@ -1136,4 +1216,4 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
 - Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
 - Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.
-- CLI: run `moltbot agent` via the Gateway by default; use `--local` to force embedded mode.
+- CLI: run `openclaw agent` via the Gateway by default; use `--local` to force embedded mode.
