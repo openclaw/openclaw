@@ -90,10 +90,18 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 }
 
 export function deliveryContextFromSession(
-  entry?: DeliveryContextSessionSource,
+  entry?: DeliveryContextSessionSource & { origin?: { threadId?: string | number } },
 ): DeliveryContext | undefined {
   if (!entry) return undefined;
-  return normalizeSessionDeliveryFields(entry).deliveryContext;
+  const source: DeliveryContextSessionSource = {
+    channel: entry.channel,
+    lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId ?? entry.origin?.threadId,
+    deliveryContext: entry.deliveryContext,
+  };
+  return normalizeSessionDeliveryFields(source).deliveryContext;
 }
 
 export function mergeDeliveryContext(

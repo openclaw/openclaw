@@ -55,7 +55,14 @@ function invalidateSessionStoreCache(storePath: string): void {
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
-  const normalized = normalizeSessionDeliveryFields(entry);
+  const normalized = normalizeSessionDeliveryFields({
+    channel: entry.channel,
+    lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId ?? entry.origin?.threadId,
+    deliveryContext: entry.deliveryContext,
+  });
   const nextDelivery = normalized.deliveryContext;
   const sameDelivery =
     (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
