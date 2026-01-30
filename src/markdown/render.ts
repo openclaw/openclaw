@@ -87,40 +87,36 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   }
 
   const points = [...boundaries].sort((a, b) => a - b);
-  const stack: MarkdownStyleSpan[] = [];
+  // Unified stack for both styles and links, tracking close string and end position
+  const stack: { close: string; end: number }[] = [];
   let out = "";
 
   for (let i = 0; i < points.length; i += 1) {
     const pos = points[i];
 
+    // Close ALL elements (styles and links) in LIFO order at this position
     while (stack.length && stack[stack.length - 1]?.end === pos) {
-      const span = stack.pop();
-      if (!span) break;
-      const marker = styleMarkers[span.style];
-      if (marker) out += marker.close;
+      const item = stack.pop();
+      if (item) out += item.close;
     }
 
-    const closingLinks = linkEnds.get(pos);
-    if (closingLinks && closingLinks.length > 0) {
-      for (const link of closingLinks) {
-        out += link.close;
-      }
-    }
-
+    // Open links first (so they close after styles that start at the same position)
     const openingLinks = linkStarts.get(pos);
     if (openingLinks && openingLinks.length > 0) {
       for (const link of openingLinks) {
         out += link.open;
+        stack.push({ close: link.close, end: link.end });
       }
     }
 
+    // Open styles second (so they close before links that start at the same position)
     const openingStyles = startsAt.get(pos);
     if (openingStyles) {
       for (const span of openingStyles) {
         const marker = styleMarkers[span.style];
         if (!marker) continue;
-        stack.push(span);
         out += marker.open;
+        stack.push({ close: marker.close, end: span.end });
       }
     }
 
