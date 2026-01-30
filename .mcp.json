@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@playwright/mcp"],
+      "env": {},
+      "description": "브라우저 자동화 - 웹 페이지 스크래핑, 스크린샷, E2E 테스트"
+    },
+    "fetcher": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "fetcher-mcp"],
+      "env": {},
+      "description": "웹 콘텐츠 추출 - Readability 알고리즘 기반"
+    },
+    "context7": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@upstash/context7-mcp"],
+      "env": {},
+      "description": "최신 라이브러리 문서 및 API 정보 제공 - 프레임워크와 라이브러리의 최신 버전 정보를 실시간으로 가져와 정확한 코딩 지원"
+    },
+    "magic": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@magicuidesign/mcp@latest"],
+      "env": {},
+      "description": "UI 컴포넌트 생성 - Magic UI 디자인 시스템 기반 모던 UI 컴포넌트 생성"
+    }
+  }
+}
