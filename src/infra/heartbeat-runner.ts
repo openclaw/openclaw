@@ -97,6 +97,14 @@ const EXEC_EVENT_PROMPT =
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
   "If it failed, explain what went wrong.";
 
+// This prompt is used when generic system events (e.g., from cron jobs) are pending.
+// It explicitly instructs the agent to process the events rather than just acknowledging them.
+const SYSTEM_EVENT_PROMPT =
+  "You have received one or more system events (shown in the system messages above). " +
+  "Read HEARTBEAT.md if it exists for instructions on how to handle specific event types. " +
+  "If an event requires action (e.g., spawning a subagent, performing a task), execute that action now. " +
+  "If no action is needed, reply HEARTBEAT_OK.";
+
 function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "user") {
@@ -543,15 +551,26 @@ export async function runHeartbeatOnce(opts: {
   // If so, use a specialized prompt that instructs the model to relay the result
   // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
   const isExecEvent = opts.reason === "exec-event";
-  const pendingEvents = isExecEvent ? peekSystemEvents(sessionKey) : [];
+  const pendingEvents = peekSystemEvents(sessionKey);
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
+  // Check for generic (non-exec) system events that may require action (e.g., from cron jobs).
+  // Use a directive prompt to ensure the agent processes them rather than just acknowledging.
+  const hasGenericSystemEvents = pendingEvents.length > 0 && !hasExecCompletion;
 
-  const prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
+  const prompt = hasExecCompletion
+    ? EXEC_EVENT_PROMPT
+    : hasGenericSystemEvents
+      ? SYSTEM_EVENT_PROMPT
+      : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: prompt,
     From: sender,
     To: sender,
-    Provider: hasExecCompletion ? "exec-event" : "heartbeat",
+    Provider: hasExecCompletion
+      ? "exec-event"
+      : hasGenericSystemEvents
+        ? "system-event"
+        : "heartbeat",
     SessionKey: sessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
