@@ -73,6 +73,39 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   return `https://${host}`;
 }
 
+/**
+ * Check if a token is a GitHub OAuth token from the Copilot CLI.
+ * These tokens (prefixed with `gho_`) can be used directly with the Copilot API
+ * without requiring a token exchange via /copilot_internal/v2/token.
+ */
+function isCopilotCliToken(token: string): boolean {
+  return token.startsWith("gho_");
+}
+
+/**
+ * Default cache TTL for Copilot CLI OAuth tokens (prefixed with `gho_`).
+ *
+ * As of this writing, the Copilot CLI issues `gho_` tokens with an 8-hour lifetime,
+ * so we cache them for the same duration. GitHub OAuth token lifetimes can be
+ * configured and may change over time; this value is therefore a best-effort
+ * approximation for cache expiry rather than a guaranteed reflection of the
+ * server-side token lifetime.
+ */
+const COPILOT_CLI_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
+
+/**
+ * Resolve the Copilot API base URL.
+ * Checks COPILOT_API_BASE_URL env var first (for enterprise/custom endpoints),
+ * then falls back to the default individual endpoint.
+ */
+function resolveCopilotApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const envUrl = env.COPILOT_API_BASE_URL?.trim();
+  if (envUrl) {
+    return envUrl;
+  }
+  return DEFAULT_COPILOT_API_BASE_URL;
+}
+
 export async function resolveCopilotApiToken(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;
@@ -95,6 +128,25 @@ export async function resolveCopilotApiToken(params: {
         baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
       };
     }
+  }
+
+  // Copilot CLI tokens (gho_*) can be used directly with the Copilot API.
+  // These tokens are already authenticated and don't need the /v2/token exchange.
+  // See: https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line
+  if (isCopilotCliToken(params.githubToken)) {
+    const now = Date.now();
+    const payload: CachedCopilotToken = {
+      token: params.githubToken,
+      expiresAt: now + COPILOT_CLI_TOKEN_TTL_MS,
+      updatedAt: now,
+    };
+    saveJsonFile(cachePath, payload);
+    return {
+      token: payload.token,
+      expiresAt: payload.expiresAt,
+      source: "copilot-cli:direct",
+      baseUrl: resolveCopilotApiBaseUrl(env),
+    };
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;

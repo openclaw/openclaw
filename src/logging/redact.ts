@@ -26,6 +26,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // Common token prefixes.
   String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,
   String.raw`\b(ghp_[A-Za-z0-9]{20,})\b`,
+  String.raw`\b(gho_[A-Za-z0-9]{20,})\b`,
   String.raw`\b(github_pat_[A-Za-z0-9_]{20,})\b`,
   String.raw`\b(xox[baprs]-[A-Za-z0-9-]{10,})\b`,
   String.raw`\b(xapp-[A-Za-z0-9-]{10,})\b`,
