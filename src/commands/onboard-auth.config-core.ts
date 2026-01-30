@@ -338,7 +338,7 @@ export function applySyntheticConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyXiaomiProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[XIAOMI_DEFAULT_MODEL_REF] = {
     ...models[XIAOMI_DEFAULT_MODEL_REF],
@@ -387,7 +387,7 @@ export function applyXiaomiProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyXiaomiConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXiaomiProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
