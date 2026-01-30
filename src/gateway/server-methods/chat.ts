@@ -149,6 +149,7 @@ function broadcastChatFinal(params: {
   runId: string;
   sessionKey: string;
   message?: Record<string, unknown>;
+  usage?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payload = {
@@ -157,6 +158,7 @@ function broadcastChatFinal(params: {
     seq,
     state: "final" as const,
     message: params.message,
+    usage: params.usage,
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -545,6 +547,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               runId: clientRunId,
               sessionKey: p.sessionKey,
               message,
+              usage: message?.usage as Record<string, unknown> | undefined,
             });
           }
           context.dedupe.set(`chat:${clientRunId}`, {
