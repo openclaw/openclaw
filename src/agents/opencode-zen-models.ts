@@ -1,8 +1,9 @@
 /**
  * OpenCode Zen model catalog with dynamic fetching, caching, and static fallback.
  *
- * OpenCode Zen is a $200/month subscription that provides proxy access to multiple
- * AI models (Claude, GPT, Gemini, etc.) through a single API endpoint.
+ * OpenCode Zen is a pay-as-you-go gateway that provides proxy access to multiple
+ * AI models (Claude, GPT, Gemini, etc.) through a single API endpoint. Pricing is
+ * per 1M tokens; credit card fees are passed through at cost.
  *
  * API endpoint: https://opencode.ai/zen/v1
  * Auth URL: https://opencode.ai/auth
@@ -70,6 +71,10 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   // GLM (free)
   glm: "glm-4.7",
   "glm-free": "glm-4.7",
+
+  // Kimi (free)
+  kimi: "kimi-k2.5",
+  "kimi-free": "kimi-k2.5-free",
 };
 
 /**
@@ -89,7 +94,7 @@ export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
   if (lower.startsWith("gpt-")) {
     return "openai-responses";
   }
-  if (lower.startsWith("claude-") || lower.startsWith("minimax-")) {
+  if (lower.startsWith("claude-") || lower.startsWith("minimax-") || lower.startsWith("kimi-")) {
     return "anthropic-messages";
   }
   if (lower.startsWith("gemini-")) {
@@ -103,7 +108,7 @@ export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
  */
 function supportsImageInput(modelId: string): boolean {
   const lower = modelId.toLowerCase();
-  if (lower.includes("glm") || lower.includes("minimax")) {
+  if (lower.includes("glm") || lower.includes("minimax") || lower.includes("kimi")) {
     return false;
   }
   return true;
@@ -113,30 +118,34 @@ const MODEL_COSTS: Record<
   string,
   { input: number; output: number; cacheRead: number; cacheWrite: number }
 > = {
-  "gpt-5.1-codex": {
-    input: 1.07,
-    output: 8.5,
-    cacheRead: 0.107,
-    cacheWrite: 0,
-  },
-  "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-  "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
-  "gpt-5.1-codex-mini": {
-    input: 0.25,
-    output: 2,
-    cacheRead: 0.025,
-    cacheWrite: 0,
-  },
-  "gpt-5.1": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
-  "glm-4.7": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
-  "gpt-5.1-codex-max": {
-    input: 1.25,
-    output: 10,
-    cacheRead: 0.125,
-    cacheWrite: 0,
-  },
   "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.2-codex": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.1": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5.1-codex": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5.1-codex-max": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+  "gpt-5.1-codex-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+  "gpt-5": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5-codex": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5-nano": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-1": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-4": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-3-5-haiku": { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
+  "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+  "minimax-m2.1": { input: 0.3, output: 1.2, cacheRead: 0.1, cacheWrite: 0 },
+  "minimax-m2.1-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "glm-4.7": { input: 0.6, output: 2.2, cacheRead: 0.1, cacheWrite: 0 },
+  "glm-4.7-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "glm-4.6": { input: 0.6, output: 2.2, cacheRead: 0.1, cacheWrite: 0 },
+  "kimi-k2.5": { input: 0.6, output: 3, cacheRead: 0.08, cacheWrite: 0 },
+  "kimi-k2.5-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "kimi-k2-thinking": { input: 0.4, output: 2.5, cacheRead: 0, cacheWrite: 0 },
+  "kimi-k2": { input: 0.4, output: 2.5, cacheRead: 0, cacheWrite: 0 },
+  "qwen3-coder": { input: 0.45, output: 1.5, cacheRead: 0, cacheWrite: 0 },
+  "big-pickle": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
 const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -151,6 +160,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3-flash": 1048576,
   "gpt-5.1-codex-max": 400000,
   "gpt-5.2": 400000,
+  "kimi-k2.5": 256000,
+  "kimi-k2.5-free": 256000,
 };
 
 function getDefaultContextWindow(modelId: string): number {
@@ -167,6 +178,8 @@ const MODEL_MAX_TOKENS: Record<string, number> = {
   "gemini-3-flash": 65536,
   "gpt-5.1-codex-max": 128000,
   "gpt-5.2": 128000,
+  "kimi-k2.5": 8192,
+  "kimi-k2.5-free": 8192,
 };
 
 function getDefaultMaxTokens(modelId: string): number {
@@ -203,6 +216,8 @@ const MODEL_NAMES: Record<string, string> = {
   "gemini-3-flash": "Gemini 3 Flash",
   "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
   "gpt-5.2": "GPT-5.2",
+  "kimi-k2.5": "Kimi K2.5",
+  "kimi-k2.5-free": "Kimi K2.5 Free",
 };
 
 function formatModelName(modelId: string): string {
@@ -230,6 +245,8 @@ export function getOpencodeZenStaticFallbackModels(): ModelDefinitionConfig[] {
     "gemini-3-flash",
     "gpt-5.1-codex-max",
     "gpt-5.2",
+    "kimi-k2.5",
+    "kimi-k2.5-free",
   ];
 
   return modelIds.map(buildModelDefinition);

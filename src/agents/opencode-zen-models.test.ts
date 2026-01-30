@@ -54,10 +54,10 @@ describe("getOpencodeZenStaticFallbackModels", () => {
   it("returns an array of models", () => {
     const models = getOpencodeZenStaticFallbackModels();
     expect(Array.isArray(models)).toBe(true);
-    expect(models.length).toBe(9);
+    expect(models.length).toBe(11);
   });
 
-  it("includes Claude, GPT, Gemini, and GLM models", () => {
+  it("includes Claude, GPT, Gemini, GLM, and Kimi models", () => {
     const models = getOpencodeZenStaticFallbackModels();
     const ids = models.map((m) => m.id);
 
@@ -66,6 +66,7 @@ describe("getOpencodeZenStaticFallbackModels", () => {
     expect(ids).toContain("gpt-5.1-codex");
     expect(ids).toContain("gemini-3-pro");
     expect(ids).toContain("glm-4.7");
+    expect(ids).toContain("kimi-k2.5");
   });
 
   it("returns valid ModelDefinitionConfig objects", () => {
