@@ -8,7 +8,10 @@ read_when:
 > *"EXFOLIATE! EXFOLIATE!"* — A space lobster, probably
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+    <picture>
+        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="420">
+    </picture>
 </p>
 
 <p align="center">
@@ -224,7 +227,7 @@ Example:
 
 - **Peter Steinberger** ([@steipete](https://twitter.com/steipete)) — Creator, lobster whisperer
 - **Mario Zechner** ([@badlogicc](https://twitter.com/badlogicgames)) — Pi creator, security pen-tester
-- **Clawd** — The space lobster who demanded a better name
+- **Molty** — The space lobster who demanded a better name
 
 ## Core Contributors
 
