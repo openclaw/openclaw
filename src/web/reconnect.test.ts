@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   computeBackoff,
   DEFAULT_HEARTBEAT_SECONDS,
@@ -11,7 +11,7 @@ import {
 } from "./reconnect.js";
 
 describe("web reconnect helpers", () => {
-  const cfg: MoltbotConfig = {};
+  const cfg: OpenClawConfig = {};
 
   it("resolves sane reconnect defaults with clamps", () => {
     const policy = resolveReconnectPolicy(cfg, {

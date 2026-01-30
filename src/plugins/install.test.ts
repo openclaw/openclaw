@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `moltbot-plugin-install-${randomUUID()}`);
+  const dir = path.join(os.tmpdir(), `openclaw-plugin-install-${randomUUID()}`);
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs into ~/.clawdbot/extensions and uses unscoped id", async () => {
+  it("installs into ~/.openclaw/extensions and uses unscoped id", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const pkgDir = path.join(workDir, "package");
@@ -96,9 +96,9 @@ describe("installPluginFromArchive", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@moltbot/voice-call",
+        name: "@openclaw/voice-call",
         version: "0.0.1",
-        moltbot: { extensions: ["./dist/index.js"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -129,9 +129,9 @@ describe("installPluginFromArchive", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@moltbot/voice-call",
+        name: "@openclaw/voice-call",
         version: "0.0.1",
-        moltbot: { extensions: ["./dist/index.js"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -163,9 +163,9 @@ describe("installPluginFromArchive", () => {
     zip.file(
       "package/package.json",
       JSON.stringify({
-        name: "@moltbot/zipper",
+        name: "@openclaw/zipper",
         version: "0.0.1",
-        moltbot: { extensions: ["./dist/index.js"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
     );
     zip.file("package/dist/index.js", "export {};");
@@ -192,9 +192,9 @@ describe("installPluginFromArchive", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@moltbot/voice-call",
+        name: "@openclaw/voice-call",
         version: "0.0.1",
-        moltbot: { extensions: ["./dist/index.js"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -210,9 +210,9 @@ describe("installPluginFromArchive", () => {
       fs.writeFileSync(
         path.join(pkgDir, "package.json"),
         JSON.stringify({
-          name: "@moltbot/voice-call",
+          name: "@openclaw/voice-call",
           version: "0.0.2",
-          moltbot: { extensions: ["./dist/index.js"] },
+          openclaw: { extensions: ["./dist/index.js"] },
         }),
         "utf-8",
       );
@@ -244,14 +244,14 @@ describe("installPluginFromArchive", () => {
     expect(manifest.version).toBe("0.0.2");
   });
 
-  it("rejects packages without moltbot.extensions", async () => {
+  it("rejects packages without openclaw.extensions", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const pkgDir = path.join(workDir, "package");
     fs.mkdirSync(pkgDir, { recursive: true });
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
-      JSON.stringify({ name: "@moltbot/nope", version: "0.0.1" }),
+      JSON.stringify({ name: "@openclaw/nope", version: "0.0.1" }),
       "utf-8",
     );
 
@@ -266,6 +266,6 @@ describe("installPluginFromArchive", () => {
     const result = await installPluginFromArchive({ archivePath, extensionsDir });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toContain("moltbot.extensions");
+    expect(result.error).toContain("openclaw.extensions");
   });
 });

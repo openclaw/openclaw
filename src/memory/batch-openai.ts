@@ -103,7 +103,7 @@ async function submitOpenAiBatch(params: {
           endpoint: OPENAI_BATCH_ENDPOINT,
           completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
           metadata: {
-            source: "moltbot-memory",
+            source: "openclaw-memory",
             agent: params.agentId,
           },
         }),

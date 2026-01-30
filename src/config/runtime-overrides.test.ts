@@ -6,7 +6,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "./runtime-overrides.js";
-import type { MoltbotConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("runtime overrides", () => {
   beforeEach(() => {
@@ -15,8 +15,8 @@ describe("runtime overrides", () => {
 
   it("sets and applies nested overrides", () => {
     const cfg = {
-      messages: { responsePrefix: "[moltbot]" },
-    } as MoltbotConfig;
+      messages: { responsePrefix: "[openclaw]" },
+    } as OpenClawConfig;
     setConfigOverride("messages.responsePrefix", "[debug]");
     const next = applyConfigOverrides(cfg);
     expect(next.messages?.responsePrefix).toBe("[debug]");
@@ -25,7 +25,7 @@ describe("runtime overrides", () => {
   it("merges object overrides without clobbering siblings", () => {
     const cfg = {
       channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+1"] } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     setConfigOverride("channels.whatsapp.dmPolicy", "open");
     const next = applyConfigOverrides(cfg);
     expect(next.channels?.whatsapp?.dmPolicy).toBe("open");

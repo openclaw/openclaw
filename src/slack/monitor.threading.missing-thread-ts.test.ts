@@ -51,7 +51,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/moltbot-sessions.json"),
+  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
   updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
   resolveSessionKey: vi.fn(),
   readSessionUpdatedAt: vi.fn(() => undefined),

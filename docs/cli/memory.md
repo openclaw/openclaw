@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `moltbot memory` (status/index/search)"
+summary: "CLI reference for `openclaw memory` (status/index/search)"
 read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
 ---
 
-# `moltbot memory`
+# `openclaw memory`
 
 Manage semantic memory indexing and search.
 Provided by the active memory plugin (default: `memory-core`; set `plugins.slots.memory = "none"` to disable).
@@ -17,15 +17,15 @@ Related:
 ## Examples
 
 ```bash
-moltbot memory status
-moltbot memory status --deep
-moltbot memory status --deep --index
-moltbot memory status --deep --index --verbose
-moltbot memory index
-moltbot memory index --verbose
-moltbot memory search "release checklist"
-moltbot memory status --agent main
-moltbot memory index --agent main --verbose
+openclaw memory status
+openclaw memory status --deep
+openclaw memory status --deep --index
+openclaw memory status --deep --index --verbose
+openclaw memory index
+openclaw memory index --verbose
+openclaw memory search "release checklist"
+openclaw memory status --agent main
+openclaw memory index --agent main --verbose
 ```
 
 ## Options

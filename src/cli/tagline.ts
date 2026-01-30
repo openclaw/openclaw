@@ -1,4 +1,4 @@
-const DEFAULT_TAGLINE = "All your chats, one Moltbot.";
+const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
 
 const HOLIDAY_TAGLINES = {
   newYear:
@@ -241,7 +241,7 @@ export function activeTaglines(options: TaglineOptions = {}): string[] {
 
 export function pickTagline(options: TaglineOptions = {}): string {
   const env = options.env ?? process.env;
-  const override = env?.CLAWDBOT_TAGLINE_INDEX;
+  const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {
     const parsed = Number.parseInt(override, 10);
     if (!Number.isNaN(parsed) && parsed >= 0) {

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
-import { discoverMoltbotPlugins, type PluginCandidate } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
@@ -36,7 +36,7 @@ const registryCache = new Map<string, { expiresAt: number; registry: PluginManif
 const DEFAULT_MANIFEST_CACHE_MS = 200;
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.CLAWDBOT_PLUGIN_MANIFEST_CACHE_MS?.trim();
+  const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
   if (raw === "" || raw === "0") return 0;
   if (!raw) return DEFAULT_MANIFEST_CACHE_MS;
   const parsed = Number.parseInt(raw, 10);
@@ -45,7 +45,7 @@ function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
 }
 
 function shouldUseManifestCache(env: NodeJS.ProcessEnv): boolean {
-  const disabled = env.CLAWDBOT_DISABLE_PLUGIN_MANIFEST_CACHE?.trim();
+  const disabled = env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim();
   if (disabled) return false;
   return resolveManifestCacheMs(env) > 0;
 }
@@ -100,7 +100,7 @@ function buildRecord(params: {
 }
 
 export function loadPluginManifestRegistry(params: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   cache?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -122,7 +122,7 @@ export function loadPluginManifestRegistry(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics ?? [],
       }
-    : discoverMoltbotPlugins({
+    : discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
       });

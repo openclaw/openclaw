@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
@@ -11,11 +11,11 @@ function normalizeBindingChannelId(raw?: string | null): string | null {
   return fallback || null;
 }
 
-export function listBindings(cfg: MoltbotConfig): AgentBinding[] {
+export function listBindings(cfg: OpenClawConfig): AgentBinding[] {
   return Array.isArray(cfg.bindings) ? cfg.bindings : [];
 }
 
-export function listBoundAccountIds(cfg: MoltbotConfig, channelId: string): string[] {
+export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const normalizedChannel = normalizeBindingChannelId(channelId);
   if (!normalizedChannel) return [];
   const ids = new Set<string>();
@@ -33,7 +33,7 @@ export function listBoundAccountIds(cfg: MoltbotConfig, channelId: string): stri
 }
 
 export function resolveDefaultAgentBoundAccountId(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   channelId: string,
 ): string | null {
   const normalizedChannel = normalizeBindingChannelId(channelId);
@@ -53,7 +53,7 @@ export function resolveDefaultAgentBoundAccountId(
   return null;
 }
 
-export function buildChannelAccountBindings(cfg: MoltbotConfig) {
+export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {
     if (!binding || typeof binding !== "object") continue;

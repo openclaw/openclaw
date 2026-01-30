@@ -93,12 +93,12 @@ const emptyRegistry = createRegistry([]);
 describe("gateway server models + voicewake", () => {
   const setTempHome = (homeDir: string) => {
     const prevHome = process.env.HOME;
-    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
     const prevUserProfile = process.env.USERPROFILE;
     const prevHomeDrive = process.env.HOMEDRIVE;
     const prevHomePath = process.env.HOMEPATH;
     process.env.HOME = homeDir;
-    process.env.CLAWDBOT_STATE_DIR = path.join(homeDir, ".clawdbot");
+    process.env.OPENCLAW_STATE_DIR = path.join(homeDir, ".openclaw");
     process.env.USERPROFILE = homeDir;
     if (process.platform === "win32") {
       const parsed = path.parse(homeDir);
@@ -112,9 +112,9 @@ describe("gateway server models + voicewake", () => {
         process.env.HOME = prevHome;
       }
       if (prevStateDir === undefined) {
-        delete process.env.CLAWDBOT_STATE_DIR;
+        delete process.env.OPENCLAW_STATE_DIR;
       } else {
-        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
       }
       if (prevUserProfile === undefined) {
         delete process.env.USERPROFILE;
@@ -140,12 +140,12 @@ describe("gateway server models + voicewake", () => {
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 60_000 },
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-home-"));
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
       const restoreHome = setTempHome(homeDir);
 
       const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
       expect(initial.ok).toBe(true);
-      expect(initial.payload?.triggers).toEqual(["clawd", "claude", "computer"]);
+      expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
 
       const changedP = onceMessage<{
         type: "event";
@@ -171,7 +171,7 @@ describe("gateway server models + voicewake", () => {
       expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
       const onDisk = JSON.parse(
-        await fs.readFile(path.join(homeDir, ".clawdbot", "settings", "voicewake.json"), "utf8"),
+        await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
       ) as { triggers?: unknown; updatedAtMs?: unknown };
       expect(onDisk.triggers).toEqual(["hi", "there"]);
       expect(typeof onDisk.updatedAtMs).toBe("number");
@@ -181,7 +181,7 @@ describe("gateway server models + voicewake", () => {
   );
 
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
     const restoreHome = setTempHome(homeDir);
 
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -203,7 +203,7 @@ describe("gateway server models + voicewake", () => {
     const first = await firstEventP;
     expect(first.event).toBe("voicewake.changed");
     expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-      "clawd",
+      "openclaw",
       "claude",
       "computer",
     ]);
@@ -213,14 +213,14 @@ describe("gateway server models + voicewake", () => {
       (o) => o.type === "event" && o.event === "voicewake.changed",
     );
     const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
-      triggers: ["clawd", "computer"],
+      triggers: ["openclaw", "computer"],
     });
     expect(setRes.ok).toBe(true);
 
     const broadcast = await broadcastP;
     expect(broadcast.event).toBe("voicewake.changed");
     expect((broadcast.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-      "clawd",
+      "openclaw",
       "computer",
     ]);
 
@@ -315,14 +315,14 @@ describe("gateway server models + voicewake", () => {
 
 describe("gateway server misc", () => {
   test("hello-ok advertises the gateway port for canvas host", async () => {
-    const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
-    const prevCanvasPort = process.env.CLAWDBOT_CANVAS_HOST_PORT;
-    process.env.CLAWDBOT_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    const prevCanvasPort = process.env.OPENCLAW_CANVAS_HOST_PORT;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
     testTailnetIPv4.value = "100.64.0.1";
     testState.gatewayBind = "lan";
     const canvasPort = await getFreePort();
     testState.canvasHostPort = canvasPort;
-    process.env.CLAWDBOT_CANVAS_HOST_PORT = String(canvasPort);
+    process.env.OPENCLAW_CANVAS_HOST_PORT = String(canvasPort);
 
     const testPort = await getFreePort();
     const canvasHostUrl = resolveCanvasHostUrl({
@@ -332,14 +332,14 @@ describe("gateway server misc", () => {
     });
     expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
     if (prevToken === undefined) {
-      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
-      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
     }
     if (prevCanvasPort === undefined) {
-      delete process.env.CLAWDBOT_CANVAS_HOST_PORT;
+      delete process.env.OPENCLAW_CANVAS_HOST_PORT;
     } else {
-      process.env.CLAWDBOT_CANVAS_HOST_PORT = prevCanvasPort;
+      process.env.OPENCLAW_CANVAS_HOST_PORT = prevCanvasPort;
     }
   });
 
@@ -375,8 +375,8 @@ describe("gateway server misc", () => {
   });
 
   test("auto-enables configured channel plugins on startup", async () => {
-    const configPath = process.env.CLAWDBOT_CONFIG_PATH;
-    if (!configPath) throw new Error("Missing CLAWDBOT_CONFIG_PATH");
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) throw new Error("Missing OPENCLAW_CONFIG_PATH");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,

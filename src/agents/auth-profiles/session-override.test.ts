@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverride } from "./session-override.js";
 
@@ -23,9 +23,9 @@ async function writeAuthStore(agentDir: string) {
 
 describe("resolveSessionAuthProfileOverride", () => {
   it("keeps user override when provider alias differs", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    process.env.CLAWDBOT_STATE_DIR = tmpDir;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
     try {
       const agentDir = path.join(tmpDir, "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -40,7 +40,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       const resolved = await resolveSessionAuthProfileOverride({
-        cfg: {} as MoltbotConfig,
+        cfg: {} as OpenClawConfig,
         provider: "z.ai",
         agentDir,
         sessionEntry,
@@ -53,8 +53,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(resolved).toBe("zai:work");
       expect(sessionEntry.authProfileOverride).toBe("zai:work");
     } finally {
-      if (prevStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
-      else process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+      if (prevStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

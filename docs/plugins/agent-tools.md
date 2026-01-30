@@ -6,7 +6,7 @@ read_when:
 ---
 # Plugin agent tools
 
-Moltbot plugins can register **agent tools** (JSON‑schema functions) that are exposed
+OpenClaw plugins can register **agent tools** (JSON‑schema functions) that are exposed
 to the LLM during agent runs. Tools can be **required** (always available) or
 **optional** (opt‑in).
 

@@ -1,6 +1,6 @@
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import type { MoltbotConfig } from "./config.js";
+import type { OpenClawConfig } from "./config.js";
 import type { TelegramCapabilitiesConfig } from "./types.telegram.js";
 
 type CapabilitiesConfig = TelegramCapabilitiesConfig;
@@ -45,7 +45,7 @@ function resolveAccountCapabilities(params: {
 }
 
 export function resolveChannelCapabilities(params: {
-  cfg?: Partial<MoltbotConfig>;
+  cfg?: Partial<OpenClawConfig>;
   channel?: string | null;
   accountId?: string | null;
 }): string[] | undefined {

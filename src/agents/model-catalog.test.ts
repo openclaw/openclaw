@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   __setModelCatalogImportForTest,
   loadModelCatalog,
@@ -10,11 +10,11 @@ import {
 type PiSdkModule = typeof import("@mariozechner/pi-coding-agent");
 
 vi.mock("./models-config.js", () => ({
-  ensureMoltbotModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
+  ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
 }));
 
 vi.mock("./agent-paths.js", () => ({
-  resolveMoltbotAgentDir: () => "/tmp/moltbot",
+  resolveOpenClawAgentDir: () => "/tmp/openclaw",
 }));
 
 describe("loadModelCatalog", () => {
@@ -43,7 +43,7 @@ describe("loadModelCatalog", () => {
       } as unknown as PiSdkModule;
     });
 
-    const cfg = {} as MoltbotConfig;
+    const cfg = {} as OpenClawConfig;
     const first = await loadModelCatalog({ config: cfg });
     expect(first).toEqual([]);
 
@@ -75,7 +75,7 @@ describe("loadModelCatalog", () => {
         }) as unknown as PiSdkModule,
     );
 
-    const result = await loadModelCatalog({ config: {} as MoltbotConfig });
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });

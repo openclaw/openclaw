@@ -1,12 +1,12 @@
 import { normalizeChatChannelId } from "../../channels/registry.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { normalizeE164 } from "../../utils.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
 type HeartbeatRecipientsOpts = { to?: string; all?: boolean };
 
-function getSessionRecipients(cfg: MoltbotConfig) {
+function getSessionRecipients(cfg: OpenClawConfig) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   if (scope === "global") return [];
@@ -39,7 +39,7 @@ function getSessionRecipients(cfg: MoltbotConfig) {
 }
 
 export function resolveWhatsAppHeartbeatRecipients(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   opts: HeartbeatRecipientsOpts = {},
 ): HeartbeatRecipientsResult {
   if (opts.to) {

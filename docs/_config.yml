@@ -1,4 +1,4 @@
-title: "Moltbot Docs"
+title: "OpenClaw Docs"
 description: "A TypeScript/Node gateway + macOS/iOS/Android companions for WhatsApp (web) and Telegram (bot)."
 markdown: kramdown
 highlighter: rouge
@@ -22,8 +22,8 @@ defaults:
 nav:
   - title: "Home"
     url: "/"
-  - title: "Moltbot Assistant"
-    url: "/start/clawd/"
+  - title: "OpenClaw Assistant"
+    url: "/start/openclaw/"
   - title: "Gateway"
     url: "/gateway/"
   - title: "Remote"

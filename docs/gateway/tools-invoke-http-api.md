@@ -6,7 +6,7 @@ read_when:
 ---
 # Tools Invoke (HTTP)
 
-Moltbot’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled, but gated by Gateway auth and tool policy.
+OpenClaw’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled, but gated by Gateway auth and tool policy.
 
 - `POST /tools/invoke`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -20,8 +20,8 @@ Uses the Gateway auth configuration. Send a bearer token:
 - `Authorization: Bearer <token>`
 
 Notes:
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `CLAWDBOT_GATEWAY_PASSWORD`).
+- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
+- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
 
 ## Request body
 
@@ -54,8 +54,8 @@ Tool availability is filtered through the same policy chain used by Gateway agen
 If a tool is not allowed by policy, the endpoint returns **404**.
 
 To help group policies resolve context, you can optionally set:
-- `x-moltbot-message-channel: <channel>` (example: `slack`, `telegram`)
-- `x-moltbot-account-id: <accountId>` (when multiple accounts exist)
+- `x-openclaw-message-channel: <channel>` (example: `slack`, `telegram`)
+- `x-openclaw-account-id: <accountId>` (when multiple accounts exist)
 
 ## Responses
 

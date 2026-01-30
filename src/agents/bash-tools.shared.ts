@@ -63,14 +63,14 @@ export function buildDockerExecArgs(params: {
   const hasCustomPath = typeof params.env.PATH === "string" && params.env.PATH.length > 0;
   if (hasCustomPath) {
     // Avoid interpolating PATH into the shell command; pass it via env instead.
-    args.push("-e", `CLAWDBOT_PREPEND_PATH=${params.env.PATH}`);
+    args.push("-e", `OPENCLAW_PREPEND_PATH=${params.env.PATH}`);
   }
   // Login shell (-l) sources /etc/profile which resets PATH to a minimal set,
   // overriding both Docker ENV and -e PATH=... environment variables.
   // Prepend custom PATH after profile sourcing to ensure custom tools are accessible
   // while preserving system paths that /etc/profile may have added.
   const pathExport = hasCustomPath
-    ? 'export PATH="${CLAWDBOT_PREPEND_PATH}:$PATH"; unset CLAWDBOT_PREPEND_PATH; '
+    ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
     : "";
   args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
   return args;

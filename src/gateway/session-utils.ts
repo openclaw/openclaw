@@ -5,7 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { type MoltbotConfig, loadConfig } from "../config/config.js";
+import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
@@ -85,7 +85,7 @@ function isWorkspaceRelativePath(value: string): boolean {
 }
 
 function resolveIdentityAvatarUrl(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   agentId: string,
   avatar: string | undefined,
 ): string | undefined {
@@ -211,7 +211,7 @@ function listExistingAgentIdsFromDisk(): string[] {
   }
 }
 
-function listConfiguredAgentIds(cfg: MoltbotConfig): string[] {
+function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   const agents = cfg.agents?.list ?? [];
   if (agents.length > 0) {
     const ids = new Set<string>();
@@ -239,7 +239,7 @@ function listConfiguredAgentIds(cfg: MoltbotConfig): string[] {
   return sorted;
 }
 
-export function listAgentsForGateway(cfg: MoltbotConfig): {
+export function listAgentsForGateway(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;
   scope: SessionScope;
@@ -301,11 +301,14 @@ function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
   return `agent:${normalizeAgentId(agentId)}:${key}`;
 }
 
-function resolveDefaultStoreAgentId(cfg: MoltbotConfig): string {
+function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
   return normalizeAgentId(resolveDefaultAgentId(cfg));
 }
 
-export function resolveSessionStoreKey(params: { cfg: MoltbotConfig; sessionKey: string }): string {
+export function resolveSessionStoreKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): string {
   const raw = params.sessionKey.trim();
   if (!raw) return raw;
   if (raw === "global" || raw === "unknown") return raw;
@@ -330,7 +333,7 @@ export function resolveSessionStoreKey(params: { cfg: MoltbotConfig; sessionKey:
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
-function resolveSessionStoreAgentId(cfg: MoltbotConfig, canonicalKey: string): string {
+function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     return resolveDefaultStoreAgentId(cfg);
   }
@@ -347,7 +350,7 @@ function canonicalizeSpawnedByForAgent(agentId: string, spawnedBy?: string): str
   return `agent:${normalizeAgentId(agentId)}:${raw}`;
 }
 
-export function resolveGatewaySessionStoreTarget(params: { cfg: MoltbotConfig; key: string }): {
+export function resolveGatewaySessionStoreTarget(params: { cfg: OpenClawConfig; key: string }): {
   agentId: string;
   storePath: string;
   canonicalKey: string;
@@ -403,7 +406,7 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
-export function loadCombinedSessionStoreForGateway(cfg: MoltbotConfig): {
+export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
@@ -446,7 +449,7 @@ export function loadCombinedSessionStoreForGateway(cfg: MoltbotConfig): {
   return { storePath, store: combined };
 }
 
-export function getSessionDefaults(cfg: MoltbotConfig): GatewaySessionsDefaults {
+export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -464,7 +467,7 @@ export function getSessionDefaults(cfg: MoltbotConfig): GatewaySessionsDefaults 
 }
 
 export function resolveSessionModelRef(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   entry?: SessionEntry,
 ): { provider: string; model: string } {
   const resolved = resolveConfiguredModelRef({
@@ -483,7 +486,7 @@ export function resolveSessionModelRef(
 }
 
 export function listSessionsFromStore(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;

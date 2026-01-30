@@ -1,5 +1,5 @@
 ---
-summary: "Hubs that link to every Moltbot doc"
+summary: "Hubs that link to every OpenClaw doc"
 read_when:
   - You want a complete map of the documentation
 ---
@@ -18,7 +18,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Help](/help)
 - [Configuration](/gateway/configuration)
 - [Configuration examples](/gateway/configuration-examples)
-- [Moltbot assistant (Clawd)](/start/clawd)
+- [OpenClaw assistant](/start/openclaw)
 - [Showcase](/start/showcase)
 - [Lore](/start/lore)
 

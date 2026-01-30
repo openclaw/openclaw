@@ -26,7 +26,7 @@ beforeEach(() => {
 
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset().mockResolvedValue(undefined);
-  resolveMoltbotPackageRoot.mockReset().mockResolvedValue(null);
+  resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue({
     status: "skipped",
     mode: "unknown",
@@ -34,7 +34,7 @@ beforeEach(() => {
     durationMs: 0,
   });
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
-    path: "/tmp/moltbot.json",
+    path: "/tmp/openclaw.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -75,11 +75,11 @@ beforeEach(() => {
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
-  originalStateDir = process.env.CLAWDBOT_STATE_DIR;
-  originalUpdateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
-  process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-doctor-state-"));
-  process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+  originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-"));
+  process.env.OPENCLAW_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
   });
@@ -89,14 +89,14 @@ beforeEach(() => {
 afterEach(() => {
   setStdinTty(originalIsTTY);
   if (originalStateDir === undefined) {
-    delete process.env.CLAWDBOT_STATE_DIR;
+    delete process.env.OPENCLAW_STATE_DIR;
   } else {
-    process.env.CLAWDBOT_STATE_DIR = originalStateDir;
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
   if (originalUpdateInProgress === undefined) {
-    delete process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
+    delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   } else {
-    process.env.CLAWDBOT_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
   }
   if (tempStateDir) {
     fs.rmSync(tempStateDir, { recursive: true, force: true });
@@ -109,7 +109,7 @@ const confirm = vi.fn().mockResolvedValue(true);
 const select = vi.fn().mockResolvedValue("node");
 const note = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
-const resolveMoltbotPackageRoot = vi.fn().mockResolvedValue(null);
+const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null);
 const runGatewayUpdate = vi.fn().mockResolvedValue({
   status: "skipped",
   mode: "unknown",
@@ -133,7 +133,7 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
-  path: "/tmp/moltbot.json",
+  path: "/tmp/openclaw.json",
   exists: false,
   raw: null,
   parsed: {},
@@ -173,14 +173,14 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadMoltbotPlugins: () => ({ plugins: [], diagnostics: [] }),
+  loadOpenClawPlugins: () => ({ plugins: [], diagnostics: [] }),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    CONFIG_PATH: "/tmp/moltbot.json",
+    CONFIG_PATH: "/tmp/openclaw.json",
     createConfigIO,
     readConfigFileSnapshot,
     writeConfigFile,
@@ -215,8 +215,8 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
 
-vi.mock("../infra/moltbot-root.js", () => ({
-  resolveMoltbotPackageRoot,
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageRoot,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -332,7 +332,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 describe("doctor command", () => {
   it("migrates routing.allowFrom to channels.whatsapp.allowFrom", { timeout: 60_000 }, async () => {
     readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/moltbot.json",
+      path: "/tmp/openclaw.json",
       exists: true,
       raw: "{}",
       parsed: { routing: { allowFrom: ["+15555550123"] } },
@@ -374,9 +374,9 @@ describe("doctor command", () => {
     expect(written.routing).toBeUndefined();
   });
 
-  it("migrates legacy gateway services", { timeout: 60_000 }, async () => {
+  it("skips legacy gateway services migration", { timeout: 60_000 }, async () => {
     readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/moltbot.json",
+      path: "/tmp/openclaw.json",
       exists: true,
       raw: "{}",
       parsed: {},
@@ -389,7 +389,7 @@ describe("doctor command", () => {
     findLegacyGatewayServices.mockResolvedValueOnce([
       {
         platform: "darwin",
-        label: "com.steipete.clawdbot.gateway",
+        label: "com.steipete.openclaw.gateway",
         detail: "loaded",
       },
     ]);
@@ -405,15 +405,15 @@ describe("doctor command", () => {
 
     await doctorCommand(runtime);
 
-    expect(uninstallLegacyGatewayServices).toHaveBeenCalledTimes(1);
-    expect(serviceInstall).toHaveBeenCalledTimes(1);
+    expect(uninstallLegacyGatewayServices).not.toHaveBeenCalled();
+    expect(serviceInstall).not.toHaveBeenCalled();
   });
 
   it("offers to update first for git checkouts", async () => {
-    delete process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
+    delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 
-    const root = "/tmp/moltbot";
-    resolveMoltbotPackageRoot.mockResolvedValueOnce(root);
+    const root = "/tmp/openclaw";
+    resolveOpenClawPackageRoot.mockResolvedValueOnce(root);
     runCommandWithTimeout.mockResolvedValueOnce({
       stdout: `${root}\n`,
       stderr: "",
@@ -430,7 +430,7 @@ describe("doctor command", () => {
     });
 
     readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/moltbot.json",
+      path: "/tmp/openclaw.json",
       exists: true,
       raw: "{}",
       parsed: {},

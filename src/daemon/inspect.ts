@@ -6,12 +6,9 @@ import { promisify } from "node:util";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
-  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
-  LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
-  resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 
 export type ExtraGatewayService = {
@@ -25,13 +22,13 @@ export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
 };
 
-const EXTRA_MARKERS = ["moltbot"];
+const EXTRA_MARKERS = ["openclaw"];
 const execFileAsync = promisify(execFile);
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string[] {
-  const profile = env.CLAWDBOT_PROFILE;
+  const profile = env.OPENCLAW_PROFILE;
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
@@ -66,32 +63,38 @@ function containsMarker(content: string): boolean {
 
 function hasGatewayServiceMarker(content: string): boolean {
   const lower = content.toLowerCase();
+  const markerKeys = ["openclaw_service_marker"];
+  const kindKeys = ["openclaw_service_kind"];
+  const markerValues = [GATEWAY_SERVICE_MARKER.toLowerCase()];
+  const hasMarkerKey = markerKeys.some((key) => lower.includes(key));
+  const hasKindKey = kindKeys.some((key) => lower.includes(key));
+  const hasMarkerValue = markerValues.some((value) => lower.includes(value));
   return (
-    lower.includes("moltbot_service_marker") &&
-    lower.includes(GATEWAY_SERVICE_MARKER.toLowerCase()) &&
-    lower.includes("moltbot_service_kind") &&
+    hasMarkerKey &&
+    hasKindKey &&
+    hasMarkerValue &&
     lower.includes(GATEWAY_SERVICE_KIND.toLowerCase())
   );
 }
 
-function isMoltbotGatewayLaunchdService(label: string, contents: string): boolean {
+function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) return true;
   const lowerContents = contents.toLowerCase();
   if (!lowerContents.includes("gateway")) return false;
-  return label.startsWith("bot.molt.") || label.startsWith("com.clawdbot.");
+  return label.startsWith("ai.openclaw.");
 }
 
-function isMoltbotGatewaySystemdService(name: string, contents: string): boolean {
+function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) return true;
-  if (!name.startsWith("moltbot-gateway")) return false;
+  if (!name.startsWith("openclaw-gateway")) return false;
   return contents.toLowerCase().includes("gateway");
 }
 
-function isMoltbotGatewayTaskName(name: string): boolean {
+function isOpenClawGatewayTaskName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   if (!normalized) return false;
   const defaultName = resolveGatewayWindowsTaskName().toLowerCase();
-  return normalized === defaultName || normalized.startsWith("moltbot gateway");
+  return normalized === defaultName || normalized.startsWith("openclaw gateway");
 }
 
 function tryExtractPlistLabel(contents: string): string | null {
@@ -101,17 +104,11 @@ function tryExtractPlistLabel(contents: string): string | null {
 }
 
 function isIgnoredLaunchdLabel(label: string): boolean {
-  return (
-    label === resolveGatewayLaunchAgentLabel() ||
-    resolveLegacyGatewayLaunchAgentLabels(process.env.CLAWDBOT_PROFILE).includes(label)
-  );
+  return label === resolveGatewayLaunchAgentLabel();
 }
 
 function isIgnoredSystemdName(name: string): boolean {
-  return (
-    name === resolveGatewaySystemdServiceName() ||
-    LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES.includes(name)
-  );
+  return name === resolveGatewaySystemdServiceName();
 }
 
 async function scanLaunchdDir(params: {
@@ -140,7 +137,7 @@ async function scanLaunchdDir(params: {
     if (!containsMarker(contents)) continue;
     const label = tryExtractPlistLabel(contents) ?? labelFromName;
     if (isIgnoredLaunchdLabel(label)) continue;
-    if (isMoltbotGatewayLaunchdService(label, contents)) continue;
+    if (isOpenClawGatewayLaunchdService(label, contents)) continue;
     results.push({
       platform: "darwin",
       label,
@@ -176,7 +173,7 @@ async function scanSystemdDir(params: {
       continue;
     }
     if (!containsMarker(contents)) continue;
-    if (isMoltbotGatewaySystemdService(name, contents)) continue;
+    if (isOpenClawGatewaySystemdService(name, contents)) continue;
     results.push({
       platform: "linux",
       label: entry,
@@ -336,8 +333,7 @@ export async function findExtraGatewayServices(
     for (const task of tasks) {
       const name = task.name.trim();
       if (!name) continue;
-      if (isMoltbotGatewayTaskName(name)) continue;
-      if (LEGACY_GATEWAY_WINDOWS_TASK_NAMES.includes(name)) continue;
+      if (isOpenClawGatewayTaskName(name)) continue;
       const lowerName = name.toLowerCase();
       const lowerCommand = task.taskToRun?.toLowerCase() ?? "";
       const matches = EXTRA_MARKERS.some(

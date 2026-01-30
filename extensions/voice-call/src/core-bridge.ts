@@ -86,9 +86,9 @@ function findPackageRoot(startDir: string, name: string): string | null {
   }
 }
 
-function resolveMoltbotRoot(): string {
+function resolveOpenClawRoot(): string {
   if (coreRootCache) return coreRootCache;
-  const override = process.env.MOLTBOT_ROOT?.trim() || process.env.CLAWDBOT_ROOT?.trim();
+  const override = process.env.OPENCLAW_ROOT?.trim();
   if (override) {
     coreRootCache = override;
     return override;
@@ -107,7 +107,7 @@ function resolveMoltbotRoot(): string {
   }
 
   for (const start of candidates) {
-    for (const name of ["moltbot", "moltbot"]) {
+    for (const name of ["openclaw"]) {
       const found = findPackageRoot(start, name);
       if (found) {
         coreRootCache = found;
@@ -117,12 +117,12 @@ function resolveMoltbotRoot(): string {
   }
 
   throw new Error(
-    "Unable to resolve core root. Set MOLTBOT_ROOT (or legacy CLAWDBOT_ROOT) to the package root.",
+    "Unable to resolve core root. Set OPENCLAW_ROOT to the package root.",
   );
 }
 
 async function importCoreModule<T>(relativePath: string): Promise<T> {
-  const root = resolveMoltbotRoot();
+  const root = resolveOpenClawRoot();
   const distPath = path.join(root, "dist", relativePath);
   if (!fs.existsSync(distPath)) {
     throw new Error(

@@ -2,7 +2,7 @@
 title: Deploy on Railway
 ---
 
-Deploy Moltbot on Railway with a one-click template and finish setup in your browser.
+Deploy OpenClaw on Railway with a one-click template and finish setup in your browser.
 This is the easiest “no terminal on the server” path: Railway runs the Gateway for you,
 and you configure everything via the `/setup` web wizard.
 
@@ -16,7 +16,7 @@ and you configure everything via the `/setup` web wizard.
 
 ## One-click deploy
 
-<a href="https://railway.com/deploy/moltbot-railway-template" target="_blank" rel="noreferrer">Deploy on Railway</a>
+<a href="https://railway.com/deploy/openclaw-railway-template" target="_blank" rel="noreferrer">Deploy on Railway</a>
 
 After deploy, find your public URL in **Railway → your service → Settings → Domains**.
 
@@ -27,11 +27,11 @@ Railway will either:
 Then open:
 
 - `https://<your-railway-domain>/setup` — setup wizard (password protected)
-- `https://<your-railway-domain>/moltbot` — Control UI
+- `https://<your-railway-domain>/openclaw` — Control UI
 
 ## What you get
 
-- Hosted Moltbot Gateway + Control UI
+- Hosted OpenClaw Gateway + Control UI
 - Web setup wizard at `/setup` (no terminal commands)
 - Persistent storage via Railway Volume (`/data`) so config/credentials/workspace survive redeploys
 - Backup export at `/setup/export` to migrate off Railway later
@@ -56,9 +56,9 @@ Set these variables on the service:
 
 - `SETUP_PASSWORD` (required)
 - `PORT=8080` (required — must match the port in Public Networking)
-- `CLAWDBOT_STATE_DIR=/data/.clawdbot` (recommended)
-- `CLAWDBOT_WORKSPACE_DIR=/data/workspace` (recommended)
-- `CLAWDBOT_GATEWAY_TOKEN` (recommended; treat as an admin secret)
+- `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
+- `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
+- `OPENCLAW_GATEWAY_TOKEN` (recommended; treat as an admin secret)
 
 ## Setup flow
 
@@ -93,4 +93,4 @@ Download a backup at:
 
 - `https://<your-railway-domain>/setup/export`
 
-This exports your Moltbot state + workspace so you can migrate to another host without losing config or memory.
+This exports your OpenClaw state + workspace so you can migrate to another host without losing config or memory.

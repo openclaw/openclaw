@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   addChannelAllowFromStoreEntry,
   approveChannelPairingCode,
@@ -95,7 +95,7 @@ export async function approveTelegramPairingCode(params: {
 }
 
 export async function resolveTelegramEffectiveAllowFrom(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ dm: string[]; group: string[] }> {
   const env = params.env ?? process.env;

@@ -20,7 +20,7 @@ async function prepareRoutedCommand(params: {
 }
 
 export async function tryRouteCli(argv: string[]): Promise<boolean> {
-  if (isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_ROUTE_FIRST)) return false;
+  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_ROUTE_FIRST)) return false;
   if (hasHelpOrVersion(argv)) return false;
 
   const path = getCommandPath(argv, 2);

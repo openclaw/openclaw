@@ -1,5 +1,5 @@
 import { resolveUserPath } from "../utils.js";
-import type { MoltbotConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.js";
 
 const PATH_VALUE_RE = /^~(?=$|[\\/])/;
 
@@ -50,7 +50,7 @@ function normalizeAny(key: string | undefined, value: unknown): unknown {
  * Goal: accept `~/...` consistently across config file + env overrides, while
  * keeping the surface area small and predictable.
  */
-export function normalizeConfigPaths(cfg: MoltbotConfig): MoltbotConfig {
+export function normalizeConfigPaths(cfg: OpenClawConfig): OpenClawConfig {
   if (!cfg || typeof cfg !== "object") return cfg;
   normalizeAny(undefined, cfg);
   return cfg;

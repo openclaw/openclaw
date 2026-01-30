@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramGroupConfig } from "../config/types.telegram.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
@@ -13,7 +13,7 @@ export type TelegramGroupMigrationResult = {
 };
 
 function resolveAccountGroups(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId?: string | null,
 ): { groups?: TelegramGroups } {
   if (!accountId) return {};
@@ -43,7 +43,7 @@ export function migrateTelegramGroupsInPlace(
 }
 
 export function migrateTelegramGroupConfig(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
   oldChatId: string;
   newChatId: string;

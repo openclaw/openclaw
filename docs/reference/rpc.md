@@ -6,18 +6,18 @@ read_when:
 ---
 # RPC adapters
 
-Moltbot integrates external CLIs via JSON-RPC. Two patterns are used today.
+OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 
 ## Pattern A: HTTP daemon (signal-cli)
 - `signal-cli` runs as a daemon with JSON-RPC over HTTP.
 - Event stream is SSE (`/api/v1/events`).
 - Health probe: `/api/v1/check`.
-- Moltbot owns lifecycle when `channels.signal.autoStart=true`.
+- OpenClaw owns lifecycle when `channels.signal.autoStart=true`.
 
 See [Signal](/channels/signal) for setup and endpoints.
 
 ## Pattern B: stdio child process (imsg)
-- Moltbot spawns `imsg rpc` as a child process.
+- OpenClaw spawns `imsg rpc` as a child process.
 - JSON-RPC is line-delimited over stdin/stdout (one JSON object per line).
 - No TCP port, no daemon required.
 

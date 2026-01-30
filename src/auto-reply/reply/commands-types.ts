@@ -1,5 +1,5 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { MsgContext } from "../templating.js";
@@ -23,7 +23,7 @@ export type CommandContext = {
 
 export type HandleCommandsParams = {
   ctx: MsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   command: CommandContext;
   agentId?: string;
   directives: InlineDirectives;

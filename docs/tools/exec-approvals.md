@@ -20,7 +20,7 @@ resolved by the **ask fallback** (default: deny).
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:
-- **gateway host** → `moltbot` process on the gateway machine
+- **gateway host** → `openclaw` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
 macOS split:
@@ -31,14 +31,14 @@ macOS split:
 
 Approvals live in a local JSON file on the execution host:
 
-`~/.clawdbot/exec-approvals.json`
+`~/.openclaw/exec-approvals.json`
 
 Example schema:
 ```json
 {
   "version": 1,
   "socket": {
-    "path": "~/.clawdbot/exec-approvals.sock",
+    "path": "~/.openclaw/exec-approvals.sock",
     "token": "base64url-token"
   },
   "defaults": {
@@ -131,9 +131,9 @@ per pattern so you can keep the list tidy.
 The target selector chooses **Gateway** (local approvals) or a **Node**. Nodes
 must advertise `system.execApprovals.get/set` (macOS app or headless node host).
 If a node does not advertise exec approvals yet, edit its local
-`~/.clawdbot/exec-approvals.json` directly.
+`~/.openclaw/exec-approvals.json` directly.
 
-CLI: `moltbot approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
+CLI: `openclaw approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
 
 ## Approval flow
 

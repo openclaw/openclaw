@@ -13,8 +13,8 @@ installGatewayTestHooks({ scope: "suite" });
 
 beforeEach(() => {
   // Ensure these tests are not affected by host env vars.
-  delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-  delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 });
 
 const resolveGatewayToken = (): string => {
