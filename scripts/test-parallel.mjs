@@ -3,6 +3,16 @@ import os from "node:os";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
+function runOnce(args, label) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pnpm, args, { stdio: "inherit", shell: process.platform === "win32" });
+    child.on("exit", (code, signal) => {
+      if (code === 0) return resolve();
+      reject(new Error(`${label} failed (code=${code ?? "?"}${signal ? ` signal=${signal}` : ""})`));
+    });
+  });
+}
+
 const runs = [
   {
     name: "unit",
@@ -51,7 +61,7 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=DEP0060",
 ];
 
-const runOnce = (entry, extraArgs = []) =>
+const runTestOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
     const args = maxWorkers
       ? [...entry.args, "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...extraArgs]
@@ -74,15 +84,11 @@ const runOnce = (entry, extraArgs = []) =>
   });
 
 const run = async (entry) => {
-  if (shardCount <= 1) {
-    return runOnce(entry);
-  }
+  if (shardCount <= 1) return runTestOnce(entry);
   for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const code = await runOnce(entry, ["--shard", `${shardIndex}/${shardCount}`]);
-    if (code !== 0) {
-      return code;
-    }
+    const code = await runTestOnce(entry, ["--shard", `${shardIndex}/${shardCount}`]);
+    if (code !== 0) return code;
   }
   return 0;
 };
@@ -95,6 +101,10 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// Some unit tests expect the gateway-hosted A2UI scaffold + bundle to be present.
+// The bundle is a generated artifact (gitignored), so ensure it's built before running Vitest.
+await runOnce(["canvas:a2ui:bundle"], "A2UI bundle");
 
 const parallelCodes = await Promise.all(parallelRuns.map(run));
 const failedParallel = parallelCodes.find((code) => code !== 0);
