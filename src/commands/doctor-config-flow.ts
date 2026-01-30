@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import type { ZodIssue } from "zod";
 
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,6 +16,7 @@ import { note } from "../terminal/note.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
+import { resolveHomeDir } from "../utils.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -118,6 +122,49 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   note(lines.join("\n"), "OpenCode Zen");
 }
 
+async function maybeMigrateLegacyConfig(): Promise<string[]> {
+  const changes: string[] = [];
+  const home = resolveHomeDir();
+  if (!home) return changes;
+
+  const targetDir = path.join(home, ".openclaw");
+  const targetPath = path.join(targetDir, "openclaw.json");
+  try {
+    await fs.access(targetPath);
+    return changes;
+  } catch {
+    // missing config
+  }
+
+  const legacyCandidates = [
+    path.join(home, ".clawdbot", "clawdbot.json"),
+    path.join(home, ".moltbot", "moltbot.json"),
+    path.join(home, ".moldbot", "moldbot.json"),
+  ];
+
+  let legacyPath: string | null = null;
+  for (const candidate of legacyCandidates) {
+    try {
+      await fs.access(candidate);
+      legacyPath = candidate;
+      break;
+    } catch {
+      // continue
+    }
+  }
+  if (!legacyPath) return changes;
+
+  await fs.mkdir(targetDir, { recursive: true });
+  try {
+    await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
+    changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
+  } catch {
+    // If it already exists, skip silently.
+  }
+
+  return changes;
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -129,6 +176,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   if (stateDirResult.warnings.length > 0) {
     note(stateDirResult.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
+  }
+
+  const legacyConfigChanges = await maybeMigrateLegacyConfig();
+  if (legacyConfigChanges.length > 0) {
+    note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
 
   let snapshot = await readConfigFileSnapshot();
