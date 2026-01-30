@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
 import { loginQwenPortalOAuth } from "./oauth.js";
 

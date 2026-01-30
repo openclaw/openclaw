@@ -7,7 +7,7 @@ read_when:
 
 # Date & Time
 
-Moltbot defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
+OpenClaw defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
 Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
 
 ## Message envelopes (local by default)
@@ -101,7 +101,7 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 
 ## Time format detection (auto)
 
-When `timeFormat: "auto"`, Moltbot inspects the OS preference (macOS/Windows)
+When `timeFormat: "auto"`, OpenClaw inspects the OS preference (macOS/Windows)
 and falls back to locale formatting. The detected value is **cached per process**
 to avoid repeated system calls.
 

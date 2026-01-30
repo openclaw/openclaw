@@ -31,6 +31,13 @@ export type FeishuAccountConfig = {
   /** If false, do not start this Feishu account. Default: true. */
   enabled?: boolean;
 
+  /**
+   * Text to append to user input for prompt enhancement.
+   * This text will be added after the user's message before sending to the agent.
+   * Useful for adding context, instructions, or constraints to all user requests.
+   */
+  promptSuffix?: string;
+
   /** Feishu App ID (from Feishu Open Platform). */
   appId?: string;
   /** Feishu App Secret (from Feishu Open Platform). */
@@ -154,6 +161,11 @@ export type FeishuGroupConfig = {
   allowFrom?: string[];
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
+  /**
+   * Text to append to user input for prompt enhancement (per-group override).
+   * Overrides account-level promptSuffix if set.
+   */
+  promptSuffix?: string;
 };
 
 export type FeishuConfig = {

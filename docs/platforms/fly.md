@@ -1,11 +1,11 @@
 ---
 title: Fly.io
-description: Deploy Moltbot on Fly.io
+description: Deploy OpenClaw on Fly.io
 ---
 
 # Fly.io Deployment
 
-**Goal:** Moltbot Gateway running on a [Fly.io](https://fly.io) machine with persistent storage, automatic HTTPS, and Discord/channel access.
+**Goal:** OpenClaw Gateway running on a [Fly.io](https://fly.io) machine with persistent storage, automatic HTTPS, and Discord/channel access.
 
 ## What you need
 
@@ -25,14 +25,14 @@ description: Deploy Moltbot on Fly.io
 
 ```bash
 # Clone the repo
-git clone https://github.com/moltbot/moltbot.git
-cd moltbot
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
 
 # Create a new Fly app (pick your own name)
-fly apps create my-moltbot
+fly apps create my-openclaw
 
 # Create a persistent volume (1GB is usually enough)
-fly volumes create moltbot_data --size 1 --region iad
+fly volumes create openclaw_data --size 1 --region iad
 ```
 
 **Tip:** Choose a region close to you. Common options: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
@@ -44,7 +44,7 @@ Edit `fly.toml` to match your app name and requirements.
 **Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `fly.private.toml`.
 
 ```toml
-app = "my-moltbot"  # Your app name
+app = "my-openclaw"  # Your app name
 primary_region = "iad"
 
 [build]
@@ -52,8 +52,8 @@ primary_region = "iad"
 
 [env]
   NODE_ENV = "production"
-  CLAWDBOT_PREFER_PNPM = "1"
-  CLAWDBOT_STATE_DIR = "/data"
+  OPENCLAW_PREFER_PNPM = "1"
+  OPENCLAW_STATE_DIR = "/data"
   NODE_OPTIONS = "--max-old-space-size=1536"
 
 [processes]
@@ -72,7 +72,7 @@ primary_region = "iad"
   memory = "2048mb"
 
 [mounts]
-  source = "moltbot_data"
+  source = "openclaw_data"
   destination = "/data"
 ```
 
@@ -82,15 +82,15 @@ primary_region = "iad"
 |---------|-----|
 | `--bind lan` | Binds to `0.0.0.0` so Fly's proxy can reach the gateway |
 | `--allow-unconfigured` | Starts without a config file (you'll create one after) |
-| `internal_port = 3000` | Must match `--port 3000` (or `CLAWDBOT_GATEWAY_PORT`) for Fly health checks |
+| `internal_port = 3000` | Must match `--port 3000` (or `OPENCLAW_GATEWAY_PORT`) for Fly health checks |
 | `memory = "2048mb"` | 512MB is too small; 2GB recommended |
-| `CLAWDBOT_STATE_DIR = "/data"` | Persists state on the volume |
+| `OPENCLAW_STATE_DIR = "/data"` | Persists state on the volume |
 
 ## 3) Set secrets
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
-fly secrets set CLAWDBOT_GATEWAY_TOKEN=$(openssl rand -hex 32)
+fly secrets set OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)
 
 # Model provider API keys
 fly secrets set ANTHROPIC_API_KEY=sk-ant-...
@@ -104,9 +104,9 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 ```
 
 **Notes:**
-- Non-loopback binds (`--bind lan`) require `CLAWDBOT_GATEWAY_TOKEN` for security.
+- Non-loopback binds (`--bind lan`) require `OPENCLAW_GATEWAY_TOKEN` for security.
 - Treat these tokens like passwords.
-- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `moltbot.json` where they could be accidentally exposed or logged.
+- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `openclaw.json` where they could be accidentally exposed or logged.
 
 ## 4) Deploy
 
@@ -139,7 +139,7 @@ fly ssh console
 Create the config directory and file:
 ```bash
 mkdir -p /data
-cat > /data/moltbot.json << 'EOF'
+cat > /data/openclaw.json << 'EOF'
 {
   "agents": {
     "defaults": {
@@ -185,13 +185,13 @@ cat > /data/moltbot.json << 'EOF'
     "bind": "auto"
   },
   "meta": {
-    "lastTouchedVersion": "2026.1.27-beta.1"
+    "lastTouchedVersion": "2026.1.29"
   }
 }
 EOF
 ```
 
-**Note:** With `CLAWDBOT_STATE_DIR=/data`, the config path is `/data/moltbot.json`.
+**Note:** With `OPENCLAW_STATE_DIR=/data`, the config path is `/data/openclaw.json`.
 
 **Note:** The Discord token can come from either:
 - Environment variable: `DISCORD_BOT_TOKEN` (recommended for secrets)
@@ -214,9 +214,9 @@ Open in browser:
 fly open
 ```
 
-Or visit `https://my-moltbot.fly.dev/`
+Or visit `https://my-openclaw.fly.dev/`
 
-Paste your gateway token (the one from `CLAWDBOT_GATEWAY_TOKEN`) to authenticate.
+Paste your gateway token (the one from `OPENCLAW_GATEWAY_TOKEN`) to authenticate.
 
 ### Logs
 
@@ -243,7 +243,7 @@ The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
 
 Fly can't reach the gateway on the configured port.
 
-**Fix:** Ensure `internal_port` matches the gateway port (set `--port 3000` or `CLAWDBOT_GATEWAY_PORT=3000`).
+**Fix:** Ensure `internal_port` matches the gateway port (set `--port 3000` or `OPENCLAW_GATEWAY_PORT=3000`).
 
 ### OOM / Memory Issues
 
@@ -278,11 +278,11 @@ The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
 ### Config Not Being Read
 
-If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/moltbot.json` should be read on restart.
+If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/openclaw.json` should be read on restart.
 
 Verify the config exists:
 ```bash
-fly ssh console --command "cat /data/moltbot.json"
+fly ssh console --command "cat /data/openclaw.json"
 ```
 
 ### Writing Config via SSH
@@ -291,23 +291,23 @@ The `fly ssh console -C` command doesn't support shell redirection. To write a c
 
 ```bash
 # Use echo + tee (pipe from local to remote)
-echo '{"your":"config"}' | fly ssh console -C "tee /data/moltbot.json"
+echo '{"your":"config"}' | fly ssh console -C "tee /data/openclaw.json"
 
 # Or use sftp
 fly sftp shell
-> put /local/path/config.json /data/moltbot.json
+> put /local/path/config.json /data/openclaw.json
 ```
 
 **Note:** `fly sftp` may fail if the file already exists. Delete first:
 ```bash
-fly ssh console --command "rm /data/moltbot.json"
+fly ssh console --command "rm /data/openclaw.json"
 ```
 
 ### State Not Persisting
 
 If you lose credentials or sessions after a restart, the state dir is writing to the container filesystem.
 
-**Fix:** Ensure `CLAWDBOT_STATE_DIR=/data` is set in `fly.toml` and redeploy.
+**Fix:** Ensure `OPENCLAW_STATE_DIR=/data` is set in `fly.toml` and redeploy.
 
 ## Updates
 
@@ -366,18 +366,18 @@ Or convert an existing deployment:
 
 ```bash
 # List current IPs
-fly ips list -a my-moltbot
+fly ips list -a my-openclaw
 
 # Release public IPs
-fly ips release <public-ipv4> -a my-moltbot
-fly ips release <public-ipv6> -a my-moltbot
+fly ips release <public-ipv4> -a my-openclaw
+fly ips release <public-ipv6> -a my-openclaw
 
 # Switch to private config so future deploys don't re-allocate public IPs
 # (remove [http_service] or deploy with the private template)
 fly deploy -c fly.private.toml
 
 # Allocate private-only IPv6
-fly ips allocate-v6 --private -a my-moltbot
+fly ips allocate-v6 --private -a my-openclaw
 ```
 
 After this, `fly ips list` should show only a `private` type IP:
@@ -393,7 +393,7 @@ Since there's no public URL, use one of these methods:
 **Option 1: Local proxy (simplest)**
 ```bash
 # Forward local port 3000 to the app
-fly proxy 3000:3000 -a my-moltbot
+fly proxy 3000:3000 -a my-openclaw
 
 # Then open http://localhost:3000 in browser
 ```
@@ -409,7 +409,7 @@ fly wireguard create
 
 **Option 3: SSH only**
 ```bash
-fly ssh console -a my-moltbot
+fly ssh console -a my-openclaw
 ```
 
 ### Webhooks with private deployment

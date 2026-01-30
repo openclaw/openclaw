@@ -5,7 +5,7 @@
  * similar to how Telegram messages are handled.
  */
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getStartupChatIds, type ResolvedFeishuAccount } from "./accounts.js";
 import type { FeishuMessageContext } from "./monitor.js";
@@ -33,7 +33,7 @@ const feishuMessageDedupe = createDedupeCache({
 
 export type DispatchFeishuMessageParams = {
   ctx: FeishuMessageContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   account: ResolvedFeishuAccount;
 };
@@ -50,7 +50,7 @@ function buildFeishuPeerId(chatId: string, threadId?: string): string {
  */
 function isFeishuSenderAllowed(
   ctx: FeishuMessageContext,
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   account: ResolvedFeishuAccount,
 ): { allowed: boolean; reason?: string } {
   const isGroup = ctx.chatType === "group";
@@ -120,7 +120,7 @@ function isFeishuSenderAllowed(
  */
 function requiresFeishuMention(
   ctx: FeishuMessageContext,
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   account: ResolvedFeishuAccount,
 ): boolean {
   if (ctx.chatType !== "group") return false;
@@ -131,6 +131,25 @@ function requiresFeishuMention(
     accountId: account.accountId,
     groupId: ctx.chatId,
   });
+}
+
+/**
+ * Resolve prompt suffix for the given context.
+ * Group-level promptSuffix takes precedence over account-level.
+ */
+function resolvePromptSuffix(
+  ctx: FeishuMessageContext,
+  account: ResolvedFeishuAccount,
+): string | undefined {
+  // Check group-level override first
+  if (ctx.chatType === "group") {
+    const groupConfig = account.config.groups?.[ctx.chatId];
+    if (groupConfig?.promptSuffix?.trim()) {
+      return groupConfig.promptSuffix.trim();
+    }
+  }
+  // Fall back to account-level
+  return account.config.promptSuffix?.trim() || undefined;
 }
 
 /**
@@ -188,27 +207,32 @@ export async function dispatchFeishuMessage(params: DispatchFeishuMessageParams)
   }
 
   // Skip empty messages
-  const messageText = ctx.text.trim();
-  if (!messageText) {
+  const rawMessageText = ctx.text.trim();
+  if (!rawMessageText) {
     log(`feishu: skipping empty message`);
     return;
   }
 
   // Normalize command body (strip bot mention prefix if present)
-  const commandBody = normalizeCommandBody(messageText);
+  const commandBody = normalizeCommandBody(rawMessageText);
 
   // Check if this is a control command
   const isControlCommand = hasControlCommand(commandBody, cfg, undefined);
 
+  // Apply prompt suffix for non-command messages (enhance user input)
+  const promptSuffix = resolvePromptSuffix(ctx, account);
+  const messageText =
+    !isControlCommand && promptSuffix ? `${rawMessageText}\n\n${promptSuffix}` : rawMessageText;
+
   log(
-    `feishu: processing message - text="${messageText.substring(0, 100)}", isCommand=${isControlCommand}`,
+    `feishu: processing message - text="${rawMessageText.substring(0, 100)}", isCommand=${isControlCommand}, hasSuffix=${!!promptSuffix}`,
   );
 
   // Build message context for dispatch
   const envelopeOpts = resolveEnvelopeFormatOptions(cfg);
   const conversationLabel = isGroup ? `group:${ctx.chatId}` : ctx.senderId;
 
-  // Format envelope for agent context
+  // Format envelope for agent context (use enhanced messageText with suffix)
   const bodyForAgent = formatInboundEnvelope({
     channel: "Feishu",
     from: conversationLabel,
@@ -221,7 +245,7 @@ export async function dispatchFeishuMessage(params: DispatchFeishuMessageParams)
   const msgContext = {
     Body: bodyForAgent,
     BodyForAgent: bodyForAgent,
-    RawBody: messageText,
+    RawBody: rawMessageText, // Keep original message without suffix
     CommandBody: commandBody,
     BodyForCommands: commandBody,
     From: isGroup ? `feishu:group:${ctx.chatId}` : `feishu:${ctx.chatId}`,

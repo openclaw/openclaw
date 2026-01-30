@@ -5,7 +5,7 @@
  * processes incoming mentions, resolves agent routes, and handles replies.
  */
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { XAccountConfig, XMention, XLogSink } from "./types.js";
 import { getOrCreateClientManager } from "./client.js";
 import { loadXPollState, updateXLastTweetId } from "./state.js";
@@ -13,7 +13,7 @@ import { chunkTextForX, X_CHAR_LIMIT } from "./send.js";
 
 export type XMonitorDeps = {
   resolveAgentRoute: (params: {
-    cfg: MoltbotConfig;
+    cfg: OpenClawConfig;
     channel: string;
     accountId: string;
     peer: { kind: string; id: string };
@@ -25,7 +25,7 @@ export type XMonitorDeps = {
     envelope: unknown;
     body: string;
   }) => string;
-  resolveEnvelopeFormatOptions: (cfg: MoltbotConfig) => unknown;
+  resolveEnvelopeFormatOptions: (cfg: OpenClawConfig) => unknown;
   finalizeInboundContext: (ctx: Record<string, unknown>) => Record<string, unknown>;
   resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
   recordInboundSession: (params: {
@@ -36,7 +36,7 @@ export type XMonitorDeps = {
   }) => Promise<void>;
   dispatchReply: (params: {
     ctx: Record<string, unknown>;
-    cfg: MoltbotConfig;
+    cfg: OpenClawConfig;
     deliver: (payload: { text?: string }) => Promise<void>;
   }) => Promise<void>;
 };
@@ -44,7 +44,7 @@ export type XMonitorDeps = {
 export type XMonitorOptions = {
   account: XAccountConfig;
   accountId: string;
-  config: MoltbotConfig;
+  config: OpenClawConfig;
   abortSignal: AbortSignal;
   deps: XMonitorDeps;
   logger: XLogSink;
@@ -94,7 +94,7 @@ async function processXMention(params: {
   mention: XMention;
   account: XAccountConfig;
   accountId: string;
-  config: MoltbotConfig;
+  config: OpenClawConfig;
   deps: XMonitorDeps;
   logger: XLogSink;
   botUserId: string;

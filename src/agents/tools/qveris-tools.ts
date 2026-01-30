@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -17,7 +17,7 @@ const DEFAULT_SEARCH_LIMIT = 10;
 // Types
 // ============================================================================
 
-type QverisConfig = NonNullable<MoltbotConfig["tools"]>["qveris"];
+type QverisConfig = NonNullable<OpenClawConfig["tools"]>["qveris"];
 
 /** Search result parameter from QVeris API */
 interface QverisSearchResultParam {
@@ -75,7 +75,7 @@ interface QverisExecutionResponse {
 // Config Resolution
 // ============================================================================
 
-function resolveQverisConfig(cfg?: MoltbotConfig): QverisConfig {
+function resolveQverisConfig(cfg?: OpenClawConfig): QverisConfig {
   return cfg?.tools?.qveris;
 }
 
@@ -235,7 +235,7 @@ const QverisExecuteSchema = Type.Object({
 // ============================================================================
 
 export function createQverisTools(options?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   sandboxed?: boolean;
   agentSessionKey?: string;
 }): AnyAgentTool[] {
@@ -358,7 +358,7 @@ export function createQverisTools(options?: {
  * Check if QVeris tools are enabled/available
  */
 export function isQverisEnabled(options?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   sandboxed?: boolean;
 }): boolean {
   const config = resolveQverisConfig(options?.config);

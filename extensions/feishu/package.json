@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/feishu",
+  "name": "@openclaw/feishu",
   "version": "2026.1.25",
   "type": "module",
-  "description": "Clawdbot Feishu/Lark channel plugin",
-  "clawdbot": {
+  "description": "OpenClaw Feishu/Lark channel plugin",
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

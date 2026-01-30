@@ -4,7 +4,7 @@
  * Processes incoming messages and generates responses using the agent system.
  */
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
@@ -22,7 +22,7 @@ import type { FeishuMessageContext } from "./monitor.js";
 export type FeishuBotOptions = {
   accountId?: string;
   runtime?: RuntimeEnv;
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   /** Whether to require @mention in group chats */
   requireMention?: boolean;
   /** Allowlist for DM senders */
@@ -42,7 +42,7 @@ export type FeishuBotContext = {
 export class FeishuBot {
   readonly account: ResolvedFeishuAccount;
   readonly client: FeishuClient;
-  readonly cfg: MoltbotConfig;
+  readonly cfg: OpenClawConfig;
   readonly runtime: RuntimeEnv;
 
   private readonly historyLimit: number;
@@ -276,7 +276,7 @@ export function buildFeishuSessionKey(params: {
   agentId?: string;
   chatId: string;
   chatType: "p2p" | "group";
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
 }): string {
   const cfg = params.cfg ?? loadConfig();
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);

@@ -27,10 +27,10 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     },
     {
       env: {
-        CLAWDBOT_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
-        PI_CODING_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
+        OPENCLAW_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
+        PI_CODING_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
       },
-      prefix: "moltbot-reply-",
+      prefix: "openclaw-reply-",
     },
   );
 }
@@ -79,7 +79,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
             list: [
               {
@@ -126,7 +126,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
             list: [
               {
@@ -172,7 +172,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
               sandbox: { mode: "off" },
             },
           },
@@ -210,7 +210,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
           },
           tools: {
@@ -246,7 +246,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
           },
           tools: {

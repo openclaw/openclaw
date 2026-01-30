@@ -2,7 +2,7 @@
  * X channel account configuration helpers.
  */
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { XAccountConfig } from "./types.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -10,7 +10,7 @@ export const DEFAULT_ACCOUNT_ID = "default";
 /**
  * List all configured X account IDs.
  */
-export function listXAccountIds(cfg: MoltbotConfig): string[] {
+export function listXAccountIds(cfg: OpenClawConfig): string[] {
   const xConfig = (cfg.channels as Record<string, unknown> | undefined)?.x as
     | Record<string, unknown>
     | undefined;
@@ -36,7 +36,7 @@ export function listXAccountIds(cfg: MoltbotConfig): string[] {
  * Get account configuration by ID.
  */
 export function resolveXAccount(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId?: string | null,
 ): XAccountConfig | null {
   const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
@@ -91,7 +91,7 @@ export function isXAccountConfigured(account: XAccountConfig | null): boolean {
 /**
  * Resolve the default X account ID from config.
  */
-export function resolveDefaultXAccountId(cfg: MoltbotConfig): string {
+export function resolveDefaultXAccountId(cfg: OpenClawConfig): string {
   const ids = listXAccountIds(cfg);
   return ids.length > 0 ? ids[0] : DEFAULT_ACCOUNT_ID;
 }

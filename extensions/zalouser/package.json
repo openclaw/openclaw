@@ -1,13 +1,13 @@
 {
-  "name": "@moltbot/zalouser",
-  "version": "2026.1.27-beta.1",
+  "name": "@openclaw/zalouser",
+  "version": "2026.1.29",
   "type": "module",
-  "description": "Moltbot Zalo Personal Account plugin via zca-cli",
+  "description": "OpenClaw Zalo Personal Account plugin via zca-cli",
   "dependencies": {
-    "moltbot": "workspace:*",
+    "openclaw": "workspace:*",
     "@sinclair/typebox": "0.34.47"
   },
-  "moltbot": {
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/zalouser",
+      "npmSpec": "@openclaw/zalouser",
       "localPath": "extensions/zalouser",
       "defaultChoice": "npm"
     }

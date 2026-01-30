@@ -81,7 +81,7 @@ import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./contro
 
 declare global {
   interface Window {
-    __CLAWDBOT_CONTROL_UI_BASE_PATH__?: string;
+    __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
   }
 }
 
@@ -96,8 +96,8 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-@customElement("moltbot-app")
-export class MoltbotApp extends LitElement {
+@customElement("openclaw-app")
+export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   @state() password = "";
   @state() tab: Tab = "chat";
@@ -152,6 +152,7 @@ export class MoltbotApp extends LitElement {
   @state() execApprovalQueue: ExecApprovalRequest[] = [];
   @state() execApprovalBusy = false;
   @state() execApprovalError: string | null = null;
+  @state() pendingGatewayUrl: string | null = null;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
@@ -257,6 +258,7 @@ export class MoltbotApp extends LitElement {
   private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
+  refreshSessionsAfterChat = false;
   basePath = "";
   private popStateHandler = () =>
     onPopStateInternal(
@@ -446,6 +448,21 @@ export class MoltbotApp extends LitElement {
     } finally {
       this.execApprovalBusy = false;
     }
+  }
+
+  handleGatewayUrlConfirm() {
+    const nextGatewayUrl = this.pendingGatewayUrl;
+    if (!nextGatewayUrl) return;
+    this.pendingGatewayUrl = null;
+    applySettingsInternal(
+      this as unknown as Parameters<typeof applySettingsInternal>[0],
+      { ...this.settings, gatewayUrl: nextGatewayUrl },
+    );
+    this.connect();
+  }
+
+  handleGatewayUrlCancel() {
+    this.pendingGatewayUrl = null;
   }
 
   // Sidebar handlers for tool output viewing

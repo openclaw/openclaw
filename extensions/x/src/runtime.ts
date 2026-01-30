@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "clawdbot/plugin-sdk";
+import type { PluginRuntime } from "../../../src/plugin-sdk/index.js";
 
 let runtime: PluginRuntime | null = null;
 

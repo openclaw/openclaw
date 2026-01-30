@@ -21,7 +21,7 @@
 
 ### 1.1 QVerisBot 简介
 
-**QVerisBot** 是由 [QVeris AI](https://qveris.ai) 团队开发的个人 AI 助手，基于开源项目 [Moltbot](https://github.com/moltbot/moltbot) 进行了深度定制和增强。QVerisBot 不仅仅是一个聊天机器人，而是一个能够调用各类专业工具的多功能 AI 助手。
+**QVerisBot** 是由 [QVeris AI](https://qveris.ai) 团队开发的个人 AI 助手，基于开源项目 [OpenClaw](https://github.com/openclaw/openclaw) 进行了深度定制和增强。QVerisBot 不仅仅是一个聊天机器人，而是一个能够调用各类专业工具的多功能 AI 助手。
 
 **核心特性**：
 
@@ -69,9 +69,9 @@ QVerisBot 原生支持飞书（Feishu/Lark），特别适合中国企业用户�
 }
 ```
 
-### 1.5 Moltbot 基础平台
+### 1.5 OpenClaw 基础平台
 
-QVerisBot 基于 [Moltbot](https://github.com/moltbot/moltbot)（前身为 Clawdbot）开发，继承了其强大的平台能力：
+QVerisBot 基于 [OpenClaw](https://github.com/openclaw/openclaw)（前身为 Clawdbot）开发，继承了其强大的平台能力：
 
 - **本地优先的网关架构**：单一控制平面管理会话、渠道、工具和事件
 - **多渠道支持**：连接多种即时通讯平台
@@ -370,7 +370,7 @@ pnpm build
 ls -la dist/
 
 # 验证 CLI 可执行
-pnpm moltbot --version
+pnpm openclaw --version
 ```
 
 ### 5.5 开发模式（可选）
@@ -388,16 +388,16 @@ pnpm gateway:watch
 
 ### 6.1 配置文件位置
 
-QVerisBot 的配置文件位于 `~/.moltbot/moltbot.json`。
+QVerisBot 的配置文件位于 `~/.openclaw/openclaw.json`。
 
 ```bash
 # 创建配置目录
-mkdir -p ~/.moltbot
+mkdir -p ~/.openclaw
 ```
 
 ### 6.2 完整配置示例
 
-创建配置文件 `~/.moltbot/moltbot.json`：
+创建配置文件 `~/.openclaw/openclaw.json`：
 
 ```json
 {
@@ -492,6 +492,7 @@ mkdir -p ~/.moltbot
 | requireMention | boolean | true | 群聊是否需要 @机器人 |
 | allowFrom | string[] | - | 允许的用户 ID 列表 |
 | groupAllowFrom | string[] | - | 允许的群组发送者列表 |
+| promptSuffix | string | - | **提示词增强后缀**（详见下方说明） |
 
 ##### startupChatId 配置说明
 
@@ -544,6 +545,62 @@ mkdir -p ~/.moltbot
   }
 }
 ```
+
+##### promptSuffix 配置说明（提示词增强）
+
+`promptSuffix` 用于在用户消息后自动附加一段文本，实现对用户请求的增强。这个功能可以：
+
+1. 为所有用户请求添加统一的上下文或指导
+2. 强制 AI 遵守特定的回复规范或格式
+3. 针对不同群组设置不同的增强规则
+
+**基本配置**（账户级别，对所有消息生效）：
+
+```json
+{
+  "channels": {
+    "feishu": {
+      "promptSuffix": "请用中文回答。回答要简洁明了，重点突出。"
+    }
+  }
+}
+```
+
+**群组级别配置**（覆盖账户级别设置）：
+
+```json
+{
+  "channels": {
+    "feishu": {
+      "promptSuffix": "默认：请用中文回答。",
+      "groups": {
+        "oc_tech_group": {
+          "promptSuffix": "这是一个技术讨论群。请提供代码示例，使用 Markdown 格式。"
+        },
+        "oc_sales_group": {
+          "promptSuffix": "这是销售团队群组。请用简洁的商务语言回复，突出要点。"
+        }
+      }
+    }
+  }
+}
+```
+
+**使用场景示例**：
+
+| 场景 | promptSuffix 配置 |
+|------|------------------|
+| 中文回复 | `"请用中文回答。"` |
+| 简洁回复 | `"请简洁回答，控制在200字以内。"` |
+| 技术群组 | `"请提供代码示例和技术细节。"` |
+| 客服场景 | `"请礼貌、专业地回复，提供详细的解决方案。"` |
+| 数据分析 | `"请用表格或列表形式呈现数据，便于阅读。"` |
+
+**注意事项**：
+
+- 控制命令（如 `/status`、`/reset`）不会附加 promptSuffix
+- 群组级别的 promptSuffix 会完全覆盖（而非追加）账户级别的设置
+- 建议保持 promptSuffix 简洁，避免过长影响对话效率
 
 #### 6.3.3 QVeris 配置
 
@@ -651,7 +708,7 @@ export HTTPS_PROXY="http://127.0.0.1:7890"
 
 ```bash
 # 运行安装向导
-pnpm moltbot onboard --install-daemon
+pnpm openclaw onboard --install-daemon
 ```
 
 向导会引导你完成：
@@ -664,23 +721,23 @@ pnpm moltbot onboard --install-daemon
 
 ```bash
 # 前台运行（推荐开发时使用）
-pnpm moltbot gateway --port 18789 --verbose
+pnpm openclaw gateway --port 18789 --verbose
 
 # 后台运行
-nohup pnpm moltbot gateway --port 18789 > /tmp/moltbot-gateway.log 2>&1 &
+nohup pnpm openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
 ```
 
 ### 7.3 验证运行状态
 
 ```bash
 # 检查渠道状态
-pnpm moltbot channels status
+pnpm openclaw channels status
 
 # 深度检查（包括连接探测）
-pnpm moltbot channels status --deep
+pnpm openclaw channels status --deep
 
 # 检查飞书连接
-pnpm moltbot channels status feishu
+pnpm openclaw channels status feishu
 ```
 
 ### 7.4 运行诊断
@@ -688,7 +745,7 @@ pnpm moltbot channels status feishu
 如果遇到问题，运行诊断工具：
 
 ```bash
-pnpm moltbot doctor
+pnpm openclaw doctor
 ```
 
 ### 7.5 飞书事件配置（第二步）
@@ -743,28 +800,28 @@ QVerisBot 会自动识别需要使用外部工具的场景。你也可以显式�
 
 ```bash
 # 发送消息
-pnpm moltbot message send --to oc_xxx --message "Hello from QVerisBot"
+pnpm openclaw message send --to oc_xxx --message "Hello from QVerisBot"
 
 # 与助手对话
-pnpm moltbot agent --message "帮我写一个 Python 脚本" --thinking high
+pnpm openclaw agent --message "帮我写一个 Python 脚本" --thinking high
 
 # 查看帮助
-pnpm moltbot --help
-pnpm moltbot gateway --help
-pnpm moltbot channels --help
+pnpm openclaw --help
+pnpm openclaw gateway --help
+pnpm openclaw channels --help
 ```
 
 ### 8.5 日志查看
 
 ```bash
 # 查看网关日志
-tail -f /tmp/moltbot-gateway.log
+tail -f /tmp/openclaw-gateway.log
 
 # 开启详细日志运行
-pnpm moltbot gateway --verbose
+pnpm openclaw gateway --verbose
 
 # 使用 debug 模式
-DEBUG=* pnpm moltbot gateway
+DEBUG=* pnpm openclaw gateway
 ```
 
 ### 8.6 常见问题
@@ -796,7 +853,7 @@ DEBUG=* pnpm moltbot gateway
 
 ### A. 配置文件模板
 
-完整配置文件模板：`~/.moltbot/moltbot.json`
+完整配置文件模板：`~/.openclaw/openclaw.json`
 
 ```json
 {
@@ -821,9 +878,11 @@ DEBUG=* pnpm moltbot gateway
       "startupChatId": ["oc_xxx"],
       "dmPolicy": "open",
       "groupPolicy": "open",
+      "promptSuffix": "请用中文回答。",
       "groups": {
         "oc_xxx": {
-          "requireMention": false
+          "requireMention": false,
+          "promptSuffix": "这是技术讨论群，请提供代码示例。"
         }
       }
     }
@@ -856,12 +915,12 @@ DEBUG=* pnpm moltbot gateway
 
 - [QVeris AI](https://qveris.ai) - QVeris 万能工具箱
 - [QVerisBot GitHub](https://github.com/QVerisAI/QVerisBot) - QVerisBot 源代码
-- [Moltbot 文档](https://docs.molt.bot) - 完整文档
+- [OpenClaw 文档](https://docs.openclaw.ai) - 完整文档
 - [飞书开放平台](https://open.feishu.cn) - 飞书开发者文档
 
 ### C. 获取帮助
 
-- 查看文档：https://docs.molt.bot
+- 查看文档：https://docs.openclaw.ai
 - 提交 Issue：https://github.com/QVerisAI/QVerisBot/issues
 - 加入 Discord：https://discord.gg/clawd
 

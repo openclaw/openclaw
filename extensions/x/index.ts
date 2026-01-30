@@ -1,5 +1,5 @@
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+import type { OpenClawPluginApi } from "../../src/plugin-sdk/index.js";
+import { emptyPluginConfigSchema } from "../../src/plugin-sdk/index.js";
 
 import { xPlugin } from "./src/plugin.js";
 import { setXRuntime } from "./src/runtime.js";
@@ -9,7 +9,7 @@ const plugin = {
   name: "X (Twitter)",
   description: "X (Twitter) channel plugin - monitor mentions and reply to tweets",
   configSchema: emptyPluginConfigSchema(),
-  register(api: MoltbotPluginApi) {
+  register(api: OpenClawPluginApi) {
     setXRuntime(api.runtime);
     api.registerChannel({ plugin: xPlugin as any });
   },

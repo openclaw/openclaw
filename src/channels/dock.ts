@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveFeishuAccount } from "../feishu/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
@@ -49,11 +49,11 @@ export type ChannelDock = {
   elevated?: ChannelElevatedAdapter;
   config?: {
     resolveAllowFrom?: (params: {
-      cfg: MoltbotConfig;
+      cfg: OpenClawConfig;
       accountId?: string | null;
     }) => Array<string | number> | undefined;
     formatAllowFrom?: (params: {
-      cfg: MoltbotConfig;
+      cfg: OpenClawConfig;
       accountId?: string | null;
       allowFrom: Array<string | number>;
     }) => string[];

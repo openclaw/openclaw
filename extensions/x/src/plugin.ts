@@ -1,12 +1,12 @@
 /**
- * X (Twitter) channel plugin for Moltbot.
+ * X (Twitter) channel plugin for OpenClaw.
  *
  * Main plugin export combining all adapters (outbound, actions, status, gateway).
  * This delegates to core implementation in src/x/.
  */
 
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
-import { buildChannelConfigSchema } from "clawdbot/plugin-sdk";
+import type { OpenClawConfig } from "../../../src/plugin-sdk/index.js";
+import { buildChannelConfigSchema } from "../../../src/plugin-sdk/index.js";
 import { XConfigSchema } from "./config-schema.js";
 import { getXRuntime } from "./runtime.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
@@ -59,10 +59,10 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   configSchema: buildChannelConfigSchema(XConfigSchema),
 
   config: {
-    listAccountIds: (cfg: MoltbotConfig): string[] =>
+    listAccountIds: (cfg: OpenClawConfig): string[] =>
       getXRuntime().channel.x.listXAccountIds(cfg),
 
-    resolveAccount: (cfg: MoltbotConfig, accountId?: string | null): XAccountConfig => {
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): XAccountConfig => {
       const account = getXRuntime().channel.x.resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
       if (!account) {
         return {
@@ -79,7 +79,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
     defaultAccountId: (): string =>
       getXRuntime().channel.x.defaultAccountId,
 
-    isConfigured: (_account: unknown, cfg: MoltbotConfig): boolean => {
+    isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean => {
       const account = getXRuntime().channel.x.resolveXAccount(cfg, DEFAULT_ACCOUNT_ID);
       return getXRuntime().channel.x.isXAccountConfigured(account);
     },
@@ -96,22 +96,22 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 280,
-    chunkerMode: "plain",
+    chunkerMode: "text",
 
     chunker: (text: string, limit: number): string[] =>
       getXRuntime().channel.x.chunkTextForX(text, limit),
 
     sendText: async (ctx) => {
       const { to, text, accountId } = ctx;
-      const cfg = (ctx as { deps?: { cfg?: MoltbotConfig } }).deps?.cfg;
+      const cfg = (ctx as { deps?: { cfg?: OpenClawConfig } }).deps?.cfg;
 
       if (!cfg) {
-        return { channel: "x", ok: false, error: "No config provided" };
+        return { channel: "x", ok: false, error: "No config provided", messageId: "" };
       }
 
       const account = getXRuntime().channel.x.resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
       if (!account) {
-        return { channel: "x", ok: false, error: "Account not configured" };
+        return { channel: "x", ok: false, error: "Account not configured", messageId: "" };
       }
 
       const logger = {
@@ -133,7 +133,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       return {
         channel: "x",
         ok: result.ok,
-        messageId: result.tweetId,
+        messageId: result.tweetId ?? "",
         error: result.error,
       };
     },
@@ -180,7 +180,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       probe,
     }: {
       account: XAccountConfig;
-      cfg: MoltbotConfig;
+      cfg: OpenClawConfig;
       runtime?: ChannelAccountSnapshot;
       probe?: unknown;
     }): ChannelAccountSnapshot => {
@@ -204,36 +204,36 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       };
     },
 
-    collectStatusIssues: (params: { cfg: MoltbotConfig; accountId: string }) => {
-      const { cfg, accountId } = params;
-      const issues: Array<{ level: string; message: string }> = [];
+    collectStatusIssues: (accounts) =>
+      accounts.flatMap((account) => {
+        const issues: Array<{
+          channel: "x";
+          accountId: string;
+          kind: "config" | "runtime";
+          message: string;
+        }> = [];
 
-      const xConfig = (cfg.channels as Record<string, unknown> | undefined)?.x as
-        | Record<string, unknown>
-        | undefined;
+        if (!account.configured) {
+          issues.push({
+            channel: "x",
+            accountId: account.accountId,
+            kind: "config",
+            message: "Account not configured (missing credentials)",
+          });
+        }
 
-      if (!xConfig) {
-        issues.push({ level: "error", message: "X channel not configured" });
+        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+        if (lastError) {
+          issues.push({
+            channel: "x",
+            accountId: account.accountId,
+            kind: "runtime",
+            message: `Channel error: ${lastError}`,
+          });
+        }
+
         return issues;
-      }
-
-      const account = getXRuntime().channel.x.resolveXAccount(cfg, accountId);
-      if (!account) {
-        issues.push({ level: "error", message: `Account "${accountId}" not found` });
-        return issues;
-      }
-
-      if (!account.consumerKey) issues.push({ level: "error", message: "Missing consumerKey" });
-      if (!account.consumerSecret) issues.push({ level: "error", message: "Missing consumerSecret" });
-      if (!account.accessToken) issues.push({ level: "error", message: "Missing accessToken" });
-      if (!account.accessTokenSecret) issues.push({ level: "error", message: "Missing accessTokenSecret" });
-
-      if (!account.allowFrom || account.allowFrom.length === 0) {
-        issues.push({ level: "warn", message: "No allowFrom configured - bot will respond to all mentions" });
-      }
-
-      return issues;
-    },
+      }),
   },
 
   gateway: {
@@ -280,7 +280,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
               },
             });
           },
-        },
+        } as any,
       });
     },
 

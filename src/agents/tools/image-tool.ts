@@ -11,7 +11,7 @@ import {
 import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { setupLlmProxy } from "../llm-proxy.js";
 import { loadWebMedia } from "../../web/media.js";
@@ -21,7 +21,7 @@ import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
-import { ensureMoltbotModelsJson } from "../models-config.js";
+import { ensureOpenClawModelsJson } from "../models-config.js";
 import { assertSandboxPath } from "../sandbox-paths.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -39,7 +39,7 @@ export const __testing = {
   coerceImageAssistantText,
 } as const;
 
-function resolveDefaultModelRef(cfg?: MoltbotConfig): {
+function resolveDefaultModelRef(cfg?: OpenClawConfig): {
   provider: string;
   model: string;
 } {
@@ -71,7 +71,7 @@ function hasAuthForProvider(params: { provider: string; agentDir: string }): boo
  *   - fall back to OpenAI/Anthropic when available
  */
 export function resolveImageModelConfigForTool(params: {
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   agentDir: string;
 }): ImageModelConfig | null {
   // Note: We intentionally do NOT gate based on primarySupportsImages here.
@@ -149,7 +149,7 @@ export function resolveImageModelConfigForTool(params: {
   return null;
 }
 
-function pickMaxBytes(cfg?: MoltbotConfig, maxBytesMb?: number): number | undefined {
+function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
   if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
     return Math.floor(maxBytesMb * 1024 * 1024);
   }
@@ -207,7 +207,7 @@ async function resolveSandboxedImagePath(params: {
 }
 
 async function runImagePrompt(params: {
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   agentDir: string;
   imageModelConfig: ImageModelConfig;
   modelOverride?: string;
@@ -223,7 +223,7 @@ async function runImagePrompt(params: {
   // Set up LLM proxy if configured (must be done before any fetch calls)
   setupLlmProxy(params.cfg);
 
-  const effectiveCfg: MoltbotConfig | undefined = params.cfg
+  const effectiveCfg: OpenClawConfig | undefined = params.cfg
     ? {
         ...params.cfg,
         agents: {
@@ -236,7 +236,7 @@ async function runImagePrompt(params: {
       }
     : undefined;
 
-  await ensureMoltbotModelsJson(effectiveCfg, params.agentDir);
+  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
 
@@ -297,7 +297,7 @@ async function runImagePrompt(params: {
 }
 
 export function createImageTool(options?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   agentDir?: string;
   sandboxRoot?: string;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */

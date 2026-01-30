@@ -17,7 +17,7 @@ import { EdgeTTS } from "node-edge-tts";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type {
   TtsConfig,
   TtsAutoMode,
@@ -245,7 +245,7 @@ function resolveModelOverridePolicy(
   };
 }
 
-export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
+export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   const raw: TtsConfig = cfg.messages?.tts ?? {};
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
@@ -304,7 +304,7 @@ export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
 
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   if (config.prefsPath?.trim()) return resolveUserPath(config.prefsPath.trim());
-  const envPath = process.env.CLAWDBOT_TTS_PREFS?.trim();
+  const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
   if (envPath) return resolveUserPath(envPath);
   return path.join(CONFIG_DIR, "settings", "tts.json");
 }
@@ -330,7 +330,7 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
-export function buildTtsSystemPromptHint(cfg: MoltbotConfig): string | undefined {
+export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({ config, prefsPath });
@@ -757,11 +757,19 @@ export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as con
  * Custom OpenAI-compatible TTS endpoint.
  * When set, model/voice validation is relaxed to allow non-OpenAI models.
  * Example: OPENAI_TTS_BASE_URL=http://localhost:8880/v1
+ *
+ * Note: Read at runtime (not module load) to support config.env loading.
  */
-const OPENAI_TTS_BASE_URL = (
-  process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1"
-).replace(/\/+$/, "");
-const isCustomOpenAIEndpoint = OPENAI_TTS_BASE_URL !== "https://api.openai.com/v1";
+function getOpenAITtsBaseUrl(): string {
+  return (process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1").replace(
+    /\/+$/,
+    "",
+  );
+}
+
+function isCustomOpenAIEndpoint(): boolean {
+  return getOpenAITtsBaseUrl() !== "https://api.openai.com/v1";
+}
 export const OPENAI_TTS_VOICES = [
   "alloy",
   "ash",
@@ -778,13 +786,13 @@ type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
 function isValidOpenAIModel(model: string): boolean {
   // Allow any model when using custom endpoint (e.g., Kokoro, LocalAI)
-  if (isCustomOpenAIEndpoint) return true;
+  if (isCustomOpenAIEndpoint()) return true;
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
 }
 
 function isValidOpenAIVoice(voice: string): voice is OpenAiTtsVoice {
   // Allow any voice when using custom endpoint (e.g., Kokoro Chinese voices)
-  if (isCustomOpenAIEndpoint) return true;
+  if (isCustomOpenAIEndpoint()) return true;
   return OPENAI_TTS_VOICES.includes(voice as OpenAiTtsVoice);
 }
 
@@ -801,7 +809,7 @@ type SummaryModelSelection = {
 };
 
 function resolveSummaryModelRef(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   config: ResolvedTtsConfig,
 ): SummaryModelSelection {
   const defaultRef = resolveDefaultModelForAgent({ cfg });
@@ -825,7 +833,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 async function summarizeText(params: {
   text: string;
   targetLength: number;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
   timeoutMs: number;
 }): Promise<SummarizeResult> {
@@ -1011,7 +1019,7 @@ async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${OPENAI_TTS_BASE_URL}/audio/speech`, {
+    const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -1070,7 +1078,7 @@ async function edgeTTS(params: {
 
 export async function textToSpeech(params: {
   text: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
@@ -1241,7 +1249,7 @@ export async function textToSpeech(params: {
 
 export async function textToSpeechTelephony(params: {
   text: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prefsPath?: string;
 }): Promise<TtsTelephonyResult> {
   const config = resolveTtsConfig(params.cfg);
@@ -1335,7 +1343,7 @@ export async function textToSpeechTelephony(params: {
 
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel?: string;
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;

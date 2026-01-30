@@ -15,10 +15,17 @@ type AnyAgentTool = AgentTool<any, unknown>;
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
+  cause?: string;
 } {
   if (err instanceof Error) {
     const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack };
+    // Extract cause chain for network errors (fetch failures often nest the real error)
+    let cause: string | undefined;
+    if (err.cause) {
+      cause =
+        err.cause instanceof Error ? `${err.cause.name}: ${err.cause.message}` : String(err.cause);
+    }
+    return { message, stack: err.stack, cause };
   }
   return { message: String(err) };
 }
@@ -55,7 +62,9 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${normalizedName} failed: ${described.message}`);
+          // Include cause for network errors (fetch failures nest the real error in cause)
+          const causeInfo = described.cause ? ` (cause: ${described.cause})` : "";
+          logError(`[tools] ${normalizedName} failed: ${described.message}${causeInfo}`);
           return jsonResult({
             status: "error",
             tool: normalizedName,

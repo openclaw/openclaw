@@ -1,13 +1,13 @@
 /**
  * X channel CLI onboarding wizard.
+ *
+ * Note: This uses a simplified prompt-based schema, not the full ChannelOnboardingAdapter interface.
  */
-
-import type { ChannelOnboardingAdapter } from "clawdbot/plugin-sdk";
 
 /**
  * X onboarding adapter for CLI setup.
  */
-export const xOnboardingAdapter: ChannelOnboardingAdapter = {
+export const xOnboardingAdapter = {
   /**
    * Get onboarding prompts for X channel.
    */

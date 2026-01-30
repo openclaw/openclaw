@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -61,7 +61,7 @@ const WebFetchSchema = Type.Object({
   ),
 });
 
-type WebFetchConfig = NonNullable<MoltbotConfig["tools"]>["web"] extends infer Web
+type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
     ? Fetch
     : undefined
@@ -78,7 +78,7 @@ type FirecrawlFetchConfig =
     }
   | undefined;
 
-function resolveFetchConfig(cfg?: MoltbotConfig): WebFetchConfig {
+function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   const fetch = cfg?.tools?.web?.fetch;
   if (!fetch || typeof fetch !== "object") return undefined;
   return fetch as WebFetchConfig;
@@ -207,7 +207,13 @@ async function fetchWithRedirects(params: {
       } as RequestInit);
     } catch (err) {
       await closeDispatcher(dispatcher);
-      throw err;
+      // Wrap fetch errors with URL context for better debugging
+      const cause = err instanceof Error ? err.cause : undefined;
+      const causeMsg = cause instanceof Error ? `: ${cause.name} - ${cause.message}` : "";
+      const errMsg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Fetch failed for ${parsedUrl.hostname}${causeMsg || `: ${errMsg}`}`, {
+        cause: err,
+      });
     }
 
     if (isRedirectStatus(res.status)) {
@@ -570,7 +576,7 @@ function resolveFirecrawlEndpoint(baseUrl: string): string {
 }
 
 export function createWebFetchTool(options?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
