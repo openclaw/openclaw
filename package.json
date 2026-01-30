@@ -91,7 +91,7 @@
     "ui:install": "node scripts/ui.js install",
     "ui:dev": "node scripts/ui.js dev",
     "ui:build": "node scripts/ui.js build",
-    "start": "node scripts/run-node.mjs",
+    "start": "node openclaw.mjs gateway run --bind 0.0.0.0 --port ${PORT:-8080}",
     "openclaw": "node scripts/run-node.mjs",
     "gateway:watch": "node scripts/watch-node.mjs gateway --force",
     "gateway:dev": "OPENCLAW_SKIP_CHANNELS=1 CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway",

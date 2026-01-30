@@ -24,6 +24,11 @@ COPY scripts ./scripts
 RUN pnpm install --frozen-lockfile
 
 COPY . .
+
+# Copy and set up entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
@@ -40,4 +45,6 @@ RUN mkdir -p /data/.clawdbot && chown -R node:node /data
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
-CMD ["node", "dist/index.js"]
+# Run the gateway server via entrypoint script
+# The script maps Railway's PORT env var to OPENCLAW_GATEWAY_PORT
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
