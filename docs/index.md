@@ -7,17 +7,14 @@ read_when:
 
 > *"EXFOLIATE! EXFOLIATE!"* — A space lobster, probably
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="/assets/openclaw-logo-text.png" />
-    <source media="(prefers-color-scheme: light)" srcset="/assets/openclaw-logo-text-dark.png" />
-    <img src="/assets/openclaw-logo-text.png" alt="OpenClaw" width="520" />
-  </picture>
-</p>
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+    <picture>
+        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
+    </picture>
 </p>
+
 
 <p align="center">
   <strong>Any OS + WhatsApp/Telegram/Discord/iMessage gateway for AI agents (Pi).</strong><br />
