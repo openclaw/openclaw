@@ -3,6 +3,10 @@ import { IpManager } from "./ip-manager.js";
 
 vi.mock("node:fs", () => ({
   default: {
+    existsSync: vi.fn().mockReturnValue(false),
+    readFileSync: vi.fn().mockReturnValue("{}"),
+    writeFileSync: vi.fn(),
+    mkdirSync: vi.fn(),
     promises: {
       mkdir: vi.fn().mockResolvedValue(undefined),
       writeFile: vi.fn().mockResolvedValue(undefined),
@@ -265,7 +269,7 @@ describe("IpManager", () => {
         durationMs: 86400000,
       });
 
-      const blocklist = manager.getBlocklist();
+      const blocklist = manager.getBlockedIps();
       expect(blocklist).toHaveLength(2);
       expect(blocklist.map((b) => b.ip)).toContain("192.168.1.1");
       expect(blocklist.map((b) => b.ip)).toContain("192.168.1.2");
@@ -279,7 +283,7 @@ describe("IpManager", () => {
         durationMs: 86400000,
       });
 
-      const blocklist = manager.getBlocklist();
+      const blocklist = manager.getBlockedIps();
       expect(blocklist[0]?.expiresAt).toBeDefined();
       expect(new Date(blocklist[0]!.expiresAt).getTime()).toBeGreaterThan(now.getTime());
     });
@@ -297,7 +301,7 @@ describe("IpManager", () => {
         reason: "trusted2",
       });
 
-      const allowlist = manager.getAllowlist();
+      const allowlist = manager.getAllowedIps();
       expect(allowlist).toHaveLength(2);
       expect(allowlist.map((a) => a.ip)).toContain("192.168.1.100");
       expect(allowlist.map((a) => a.ip)).toContain("10.0.0.0/8");

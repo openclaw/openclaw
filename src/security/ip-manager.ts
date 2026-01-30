@@ -170,7 +170,7 @@ export class IpManager {
     const now = new Date().toISOString();
 
     for (const entry of this.store.blocklist) {
-      if (entry.ip === ip && entry.expiresAt > now) {
+      if (ipMatchesCidr(ip, entry.ip) && entry.expiresAt > now) {
         return entry.reason;
       }
     }
@@ -361,7 +361,7 @@ export class IpManager {
    */
   getBlocklistEntry(ip: string): BlocklistEntry | null {
     const now = new Date().toISOString();
-    return this.store.blocklist.find((e) => e.ip === ip && e.expiresAt > now) ?? null;
+    return this.store.blocklist.find((e) => ipMatchesCidr(ip, e.ip) && e.expiresAt > now) ?? null;
   }
 
   /**

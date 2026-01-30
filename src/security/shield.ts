@@ -432,7 +432,9 @@ export class SecurityShield {
     // Try X-Forwarded-For first (if behind proxy)
     const forwarded = req.headers["x-forwarded-for"];
     if (forwarded) {
-      const ips = typeof forwarded === "string" ? forwarded.split(",") : forwarded;
+      // Handle both string and array cases (array can come from some proxies)
+      const forwardedStr = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+      const ips = typeof forwardedStr === "string" ? forwardedStr.split(",") : [];
       const clientIp = ips[0]?.trim();
       if (clientIp) return clientIp;
     }

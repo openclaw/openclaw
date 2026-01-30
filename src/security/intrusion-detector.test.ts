@@ -3,6 +3,7 @@ import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { IntrusionDetector } from "./intrusion-detector.js";
 import { SecurityActions, AttackPatterns, type SecurityEvent } from "./events/schema.js";
 import { ipManager } from "./ip-manager.js";
+import { securityEventAggregator } from "./events/aggregator.js";
 
 vi.mock("./ip-manager.js", () => ({
   ipManager: {
@@ -15,6 +16,7 @@ describe("IntrusionDetector", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    securityEventAggregator.clearAll(); // Clear event state between tests
     detector = new IntrusionDetector({
       enabled: true,
       patterns: {
@@ -313,6 +315,7 @@ describe("IntrusionDetector", () => {
 
     it("should respect custom time windows", () => {
       vi.useFakeTimers();
+      vi.setSystemTime(0); // Start at time 0
 
       const customDetector = new IntrusionDetector({
         enabled: true,

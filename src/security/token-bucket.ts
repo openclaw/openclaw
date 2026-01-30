@@ -54,6 +54,11 @@ export class TokenBucket {
       return 0;
     }
 
+    // If count exceeds capacity, we can never fulfill this request
+    if (count > this.config.capacity) {
+      return Infinity;
+    }
+
     const tokensNeeded = count - this.tokens;
     return Math.ceil(tokensNeeded / this.config.refillRate);
   }

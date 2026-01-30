@@ -61,6 +61,9 @@ export class SecurityEventAggregator {
     // Filter out events outside the time window
     count.events = count.events.filter((e) => new Date(e.timestamp).getTime() > windowStart);
 
+    // Store previous count before adding new event
+    const previousCount = count.events.length;
+
     // Add new event
     count.events.push(event);
     count.count = count.events.length;
@@ -71,8 +74,8 @@ export class SecurityEventAggregator {
       count.firstSeen = new Date(count.events[0].timestamp).getTime();
     }
 
-    // Check if threshold crossed
-    return count.count >= threshold;
+    // Return true only when threshold is FIRST crossed (not on subsequent events)
+    return previousCount < threshold && count.count >= threshold;
   }
 
   /**

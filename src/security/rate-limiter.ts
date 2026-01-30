@@ -87,10 +87,11 @@ class LRUCache<K, V> {
  * Rate limiter using token bucket algorithm
  */
 export class RateLimiter {
-  private buckets = new LRUCache<string, CacheEntry>(MAX_CACHE_SIZE);
+  private buckets: LRUCache<string, CacheEntry>;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
-  constructor() {
+  constructor(params?: { maxSize?: number }) {
+    this.buckets = new LRUCache<string, CacheEntry>(params?.maxSize ?? MAX_CACHE_SIZE);
     this.startCleanup();
   }
 
@@ -122,10 +123,10 @@ export class RateLimiter {
     const entry = this.buckets.get(key);
 
     if (!entry) {
-      // Not rate limited yet
+      // Not rate limited yet - full capacity available
       return {
         allowed: true,
-        remaining: limit.max - 1,
+        remaining: limit.max,
         resetAt: new Date(Date.now() + limit.windowMs),
       };
     }
