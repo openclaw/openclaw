@@ -142,4 +142,105 @@ describe("installSessionToolResultGuard", () => {
       .map((e) => (e as { message: AgentMessage }).message);
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
   });
+
+  it("parallel tool results all have assistant message as parent (not each other)", () => {
+    // This test verifies the fix for the bug where multiple tool results from
+    // the same assistant message were getting chained parentIds instead of all
+    // pointing to the assistant message. This caused Anthropic API 400 errors:
+    // "tool_use ids were found without tool_result blocks immediately after"
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    // Assistant message with 3 parallel tool calls
+    sm.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        { type: "toolCall", id: "call_2", name: "write", arguments: {} },
+        { type: "toolCall", id: "call_3", name: "exec", arguments: {} },
+      ],
+    } as AgentMessage);
+
+    // Get the assistant message entry ID
+    const entries = sm.getEntries();
+    const assistantEntry = entries.find(
+      (e) => e.type === "message" && (e as { message: AgentMessage }).message.role === "assistant",
+    );
+    expect(assistantEntry).toBeDefined();
+    const assistantId = assistantEntry!.id;
+
+    // Append all three tool results
+    sm.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      content: [{ type: "text", text: "result 1" }],
+      isError: false,
+    } as AgentMessage);
+    sm.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_2",
+      content: [{ type: "text", text: "result 2" }],
+      isError: false,
+    } as AgentMessage);
+    sm.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_3",
+      content: [{ type: "text", text: "result 3" }],
+      isError: false,
+    } as AgentMessage);
+
+    // Verify all entries
+    const allEntries = sm.getEntries();
+    const toolResultEntries = allEntries.filter(
+      (e) => e.type === "message" && (e as { message: AgentMessage }).message.role === "toolResult",
+    );
+
+    expect(toolResultEntries).toHaveLength(3);
+
+    // THE FIX: All tool result entries should have the assistant message as their parent
+    // Before the fix, they would be chained: assistant -> result1 -> result2 -> result3
+    // After the fix, they should all point to assistant: assistant -> result1, result2, result3
+    for (const entry of toolResultEntries) {
+      expect(entry.parentId).toBe(assistantId);
+    }
+  });
+
+  it("parallel synthetic tool results all have assistant message as parent", () => {
+    // Same test but for synthetic tool results generated when flush is called
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    // Assistant message with 2 parallel tool calls
+    sm.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call_a", name: "read", arguments: {} },
+        { type: "toolCall", id: "call_b", name: "write", arguments: {} },
+      ],
+    } as AgentMessage);
+
+    // Get the assistant message entry ID before flushing
+    const entriesBefore = sm.getEntries();
+    const assistantEntry = entriesBefore.find(
+      (e) => e.type === "message" && (e as { message: AgentMessage }).message.role === "assistant",
+    );
+    expect(assistantEntry).toBeDefined();
+    const assistantId = assistantEntry!.id;
+
+    // Flush to generate synthetic tool results
+    guard.flushPendingToolResults();
+
+    // Verify synthetic tool results
+    const allEntries = sm.getEntries();
+    const toolResultEntries = allEntries.filter(
+      (e) => e.type === "message" && (e as { message: AgentMessage }).message.role === "toolResult",
+    );
+
+    expect(toolResultEntries).toHaveLength(2);
+
+    // Both synthetic results should have assistant as parent
+    for (const entry of toolResultEntries) {
+      expect(entry.parentId).toBe(assistantId);
+    }
+  });
 });

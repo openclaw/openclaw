@@ -55,7 +55,11 @@ export function installSessionToolResultGuard(
   getPendingIds: () => string[];
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
+  // Map from toolCallId -> toolName (for pending tool calls)
   const pending = new Map<string, string | undefined>();
+  // The entry ID of the assistant message that has pending tool calls.
+  // All tool results for this assistant message should have this ID as their parentId.
+  let assistantEntryId: string | null = null;
 
   const persistToolResult = (
     message: AgentMessage,
@@ -72,6 +76,11 @@ export function installSessionToolResultGuard(
     if (allowSyntheticToolResults) {
       for (const [id, name] of pending.entries()) {
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+        // Branch to assistant message before appending each synthetic tool result
+        // so they all have the assistant as their parent
+        if (assistantEntryId) {
+          sessionManager.branch(assistantEntryId);
+        }
         originalAppend(
           persistToolResult(synthetic, {
             toolCallId: id,
@@ -82,6 +91,7 @@ export function installSessionToolResultGuard(
       }
     }
     pending.clear();
+    assistantEntryId = null;
   };
 
   const guardedAppend = (message: AgentMessage) => {
@@ -91,13 +101,30 @@ export function installSessionToolResultGuard(
       const id = extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pending.get(id) : undefined;
       if (id) pending.delete(id);
-      return originalAppend(
+
+      // FIX: Branch to assistant message before appending tool result.
+      // This ensures all tool results from the same assistant message have
+      // the assistant message as their parent, not the previous tool result.
+      // This is required by Anthropic's API: all tool_result blocks must
+      // immediately follow the assistant message containing the tool_use blocks.
+      if (assistantEntryId) {
+        sessionManager.branch(assistantEntryId);
+      }
+
+      const result = originalAppend(
         persistToolResult(message, {
           toolCallId: id ?? undefined,
           toolName,
           isSynthetic: false,
         }) as never,
       );
+
+      // Clear assistant entry ID when all pending tool results are done
+      if (pending.size === 0) {
+        assistantEntryId = null;
+      }
+
+      return result;
     }
 
     const toolCalls =
@@ -126,6 +153,8 @@ export function installSessionToolResultGuard(
     }
 
     if (toolCalls.length > 0) {
+      // Store the assistant message's entry ID so tool results can reference it
+      assistantEntryId = sessionManager.getLeafId();
       for (const call of toolCalls) {
         pending.set(call.id, call.name);
       }
