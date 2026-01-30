@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
-import { findLegacyGatewayServices, uninstallLegacyGatewayServices } from "../daemon/legacy.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
@@ -13,13 +16,11 @@ import {
 } from "../daemon/service-audit.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "./daemon-runtime.js";
+import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
+import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+
+const execFileAsync = promisify(execFile);
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
@@ -42,92 +43,44 @@ function normalizeExecutablePath(value: string): string {
   return path.resolve(value);
 }
 
-export async function maybeMigrateLegacyGatewayService(
-  cfg: MoltbotConfig,
-  mode: "local" | "remote",
-  runtime: RuntimeEnv,
-  prompter: DoctorPrompter,
-) {
-  const legacyServices = await findLegacyGatewayServices(process.env);
-  if (legacyServices.length === 0) return;
+function extractDetailPath(detail: string, prefix: string): string | null {
+  if (!detail.startsWith(prefix)) return null;
+  const value = detail.slice(prefix.length).trim();
+  return value.length > 0 ? value : null;
+}
 
-  note(
-    legacyServices.map((svc) => `- ${svc.label} (${svc.platform}, ${svc.detail})`).join("\n"),
-    "Legacy gateway services detected",
-  );
+async function cleanupLegacyLaunchdService(params: {
+  label: string;
+  plistPath: string;
+}): Promise<string | null> {
+  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+  await execFileAsync("launchctl", ["bootout", domain, params.plistPath]).catch(() => undefined);
+  await execFileAsync("launchctl", ["unload", params.plistPath]).catch(() => undefined);
 
-  const migrate = await prompter.confirmSkipInNonInteractive({
-    message: "Migrate legacy gateway services to Moltbot now?",
-    initialValue: true,
-  });
-  if (!migrate) return;
+  const trashDir = path.join(os.homedir(), ".Trash");
+  try {
+    await fs.mkdir(trashDir, { recursive: true });
+  } catch {
+    // ignore
+  }
 
   try {
-    await uninstallLegacyGatewayServices({
-      env: process.env,
-      stdout: process.stdout,
-    });
-  } catch (err) {
-    runtime.error(`Legacy service cleanup failed: ${String(err)}`);
-    return;
+    await fs.access(params.plistPath);
+  } catch {
+    return null;
   }
 
-  if (resolveIsNixMode(process.env)) {
-    note("Nix mode detected; skip installing services.", "Gateway");
-    return;
-  }
-
-  if (mode === "remote") {
-    note("Gateway mode is remote; skipped local service install.", "Gateway");
-    return;
-  }
-
-  const service = resolveGatewayService();
-  const loaded = await service.isLoaded({ env: process.env });
-  if (loaded) {
-    note(`Moltbot ${service.label} already ${service.loadedText}.`, "Gateway");
-    return;
-  }
-
-  const install = await prompter.confirmSkipInNonInteractive({
-    message: "Install Moltbot gateway service now?",
-    initialValue: true,
-  });
-  if (!install) return;
-
-  const daemonRuntime = await prompter.select<GatewayDaemonRuntime>(
-    {
-      message: "Gateway service runtime",
-      options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-      initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-    },
-    DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  );
-  const port = resolveGatewayPort(cfg, process.env);
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
-    port,
-    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-    runtime: daemonRuntime,
-    warn: (message, title) => note(message, title),
-    config: cfg,
-  });
+  const dest = path.join(trashDir, `${params.label}-${Date.now()}.plist`);
   try {
-    await service.install({
-      env: process.env,
-      stdout: process.stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-    });
-  } catch (err) {
-    runtime.error(`Gateway service install failed: ${String(err)}`);
-    note(gatewayInstallErrorHint(), "Gateway");
+    await fs.rename(params.plistPath, dest);
+    return dest;
+  } catch {
+    return null;
   }
 }
 
 export async function maybeRepairGatewayServiceConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -174,7 +127,7 @@ export async function maybeRepairGatewayServiceConfig(
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    token: cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
     warn: (message, title) => note(message, title),
@@ -239,7 +192,11 @@ export async function maybeRepairGatewayServiceConfig(
   }
 }
 
-export async function maybeScanExtraGatewayServices(options: DoctorOptions) {
+export async function maybeScanExtraGatewayServices(
+  options: DoctorOptions,
+  runtime: RuntimeEnv,
+  prompter: DoctorPrompter,
+) {
   const extraServices = await findExtraGatewayServices(process.env, {
     deep: options.deep,
   });
@@ -249,6 +206,47 @@ export async function maybeScanExtraGatewayServices(options: DoctorOptions) {
     extraServices.map((svc) => `- ${svc.label} (${svc.scope}, ${svc.detail})`).join("\n"),
     "Other gateway-like services detected",
   );
+
+  const legacyServices = extraServices.filter((svc) => svc.legacy === true);
+  if (legacyServices.length > 0) {
+    const shouldRemove = await prompter.confirmSkipInNonInteractive({
+      message: "Remove legacy gateway services (clawdbot/moltbot) now?",
+      initialValue: true,
+    });
+    if (shouldRemove) {
+      const removed: string[] = [];
+      const failed: string[] = [];
+      for (const svc of legacyServices) {
+        if (svc.platform !== "darwin") {
+          failed.push(`${svc.label} (${svc.platform})`);
+          continue;
+        }
+        if (svc.scope !== "user") {
+          failed.push(`${svc.label} (${svc.scope})`);
+          continue;
+        }
+        const plistPath = extractDetailPath(svc.detail, "plist:");
+        if (!plistPath) {
+          failed.push(`${svc.label} (missing plist path)`);
+          continue;
+        }
+        const dest = await cleanupLegacyLaunchdService({
+          label: svc.label,
+          plistPath,
+        });
+        removed.push(dest ? `${svc.label} -> ${dest}` : svc.label);
+      }
+      if (removed.length > 0) {
+        note(removed.map((line) => `- ${line}`).join("\n"), "Legacy gateway removed");
+      }
+      if (failed.length > 0) {
+        note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
+      }
+      if (removed.length > 0) {
+        runtime.log("Legacy gateway services removed. Installing OpenClaw gateway next.");
+      }
+    }
+  }
 
   const cleanupHints = renderGatewayServiceCleanupHints();
   if (cleanupHints.length > 0) {

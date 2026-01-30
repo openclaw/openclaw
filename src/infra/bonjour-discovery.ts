@@ -1,5 +1,5 @@
 import { runCommandWithTimeout } from "../process/exec.js";
-import { WIDE_AREA_DISCOVERY_DOMAIN } from "./widearea-dns.js";
+import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
 export type GatewayBonjourBeacon = {
   instanceName: string;
@@ -22,13 +22,13 @@ export type GatewayBonjourBeacon = {
 export type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];
+  wideAreaDomain?: string | null;
   platform?: NodeJS.Platform;
   run?: typeof runCommandWithTimeout;
 };
 
 const DEFAULT_TIMEOUT_MS = 2000;
-
-const DEFAULT_DOMAINS = ["local.", WIDE_AREA_DISCOVERY_DOMAIN] as const;
+const GATEWAY_SERVICE_TYPE = "_openclaw-gw._tcp";
 
 function decodeDnsSdEscapes(value: string): string {
   let decoded = false;
@@ -166,9 +166,9 @@ function parseDnsSdBrowse(stdout: string): string[] {
   const instances = new Set<string>();
   for (const raw of stdout.split("\n")) {
     const line = raw.trim();
-    if (!line || !line.includes("_moltbot-gw._tcp")) continue;
+    if (!line || !line.includes(GATEWAY_SERVICE_TYPE)) continue;
     if (!line.includes("Add")) continue;
-    const match = line.match(/_moltbot-gw\._tcp\.?\s+(.+)$/);
+    const match = line.match(/_openclaw-gw\._tcp\.?\s+(.+)$/);
     if (match?.[1]) {
       instances.add(decodeDnsSdEscapes(match[1].trim()));
     }
@@ -225,13 +225,13 @@ async function discoverViaDnsSd(
   timeoutMs: number,
   run: typeof runCommandWithTimeout,
 ): Promise<GatewayBonjourBeacon[]> {
-  const browse = await run(["dns-sd", "-B", "_moltbot-gw._tcp", domain], {
+  const browse = await run(["dns-sd", "-B", GATEWAY_SERVICE_TYPE, domain], {
     timeoutMs,
   });
   const instances = parseDnsSdBrowse(browse.stdout);
   const results: GatewayBonjourBeacon[] = [];
   for (const instance of instances) {
-    const resolved = await run(["dns-sd", "-L", instance, "_moltbot-gw._tcp", domain], {
+    const resolved = await run(["dns-sd", "-L", instance, GATEWAY_SERVICE_TYPE, domain], {
       timeoutMs,
     });
     const parsed = parseDnsSdResolve(resolved.stdout, instance);
@@ -245,7 +245,7 @@ async function discoverWideAreaViaTailnetDns(
   timeoutMs: number,
   run: typeof runCommandWithTimeout,
 ): Promise<GatewayBonjourBeacon[]> {
-  if (domain !== WIDE_AREA_DISCOVERY_DOMAIN) return [];
+  if (!domain || domain === "local.") return [];
   const startedAt = Date.now();
   const remainingMs = () => timeoutMs - (Date.now() - startedAt);
 
@@ -268,7 +268,7 @@ async function discoverWideAreaViaTailnetDns(
   // Keep scans bounded: this is a fallback and should not block long.
   ips = ips.slice(0, 40);
 
-  const probeName = `_moltbot-gw._tcp.${domain.replace(/\.$/, "")}`;
+  const probeName = `${GATEWAY_SERVICE_TYPE}.${domain.replace(/\.$/, "")}`;
 
   const concurrency = 6;
   let nextIndex = 0;
@@ -312,7 +312,7 @@ async function discoverWideAreaViaTailnetDns(
     if (budget <= 0) break;
     const ptrName = ptr.trim().replace(/\.$/, "");
     if (!ptrName) continue;
-    const instanceName = ptrName.replace(/\.?_moltbot-gw\._tcp\..*$/, "");
+    const instanceName = ptrName.replace(/\.?_openclaw-gw\._tcp\..*$/, "");
 
     const srv = await run(["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "SRV"], {
       timeoutMs: Math.max(1, Math.min(350, budget)),
@@ -371,9 +371,9 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
   for (const raw of stdout.split("\n")) {
     const line = raw.trimEnd();
     if (!line) continue;
-    if (line.startsWith("=") && line.includes("_moltbot-gw._tcp")) {
+    if (line.startsWith("=") && line.includes(GATEWAY_SERVICE_TYPE)) {
       if (current) results.push(current);
-      const marker = " _moltbot-gw._tcp";
+      const marker = ` ${GATEWAY_SERVICE_TYPE}`;
       const idx = line.indexOf(marker);
       const left = idx >= 0 ? line.slice(0, idx).trim() : line;
       const parts = left.split(/\s+/);
@@ -429,7 +429,7 @@ async function discoverViaAvahi(
   timeoutMs: number,
   run: typeof runCommandWithTimeout,
 ): Promise<GatewayBonjourBeacon[]> {
-  const args = ["avahi-browse", "-rt", "_moltbot-gw._tcp"];
+  const args = ["avahi-browse", "-rt", GATEWAY_SERVICE_TYPE];
   if (domain && domain !== "local.") {
     // avahi-browse wants a plain domain (no trailing dot)
     args.push("-d", domain.replace(/\.$/, ""));
@@ -447,8 +447,10 @@ export async function discoverGatewayBeacons(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const platform = opts.platform ?? process.platform;
   const run = opts.run ?? runCommandWithTimeout;
+  const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: opts.wideAreaDomain });
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
-  const domains = (domainsRaw.length > 0 ? domainsRaw : [...DEFAULT_DOMAINS])
+  const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
+  const domains = (domainsRaw.length > 0 ? domainsRaw : defaultDomains)
     .map((d) => String(d).trim())
     .filter(Boolean)
     .map((d) => (d.endsWith(".") ? d : `${d}.`));
@@ -460,15 +462,15 @@ export async function discoverGatewayBeacons(
       );
       const discovered = perDomain.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
 
-      const wantsWideArea = domains.includes(WIDE_AREA_DISCOVERY_DOMAIN);
-      const hasWideArea = discovered.some((b) => b.domain === WIDE_AREA_DISCOVERY_DOMAIN);
+      const wantsWideArea = wideAreaDomain ? domains.includes(wideAreaDomain) : false;
+      const hasWideArea = wideAreaDomain
+        ? discovered.some((b) => b.domain === wideAreaDomain)
+        : false;
 
-      if (wantsWideArea && !hasWideArea) {
-        const fallback = await discoverWideAreaViaTailnetDns(
-          WIDE_AREA_DISCOVERY_DOMAIN,
-          timeoutMs,
-          run,
-        ).catch(() => []);
+      if (wantsWideArea && !hasWideArea && wideAreaDomain) {
+        const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
+          () => [],
+        );
         return [...discovered, ...fallback];
       }
 

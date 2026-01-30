@@ -12,7 +12,7 @@ const SAMPLE_URL =
 const LIVE =
   isTruthyEnvValue(process.env.DEEPGRAM_LIVE_TEST) ||
   isTruthyEnvValue(process.env.LIVE) ||
-  isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 
 const describeLive = LIVE && DEEPGRAM_KEY ? describe : describe.skip;
 

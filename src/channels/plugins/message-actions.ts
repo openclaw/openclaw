@@ -1,10 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
 
-export function listChannelMessageActions(cfg: MoltbotConfig): ChannelMessageActionName[] {
+export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
     const list = plugin.actions?.listActions?.({ cfg });
@@ -14,14 +14,14 @@ export function listChannelMessageActions(cfg: MoltbotConfig): ChannelMessageAct
   return Array.from(actions);
 }
 
-export function supportsChannelMessageButtons(cfg: MoltbotConfig): boolean {
+export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
   for (const plugin of listChannelPlugins()) {
     if (plugin.actions?.supportsButtons?.({ cfg })) return true;
   }
   return false;
 }
 
-export function supportsChannelMessageCards(cfg: MoltbotConfig): boolean {
+export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
   for (const plugin of listChannelPlugins()) {
     if (plugin.actions?.supportsCards?.({ cfg })) return true;
   }
