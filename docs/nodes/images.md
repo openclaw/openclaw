@@ -3,7 +3,7 @@ summary: "Image and media handling rules for send, gateway, and agent replies"
 read_when:
   - Modifying media pipeline or attachments
 ---
-# Image & Media Support — 2025-12-05
+# Image and Media Support - 2025-12-05
 
 The WhatsApp channel runs via **Baileys Web**. This document captures the current media handling rules for send, gateway, and agent replies.
 

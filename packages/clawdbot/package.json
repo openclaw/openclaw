@@ -1,6 +1,6 @@
 {
   "name": "moltbot",
-  "version": "2026.1.26",
+  "version": "2026.1.27-beta.1",
   "type": "module",
   "description": "Compatibility shim that forwards to moltbot",
   "exports": {
@@ -10,7 +10,7 @@
   "bin": {
     "moltbot": "./bin/moltbot.js"
   },
-  "dependencies": {
+  "devDependencies": {
     "moltbot": "workspace:*"
   }
 }

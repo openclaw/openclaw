@@ -122,7 +122,7 @@ moltbot models list | grep venice
 
 ## Available Models (25 Total)
 
-### Private Models (15) — Fully Private, No Logging
+### Private Models (15) - Fully Private, No Logging
 
 | Model ID | Name | Context (tokens) | Features |
 |----------|------|------------------|----------|
@@ -142,7 +142,7 @@ moltbot models list | grep venice
 | `openai-gpt-oss-120b` | OpenAI GPT OSS 120B | 131k | General |
 | `zai-org-glm-4.7` | GLM 4.7 | 202k | Reasoning, multilingual |
 
-### Anonymized Models (10) — Via Venice Proxy
+### Anonymized Models (10) - Via Venice Proxy
 
 | Model ID | Original | Context (tokens) | Features |
 |----------|----------|------------------|----------|

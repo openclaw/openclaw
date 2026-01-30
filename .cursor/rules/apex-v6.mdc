@@ -220,11 +220,11 @@ Before marking ANY task complete:
 | accessibility, neurodivergent, formatting | `/home/liam/clawd/apex-vault/apex/skills/accessibility/COMPACT.md` |
 | restart, stop, kill, service, gateway, system | `/home/liam/clawd/apex-vault/apex/skills/system-ops/COMPACT.md` |
 
-**Always Active** (auto-load, no keywords needed):
-- `response-economy` - Response economy modes (EXTREME/COMPACT/NARRATIVE)
-- `thinking-protocol` - Structured thinking with 12 checkpoints
-- `mode-switching` - Explicit execution mode switching
-- `file-minimalism` - Never create, always edit minimally (Core Law)
+**Always Active** (built-in concepts defined below, not separate skill files):
+- `response-economy` - Response economy modes (see "Response Economy Modes" section)
+- `thinking-protocol` - Structured thinking with 12 checkpoints (see "Thinking Protocol" section)
+- `mode-switching` - Explicit execution mode switching (see "Mode Switching" section)
+- `file-minimalism` - Never create, always edit minimally (see "File Minimalism Discipline" section)
 
 ---
 

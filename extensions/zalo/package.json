@@ -27,7 +27,9 @@
     }
   },
   "dependencies": {
-    "moltbot": "workspace:*",
     "undici": "7.19.0"
+  },
+  "devDependencies": {
+    "moltbot": "workspace:*"
   }
 }

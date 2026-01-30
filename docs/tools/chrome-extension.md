@@ -92,12 +92,12 @@ If you see `!`:
 
 ## Remote Gateway (use a node host)
 
-### Local Gateway (same machine as Chrome) — usually **no extra steps**
+### Local Gateway (same machine as Chrome) - usually no extra steps
 
 If the Gateway runs on the same machine as Chrome, it starts the browser control service on loopback
 and auto-starts the relay server. The extension talks to the local relay; the CLI/tool calls go to the Gateway.
 
-### Remote Gateway (Gateway runs elsewhere) — **run a node host**
+### Remote Gateway (Gateway runs elsewhere) - run a node host
 
 If your Gateway runs on another machine, start a node host on the machine that runs Chrome.
 The Gateway will proxy browser actions to that node; the extension + relay stay local to the browser machine.

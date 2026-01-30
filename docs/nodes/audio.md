@@ -3,7 +3,7 @@ summary: "How inbound audio/voice notes are downloaded, transcribed, and injecte
 read_when:
   - Changing audio transcription or media handling
 ---
-# Audio / Voice Notes — 2026-01-17
+# Audio and Voice Notes - 2026-01-17
 
 ## What works
 - **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), Moltbot:

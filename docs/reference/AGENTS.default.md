@@ -4,7 +4,7 @@ read_when:
   - Starting a new Moltbot agent session
   - Enabling or auditing default skills
 ---
-# AGENTS.md — Moltbot Personal Assistant (default)
+# AGENTS.md - Moltbot Personal Assistant (default)
 
 ## First run (recommended)
 

@@ -4,7 +4,7 @@ read_when:
   - Designing or refactoring media understanding
   - Tuning inbound audio/video/image preprocessing
 ---
-# Media Understanding (Inbound) — 2026-01-17
+# Media Understanding (Inbound) - 2026-01-17
 
 Moltbot can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
 

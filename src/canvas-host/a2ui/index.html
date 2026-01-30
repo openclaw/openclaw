@@ -16,7 +16,7 @@
           if (/android/i.test(navigator.userAgent || "")) {
             document.documentElement.dataset.platform = "android";
           }
-        } catch (_) {}
+        } catch (e) { console.debug("Platform detection failed:", e); }
       })();
     </script>
     <style>

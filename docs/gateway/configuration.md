@@ -2358,7 +2358,7 @@ Notes:
 }
 ```
 
-### Z.AI (GLM-4.7) — provider alias support
+### Z.AI (GLM-4.7) - provider alias support
 
 Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`
 in your environment and reference the model by provider/model.
@@ -2514,7 +2514,7 @@ Notes:
 - Model ref: `synthetic/hf:MiniMaxAI/MiniMax-M2.1`.
 - Base URL should omit `/v1` because the Anthropic client appends it.
 
-### Local models (LM Studio) — recommended setup
+### Local models (LM Studio) - recommended setup
 
 See [/gateway/local-models](/gateway/local-models) for the current local guidance. TL;DR: run MiniMax M2.1 via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.
 

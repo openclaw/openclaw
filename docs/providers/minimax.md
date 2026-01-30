@@ -35,7 +35,7 @@ MiniMax highlights these improvements in M2.1:
 
 ## Choose a setup
 
-### MiniMax M2.1 — recommended
+### MiniMax M2.1 - recommended
 
 **Best for:** hosted MiniMax with Anthropic-compatible API.
 

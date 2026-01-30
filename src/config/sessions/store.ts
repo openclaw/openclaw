@@ -151,15 +151,19 @@ export function loadSessionStore(
 
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+    // Store the original in cache, clone only on return to prevent double-clone overhead
     SESSION_STORE_CACHE.set(storePath, {
-      store: structuredClone(store), // Store a copy to prevent external mutations
+      store, // Cache owns this reference
       loadedAt: Date.now(),
       storePath,
       mtimeMs,
     });
+    // Return a clone to prevent external mutations affecting cache
+    return structuredClone(store);
   }
 
-  return structuredClone(store);
+  // No caching - return the original directly (no need to clone)
+  return store;
 }
 
 export function readSessionUpdatedAt(params: {

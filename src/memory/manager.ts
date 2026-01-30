@@ -282,11 +282,14 @@ export class MemoryIndexManager {
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
 
-    const keywordResults = hybrid.enabled
-      ? await this.searchKeyword(cleaned, candidates).catch(() => [])
-      : [];
+    // Parallelize keyword search and embedding since they're independent
+    const [keywordResults, queryVec] = await Promise.all([
+      hybrid.enabled
+        ? this.searchKeyword(cleaned, candidates).catch(() => [])
+        : Promise.resolve([]),
+      this.embedQueryWithTimeout(cleaned),
+    ]);
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates).catch(() => [])

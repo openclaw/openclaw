@@ -12,11 +12,8 @@ KillMode=control-group
 Environment=HOME=/home/liam
 Environment="PATH=/home/liam/.local/bin:/home/liam/.npm-global/bin:/home/liam/go-workspace/bin:/home/liam/.cargo/bin:/home/liam/bin:/home/liam/.nvm/current/bin:/home/liam/.fnm/current/bin:/home/liam/.volta/bin:/home/liam/.asdf/shims:/home/liam/.local/share/pnpm:/home/liam/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 Environment=CLAWDBOT_GATEWAY_PORT=18789
-Environment=CLAWDBOT_GATEWAY_TOKEN=1cb0974c90cc77902c86eaa312ebfc5a7fd993049eb0da49
-Environment="ZAI_API_KEY=cd758fc4a3ca4b0ea8f46135680704a4.LtAZJxC4YHcQspJW"
-Environment="GEMINI_API_KEY=AIzaSyAb6HIi4hAruXVu4NcmkwaURvDkZu5qP4g"
-Environment="BRAVE_API_KEY=BSAdP8-UScEWegwP450qqgR3DEIuwi2"
-Environment="GOG_KEYRING_PASSWORD=clawdbot"
+# Secrets loaded from secure env file (chmod 600)
+EnvironmentFile=/home/liam/.clawdbot/credentials/gateway.env
 Environment="CLAWDBOT_SYSTEMD_UNIT=clawdbot-gateway.service"
 Environment=CLAWDBOT_SERVICE_MARKER=clawdbot
 Environment=CLAWDBOT_SERVICE_KIND=gateway

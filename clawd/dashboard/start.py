@@ -5,6 +5,7 @@ Data analytics platform with Technical Brutalism design.
 """
 
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -31,7 +32,7 @@ IDEAS_FILE = MEMORY_DIR / 'ideas.md'
 PORT = 8080
 METRICS_INTERVAL = 5  # seconds between metric collection
 AUTH_USERNAME = 'liam'  # Basic auth username
-AUTH_PASSWORD = 'dashboard'  # Change this!
+AUTH_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', 'dashboard')  # Set via DASHBOARD_PASSWORD env var
 
 # === DATABASE ===
 _db_local = threading.local()
