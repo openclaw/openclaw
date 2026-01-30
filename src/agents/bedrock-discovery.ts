@@ -3,7 +3,6 @@ import {
   ListFoundationModelsCommand,
   ListInferenceProfilesCommand,
   type ListFoundationModelsCommandOutput,
-  type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
@@ -19,10 +18,6 @@ const DEFAULT_COST = {
 };
 
 type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
-
-type InferenceProfileSummary = NonNullable<
-  ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
->[number];
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
