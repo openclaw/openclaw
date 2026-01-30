@@ -322,7 +322,8 @@ export async function autoMigrateLegacyStateDir(params: {
 
   const homedir = params.homedir ?? os.homedir;
   const targetDir = resolveNewStateDir(homedir);
-  const legacyDir = resolveLegacyStateDirs(homedir).find((dir) => {
+  const legacyDirs = resolveLegacyStateDirs(homedir);
+  let legacyDir = legacyDirs.find((dir) => {
     try {
       return fs.existsSync(dir);
     } catch {
@@ -346,13 +347,42 @@ export async function autoMigrateLegacyStateDir(params: {
     return { migrated: false, skipped: false, changes, warnings };
   }
 
-  if (legacyStat.isSymbolicLink()) {
+  let symlinkDepth = 0;
+  while (legacyStat.isSymbolicLink()) {
     const legacyTarget = legacyDir ? resolveSymlinkTarget(legacyDir) : null;
-    if (legacyTarget && path.resolve(legacyTarget) === path.resolve(targetDir)) {
+    if (!legacyTarget) {
+      warnings.push(
+        `Legacy state dir is a symlink (${legacyDir ?? "unknown"}); could not resolve target.`,
+      );
       return { migrated: false, skipped: false, changes, warnings };
     }
+    if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
+      return { migrated: false, skipped: false, changes, warnings };
+    }
+    if (legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))) {
+      legacyDir = legacyTarget;
+      try {
+        legacyStat = fs.lstatSync(legacyDir);
+      } catch {
+        legacyStat = null;
+      }
+      if (!legacyStat) {
+        warnings.push(`Legacy state dir missing after symlink resolution: ${legacyDir}`);
+        return { migrated: false, skipped: false, changes, warnings };
+      }
+      if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
+        warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
+        return { migrated: false, skipped: false, changes, warnings };
+      }
+      symlinkDepth += 1;
+      if (symlinkDepth > 2) {
+        warnings.push(`Legacy state dir symlink chain too deep: ${legacyDir}`);
+        return { migrated: false, skipped: false, changes, warnings };
+      }
+      continue;
+    }
     warnings.push(
-      `Legacy state dir is a symlink (${legacyDir ?? "unknown"} → ${legacyTarget ?? "unknown"}); skipping auto-migration.`,
+      `Legacy state dir is a symlink (${legacyDir ?? "unknown"} → ${legacyTarget}); skipping auto-migration.`,
     );
     return { migrated: false, skipped: false, changes, warnings };
   }
