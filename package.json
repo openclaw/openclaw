@@ -97,7 +97,7 @@
     "gateway:dev": "OPENCLAW_SKIP_CHANNELS=1 CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "OPENCLAW_SKIP_CHANNELS=1 CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway --reset",
     "tui": "node scripts/run-node.mjs tui",
-    "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs tui",
+    "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "ios:gen": "cd apps/ios && xcodegen generate",
