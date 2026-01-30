@@ -22,6 +22,9 @@ Files follow: `[Category][Number]_[Topic]_[Type].md`
 ### Testing Category
 - **Testing01_Coverage_Standards.md**: 70% threshold, vitest configuration, patterns
 
+### Setup Category
+- **Setup01_Installation_Checklist.md**: MAIBOT 설치 및 설정 전체 작업 목록 (한국어)
+
 ## Maintenance Guidelines
 
 **Add new docs** when:
