@@ -41,6 +41,7 @@ export function registerModelsCli(program: Command) {
     .description("Model discovery, scanning, and configuration")
     .option("--status-json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .addHelpText(
       "after",
       () =>
@@ -85,6 +86,7 @@ export function registerModelsCli(program: Command) {
     .option("--probe-timeout <ms>", "Per-probe timeout in ms")
     .option("--probe-concurrency <n>", "Concurrent probes")
     .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsStatusCommand(
@@ -98,6 +100,7 @@ export function registerModelsCli(program: Command) {
             probeTimeout: opts.probeTimeout as string | undefined,
             probeConcurrency: opts.probeConcurrency as string | undefined,
             probeMaxTokens: opts.probeMaxTokens as string | undefined,
+            agent: opts.agent as string | undefined,
           },
           defaultRuntime,
         );
@@ -271,6 +274,7 @@ export function registerModelsCli(program: Command) {
         {
           json: Boolean(opts?.statusJson),
           plain: Boolean(opts?.statusPlain),
+          agent: opts?.agent as string | undefined,
         },
         defaultRuntime,
       );
