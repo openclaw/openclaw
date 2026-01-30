@@ -1,4 +1,4 @@
-# Moltbot Secure Edition
+# AssureBot Edition
 
 A lean, secure, self-hosted AI assistant for Railway deployment.
 
@@ -25,7 +25,7 @@ A lean, secure, self-hosted AI assistant for Railway deployment.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                    MOLTBOT SECURE                          │
+│                    ASSUREBOT                          │
 │                                                            │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │   Telegram   │  │   Webhooks   │  │   Scheduler  │     │

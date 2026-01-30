@@ -1,6 +1,7 @@
 packages:
   - .
   - ui
+  - secure
   - packages/*
   - extensions/*
 

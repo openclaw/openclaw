@@ -1,12 +1,12 @@
-# Moltbot Secure
+# AssureBot
 
 **Lean, secure, self-hosted AI assistant for Railway.**
 
 Your AI agent that runs on your infrastructure, answers only to you, and you can actually audit.
 
-## Why Secure Edition?
+## Why AssureBot?
 
-| Full Moltbot | Secure Edition |
+| Full Moltbot | AssureBot |
 |--------------|----------------|
 | 12+ channels | Telegram only |
 | File-based config | Env vars only |
@@ -46,7 +46,7 @@ Your AI agent that runs on your infrastructure, answers only to you, and you can
 
 ### One-Click
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/moltbot-secure)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/assurebot)
 
 ### Manual
 

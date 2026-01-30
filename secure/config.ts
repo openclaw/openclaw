@@ -161,7 +161,7 @@ export function loadSecureConfig(): SecureConfig {
     },
     sandbox: {
       enabled: sandboxEnabled,
-      image: optional("SANDBOX_IMAGE", "moltbot/sandbox:latest"),
+      image: optional("SANDBOX_IMAGE", "node:22-slim"),
       network: (optional("SANDBOX_NETWORK", "none") as "none" | "bridge"),
       memory: optional("SANDBOX_MEMORY", "512m"),
       cpus: optional("SANDBOX_CPUS", "1"),

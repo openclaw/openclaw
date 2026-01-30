@@ -47,7 +47,7 @@ function generateId(): string {
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { config, audit, agent, telegramBot } = deps;
   const tasks = new Map<string, ScheduledTask>();
-  const cronJobs = new Map<string, CronJob>();
+  const cronJobs = new Map<string, CronJob<null, unknown>>();
 
   async function executeTask(task: ScheduledTask): Promise<void> {
     const startTime = Date.now();

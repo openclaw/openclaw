@@ -1,4 +1,4 @@
-# Moltbot Secure - Minimal Docker Image
+# AssureBot - Minimal Docker Image
 # Lean, secure, self-hosted AI assistant for Railway
 
 FROM node:22-slim AS builder
@@ -8,8 +8,8 @@ WORKDIR /app
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Copy package files
-COPY package.json pnpm-lock.yaml ./
+# Copy workspace config and package files
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY secure/package.json ./secure/
 
 # Install dependencies
@@ -17,24 +17,24 @@ RUN pnpm install --frozen-lockfile --prod=false
 
 # Copy source
 COPY secure/ ./secure/
-COPY tsconfig.json ./
 
 # Build TypeScript
-RUN pnpm exec tsc --project secure/tsconfig.json
+RUN cd secure && pnpm exec tsc
 
 # Production image
 FROM node:22-slim AS runner
 
 # Security: Run as non-root user
-RUN useradd -m -u 1000 moltbot
-USER moltbot
+RUN useradd -m -u 1000 -s /bin/bash assurebot
+USER assurebot
 
 WORKDIR /app
 
 # Copy built files and production deps
-COPY --from=builder --chown=moltbot:moltbot /app/node_modules ./node_modules
-COPY --from=builder --chown=moltbot:moltbot /app/secure/dist ./dist
-COPY --from=builder --chown=moltbot:moltbot /app/package.json ./
+COPY --from=builder --chown=assurebot:assurebot /app/node_modules ./node_modules
+COPY --from=builder --chown=assurebot:assurebot /app/secure/node_modules ./secure/node_modules
+COPY --from=builder --chown=assurebot:assurebot /app/secure/dist ./dist
+COPY --from=builder --chown=assurebot:assurebot /app/secure/package.json ./
 
 # Create data directory for audit logs
 RUN mkdir -p /app/data

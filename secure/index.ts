@@ -1,10 +1,10 @@
 /**
- * Moltbot Secure - Entry Point
+ * AssureBot - Entry Point
  *
  * Lean, secure, self-hosted AI assistant for Railway.
  *
  * Usage:
- *   TELEGRAM_BOT_TOKEN=xxx ANTHROPIC_API_KEY=xxx ALLOWED_USERS=123 npx ts-node secure/index.ts
+ *   TELEGRAM_BOT_TOKEN=xxx ANTHROPIC_API_KEY=xxx ALLOWED_USERS=123 npx tsx secure/index.ts
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -18,7 +18,7 @@ import { createScheduler } from "./scheduler.js";
 
 async function main() {
   console.log("=".repeat(50));
-  console.log("  MOLTBOT SECURE");
+  console.log("  ASSUREBOT");
   console.log("  Lean, secure, self-hosted AI assistant");
   console.log("=".repeat(50));
   console.log();
@@ -176,7 +176,7 @@ async function main() {
 
   console.log();
   console.log("=".repeat(50));
-  console.log("  MOLTBOT SECURE IS RUNNING");
+  console.log("  ASSUREBOT IS RUNNING");
   console.log();
   console.log(`  Telegram: Polling mode`);
   console.log(`  Webhooks: http://localhost:${config.server.port}${config.webhooks.basePath}/*`);

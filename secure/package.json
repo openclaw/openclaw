@@ -1,7 +1,7 @@
 {
-  "name": "moltbot-secure",
+  "name": "assurebot",
   "version": "1.0.0",
-  "description": "Lean, secure, self-hosted AI assistant for Railway",
+  "description": "AssureBot - Lean, secure, self-hosted AI assistant for Railway",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

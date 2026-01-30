@@ -5,16 +5,15 @@
  * Allowlist-only: only approved users can interact.
  */
 
-import { Bot, Context, webhookCallback } from "grammy";
+import { Bot, Context } from "grammy";
 import type { SecureConfig } from "./config.js";
 import type { AuditLogger } from "./audit.js";
-import type { AgentCore, ConversationStore, Message } from "./agent.js";
+import type { AgentCore, ConversationStore } from "./agent.js";
 
 export type TelegramBot = {
   bot: Bot;
   start: () => Promise<void>;
   stop: () => Promise<void>;
-  webhookHandler: (path?: string) => ReturnType<typeof webhookCallback>;
 };
 
 export type TelegramDeps = {
@@ -292,10 +291,6 @@ Security:
     async stop(): Promise<void> {
       console.log("[telegram] Stopping bot...");
       await bot.stop();
-    },
-
-    webhookHandler(path = "/telegram"): ReturnType<typeof webhookCallback> {
-      return webhookCallback(bot, "http", { path });
     },
   };
 }
