@@ -41,6 +41,7 @@ Status: stable.
 - Routing: add per-account DM session scope and document multi-account isolation. (#3095) Thanks @jarvis-sam.
 - Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
 - CLI: use Node's module compile cache for faster startup. (#2808) Thanks @pi0.
+- CLI: add per-agent model status and auth order scoping. (#4780) Thanks @jlowin.
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
 - Agents: add Kimi K2.5 to the synthetic model catalog. (#4407) Thanks @manikv12.
 - TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
