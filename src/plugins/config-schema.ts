@@ -1,4 +1,4 @@
-import type { MoltbotPluginConfigSchema } from "./types.js";
+import type { OpenClawPluginConfigSchema } from "./types.js";
 
 type Issue = { path: Array<string | number>; message: string };
 
@@ -10,7 +10,7 @@ function error(message: string): SafeParseResult {
   return { success: false, error: { issues: [{ path: [], message }] } };
 }
 
-export function emptyPluginConfigSchema(): MoltbotPluginConfigSchema {
+export function emptyPluginConfigSchema(): OpenClawPluginConfigSchema {
   return {
     safeParse(value: unknown): SafeParseResult {
       if (value === undefined) return { success: true, data: undefined };

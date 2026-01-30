@@ -351,7 +351,7 @@ describe("monitorSlackProvider tool results", () => {
     slackTestState.config = {
       messages: {
         responsePrefix: "PFX",
-        groupChat: { mentionPatterns: ["\\bclawd\\b"] },
+        groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
       },
       channels: {
         slack: {
@@ -377,7 +377,7 @@ describe("monitorSlackProvider tool results", () => {
       event: {
         type: "message",
         user: "U1",
-        text: "clawd: hello",
+        text: "openclaw: hello",
         ts: "123",
         channel: "C1",
         channel_type: "channel",
@@ -392,11 +392,11 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
   });
 
-  it("skips channel messages when another user is explicitly mentioned", async () => {
+  it("accepts channel messages when mentionPatterns match even if another user is mentioned", async () => {
     slackTestState.config = {
       messages: {
         responsePrefix: "PFX",
-        groupChat: { mentionPatterns: ["\\bclawd\\b"] },
+        groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
       },
       channels: {
         slack: {
@@ -422,7 +422,7 @@ describe("monitorSlackProvider tool results", () => {
       event: {
         type: "message",
         user: "U1",
-        text: "clawd: hello <@U2>",
+        text: "openclaw: hello <@U2>",
         ts: "123",
         channel: "C1",
         channel_type: "channel",
@@ -433,8 +433,8 @@ describe("monitorSlackProvider tool results", () => {
     controller.abort();
     await run;
 
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
   });
 
   it("treats replies to bot threads as implicit mentions", async () => {

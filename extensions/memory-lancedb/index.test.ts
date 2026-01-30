@@ -16,7 +16,7 @@ import os from "node:os";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
-const liveEnabled = HAS_OPENAI_KEY && process.env.CLAWDBOT_LIVE_TEST === "1";
+const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
 describe("memory plugin e2e", () => {
@@ -24,7 +24,7 @@ describe("memory plugin e2e", () => {
   let dbPath: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-memory-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-test-"));
     dbPath = path.join(tmpDir, "lancedb");
   });
 
@@ -165,7 +165,7 @@ describeLive("memory plugin live tests", () => {
   let dbPath: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-memory-live-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-live-"));
     dbPath = path.join(tmpDir, "lancedb");
   });
 

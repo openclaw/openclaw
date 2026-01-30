@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   applyOpencodeZenModelDefault,
   OPENCODE_ZEN_DEFAULT_MODEL,
@@ -8,7 +8,7 @@ import {
 
 describe("applyOpencodeZenModelDefault", () => {
   it("sets opencode default when model is unset", () => {
-    const cfg: MoltbotConfig = { agents: { defaults: {} } };
+    const cfg: OpenClawConfig = { agents: { defaults: {} } };
     const applied = applyOpencodeZenModelDefault(cfg);
     expect(applied.changed).toBe(true);
     expect(applied.next.agents?.defaults?.model).toEqual({
@@ -19,7 +19,7 @@ describe("applyOpencodeZenModelDefault", () => {
   it("overrides existing model", () => {
     const cfg = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expect(applied.changed).toBe(true);
     expect(applied.next.agents?.defaults?.model).toEqual({
@@ -30,7 +30,7 @@ describe("applyOpencodeZenModelDefault", () => {
   it("no-ops when already opencode-zen default", () => {
     const cfg = {
       agents: { defaults: { model: OPENCODE_ZEN_DEFAULT_MODEL } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expect(applied.changed).toBe(false);
     expect(applied.next).toEqual(cfg);
@@ -39,14 +39,14 @@ describe("applyOpencodeZenModelDefault", () => {
   it("no-ops when already legacy opencode-zen default", () => {
     const cfg = {
       agents: { defaults: { model: "opencode-zen/claude-opus-4-5" } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expect(applied.changed).toBe(false);
     expect(applied.next).toEqual(cfg);
   });
 
   it("preserves fallbacks when setting primary", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           model: {
