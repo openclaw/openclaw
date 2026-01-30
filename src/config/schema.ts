@@ -189,6 +189,9 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.message.broadcast.enabled": "Enable Message Broadcast",
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
+  "tools.web.search.qveris.toolId": "QVeris Web Search Tool ID",
+  "tools.web.search.qveris.apiKey": "QVeris Web Search API Key",
+  "tools.web.search.qveris.baseUrl": "QVeris Web Search Base URL",
   "tools.web.search.apiKey": "Brave Search API Key",
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
@@ -442,7 +445,12 @@ const FIELD_HELP: Record<string, string> = {
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
-  "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
+  "tools.web.search.provider": 'Search provider ("brave", "perplexity", or "qveris").',
+  "tools.web.search.qveris.toolId":
+    "QVeris tool ID for web search (e.g. xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic).",
+  "tools.web.search.qveris.apiKey":
+    "QVeris API key (falls back to tools.qveris.apiKey or QVERIS_API_KEY env var).",
+  "tools.web.search.qveris.baseUrl": "QVeris API base URL (falls back to tools.qveris.baseUrl).",
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",

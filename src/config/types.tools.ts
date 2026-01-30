@@ -334,8 +334,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave" or "perplexity"). */
-      provider?: "brave" | "perplexity";
+      /** Search provider ("brave", "perplexity", or "qveris"). */
+      provider?: "brave" | "perplexity" | "qveris";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -352,6 +352,15 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "perplexity/sonar-pro"). */
         model?: string;
+      };
+      /** QVeris-specific configuration (used when provider="qveris"). */
+      qveris?: {
+        /** QVeris tool ID for web search (e.g. xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic). */
+        toolId?: string;
+        /** QVeris API key (falls back to tools.qveris.apiKey or QVERIS_API_KEY). */
+        apiKey?: string;
+        /** QVeris API base URL (falls back to tools.qveris.baseUrl). */
+        baseUrl?: string;
       };
     };
     fetch?: {

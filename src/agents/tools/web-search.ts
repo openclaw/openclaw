@@ -17,7 +17,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "qveris"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -103,6 +103,25 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
+type QverisSearchConfig = {
+  toolId?: string;
+  apiKey?: string;
+  baseUrl?: string;
+};
+
+type QverisExecutionResponse = {
+  execution_id: string;
+  result: {
+    data: unknown;
+  };
+  success: boolean;
+  error_message: string | null;
+  elapsed_time_ms: number;
+};
+
+const DEFAULT_QVERIS_BASE_URL = "https://qveris.ai/api/v1";
+const DEFAULT_QVERIS_SEARCH_TOOL_ID = "xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic";
+
 function resolveSearchConfig(cfg?: MoltbotConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") return undefined;
@@ -131,6 +150,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.molt.bot/tools/web",
     };
   }
+  if (provider === "qveris") {
+    return {
+      error: "missing_qveris_api_key",
+      message:
+        "web_search (qveris) needs an API key. Set QVERIS_API_KEY in the Gateway environment, or configure tools.qveris.apiKey or tools.web.search.qveris.apiKey.",
+      docs: "https://docs.molt.bot/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("moltbot configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -144,6 +171,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       ? search.provider.trim().toLowerCase()
       : "";
   if (raw === "perplexity") return "perplexity";
+  if (raw === "qveris") return "qveris";
   if (raw === "brave") return "brave";
   return "brave";
 }
@@ -219,6 +247,48 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
       ? perplexity.model.trim()
       : "";
   return fromConfig || DEFAULT_PERPLEXITY_MODEL;
+}
+
+function resolveQverisSearchConfig(search?: WebSearchConfig): QverisSearchConfig {
+  if (!search || typeof search !== "object") return {};
+  const qveris = "qveris" in search ? search.qveris : undefined;
+  if (!qveris || typeof qveris !== "object") return {};
+  return qveris as QverisSearchConfig;
+}
+
+function resolveQverisApiKey(
+  qverisSearch?: QverisSearchConfig,
+  globalQveris?: MoltbotConfig["tools"],
+): string | undefined {
+  // Priority: web.search.qveris.apiKey > tools.qveris.apiKey > QVERIS_API_KEY env
+  const fromSearchConfig = normalizeApiKey(qverisSearch?.apiKey);
+  if (fromSearchConfig) return fromSearchConfig;
+
+  const fromGlobalConfig = normalizeApiKey(globalQveris?.qveris?.apiKey);
+  if (fromGlobalConfig) return fromGlobalConfig;
+
+  const fromEnv = normalizeApiKey(process.env.QVERIS_API_KEY);
+  if (fromEnv) return fromEnv;
+
+  return undefined;
+}
+
+function resolveQverisBaseUrl(
+  qverisSearch?: QverisSearchConfig,
+  globalQveris?: MoltbotConfig["tools"],
+): string {
+  // Priority: web.search.qveris.baseUrl > tools.qveris.baseUrl > default
+  const fromSearchConfig = qverisSearch?.baseUrl?.trim();
+  if (fromSearchConfig) return fromSearchConfig;
+
+  const fromGlobalConfig = globalQveris?.qveris?.baseUrl?.trim();
+  if (fromGlobalConfig) return fromGlobalConfig;
+
+  return DEFAULT_QVERIS_BASE_URL;
+}
+
+function resolveQverisToolId(qverisSearch?: QverisSearchConfig): string {
+  return qverisSearch?.toolId?.trim() || DEFAULT_QVERIS_SEARCH_TOOL_ID;
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -306,6 +376,46 @@ async function runPerplexitySearch(params: {
   return { content, citations };
 }
 
+async function runQverisSearch(params: {
+  query: string;
+  toolId: string;
+  apiKey: string;
+  baseUrl: string;
+  timeoutSeconds: number;
+}): Promise<{ data: unknown; elapsedMs: number }> {
+  const endpoint = `${params.baseUrl.replace(/\/$/, "")}/tools/execute?tool_id=${encodeURIComponent(params.toolId)}`;
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.apiKey}`,
+    },
+    body: JSON.stringify({
+      parameters: {
+        query: params.query,
+      },
+      max_response_size: 20480,
+    }),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`QVeris API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as QverisExecutionResponse;
+  if (!data.success) {
+    throw new Error(`QVeris search failed: ${data.error_message ?? "Unknown error"}`);
+  }
+
+  return {
+    data: data.result?.data,
+    elapsedMs: data.elapsed_time_ms,
+  };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -319,16 +429,40 @@ async function runWebSearch(params: {
   freshness?: string;
   perplexityBaseUrl?: string;
   perplexityModel?: string;
+  qverisBaseUrl?: string;
+  qverisToolId?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
+      : params.provider === "qveris"
+        ? `${params.provider}:${params.qverisToolId || "default"}:${params.query}`
+        : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) return { ...cached.value, cached: true };
 
   const start = Date.now();
+
+  if (params.provider === "qveris") {
+    const { data, elapsedMs } = await runQverisSearch({
+      query: params.query,
+      toolId: params.qverisToolId ?? DEFAULT_QVERIS_SEARCH_TOOL_ID,
+      apiKey: params.apiKey,
+      baseUrl: params.qverisBaseUrl ?? DEFAULT_QVERIS_BASE_URL,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      toolId: params.qverisToolId ?? DEFAULT_QVERIS_SEARCH_TOOL_ID,
+      tookMs: elapsedMs,
+      data,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
 
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
@@ -415,11 +549,14 @@ export function createWebSearchTool(options?: {
 
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
+  const qverisSearchConfig = resolveQverisSearchConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      : provider === "qveris"
+        ? "Search the web using QVeris smart search API. Returns relevant search results from third-party data sources."
+        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -430,7 +567,11 @@ export function createWebSearchTool(options?: {
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
       const apiKey =
-        provider === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
+        provider === "perplexity"
+          ? perplexityAuth?.apiKey
+          : provider === "qveris"
+            ? resolveQverisApiKey(qverisSearchConfig, options?.config?.tools)
+            : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -476,6 +617,8 @@ export function createWebSearchTool(options?: {
           perplexityAuth?.apiKey,
         ),
         perplexityModel: resolvePerplexityModel(perplexityConfig),
+        qverisBaseUrl: resolveQverisBaseUrl(qverisSearchConfig, options?.config?.tools),
+        qverisToolId: resolveQverisToolId(qverisSearchConfig),
       });
       return jsonResult(result);
     },
