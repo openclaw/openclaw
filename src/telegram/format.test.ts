@@ -47,4 +47,14 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
   });
+
+  it("properly nests overlapping bold and autolink (#4071)", () => {
+    const res = markdownToTelegramHtml("**start https://example.com** end");
+    expect(res).toMatch(/<b>start <a href="https:\/\/example\.com">https:\/\/example\.com<\/a><\/b> end/);
+  });
+
+  it("properly nests link inside bold", () => {
+    const res = markdownToTelegramHtml("**bold [link](https://example.com) text**");
+    expect(res).toBe('<b>bold <a href="https://example.com">link</a> text</b>');
+  });
 });
