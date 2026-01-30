@@ -16,13 +16,15 @@ export type ExtraGatewayService = {
   label: string;
   detail: string;
   scope: "user" | "system";
+  marker?: "openclaw" | "clawdbot" | "moltbot";
+  legacy?: boolean;
 };
 
 export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
 };
 
-const EXTRA_MARKERS = ["openclaw"];
+const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
 const execFileAsync = promisify(execFile);
 
 export function renderGatewayServiceCleanupHints(
@@ -56,9 +58,14 @@ function resolveHomeDir(env: Record<string, string | undefined>): string {
   return home;
 }
 
-function containsMarker(content: string): boolean {
+type Marker = (typeof EXTRA_MARKERS)[number];
+
+function detectMarker(content: string): Marker | null {
   const lower = content.toLowerCase();
-  return EXTRA_MARKERS.some((marker) => lower.includes(marker));
+  for (const marker of EXTRA_MARKERS) {
+    if (lower.includes(marker)) return marker;
+  }
+  return null;
 }
 
 function hasGatewayServiceMarker(content: string): boolean {
@@ -111,6 +118,11 @@ function isIgnoredSystemdName(name: string): boolean {
   return name === resolveGatewaySystemdServiceName();
 }
 
+function isLegacyLabel(label: string): boolean {
+  const lower = label.toLowerCase();
+  return lower.includes("clawdbot") || lower.includes("moltbot");
+}
+
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
@@ -134,15 +146,18 @@ async function scanLaunchdDir(params: {
     } catch {
       continue;
     }
-    if (!containsMarker(contents)) continue;
+    const marker = detectMarker(contents);
+    if (!marker) continue;
     const label = tryExtractPlistLabel(contents) ?? labelFromName;
     if (isIgnoredLaunchdLabel(label)) continue;
-    if (isOpenClawGatewayLaunchdService(label, contents)) continue;
+    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) continue;
     results.push({
       platform: "darwin",
       label,
       detail: `plist: ${fullPath}`,
       scope: params.scope,
+      marker,
+      legacy: marker !== "openclaw" || isLegacyLabel(label),
     });
   }
 
@@ -172,13 +187,16 @@ async function scanSystemdDir(params: {
     } catch {
       continue;
     }
-    if (!containsMarker(contents)) continue;
-    if (isOpenClawGatewaySystemdService(name, contents)) continue;
+    const marker = detectMarker(contents);
+    if (!marker) continue;
+    if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) continue;
     results.push({
       platform: "linux",
       label: entry,
       detail: `unit: ${fullPath}`,
       scope: params.scope,
+      marker,
+      legacy: marker !== "openclaw",
     });
   }
 
@@ -336,15 +354,21 @@ export async function findExtraGatewayServices(
       if (isOpenClawGatewayTaskName(name)) continue;
       const lowerName = name.toLowerCase();
       const lowerCommand = task.taskToRun?.toLowerCase() ?? "";
-      const matches = EXTRA_MARKERS.some(
-        (marker) => lowerName.includes(marker) || lowerCommand.includes(marker),
-      );
-      if (!matches) continue;
+      let marker: Marker | null = null;
+      for (const candidate of EXTRA_MARKERS) {
+        if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {
+          marker = candidate;
+          break;
+        }
+      }
+      if (!marker) continue;
       push({
         platform: "win32",
         label: name,
         detail: task.taskToRun ? `task: ${name}, run: ${task.taskToRun}` : name,
         scope: "system",
+        marker,
+        legacy: marker !== "openclaw",
       });
     }
     return results;
