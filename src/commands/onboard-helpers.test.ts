@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { openUrl, resolveBrowserOpenCommand, resolveControlUiLinks } from "./onboard-helpers.js";
+import {
+  normalizeGatewayTokenInput,
+  openUrl,
+  resolveBrowserOpenCommand,
+  resolveControlUiLinks,
+} from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(async () => ({
@@ -101,5 +106,20 @@ describe("resolveControlUiLinks", () => {
     });
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+  });
+});
+
+describe("normalizeGatewayTokenInput", () => {
+  it("returns empty string for undefined or null", () => {
+    expect(normalizeGatewayTokenInput(undefined)).toBe("");
+    expect(normalizeGatewayTokenInput(null)).toBe("");
+  });
+
+  it("trims string input", () => {
+    expect(normalizeGatewayTokenInput("  token  ")).toBe("token");
+  });
+
+  it("coerces non-string input to string", () => {
+    expect(normalizeGatewayTokenInput(123)).toBe("123");
   });
 });

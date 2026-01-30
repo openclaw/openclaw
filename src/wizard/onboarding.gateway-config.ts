@@ -1,4 +1,4 @@
-import { randomToken } from "../commands/onboard-helpers.js";
+import { normalizeGatewayTokenInput, randomToken } from "../commands/onboard-helpers.js";
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
@@ -182,9 +182,7 @@ export async function configureGatewayForOnboarding(
         placeholder: "Needed for multi-machine or non-loopback access",
         initialValue: quickstartGateway.token ?? "",
       });
-      // FIX: Ensure undefined becomes an empty string, not "undefined" string
-      const rawInput = tokenInput ? String(tokenInput).trim() : "";
-      gatewayToken = rawInput || randomToken();
+      gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
     }
   }
 
