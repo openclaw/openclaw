@@ -119,7 +119,7 @@ describe("normalizeGatewayTokenInput", () => {
     expect(normalizeGatewayTokenInput("  token  ")).toBe("token");
   });
 
-  it("coerces non-string input to string", () => {
-    expect(normalizeGatewayTokenInput(123)).toBe("123");
+  it("returns empty string for non-string input", () => {
+    expect(normalizeGatewayTokenInput(123)).toBe("");
   });
 });
