@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 
 export function resolveControlUiRepoRoot(
   argv1: string | undefined = process.argv[1],
@@ -32,9 +33,9 @@ export function resolveControlUiRepoRoot(
   return null;
 }
 
-export function resolveControlUiDistIndexPath(
+export async function resolveControlUiDistIndexPath(
   argv1: string | undefined = process.argv[1],
-): string | null {
+): Promise<string | null> {
   if (!argv1) return null;
   const normalized = path.resolve(argv1);
 
@@ -44,32 +45,9 @@ export function resolveControlUiDistIndexPath(
     return path.join(distDir, "control-ui", "index.html");
   }
 
-  // Case 2: npm global install - entrypoint is at package root (e.g., openclaw.mjs)
-  // or in node_modules/.bin/. Walk up to find package.json with dist/control-ui/
-  const parts = normalized.split(path.sep);
-
-  // Handle .bin symlink: node_modules/.bin/openclaw -> node_modules/openclaw/...
-  const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
-    const binName = path.basename(normalized);
-    const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
-    const pkgPath = path.join(nodeModulesDir, binName, "dist", "control-ui", "index.html");
-    if (fs.existsSync(pkgPath)) return pkgPath;
-  }
-
-  // Walk up from entrypoint looking for package with dist/control-ui/
-  let dir = path.dirname(normalized);
-  for (let i = 0; i < 8; i++) {
-    const candidate = path.join(dir, "dist", "control-ui", "index.html");
-    if (fs.existsSync(path.join(dir, "package.json")) && fs.existsSync(candidate)) {
-      return candidate;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-
-  return null;
+  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
+  if (!packageRoot) return null;
+  return path.join(packageRoot, "dist", "control-ui", "index.html");
 }
 
 export type EnsureControlUiAssetsResult = {
@@ -93,7 +71,7 @@ export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { timeoutMs?: number },
 ): Promise<EnsureControlUiAssetsResult> {
-  const indexFromDist = resolveControlUiDistIndexPath(process.argv[1]);
+  const indexFromDist = await resolveControlUiDistIndexPath(process.argv[1]);
   if (indexFromDist && fs.existsSync(indexFromDist)) {
     return { ok: true, built: false };
   }
