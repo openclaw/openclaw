@@ -110,6 +110,7 @@ export function registerSlackMessageEvents(params: {
           sessionKey,
           contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
         });
+        await handleSlackMessage(message, { source: "message" });
         return;
       }
 
