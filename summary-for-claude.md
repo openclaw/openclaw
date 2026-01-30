@@ -94,22 +94,14 @@ pnpm openclaw gateway run --force
 - **Not done:** No automated tests for cursor-cli in this session. E2E would require `cursor` on PATH and (optionally) mock or real login.
 - **Platform:** Cursor keychain auth is macOS-only in code (`platform === "darwin"` in `readCursorCliCredentials`); other platforms would need another auth story (e.g. env or file) if desired.
 
-## Known bugs
+## Fixed bugs
 
-### TUI does not parse cursor-cli JSONL output
+### ✅ TUI cursor-cli JSONL parsing (f84aa51)
 
-When using cursor-cli via the Control UI TUI, the raw JSONL output is displayed instead of being parsed and rendered properly:
-
+Fixed in `src/agents/cli-runner/helpers.ts` — `parseCliJsonl()` now handles cursor-cli's format:
+```json
+{"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
 ```
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\n2 + 4 = 6."}]}...}
-```
-
-**Root cause:** The TUI expects a different output format than what cursor-cli produces. The CLI backend outputs JSONL with `type: "assistant"`, `type: "thinking"`, etc., which the TUI doesn't interpret.
-
-**Files to investigate:**
-- `ui/src/ui/views/chat.ts` or similar — TUI message rendering
-- `src/agents/cli-runner.ts` — CLI output parsing
-- Gateway websocket message handling for agent responses
 
 ## UI improvement opportunities (remaining)
 
@@ -118,7 +110,7 @@ When using cursor-cli via the Control UI TUI, the raw JSONL output is displayed 
 3. **Control UI config form** (`ui/src/ui/views/config-form.*.ts`) — Could add cursor-cli backend selection dropdown in the agents section
 4. ~~**Onboarding**~~ ✅ Done — `src/commands/auth-choice.apply.cursor-cli.ts`
 5. **Gateway model catalog** (`src/gateway/server-model-catalog.ts`) — cursor-cli models could appear in `models.list` API for UI display
-6. **Fix TUI JSONL parsing** — See bug above
+6. ~~**Fix TUI JSONL parsing**~~ ✅ Done — `src/agents/cli-runner/helpers.ts`
 
 ## Repo / env
 

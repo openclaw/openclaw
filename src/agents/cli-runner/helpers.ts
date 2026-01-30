@@ -324,6 +324,20 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
         texts.push(item.text);
       }
     }
+    // Handle cursor-cli format: {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
+    // Only extract from "assistant" type - "result" type duplicates the same content
+    const parsedType = typeof parsed.type === "string" ? parsed.type.toLowerCase() : "";
+    if (parsedType === "assistant") {
+      const message = isRecord(parsed.message) ? parsed.message : null;
+      const content = message && Array.isArray(message.content) ? message.content : null;
+      if (content) {
+        for (const block of content) {
+          if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
+            texts.push(block.text);
+          }
+        }
+      }
+    }
   }
   const text = texts.join("\n").trim();
   if (!text) return null;
