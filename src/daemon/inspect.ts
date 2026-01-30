@@ -147,8 +147,20 @@ async function scanLaunchdDir(params: {
       continue;
     }
     const marker = detectMarker(contents);
-    if (!marker) continue;
     const label = tryExtractPlistLabel(contents) ?? labelFromName;
+    if (!marker) {
+      const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
+      if (!legacyLabel) continue;
+      results.push({
+        platform: "darwin",
+        label,
+        detail: `plist: ${fullPath}`,
+        scope: params.scope,
+        marker: isLegacyLabel(label) ? "clawdbot" : "moltbot",
+        legacy: true,
+      });
+      continue;
+    }
     if (isIgnoredLaunchdLabel(label)) continue;
     if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) continue;
     results.push({
