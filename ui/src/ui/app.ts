@@ -258,7 +258,7 @@ export class OpenClawApp extends LitElement {
   private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
-  refreshSessionsAfterChat = false;
+  refreshSessionsAfterChat = new Set<string>();
   basePath = "";
   private popStateHandler = () =>
     onPopStateInternal(
