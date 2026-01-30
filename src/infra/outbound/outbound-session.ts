@@ -850,6 +850,9 @@ export async function ensureOutboundSessionEntry(params: {
       storePath,
       sessionKey: params.route.sessionKey,
       ctx,
+      // Outbound sends should not update displayName since it represents the
+      // session owner (inbound initiator), not the last outbound recipient.
+      skipDisplayName: true,
     });
   } catch {
     // Do not block outbound sends on session meta writes.

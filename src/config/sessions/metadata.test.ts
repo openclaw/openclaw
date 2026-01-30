@@ -20,4 +20,33 @@ describe("deriveSessionMetaPatch", () => {
     expect(patch?.channel).toBe("whatsapp");
     expect(patch?.groupId).toBe("123@g.us");
   });
+
+  it("skips displayName when skipDisplayName is true", () => {
+    const patchWithDisplayName = deriveSessionMetaPatch({
+      ctx: {
+        Provider: "whatsapp",
+        ChatType: "group",
+        GroupSubject: "Family",
+        From: "123@g.us",
+      },
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(patchWithDisplayName?.displayName).toBeDefined();
+
+    const patchWithoutDisplayName = deriveSessionMetaPatch({
+      ctx: {
+        Provider: "whatsapp",
+        ChatType: "group",
+        GroupSubject: "Family",
+        From: "123@g.us",
+      },
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      skipDisplayName: true,
+    });
+    expect(patchWithoutDisplayName?.displayName).toBeUndefined();
+    // Other fields should still be present
+    expect(patchWithoutDisplayName?.subject).toBe("Family");
+    expect(patchWithoutDisplayName?.channel).toBe("whatsapp");
+    expect(patchWithoutDisplayName?.groupId).toBe("123@g.us");
+  });
 });

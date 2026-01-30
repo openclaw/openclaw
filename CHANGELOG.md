@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 Status: stable.
 
 ### Changes
+- Sessions: fix displayName being overwritten by outbound message recipient instead of session owner. (#4683)
 - Rebrand: rename the npm package/CLI to `openclaw`, add a `openclaw` compatibility shim, and move extensions to the `@openclaw/*` scope.
 - Onboarding: strengthen security warning copy for beta + access control expectations.
 - Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.

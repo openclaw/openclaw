@@ -62,6 +62,8 @@ export function deriveGroupSessionPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  /** Skip displayName derivation (e.g., for outbound session entries). */
+  skipDisplayName?: boolean;
 }): Partial<SessionEntry> | null {
   const resolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   if (!resolution?.channel) return null;
@@ -91,15 +93,17 @@ export function deriveGroupSessionPatch(params: {
   if (nextGroupChannel) patch.groupChannel = nextGroupChannel;
   if (space) patch.space = space;
 
-  const displayName = buildGroupDisplayName({
-    provider: channel,
-    subject: nextSubject ?? params.existing?.subject,
-    groupChannel: nextGroupChannel ?? params.existing?.groupChannel,
-    space: space ?? params.existing?.space,
-    id: resolution.id,
-    key: params.sessionKey,
-  });
-  if (displayName) patch.displayName = displayName;
+  if (!params.skipDisplayName) {
+    const displayName = buildGroupDisplayName({
+      provider: channel,
+      subject: nextSubject ?? params.existing?.subject,
+      groupChannel: nextGroupChannel ?? params.existing?.groupChannel,
+      space: space ?? params.existing?.space,
+      id: resolution.id,
+      key: params.sessionKey,
+    });
+    if (displayName) patch.displayName = displayName;
+  }
 
   return patch;
 }
@@ -109,8 +113,16 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  /** Skip displayName derivation (e.g., for outbound session entries). */
+  skipDisplayName?: boolean;
 }): Partial<SessionEntry> | null {
-  const groupPatch = deriveGroupSessionPatch(params);
+  const groupPatch = deriveGroupSessionPatch({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+    existing: params.existing,
+    groupResolution: params.groupResolution,
+    skipDisplayName: params.skipDisplayName,
+  });
   const origin = deriveSessionOrigin(params.ctx);
   if (!groupPatch && !origin) return null;
 

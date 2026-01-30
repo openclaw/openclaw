@@ -361,6 +361,8 @@ export async function recordSessionMetaFromInbound(params: {
   ctx: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
   createIfMissing?: boolean;
+  /** Skip displayName derivation (e.g., for outbound session entries). */
+  skipDisplayName?: boolean;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
@@ -371,6 +373,7 @@ export async function recordSessionMetaFromInbound(params: {
       sessionKey,
       existing,
       groupResolution: params.groupResolution,
+      skipDisplayName: params.skipDisplayName,
     });
     if (!patch) return existing ?? null;
     if (!existing && !createIfMissing) return null;
