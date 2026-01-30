@@ -2,7 +2,6 @@ services:
   clawdbot-gateway:
     image: ${CLAWDBOT_IMAGE:-clawdbot:local}
     container_name: clawdbot-gateway
-    user: "node"
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -15,6 +14,7 @@ services:
     volumes:
       - clawdbot_state:/home/node/.clawdbot
       - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "127.0.0.1:${CLAWDBOT_GATEWAY_PORT:-18789}:18789"
       - "127.0.0.1:${CLAWDBOT_BRIDGE_PORT:-18790}:18790"
