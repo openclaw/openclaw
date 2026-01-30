@@ -2,137 +2,63 @@
 
 Docs: https://docs.molt.bot
 
-## 2026.1.27-beta.1
+## 2026.1.29
 Status: beta.
 
+### Highlights
+- Rebrand: rename the npm package/CLI to `moltbot`, keep a `moltbot` compatibility shim, move extensions to the `@moltbot/*` scope, and update bot.molt bundle IDs/labels/logging subsystems. Thanks @thewilloftheshadow.
+- New channels/plugins: Twitch plugin; Google Chat (beta) with Workspace Add-on events + typing indicator. (#1612, #1635) Thanks @tyler6204, @iHildy.
+- Security hardening: gateway auth defaults required, hook token query-param deprecation, Windows ACL audits, mDNS minimal discovery, and SSH target option injection fix. (#4001, #2016, #1957, #1882, #2200)
+- WebChat: image paste + image-only sends; keep sub-agent announce replies visible. (#1925, #1977)
+- Tooling: per-sender group tool policies + tools.alsoAllow additive allowlist. (#1757, #1762)
+- Memory Search: allow extra paths for memory indexing. (#3600) Thanks @kira-ariaki.
+
 ### Changes
-- Rebrand: rename the npm package/CLI to `moltbot`, add a `moltbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
+- Providers: add Venice AI integration; update Moonshot Kimi references to kimi-k2.5; update MiniMax API endpoint/format. (#2762, #3064)
+- Providers: add Xiaomi MiMo (mimo-v2-flash) support and onboarding flow. (#3454) Thanks @WqyJh.
+- Telegram: quote replies, edit-message action, silent sends, sticker support + vision caching, linkPreview toggle, plugin sendPayload support. (#2900, #2394, #2382, #2548, #1700, #1917)
+- Discord: configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.
+- Browser: route browser control via gateway/node; fallback URL matching for relay targets. (#1999)
+- macOS: add direct gateway transport; preserve custom SSH usernames for remote control; bump Textual to 0.3.1. (#2033, #2046)
+- Routing: add per-account DM session scope + guidance for multi-account setups. (#3095) Thanks @jarvis-sam.
+- Hooks: make session-memory message count configurable. (#2681)
+- Tools: honor tools.exec.safeBins in exec allowlist checks. (#2281)
+- Security: add Control UI device auth bypass flag + audit warnings; warn on hook tokens via query params; add security audit CLI surface. (#2248, #2200)
+- Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
+- Config: apply config.env before ${VAR} substitution. (#1813)
+- Web search: add Brave freshness filter parameter. (#1688) Thanks @JonUleis.
+- Control UI: improve chat session dropdown refresh, URL confirmation flow, config-save guardrails, and chat composer sizing. (#3682, #3578, #1707, #2950)
 - Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
-- macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
-- macOS: finish Moltbot app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.
-- Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy com.clawdbot migrations). Thanks @thewilloftheshadow.
-- Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
+- CLI: use Node's compile cache for faster startup; recognize versioned node binaries (e.g., node-22). (#2808, #2490) Thanks @pi0, @David-Marsh-Photo.
 - Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
-- Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
 - Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.
-- Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.
-- Docs: add migration guide for moving to a new machine. (#2381)
-- Docs: add Northflank one-click deployment guide. (#2167) Thanks @AdeboyeDN.
-- Gateway: warn on hook tokens via query params; document header auth preference. (#2200) Thanks @YuriNachos.
-- Gateway: add dangerous Control UI device auth bypass flag + audit warnings. (#2248)
-- Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
-- Config: auto-migrate legacy state/config paths and keep config resolution consistent across legacy filenames.
-- Discord: add configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.
-- Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.
-- Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
-- Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
-- Docs: add Render deployment guide. (#1975) Thanks @anurag.
-- Docs: add Claude Max API Proxy guide. (#1875) Thanks @atalovesyou.
-- Docs: add DigitalOcean deployment guide. (#1870) Thanks @0xJonHoldsCrypto.
-- Docs: add Oracle Cloud (OCI) platform guide + cross-links. (#2333) Thanks @hirefrank.
-- Docs: add Raspberry Pi install guide. (#1871) Thanks @0xJonHoldsCrypto.
-- Docs: add GCP Compute Engine deployment guide. (#1848) Thanks @hougangdev.
-- Docs: add LINE channel guide. Thanks @thewilloftheshadow.
-- Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
-- Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
-- Onboarding: strengthen security warning copy for beta + access control expectations.
-- Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
-- Gateway: prefer newest session metadata when combining stores. (#1823) Thanks @emanuelst.
-- Web UI: keep sub-agent announce replies visible in WebChat. (#1977) Thanks @andrescardonas7.
-- CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
-- macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.
-- Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
-- Browser: route browser control via gateway/node; remove standalone browser control command and control URL config.
-- Browser: route `browser.request` via node proxies when available; honor proxy timeouts; derive browser ports from `gateway.port`.
-- Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
-- Build: bundle A2UI assets during build and stop tracking generated bundles. (#2455) Thanks @0oAstro.
-- Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
-- Telegram: support plugin sendPayload channelData (media/buttons) and validate plugin commands. (#1917) Thanks @JoshuaLelon.
-- Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
-- Docs: keep docs header sticky so navbar stays visible while scrolling. (#2445) Thanks @chenyuan99.
-- Docs: update exe.dev install instructions. (#https://github.com/moltbot/moltbot/pull/3047) Thanks @zackerthescar.
-- Security: use Windows ACLs for permission audits and fixes on Windows. (#1957)
-- Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
-- Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
-- TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
-- Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
-- Telegram: add optional silent send flag (disable notifications). (#2382) Thanks @Suksham-sharma.
-- Telegram: support editing sent messages via message(action="edit"). (#2394) Thanks @marcelomar21.
-- Telegram: support quote replies for message tool and inbound context. (#2900) Thanks @aduk059.
-- Telegram: add sticker receive/send with vision caching. (#2629) Thanks @longjos.
-- Telegram: send sticker pixels to vision models. (#2650)
-- Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
-- Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
-- macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
-- CLI: use Node's module compile cache for faster startup. (#2808) Thanks @pi0.
-- Routing: add per-account DM session scope and document multi-account isolation. (#3095) Thanks @jarvis-sam.
+- Docs: new deployment guides (Northflank, Render, Oracle, Raspberry Pi, GCP, DigitalOcean), Claude Max API Proxy, Vercel AI Gateway, migration guide, formal verification updates, and Fly private hardening. (#2167, #1975, #2333, #1871, #1848, #1870, #1875, #1901, #2381, #2289)
+- Onboarding: add Venice API key to non-interactive flow; strengthen security warning copy.
 
 ### Breaking
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
-- Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
-- Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
-- Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
-- Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
-- Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.
-- TTS: read OPENAI_TTS_BASE_URL at runtime instead of module load to honor config.env. (#3341) Thanks @hclsys.
-- macOS: auto-scroll to bottom when sending a new message while scrolled up. (#2471) Thanks @kennyklee.
-- Web UI: auto-expand the chat compose textarea while typing (with sensible max height). (#2950) Thanks @shivamraut101.
-- Gateway: prevent crashes on transient network errors (fetch failures, timeouts, DNS). Added fatal error detection to only exit on truly critical errors. Fixes #2895, #2879, #2873. (#2980) Thanks @elliotsecops.
-- Agents: guard channel tool listActions to avoid plugin crashes. (#2859) Thanks @mbelinky.
-- Discord: stop resolveDiscordTarget from passing directory params into messaging target parsers. Fixes #3167. Thanks @thewilloftheshadow.
-- Discord: avoid resolving bare channel names to user DMs when a username matches. Thanks @thewilloftheshadow.
-- Discord: fix directory config type import for target resolution. Thanks @thewilloftheshadow.
-- Providers: update MiniMax API endpoint and compatibility mode. (#3064) Thanks @hlbbbbbbb.
-- Telegram: treat more network errors as recoverable in polling. (#3013) Thanks @ryancontent.
-- Discord: resolve usernames to user IDs for outbound messages. (#2649) Thanks @nonggialiang.
-- Providers: update Moonshot Kimi model references to kimi-k2.5. (#2762) Thanks @MarvinCui.
-- Gateway: suppress AbortError and transient network errors in unhandled rejections. (#2451) Thanks @Glucksberg.
-- TTS: keep /tts status replies on text-only commands and avoid duplicate block-stream audio. (#2451) Thanks @Glucksberg.
-- Security: pin npm overrides to keep tar@7.5.4 for install toolchains.
-- Security: properly test Windows ACL audit for config includes. (#2403) Thanks @dominicnunez.
-- CLI: recognize versioned Node executables when parsing argv. (#2490) Thanks @David-Marsh-Photo.
-- CLI: avoid prompting for gateway runtime under the spinner. (#2874)
-- BlueBubbles: coalesce inbound URL link preview messages. (#1981) Thanks @tyler6204.
-- Cron: allow payloads containing "heartbeat" in event filter. (#2219) Thanks @dwfinkelstein.
-- CLI: avoid loading config for global help/version while registering plugin commands. (#2212) Thanks @dial481.
-- Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
-- Agents: release session locks on process termination and cover more signals. (#2483) Thanks @janeexai.
-- Agents: skip cooldowned providers during model failover. (#2143) Thanks @YiWang24.
-- Telegram: harden polling + retry behavior for transient network errors and Node 22 transport issues. (#2420) Thanks @techboss.
-- Telegram: ignore non-forum group message_thread_id while preserving DM thread sessions. (#2731) Thanks @dylanneve1.
-- Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
-- Telegram: centralize API error logging for delivery and bot calls. (#2492) Thanks @altryne.
-- Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
-- Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
-- Build: align memory-core peer dependency with lockfile.
-- Security: add mDNS discovery mode with minimal default to reduce information disclosure. (#1882) Thanks @orlyjamie.
-- Security: harden URL fetches with DNS pinning to reduce rebinding risk. Thanks Chris Zheng.
-- Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
-- Security: wrap external hook content by default with a per-hook opt-out. (#1827) Thanks @mertcicekci0.
-- Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).
-- Gateway: treat loopback + non-local Host connections as remote unless trusted proxy headers are present.
-- Onboarding: remove unsupported gateway auth "off" choice from onboarding/configure flows and CLI flags.
+- Security: harden SSH tunnel target parsing to prevent option injection/DoS. (#4001) Thanks @YLChen-007.
+- Security: prevent PATH injection in exec sandbox; harden file serving; pin DNS in URL fetches; verify Twilio webhooks; fix LINE webhook timing-attack edge case; validate Tailscale Serve identity; flag loopback Control UI with auth disabled as critical. (#1616, #1795)
+- Gateway: prevent crashes on transient network errors, suppress AbortError/unhandled rejections, sanitize error responses, clean session locks on exit, and harden reverse proxy handling for unauthenticated proxied connects. (#2980, #2451, #2483, #1795)
+- Config: auto-migrate legacy state/config paths; honor state dir overrides.
+- Packaging: include missing dist/shared and dist/link-understanding outputs in npm tarball installs.
+- Telegram: avoid silent empty replies, improve polling/network recovery, handle video notes, keep DM thread sessions, ignore non-forum message_thread_id, centralize API error logging, include AccountId in native command context. (#3796, #3013, #2905, #2731, #2492, #2942)
+- Telegram: preserve reasoning tags inside code blocks. (#3952) Thanks @vinaygit18.
+- Discord: restore username resolution, resolve outbound usernames to IDs, honor threadId replies, guard forum thread access. (#3131, #2649)
+- BlueBubbles: coalesce URL link previews, improve reaction handling, preserve reply-tag GUIDs. (#1981, #1641)
+- Voice Call: prevent TTS overlap, validate env-var config, return TwiML for conversation calls. (#1713, #1634)
+- Media: fix text attachment MIME classification + XML escaping on Windows. (#3628, #3750)
+- Models: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
+- Web UI: auto-scroll on send; fix textarea sizing; improve chat session refresh. (#2471, #2950, #3682)
+- CLI/TUI: resume sessions cleanly; guard width overflow; avoid spinner prompt race. (#1921, #1686, #2874)
+- Slack: fix file downloads failing on redirects with missing auth header. (#1936)
+- iMessage: normalize messaging targets. (#1708)
+- Signal: fix reactions and add configurable startup timeout. (#1651, #1677)
+- Matrix: decrypt E2EE media with size guard. (#1744)
 
-## 2026.1.24-3
-
-### Fixes
-- Slack: fix image downloads failing due to missing Authorization header on cross-origin redirects. (#1936) Thanks @sanderhelgesen.
-- Gateway: harden reverse proxy handling for local-client detection and unauthenticated proxied connects. (#1795) Thanks @orlyjamie.
-- Security audit: flag loopback Control UI with auth disabled as critical. (#1795) Thanks @orlyjamie.
-- CLI: resume claude-cli sessions and stream CLI replies to TUI clients. (#1921) Thanks @rmorse.
-
-## 2026.1.24-2
-
-### Fixes
-- Packaging: include dist/link-understanding output in npm tarball (fixes missing apply.js import on install).
-
-## 2026.1.24-1
-
-### Fixes
-- Packaging: include dist/shared output in npm tarball (fixes missing reasoning-tags import on install).
 
 ## 2026.1.24
 
