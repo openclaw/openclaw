@@ -264,7 +264,7 @@ type BlueBubblesDebounceEntry = {
  * This helps combine URL text + link preview balloon messages that BlueBubbles
  * sends as separate webhook events when no explicit inbound debounce config exists.
  */
-const DEFAULT_INBOUND_DEBOUNCE_MS = 350;
+const DEFAULT_INBOUND_DEBOUNCE_MS = 500;
 
 /**
  * Combines multiple debounced messages into a single message for processing.
@@ -363,7 +363,23 @@ function getOrCreateDebouncer(target: WebhookTarget) {
     debounceMs: resolveBlueBubblesDebounceMs(config, core),
     buildKey: (entry) => {
       const msg = entry.message;
-      // Build key from account + chat + sender to coalesce messages from same source
+      // Prefer stable, shared identifiers to coalesce rapid-fire webhook events for the
+      // same message (e.g., text-only then text+attachment).
+      //
+      // For balloons (URL previews, stickers, etc), BlueBubbles often uses a different
+      // messageId than the originating text. When present, key by associatedMessageGuid
+      // to keep text + balloon coalescing working.
+      const balloonBundleId = msg.balloonBundleId?.trim();
+      const associatedMessageGuid = msg.associatedMessageGuid?.trim();
+      if (balloonBundleId && associatedMessageGuid) {
+        return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
+      }
+
+      const messageId = msg.messageId?.trim();
+      if (messageId) {
+        return `bluebubbles:${account.accountId}:msg:${messageId}`;
+      }
+
       const chatKey =
         msg.chatGuid?.trim() ??
         msg.chatIdentifier?.trim() ??
@@ -372,13 +388,12 @@ function getOrCreateDebouncer(target: WebhookTarget) {
     },
     shouldDebounce: (entry) => {
       const msg = entry.message;
-      // Skip debouncing for messages with attachments - process immediately
-      if (msg.attachments && msg.attachments.length > 0) return false;
       // Skip debouncing for from-me messages (they're just cached, not processed)
       if (msg.fromMe) return false;
       // Skip debouncing for control commands - process immediately
       if (core.channel.text.hasControlCommand(msg.text, config)) return false;
-      // Debounce normal text messages and URL balloon messages
+      // Debounce all other messages to coalesce rapid-fire webhook events
+      // (e.g., text+image arriving as separate webhooks for the same messageId)
       return true;
     },
     onFlush: async (entries) => {
