@@ -30,6 +30,7 @@ export const ArcadeConfigSchema = z.object({
   tools: ToolsFilterSchema.optional(),
   autoAuth: z.boolean().default(true),
   cacheToolsTtlMs: z.number().default(300000), // 5 minutes
+  useApiTools: z.boolean().default(false), // Include *Api toolkits (e.g., GithubApi, SlackApi)
 });
 
 export type ArcadeConfig = z.infer<typeof ArcadeConfigSchema>;
@@ -389,6 +390,13 @@ function escapeRegex(str: string): string {
 // Plugin Config Schema (for OpenClaw)
 // ============================================================================
 
+/**
+ * Check if a toolkit name is an "Api" toolkit (e.g., GithubApi, SlackApi)
+ */
+export function isApiToolkit(toolkitName: string): boolean {
+  return toolkitName.endsWith("Api");
+}
+
 export const arcadeConfigSchema = {
   parse(value: unknown): ArcadeConfig {
     return resolveArcadeConfig(value);
@@ -420,6 +428,10 @@ export const arcadeConfigSchema = {
     cacheToolsTtlMs: {
       label: "Tool Cache TTL (ms)",
       advanced: true,
+    },
+    useApiTools: {
+      label: "Include API Toolkits",
+      description: "Include comprehensive API toolkits (e.g., GithubApi, SlackApi) with more tools",
     },
   },
 };

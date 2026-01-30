@@ -79,6 +79,11 @@
         "type": "number",
         "description": "How long to cache tool definitions (ms)",
         "default": 300000
+      },
+      "useApiTools": {
+        "type": "boolean",
+        "description": "Include comprehensive *Api toolkits (e.g., GithubApi, SlackApi) with more tools",
+        "default": false
       }
     },
     "required": []
@@ -110,6 +115,10 @@
     "cacheToolsTtlMs": {
       "label": "Tool Cache TTL (ms)",
       "advanced": true
+    },
+    "useApiTools": {
+      "label": "Include API Toolkits",
+      "description": "Include comprehensive *Api toolkits (GithubApi, SlackApi, etc.) with more tools"
     }
   }
 }

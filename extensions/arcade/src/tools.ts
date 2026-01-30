@@ -9,7 +9,7 @@ import { Type, type TSchema, type TObject } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { ArcadeClient, ArcadeToolDefinition, ArcadeToolParameter } from "./client.js";
 import type { ArcadeConfig } from "./config.js";
-import { matchesToolFilter } from "./config.js";
+import { matchesToolFilter, isApiToolkit } from "./config.js";
 
 // ============================================================================
 // Types
@@ -262,6 +262,12 @@ export async function registerArcadeTools(
       const toolkitName = typeof arcadeTool.toolkit === "string"
         ? arcadeTool.toolkit
         : arcadeTool.toolkit?.name ?? "";
+
+      // Skip *Api toolkits unless useApiTools is enabled
+      if (!config.useApiTools && isApiToolkit(toolkitName)) {
+        continue;
+      }
+
       const toolkitConfig = config.toolkits?.[toolkitName.toLowerCase()];
       if (toolkitConfig?.enabled === false) {
         continue;
@@ -323,6 +329,11 @@ export function registerArcadeToolsFromCache(
   for (const cached of cachedTools) {
     // Check if tool is allowed by filter
     if (!matchesToolFilter(cached.name, config.tools)) {
+      continue;
+    }
+
+    // Skip *Api toolkits unless useApiTools is enabled
+    if (!config.useApiTools && isApiToolkit(cached.toolkit)) {
       continue;
     }
 

@@ -98,6 +98,7 @@ Config file location: `~/.openclaw/openclaw.json`
 | `toolPrefix` | string | `arcade` | Prefix for tool names |
 | `autoAuth` | boolean | `true` | Auto-prompt for authorization |
 | `cacheToolsTtlMs` | number | `300000` | Cache TTL (5 min) |
+| `useApiTools` | boolean | `false` | Include *Api toolkits (GithubApi, SlackApi, etc.) |
 | `tools.allow` | string[] | — | Allowlist patterns (e.g., `Gmail.*`) |
 | `tools.deny` | string[] | — | Denylist patterns |
 

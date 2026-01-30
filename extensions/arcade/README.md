@@ -234,6 +234,7 @@ pnpm lint
 | `toolPrefix` | string | `arcade` | Prefix for tool names |
 | `autoAuth` | boolean | `true` | Auto-prompt for authorization |
 | `cacheToolsTtlMs` | number | `300000` | Tool cache TTL (5 min) |
+| `useApiTools` | boolean | `false` | Include *Api toolkits (GithubApi, SlackApi, etc.) |
 | `tools.allow` | string[] | - | Allowlist patterns |
 | `tools.deny` | string[] | - | Denylist patterns |
 | `toolkits.<id>.enabled` | boolean | `true` | Enable/disable toolkit |
