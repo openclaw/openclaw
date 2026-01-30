@@ -5,11 +5,14 @@ import {
   parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../../config/config.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -80,6 +83,22 @@ export function normalizeAlias(alias: string): string {
     throw new Error("Alias must use letters, numbers, dots, underscores, colons, or dashes.");
   }
   return trimmed;
+}
+
+export function resolveKnownAgentId(params: {
+  cfg: OpenClawConfig;
+  rawAgentId?: string | null;
+}): string | undefined {
+  const raw = params.rawAgentId?.trim();
+  if (!raw) return undefined;
+  const agentId = normalizeAgentId(raw);
+  const knownAgents = listAgentIds(params.cfg);
+  if (!knownAgents.includes(agentId)) {
+    throw new Error(
+      `Unknown agent id "${raw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+    );
+  }
+  return agentId;
 }
 
 export { modelKey };

@@ -1,5 +1,10 @@
 import path from "node:path";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import {
+  resolveAgentDir,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentModelPrimary,
+} from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -15,6 +20,7 @@ import {
   buildModelAliasIndex,
   parseModelRef,
   resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { CONFIG_PATH, loadConfig } from "../../config/config.js";
@@ -40,8 +46,12 @@ import {
   sortProbeResults,
   type AuthProbeSummary,
 } from "./list.probe.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  ensureFlagCompatibility,
+  resolveKnownAgentId,
+} from "./shared.js";
 
 export async function modelsStatusCommand(
   opts: {
@@ -63,11 +73,19 @@ export async function modelsStatusCommand(
     throw new Error("--probe cannot be used with --plain output.");
   }
   const cfg = loadConfig();
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
+  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
+  const agentModelPrimary = agentId ? resolveAgentModelPrimary(cfg, agentId) : undefined;
+  const agentFallbacksOverride = agentId
+    ? resolveAgentModelFallbacksOverride(cfg, agentId)
+    : undefined;
+  const resolved = agentId
+    ? resolveDefaultModelForAgent({ cfg, agentId })
+    : resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
 
   const modelConfig = cfg.agents?.defaults?.model as
     | { primary?: string; fallbacks?: string[] }
@@ -77,11 +95,13 @@ export async function modelsStatusCommand(
     | { primary?: string; fallbacks?: string[] }
     | string
     | undefined;
-  const rawModel =
+  const rawDefaultsModel =
     typeof modelConfig === "string" ? modelConfig.trim() : (modelConfig?.primary?.trim() ?? "");
+  const rawModel = agentModelPrimary ?? rawDefaultsModel;
   const resolvedLabel = `${resolved.provider}/${resolved.model}`;
   const defaultLabel = rawModel || resolvedLabel;
-  const fallbacks = typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
+  const defaultsFallbacks = typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
+  const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
   const imageModel =
     typeof imageConfig === "string" ? imageConfig.trim() : (imageConfig?.primary?.trim() ?? "");
   const imageFallbacks = typeof imageConfig === "object" ? (imageConfig?.fallbacks ?? []) : [];
@@ -95,10 +115,6 @@ export async function modelsStatusCommand(
   );
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
-  const agentId = opts.agent?.trim()
-    ? normalizeAgentId(opts.agent.trim())
-    : resolveDefaultAgentId(cfg);
-  const agentDir = resolveAgentDir(cfg, agentId);
   const store = ensureAuthProfileStore(agentDir);
   const modelsPath = path.join(agentDir, "models.json");
 
@@ -300,12 +316,21 @@ export async function modelsStatusCommand(
       JSON.stringify(
         {
           configPath: CONFIG_PATH,
+          ...(agentId ? { agentId } : {}),
           agentDir,
           defaultModel: defaultLabel,
           resolvedDefault: resolvedLabel,
           fallbacks,
           imageModel: imageModel || null,
           imageFallbacks,
+          ...(agentId
+            ? {
+                modelConfig: {
+                  defaultSource: agentModelPrimary ? "agent" : "defaults",
+                  fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
+                },
+              }
+            : {}),
           aliases,
           allowed,
           auth: {
@@ -341,7 +366,10 @@ export async function modelsStatusCommand(
   }
 
   const rich = isRich(opts);
+  type ModelConfigSource = "agent" | "defaults";
   const label = (value: string) => colorize(rich, theme.accent, value.padEnd(14));
+  const labelWithSource = (value: string, source?: ModelConfigSource) =>
+    label(source ? `${value} (${source})` : value);
   const displayDefault =
     rawModel && rawModel !== resolvedLabel ? `${resolvedLabel} (from ${rawModel})` : resolvedLabel;
 
@@ -356,32 +384,34 @@ export async function modelsStatusCommand(
     )}`,
   );
   runtime.log(
-    `${label("Default")}${colorize(rich, theme.muted, ":")} ${colorize(
+    `${labelWithSource("Default", agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined)}${colorize(
       rich,
-      theme.success,
-      displayDefault,
-    )}`,
+      theme.muted,
+      ":",
+    )} ${colorize(rich, theme.success, displayDefault)}`,
   );
   runtime.log(
-    `${label(`Fallbacks (${fallbacks.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
+    `${labelWithSource(
+      `Fallbacks (${fallbacks.length || 0})`,
+      agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
+    )}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       fallbacks.length ? theme.warn : theme.muted,
       fallbacks.length ? fallbacks.join(", ") : "-",
     )}`,
   );
   runtime.log(
-    `${label("Image model")}${colorize(rich, theme.muted, ":")} ${colorize(
-      rich,
-      imageModel ? theme.accentBright : theme.muted,
-      imageModel || "-",
-    )}`,
-  );
-  runtime.log(
-    `${label(`Image fallbacks (${imageFallbacks.length || 0})`)}${colorize(
+    `${labelWithSource("Image model", agentId ? "defaults" : undefined)}${colorize(
       rich,
       theme.muted,
       ":",
-    )} ${colorize(
+    )} ${colorize(rich, imageModel ? theme.accentBright : theme.muted, imageModel || "-")}`,
+  );
+  runtime.log(
+    `${labelWithSource(
+      `Image fallbacks (${imageFallbacks.length || 0})`,
+      agentId ? "defaults" : undefined,
+    )}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       imageFallbacks.length ? theme.accentBright : theme.muted,
       imageFallbacks.length ? imageFallbacks.join(", ") : "-",
