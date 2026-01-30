@@ -100,7 +100,11 @@ export async function runCommandWithTimeout(
     return false;
   })();
 
-  const resolvedEnv = env ? { ...process.env, ...env } : { ...process.env };
+  const resolvedEnv = Object.fromEntries(
+    Object.entries({ ...process.env, ...(env ?? {}) })
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, String(value)]),
+  );
   if (shouldSuppressNpmFund) {
     if (resolvedEnv.NPM_CONFIG_FUND == null) {
       resolvedEnv.NPM_CONFIG_FUND = "false";
