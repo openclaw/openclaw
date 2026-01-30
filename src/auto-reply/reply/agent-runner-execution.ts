@@ -55,7 +55,7 @@ export type AgentRunLoopResult =
  * Categorize errors to provide better error messages to users.
  * Returns error message, type, and optional hint for remediation.
  */
-function categorizeError(err: unknown): {
+export function categorizeError(err: unknown): {
   message: string;
   type: "model" | "tool" | "network" | "config" | "timeout" | "unknown";
   hint?: string;
