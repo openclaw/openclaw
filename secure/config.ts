@@ -53,6 +53,12 @@ export type SecureConfig = {
     host: string;
     gatewayToken: string;
   };
+
+  // Storage (optional)
+  storage: {
+    postgresUrl?: string;
+    redisUrl?: string;
+  };
 };
 
 function required(name: string): string {
@@ -179,6 +185,10 @@ export function loadSecureConfig(): SecureConfig {
       host: optional("HOST", "0.0.0.0"),
       gatewayToken: optional("ASSUREBOT_GATEWAY_TOKEN", generateSecureToken()),
     },
+    storage: {
+      postgresUrl: process.env.DATABASE_URL || process.env.POSTGRES_URL,
+      redisUrl: process.env.REDIS_URL,
+    },
   };
 }
 
@@ -230,6 +240,10 @@ export function redactConfig(config: SecureConfig): Record<string, unknown> {
       port: config.server.port,
       host: config.server.host,
       gatewayToken: "[REDACTED]",
+    },
+    storage: {
+      postgresUrl: config.storage.postgresUrl ? "[CONFIGURED]" : undefined,
+      redisUrl: config.storage.redisUrl ? "[CONFIGURED]" : undefined,
     },
   };
 }

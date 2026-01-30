@@ -13,10 +13,14 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "cron": "^3.1.7",
     "grammy": "^1.21.1",
-    "openai": "^4.77.0"
+    "openai": "^4.77.0",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.11.3",
+    "redis": "^4.6.12"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.10.9",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   },

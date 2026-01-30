@@ -15,6 +15,7 @@ import { createTelegramBot } from "./telegram.js";
 import { createWebhookHandler } from "./webhooks.js";
 import { createSandboxRunner } from "./sandbox.js";
 import { createScheduler } from "./scheduler.js";
+import { createStorage, type Storage } from "./storage.js";
 
 async function main() {
   console.log("=".repeat(50));
@@ -49,6 +50,15 @@ async function main() {
   });
   audit.startup();
 
+  // Create storage (PostgreSQL + Redis)
+  console.log("[init] Creating storage layer...");
+  const storage = await createStorage({
+    postgres: config.storage.postgresUrl ? { url: config.storage.postgresUrl } : undefined,
+    redis: config.storage.redisUrl ? { url: config.storage.redisUrl } : undefined,
+  });
+  const storageHealthy = await storage.isHealthy();
+  console.log(`[init] Storage healthy: ${storageHealthy}`);
+
   // Create AI agent
   console.log(`[init] Creating AI agent (${config.ai.provider})...`);
   const agent = createAgent(config, audit);
@@ -67,13 +77,14 @@ async function main() {
   const { Bot } = await import("grammy");
   const bot = new Bot(config.telegram.botToken);
 
-  // Create scheduler (needs bot for notifications)
+  // Create scheduler (needs bot for notifications, storage for persistence)
   console.log("[init] Creating scheduler...");
   const scheduler = createScheduler({
     config,
     audit,
     agent,
     telegramBot: bot,
+    storage,
   });
 
   // Create Telegram bot handler (with sandbox and scheduler)
@@ -103,6 +114,7 @@ async function main() {
 
     // Health check
     if (url.pathname === "/health" || url.pathname === "/healthz") {
+      const isStorageHealthy = await storage.isHealthy();
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({
@@ -111,6 +123,9 @@ async function main() {
         uptime: process.uptime(),
         telegram: "connected",
         sandbox: sandboxAvailable ? "available" : "unavailable",
+        storage: isStorageHealthy ? "healthy" : "degraded",
+        postgres: config.storage.postgresUrl ? "configured" : "none",
+        redis: config.storage.redisUrl ? "configured" : "none",
       }));
       return;
     }
@@ -148,6 +163,7 @@ async function main() {
     try {
       scheduler.stop();
       await telegram.stop();
+      await storage.close();
 
       await new Promise<void>((resolve, reject) => {
         server.close((err) => {
@@ -175,8 +191,8 @@ async function main() {
     console.log(`[start] HTTP server listening on ${config.server.host}:${config.server.port}`);
   });
 
-  // Start scheduler
-  scheduler.start();
+  // Start scheduler (loads tasks from storage)
+  await scheduler.start();
 
   // Start Telegram bot (polling mode for simplicity)
   await telegram.start();
@@ -188,6 +204,7 @@ async function main() {
   console.log(`  Telegram: Polling mode`);
   console.log(`  Webhooks: http://localhost:${config.server.port}${config.webhooks.basePath}/*`);
   console.log(`  Health:   http://localhost:${config.server.port}/health`);
+  console.log(`  Storage:  ${config.storage.postgresUrl ? "PostgreSQL" : "memory"}${config.storage.redisUrl ? " + Redis" : ""}`);
   console.log(`  Allowed:  ${config.telegram.allowedUsers.length} users`);
   console.log();
   console.log("  Press Ctrl+C to stop");

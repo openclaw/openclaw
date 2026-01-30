@@ -11,6 +11,7 @@ import type { AuditLogger } from "./audit.js";
 import type { AgentCore } from "./agent.js";
 import type { Bot } from "grammy";
 import { sendToUser } from "./telegram.js";
+import type { Storage } from "./storage.js";
 
 export type ScheduledTask = {
   id: string;
@@ -29,7 +30,7 @@ export type Scheduler = {
   enableTask: (id: string, enabled: boolean) => boolean;
   listTasks: () => ScheduledTask[];
   runTask: (id: string) => Promise<void>;
-  start: () => void;
+  start: () => Promise<void>;
   stop: () => void;
 };
 
@@ -38,6 +39,7 @@ export type SchedulerDeps = {
   audit: AuditLogger;
   agent: AgentCore;
   telegramBot: Bot;
+  storage?: Storage;
 };
 
 function generateId(): string {
@@ -45,9 +47,44 @@ function generateId(): string {
 }
 
 export function createScheduler(deps: SchedulerDeps): Scheduler {
-  const { config, audit, agent, telegramBot } = deps;
+  const { config, audit, agent, telegramBot, storage } = deps;
   const tasks = new Map<string, ScheduledTask>();
   const cronJobs = new Map<string, CronJob<null, unknown>>();
+  let initialized = false;
+
+  // Save task to storage (if available)
+  async function persistTask(task: ScheduledTask): Promise<void> {
+    if (storage) {
+      await storage.saveTask(task).catch((err) => {
+        console.error("[scheduler] Failed to persist task:", err);
+      });
+    }
+  }
+
+  // Delete task from storage (if available)
+  async function unpersistTask(id: string): Promise<void> {
+    if (storage) {
+      await storage.deleteTask(id).catch((err) => {
+        console.error("[scheduler] Failed to delete persisted task:", err);
+      });
+    }
+  }
+
+  // Load tasks from storage
+  async function loadFromStorage(): Promise<void> {
+    if (!storage || initialized) return;
+    initialized = true;
+
+    try {
+      const storedTasks = await storage.getAllTasks();
+      for (const task of storedTasks) {
+        tasks.set(task.id, task);
+      }
+      console.log(`[scheduler] Loaded ${storedTasks.length} tasks from storage`);
+    } catch (err) {
+      console.error("[scheduler] Failed to load tasks from storage:", err);
+    }
+  }
 
   async function executeTask(task: ScheduledTask): Promise<void> {
     const startTime = Date.now();
@@ -67,6 +104,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       task.lastRun = new Date();
       task.lastStatus = "ok";
       task.lastError = undefined;
+      await persistTask(task);
 
       audit.cron({
         jobId: task.id,
@@ -80,6 +118,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       task.lastRun = new Date();
       task.lastStatus = "error";
       task.lastError = errorMsg;
+      await persistTask(task);
 
       audit.cron({
         jobId: task.id,
@@ -133,6 +172,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const task: ScheduledTask = { ...taskInput, id };
       tasks.set(id, task);
       scheduleTask(task);
+      void persistTask(task);
       return id;
     },
 
@@ -147,6 +187,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
 
       tasks.delete(id);
+      void unpersistTask(id);
       return true;
     },
 
@@ -156,6 +197,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       task.enabled = enabled;
       scheduleTask(task);
+      void persistTask(task);
       return true;
     },
 
@@ -171,16 +213,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await executeTask(task);
     },
 
-    start(): void {
+    async start(): Promise<void> {
       if (!config.scheduler.enabled) {
         console.log("[scheduler] Scheduler is disabled");
         return;
       }
 
       console.log("[scheduler] Starting scheduler...");
+
+      // Load tasks from persistent storage
+      await loadFromStorage();
+
       for (const task of tasks.values()) {
         scheduleTask(task);
       }
+      console.log(`[scheduler] ${tasks.size} tasks scheduled`);
     },
 
     stop(): void {

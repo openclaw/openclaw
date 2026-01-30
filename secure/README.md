@@ -21,19 +21,24 @@ Your AI agent that runs on your infrastructure, answers only to you, and you can
 ```
 ┌─────────────────────────────────────────────────────┐
 │  TELEGRAM (your secure UI)                          │
-│  ├── Chat with AI (text, voice, images)             │
+│  ├── Chat with AI (text, images, documents)         │
 │  ├── Forward anything → get analysis                │
 │  └── /commands for actions                          │
+├─────────────────────────────────────────────────────┤
+│  DOCUMENT ANALYSIS                                  │
+│  ├── PDF extraction and summarization               │
+│  ├── Code files, markdown, JSON, CSV                │
+│  └── Up to 20MB per document                        │
 ├─────────────────────────────────────────────────────┤
 │  WEBHOOKS IN (authenticated)                        │
 │  ├── GitHub → "PR merged, here's the summary"       │
 │  ├── Uptime → "Site down, checking why..."          │
 │  └── Anything → AI-summarized to Telegram           │
 ├─────────────────────────────────────────────────────┤
-│  SCHEDULED TASKS (cron)                             │
+│  SCHEDULED TASKS (persistent cron)                  │
 │  ├── Morning briefing                               │
-│  ├── Monitor RSS/sites                              │
-│  └── Recurring research                             │
+│  ├── Stored in PostgreSQL (survives restarts)       │
+│  └── Conversations cached in Redis                  │
 ├─────────────────────────────────────────────────────┤
 │  SANDBOX (isolated execution)                       │
 │  ├── Docker container                               │
@@ -71,6 +76,10 @@ ANTHROPIC_API_KEY=sk-ant-...            # Or OPENAI_API_KEY
 ### Optional
 
 ```bash
+# Storage (Railway provides these automatically)
+DATABASE_URL=postgresql://...           # PostgreSQL for task persistence
+REDIS_URL=redis://...                   # Redis for conversation caching
+
 # Webhooks
 WEBHOOK_SECRET=random-32-chars          # Auto-generated if missing
 WEBHOOK_BASE_PATH=/hooks                # Default: /hooks
@@ -178,9 +187,12 @@ All webhooks are:
 │  • Allowlist auth  │     │  • Ephemeral       │
 └────────────────────┘     └────────────────────┘
          │
-         ▼
-    [Anthropic/OpenAI]
-    (Direct API calls)
+    ┌────┴────┬─────────────┐
+    ▼         ▼             ▼
+┌────────┐ ┌────────┐ ┌────────────────┐
+│  Pg    │ │ Redis  │ │ Anthropic/     │
+│ Tasks  │ │ Cache  │ │ OpenAI         │
+└────────┘ └────────┘ └────────────────┘
 ```
 
 ## License

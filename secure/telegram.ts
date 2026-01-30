@@ -11,6 +11,7 @@ import type { AuditLogger } from "./audit.js";
 import type { AgentCore, ConversationStore, ImageContent } from "./agent.js";
 import type { SandboxRunner } from "./sandbox.js";
 import type { Scheduler } from "./scheduler.js";
+import { extractText, summarizeDocument } from "./documents.js";
 
 export type TelegramBot = {
   bot: Bot;
@@ -501,13 +502,95 @@ Cron format: minute hour day month weekday
   // Handle documents
   bot.on("message:document", async (ctx) => {
     const userId = ctx.from?.id;
+    const username = formatUsername(ctx);
+
     if (!userId || !isUserAllowed(userId, config.telegram.allowedUsers)) {
+      audit.messageBlocked({
+        userId: userId || 0,
+        username,
+        reason: "User not in allowlist",
+      });
       return;
     }
 
-    await ctx.reply(
-      "I received your document. Document analysis coming soon - for now, please copy/paste the text content."
-    );
+    const doc = ctx.message?.document;
+    if (!doc) {
+      await ctx.reply("Could not process document.");
+      return;
+    }
+
+    const startTime = Date.now();
+    const caption = ctx.message?.caption || "Please analyze this document and summarize the key points.";
+
+    try {
+      await ctx.replyWithChatAction("typing");
+
+      // Check file size (max 20MB)
+      if (doc.file_size && doc.file_size > 20 * 1024 * 1024) {
+        await ctx.reply("Document too large (max 20MB).");
+        return;
+      }
+
+      // Get file info
+      const file = await ctx.api.getFile(doc.file_id);
+      if (!file.file_path) {
+        await ctx.reply("Could not download document.");
+        return;
+      }
+
+      // Download the file
+      const fileUrl = `https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`;
+      const response = await fetch(fileUrl);
+      if (!response.ok) {
+        await ctx.reply("Failed to download document.");
+        return;
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const mimeType = doc.mime_type || "application/octet-stream";
+
+      // Extract text
+      const extracted = await extractText(buffer, mimeType, doc.file_name);
+
+      if (extracted.format === "unsupported") {
+        await ctx.reply(
+          `Unsupported document format: ${mimeType}\n\nSupported: PDF, TXT, MD, JSON, CSV, code files`
+        );
+        return;
+      }
+
+      if (extracted.format === "pdf-error") {
+        await ctx.reply(`Could not parse PDF: ${extracted.text}`);
+        return;
+      }
+
+      // Analyze with AI
+      const result = await agent.chat([
+        {
+          role: "user",
+          content: `${caption}\n\n--- Document Content (${summarizeDocument(extracted)}) ---\n\n${extracted.text}`,
+        },
+      ]);
+
+      await ctx.reply(result.text, { parse_mode: "Markdown" }).catch(async () => {
+        await ctx.reply(result.text);
+      });
+
+      audit.message({
+        userId,
+        username,
+        text: `[DOCUMENT: ${doc.file_name || "unnamed"}] ${caption}`,
+        response: result.text,
+        durationMs: Date.now() - startTime,
+      });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      audit.error({
+        error: `Failed to analyze document: ${errorMsg}`,
+        metadata: { userId, username, filename: doc.file_name },
+      });
+      await ctx.reply("Sorry, I couldn't analyze that document. Please try again.");
+    }
   });
 
   return {
