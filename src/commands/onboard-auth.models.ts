@@ -22,9 +22,17 @@ export const KIMI_CODE_COMPAT = { supportsDeveloperRole: false } as const;
 
 export const NOVA_BASE_URL = "https://api.nova.amazon.com/v1";
 export const NOVA_DEFAULT_MODEL_ID = "nova-2-lite-v1";
+export const NOVA_PRO_MODEL_ID = "nova-2-pro-v1";
 export const NOVA_DEFAULT_MODEL_REF = `nova/${NOVA_DEFAULT_MODEL_ID}`;
 export const NOVA_DEFAULT_CONTEXT_WINDOW = 64000;
 export const NOVA_DEFAULT_MAX_TOKENS = 10000;
+
+const NOVA_MODEL_CATALOG = {
+  "nova-2-lite-v1": { name: "Nova 2 Lite" },
+  "nova-2-pro-v1": { name: "Nova 2 Pro" },
+} as const;
+
+type NovaCatalogId = keyof typeof NOVA_MODEL_CATALOG;
 
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 export const MINIMAX_API_COST = {
@@ -133,9 +141,10 @@ export function buildKimiCodeModelDefinition(): ModelDefinitionConfig {
 export function buildNovaModelDefinition(
   modelId: string = NOVA_DEFAULT_MODEL_ID,
 ): ModelDefinitionConfig {
+  const catalog = NOVA_MODEL_CATALOG[modelId as NovaCatalogId];
   return {
     id: modelId,
-    name: "Nova 2 Lite",
+    name: catalog?.name ?? "Nova 2 Lite",
     reasoning: false,
     input: ["text", "image"],
     cost: NOVA_DEFAULT_COST,
@@ -143,3 +152,5 @@ export function buildNovaModelDefinition(
     maxTokens: NOVA_DEFAULT_MAX_TOKENS,
   };
 }
+
+export const NOVA_MODEL_IDS = Object.keys(NOVA_MODEL_CATALOG) as NovaCatalogId[];

@@ -66,6 +66,7 @@ const KIMI_CODE_DEFAULT_COST = {
 
 const NOVA_BASE_URL = "https://api.nova.amazon.com/v1";
 const NOVA_DEFAULT_MODEL_ID = "nova-2-lite-v1";
+const NOVA_PRO_MODEL_ID = "nova-2-pro-v1";
 const NOVA_DEFAULT_CONTEXT_WINDOW = 64000;
 const NOVA_DEFAULT_MAX_TOKENS = 10000;
 const NOVA_DEFAULT_COST = {
@@ -398,6 +399,15 @@ function buildNovaProvider(): ProviderConfig {
       {
         id: NOVA_DEFAULT_MODEL_ID,
         name: "Nova 2 Lite",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: NOVA_DEFAULT_COST,
+        contextWindow: NOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: NOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: NOVA_PRO_MODEL_ID,
+        name: "Nova 2 Pro",
         reasoning: false,
         input: ["text", "image"],
         cost: NOVA_DEFAULT_COST,

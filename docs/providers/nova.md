@@ -11,6 +11,7 @@ Amazon Nova provides multimodal AI models via an OpenAI-compatible chat completi
 ## Available Models
 
 - **Nova 2 Lite** (`nova-2-lite-v1`) - Fast multimodal model, 64K context
+- **Nova 2 Pro** (`nova-2-pro-v1`) - Advanced multimodal model, 64K context
 
 ## CLI setup
 
