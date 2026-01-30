@@ -28,7 +28,7 @@ Use this skill when working on the BlueBubbles channel plugin.
 - BlueBubbles posts JSON to the gateway HTTP server.
 - Normalize sender/chat IDs defensively (payloads vary by version).
 - Skip messages marked as from self.
-- Route into core reply pipeline via the plugin runtime (`api.runtime`) and `clawdbot/plugin-sdk` helpers.
+- Route into core reply pipeline via the plugin runtime (`api.runtime`) and `openclaw/plugin-sdk` helpers.
 - For attachments/stickers, use `<media:...>` placeholders when text is empty and attach media paths via `MediaUrl(s)` in the inbound context.
 
 ## Config (core)

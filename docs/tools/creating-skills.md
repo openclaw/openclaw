@@ -38,4 +38,4 @@ Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discove
 - **Test Locally**: Use `openclaw agent --message "use my new skill"` to test.
 
 ## Shared Skills
-You can also browse and contribute skills to [ClawdHub](https://clawdhub.com).
+You can also browse and contribute skills to [ClawHub](https://clawhub.com).

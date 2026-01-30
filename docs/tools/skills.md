@@ -45,22 +45,22 @@ You can gate them via `metadata.openclaw.requires.config` on the plugin’s conf
 entry. See [Plugins](/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
 
-## ClawdHub (install + sync)
+## ClawHub (install + sync)
 
-ClawdHub is the public skills registry for OpenClaw. Browse at
-https://clawdhub.com. Use it to discover, install, update, and back up skills.
-Full guide: [ClawdHub](/tools/clawdhub).
+ClawHub is the public skills registry for OpenClaw. Browse at
+https://clawhub.com. Use it to discover, install, update, and back up skills.
+Full guide: [ClawHub](/tools/clawhub).
 
 Common flows:
 
 - Install a skill into your workspace:
-  - `clawdhub install <skill-slug>`
+  - `clawhub install <skill-slug>`
 - Update all installed skills:
-  - `clawdhub update --all`
+  - `clawhub update --all`
 - Sync (scan + publish updates):
-  - `clawdhub sync --all`
+  - `clawhub sync --all`
 
-By default, `clawdhub` installs into `./skills` under your current working
+By default, `clawhub` installs into `./skills` under your current working
 directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
 that up as `<workspace>/skills` on the next session.
 
@@ -262,6 +262,6 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse https://clawdhub.com.
+Browse https://clawhub.com.
 
 ---
