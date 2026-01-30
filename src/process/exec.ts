@@ -100,8 +100,9 @@ export async function runCommandWithTimeout(
     return false;
   })();
 
+  const mergedEnv = env ? { ...process.env, ...env } : { ...process.env };
   const resolvedEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...(env ?? {}) })
+    Object.entries(mergedEnv)
       .filter(([, value]) => value !== undefined)
       .map(([key, value]) => [key, String(value)]),
   );
