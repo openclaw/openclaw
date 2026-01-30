@@ -7,7 +7,7 @@ import { setLastActiveSessionKey } from "./app-settings";
 import { normalizeBasePath } from "./navigation";
 import type { GatewayHelloOk } from "./gateway";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
-import type { MoltbotApp } from "./app";
+import type { OpenClawApp } from "./app";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types";
 
 type ChatHost = {
@@ -21,6 +21,7 @@ type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
+  refreshSessionsAfterChat: boolean;
 };
 
 export function isChatBusy(host: ChatHost) {
@@ -41,10 +42,18 @@ export function isChatStopCommand(text: string) {
   );
 }
 
+function isChatResetCommand(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "/new" || normalized === "/reset") return true;
+  return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+}
+
 export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) return;
   host.chatMessage = "";
-  await abortChatRun(host as unknown as MoltbotApp);
+  await abortChatRun(host as unknown as OpenClawApp);
 }
 
 function enqueueChatMessage(host: ChatHost, text: string, attachments?: ChatAttachment[]) {
@@ -71,10 +80,11 @@ async function sendChatMessageNow(
     attachments?: ChatAttachment[];
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
+    refreshSessions?: boolean;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const ok = await sendChatMessage(host as unknown as MoltbotApp, message, opts?.attachments);
+  const ok = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
   }
@@ -93,6 +103,9 @@ async function sendChatMessageNow(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
+  }
+  if (ok && opts?.refreshSessions) {
+    host.refreshSessionsAfterChat = true;
   }
   return ok;
 }
@@ -132,6 +145,7 @@ export async function handleSendChat(
     return;
   }
 
+  const refreshSessions = isChatResetCommand(message);
   if (messageOverride == null) {
     host.chatMessage = "";
     // Clear attachments when sending
@@ -149,13 +163,14 @@ export async function handleSendChat(
     attachments: hasAttachments ? attachmentsToSend : undefined,
     previousAttachments: messageOverride == null ? attachments : undefined,
     restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
+    refreshSessions,
   });
 }
 
 export async function refreshChat(host: ChatHost) {
   await Promise.all([
-    loadChatHistory(host as unknown as MoltbotApp),
-    loadSessions(host as unknown as MoltbotApp),
+    loadChatHistory(host as unknown as OpenClawApp),
+    loadSessions(host as unknown as OpenClawApp, { activeMinutes: 0 }),
     refreshChatAvatar(host),
   ]);
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);

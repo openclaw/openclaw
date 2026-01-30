@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -76,7 +76,7 @@ function buildProfileHealth(params: {
   profileId: string;
   credential: AuthProfileCredential;
   store: AuthProfileStore;
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   now: number;
   warnAfterMs: number;
 }): AuthProfileHealth {
@@ -123,7 +123,16 @@ function buildProfileHealth(params: {
     };
   }
 
-  const { status, remainingMs } = resolveOAuthStatus(credential.expires, now, warnAfterMs);
+  const hasRefreshToken = typeof credential.refresh === "string" && credential.refresh.length > 0;
+  const { status: rawStatus, remainingMs } = resolveOAuthStatus(
+    credential.expires,
+    now,
+    warnAfterMs,
+  );
+  // OAuth credentials with a valid refresh token auto-renew on first API call,
+  // so don't warn about access token expiration.
+  const status =
+    hasRefreshToken && (rawStatus === "expired" || rawStatus === "expiring") ? "ok" : rawStatus;
   return {
     profileId,
     provider: credential.provider,
@@ -138,7 +147,7 @@ function buildProfileHealth(params: {
 
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   warnAfterMs?: number;
   providers?: string[];
 }): AuthHealthSummary {

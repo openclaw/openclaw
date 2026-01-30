@@ -7,8 +7,8 @@ import { ensureAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
-  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
   let tmpDir: string;
   let mainAgentDir: string;
@@ -21,9 +21,9 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await fs.mkdir(mainAgentDir, { recursive: true });
     await fs.mkdir(secondaryAgentDir, { recursive: true });
 
-    // Set environment variables so resolveMoltbotAgentDir() returns mainAgentDir
-    process.env.CLAWDBOT_STATE_DIR = tmpDir;
-    process.env.CLAWDBOT_AGENT_DIR = mainAgentDir;
+    // Set environment variables so resolveOpenClawAgentDir() returns mainAgentDir
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
     process.env.PI_CODING_AGENT_DIR = mainAgentDir;
   });
 
@@ -31,10 +31,10 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     vi.unstubAllGlobals();
 
     // Restore original environment
-    if (previousStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
-    else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
-    if (previousAgentDir === undefined) delete process.env.CLAWDBOT_AGENT_DIR;
-    else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    if (previousAgentDir === undefined) delete process.env.OPENCLAW_AGENT_DIR;
+    else process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
     if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
 

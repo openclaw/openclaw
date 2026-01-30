@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
 
-const baseConfig = {} as MoltbotConfig;
+const baseConfig = {} as OpenClawConfig;
 
 describe("resolveOutboundSessionRoute", () => {
   it("builds Slack thread session keys", async () => {
@@ -36,7 +36,7 @@ describe("resolveOutboundSessionRoute", () => {
   });
 
   it("treats Telegram usernames as DMs when unresolved", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as MoltbotConfig;
+    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
     const route = await resolveOutboundSessionRoute({
       cfg,
       channel: "telegram",
@@ -56,7 +56,7 @@ describe("resolveOutboundSessionRoute", () => {
           alice: ["discord:123"],
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const route = await resolveOutboundSessionRoute({
       cfg,
@@ -81,7 +81,7 @@ describe("resolveOutboundSessionRoute", () => {
   });
 
   it("treats Zalo Personal DM targets as direct sessions", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as MoltbotConfig;
+    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
     const route = await resolveOutboundSessionRoute({
       cfg,
       channel: "zalouser",
@@ -102,7 +102,7 @@ describe("resolveOutboundSessionRoute", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const route = await resolveOutboundSessionRoute({
       cfg,

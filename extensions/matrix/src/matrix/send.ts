@@ -1,6 +1,6 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 
-import type { PollInput } from "clawdbot/plugin-sdk";
+import type { PollInput } from "openclaw/plugin-sdk";
 import { getMatrixRuntime } from "../runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { resolveMatrixClient, resolveMediaMaxBytes } from "./send/client.js";

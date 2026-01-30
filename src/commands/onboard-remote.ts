@@ -1,6 +1,7 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
+import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 
@@ -25,9 +26,9 @@ function ensureWsUrl(value: string): string {
 }
 
 export async function promptRemoteGatewayConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   prompter: WizardPrompter,
-): Promise<MoltbotConfig> {
+): Promise<OpenClawConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
 
@@ -43,15 +44,18 @@ export async function promptRemoteGatewayConfig(
     await prompter.note(
       [
         "Bonjour discovery requires dns-sd (macOS) or avahi-browse (Linux).",
-        "Docs: https://docs.molt.bot/gateway/discovery",
+        "Docs: https://docs.openclaw.ai/gateway/discovery",
       ].join("\n"),
       "Discovery",
     );
   }
 
   if (wantsDiscover) {
+    const wideAreaDomain = resolveWideAreaDiscoveryDomain({
+      configDomain: cfg.discovery?.wideArea?.domain,
+    });
     const spin = prompter.progress("Searching for gateways…");
-    const beacons = await discoverGatewayBeacons({ timeoutMs: 2000 });
+    const beacons = await discoverGatewayBeacons({ timeoutMs: 2000, wideAreaDomain });
     spin.stop(beacons.length > 0 ? `Found ${beacons.length} gateway(s)` : "No gateways found");
 
     if (beacons.length > 0) {
@@ -96,7 +100,7 @@ export async function promptRemoteGatewayConfig(
             `ssh -N -L 18789:127.0.0.1:18789 <user>@${host}${
               selectedBeacon.sshPort ? ` -p ${selectedBeacon.sshPort}` : ""
             }`,
-            "Docs: https://docs.molt.bot/gateway/remote",
+            "Docs: https://docs.openclaw.ai/gateway/remote",
           ].join("\n"),
           "SSH tunnel",
         );
