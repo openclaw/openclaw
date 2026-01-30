@@ -1,0 +1,30 @@
+{
+  "name": "moltbot-mini",
+  "version": "1.0.0",
+  "description": "Minimal secure email assistant with OpenAI",
+  "type": "module",
+  "bin": {
+    "moltbot-mini": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
+    "commander": "^12.1.0",
+    "googleapis": "^144.0.0",
+    "openai": "^4.77.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
