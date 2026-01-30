@@ -13,6 +13,7 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { estimateMessagesTokens } from "./compaction.js";
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = toolName.trim().toLowerCase();
@@ -210,6 +211,54 @@ export function handleToolExecutionEnd(
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+
+  // CHECK 3: Intra-turn (After Tool Results) - Monitor context usage after tool execution
+  // Note: We use conservative estimates here since we don't have full config/model access
+  // The pi-coding-agent library has its own safeguards, but this provides early warnings
+  try {
+    const session = ctx.params.session;
+    const agent = session?.agent as
+      | { model?: { contextWindow?: number } }
+      | { contextWindow?: number }
+      | undefined;
+    const contextWindow =
+      (agent as { model?: { contextWindow?: number } })?.model?.contextWindow ??
+      (agent as { contextWindow?: number })?.contextWindow;
+
+    if (contextWindow && session?.messages) {
+      const currentMessages = session.messages;
+      const currentTokens = estimateMessagesTokens(currentMessages);
+      const maxTokens = contextWindow;
+      const usagePercent = (currentTokens / maxTokens) * 100;
+
+      // Log context usage after tool execution
+      if (usagePercent >= 70) {
+        // Start monitoring at 70%
+        ctx.log.debug(
+          `Intra-turn context check after tool '${toolName}': ${usagePercent.toFixed(1)}% ` +
+            `(${currentTokens}/${maxTokens} tokens)`,
+        );
+      }
+
+      // ≥90%: Stop executing more tools, warn heavily
+      if (usagePercent >= 90) {
+        ctx.log.warn(
+          `⚠️ Context at ${usagePercent.toFixed(0)}% after tool '${toolName}'. ` +
+            `Consider saving work and compacting session.`,
+        );
+        // Note: We can't easily stop tool execution here since we're in a subscription handler
+        // The pi-coding-agent library should handle this via its own safeguards
+      } else if (usagePercent >= 80) {
+        // ≥80%: Warn but continue
+        ctx.log.warn(
+          `Context at ${usagePercent.toFixed(0)}% after tool '${toolName}'. Approaching limit.`,
+        );
+      }
+    }
+  } catch (err) {
+    // Don't fail tool execution on context check errors
+    ctx.log.warn(`Intra-turn context check failed: ${err}`);
+  }
 
   if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);

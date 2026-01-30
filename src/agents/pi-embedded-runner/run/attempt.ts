@@ -85,6 +85,15 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import {
+  checkContextLimit,
+  estimateOutputTokenBudget,
+  logContextWarning,
+  resolveContextThresholds,
+  resolveMaxContextTokens,
+} from "../context-limit-warnings.js";
+import { compactEmbeddedPiSessionDirect } from "../compact.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -545,6 +554,72 @@ export async function runEmbeddedAttempt(
         throw err;
       }
 
+      // Resolve context limit configuration (used by all checks)
+      const maxContextTokens = resolveMaxContextTokens({
+        sessionEntry: null, // Session entry not available here - using model context window
+        modelContextWindow: params.model.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      });
+      const thresholds = resolveContextThresholds(params.config);
+
+      // CHECK 1: Session Load (Preemptive) - Check context usage before first turn
+      const sessionLoadCheck = checkContextLimit({
+        messages: activeSession.messages,
+        maxContextTokens,
+        systemPrompt: appendPrompt,
+        thresholds,
+      });
+
+      log.debug(
+        `Session load context check: ${sessionLoadCheck.usagePercent.toFixed(1)}% ` +
+          `(${sessionLoadCheck.currentTokens}/${sessionLoadCheck.maxTokens} tokens) ` +
+          `action=${sessionLoadCheck.action}`,
+      );
+
+      // ≥90%: Auto-compact before first turn
+      if (sessionLoadCheck.action === "hard_gate" || sessionLoadCheck.action === "block") {
+        log.warn(
+          `Session load: context at ${sessionLoadCheck.usagePercent.toFixed(0)}% - auto-compacting before first turn`,
+        );
+        const compactResult = await compactEmbeddedPiSessionDirect({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          messageChannel: params.messageChannel,
+          messageProvider: params.messageProvider,
+          agentAccountId: params.agentAccountId,
+          sessionFile: params.sessionFile,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          config: params.config,
+          skillsSnapshot: params.skillsSnapshot,
+          provider: params.provider,
+          model: params.modelId,
+          thinkLevel: params.thinkLevel,
+          reasoningLevel: params.reasoningLevel,
+          bashElevated: params.bashElevated,
+          extraSystemPrompt: params.extraSystemPrompt,
+          ownerNumbers: params.ownerNumbers,
+        });
+
+        if (compactResult.compacted) {
+          log.info("Session load: auto-compaction succeeded, reloading messages");
+          // Reload messages after compaction
+          const sessionContext = sessionManager.buildSessionContext();
+          activeSession.agent.replaceMessages(sessionContext.messages);
+        } else {
+          log.warn(
+            `Session load: auto-compaction failed: ${compactResult.reason ?? "nothing to compact"}`,
+          );
+        }
+      } else if (sessionLoadCheck.action === "soft_warn" && sessionLoadCheck.warningMessage) {
+        // ≥80%: Log warning
+        logContextWarning({
+          warningMessage: sessionLoadCheck.warningMessage,
+          checkpoint: "session_load",
+          usagePercent: sessionLoadCheck.usagePercent,
+        });
+      }
+
       let aborted = Boolean(params.abortSignal?.aborted);
       let timedOut = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
@@ -773,6 +848,121 @@ export async function runEmbeddedAttempt(
               timestamp: Date.now(),
               provider: params.provider,
               modelId: params.modelId,
+            });
+          }
+
+          // CHECK 2: Turn Boundary (with Output Budget) - Check before API call
+          const estimatedOutput = estimateOutputTokenBudget({
+            model: params.model,
+          });
+          const turnBoundaryCheck = checkContextLimit({
+            messages: activeSession.messages,
+            maxContextTokens,
+            systemPrompt: appendPrompt,
+            estimatedOutputTokens: estimatedOutput,
+            thresholds,
+          });
+
+          log.debug(
+            `Turn boundary context check: ${turnBoundaryCheck.usagePercent.toFixed(1)}% ` +
+              `(${turnBoundaryCheck.currentTokens}/${turnBoundaryCheck.maxTokens} tokens, ` +
+              `includes ${estimatedOutput} output budget) action=${turnBoundaryCheck.action}`,
+          );
+
+          // ≥95%: Block - force save/compact, do not call API
+          if (turnBoundaryCheck.action === "block") {
+            log.error(
+              `Turn boundary: context at ${turnBoundaryCheck.usagePercent.toFixed(0)}% - blocking API call, forcing compaction`,
+            );
+            if (turnBoundaryCheck.warningMessage) {
+              logContextWarning({
+                warningMessage: turnBoundaryCheck.warningMessage,
+                checkpoint: "turn_boundary",
+                usagePercent: turnBoundaryCheck.usagePercent,
+              });
+            }
+            // Force compaction
+            const compactResult = await compactEmbeddedPiSessionDirect({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              messageChannel: params.messageChannel,
+              messageProvider: params.messageProvider,
+              agentAccountId: params.agentAccountId,
+              sessionFile: params.sessionFile,
+              workspaceDir: params.workspaceDir,
+              agentDir: params.agentDir,
+              config: params.config,
+              skillsSnapshot: params.skillsSnapshot,
+              provider: params.provider,
+              model: params.modelId,
+              thinkLevel: params.thinkLevel,
+              reasoningLevel: params.reasoningLevel,
+              bashElevated: params.bashElevated,
+              extraSystemPrompt: params.extraSystemPrompt,
+              ownerNumbers: params.ownerNumbers,
+            });
+
+            if (compactResult.compacted) {
+              log.info("Turn boundary: compaction succeeded, session should be safe now");
+              // Reload messages
+              const sessionContext = sessionManager.buildSessionContext();
+              activeSession.agent.replaceMessages(sessionContext.messages);
+            } else {
+              log.error(
+                `Turn boundary: compaction failed: ${compactResult.reason ?? "nothing to compact"}. Aborting to prevent context overflow.`,
+              );
+              throw new Error(
+                `Context limit reached but compaction failed: ${compactResult.reason ?? "unknown"}`,
+              );
+            }
+          } else if (turnBoundaryCheck.action === "hard_gate") {
+            // ≥90%: Hard gate - log warning and auto-compact
+            log.warn(
+              `Turn boundary: context at ${turnBoundaryCheck.usagePercent.toFixed(0)}% - logging hard warning and auto-compacting`,
+            );
+            if (turnBoundaryCheck.warningMessage) {
+              logContextWarning({
+                warningMessage: turnBoundaryCheck.warningMessage,
+                checkpoint: "turn_boundary",
+                usagePercent: turnBoundaryCheck.usagePercent,
+              });
+            }
+            // Auto-compact but allow the turn to proceed
+            const compactResult = await compactEmbeddedPiSessionDirect({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              messageChannel: params.messageChannel,
+              messageProvider: params.messageProvider,
+              agentAccountId: params.agentAccountId,
+              sessionFile: params.sessionFile,
+              workspaceDir: params.workspaceDir,
+              agentDir: params.agentDir,
+              config: params.config,
+              skillsSnapshot: params.skillsSnapshot,
+              provider: params.provider,
+              model: params.modelId,
+              thinkLevel: params.thinkLevel,
+              reasoningLevel: params.reasoningLevel,
+              bashElevated: params.bashElevated,
+              extraSystemPrompt: params.extraSystemPrompt,
+              ownerNumbers: params.ownerNumbers,
+            });
+
+            if (compactResult.compacted) {
+              log.info("Turn boundary: auto-compaction succeeded");
+              const sessionContext = sessionManager.buildSessionContext();
+              activeSession.agent.replaceMessages(sessionContext.messages);
+            } else {
+              log.warn(
+                `Turn boundary: auto-compaction failed: ${compactResult.reason ?? "nothing to compact"}`,
+              );
+            }
+          } else if (turnBoundaryCheck.action === "soft_warn" && turnBoundaryCheck.warningMessage) {
+            // ≥80%: Soft warning - log about approaching limit
+            logContextWarning({
+              warningMessage: turnBoundaryCheck.warningMessage,
+              checkpoint: "turn_boundary",
+              usagePercent: turnBoundaryCheck.usagePercent,
             });
           }
 
