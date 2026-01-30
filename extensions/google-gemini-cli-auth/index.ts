@@ -1,6 +1,6 @@
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema, type OAuthCredential } from "openclaw/plugin-sdk";
 
-import { loginGeminiCliOAuth } from "./oauth.js";
+import { loginGeminiCliOAuth, refreshGeminiCliToken } from "./oauth.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
@@ -24,6 +24,23 @@ const geminiCliPlugin = {
       docsPath: "/providers/models",
       aliases: ["gemini-cli"],
       envVars: ENV_VARS,
+      refreshOAuth: async (cred: OAuthCredential) => {
+        const result = await refreshGeminiCliToken({
+          refreshToken: cred.refresh,
+          projectId: cred.projectId ?? "",
+          clientId: cred.clientId,
+          clientSecret: cred.clientSecret,
+        });
+        return {
+          ...cred,
+          access: result.access,
+          refresh: result.refresh,
+          expires: result.expires,
+          projectId: result.projectId,
+          clientId: result.clientId,
+          clientSecret: result.clientSecret,
+        };
+      },
       auth: [
         {
           id: "oauth",
@@ -56,6 +73,8 @@ const geminiCliPlugin = {
                       expires: result.expires,
                       email: result.email,
                       projectId: result.projectId,
+                      clientId: result.clientId,
+                      clientSecret: result.clientSecret,
                     },
                   },
                 ],

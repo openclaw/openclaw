@@ -29,6 +29,10 @@ export type GeminiCliOAuthCredentials = {
   expires: number;
   email?: string;
   projectId: string;
+  /** OAuth client ID used during login, needed for refresh */
+  clientId?: string;
+  /** OAuth client secret used during login, needed for refresh */
+  clientSecret?: string;
 };
 
 export type GeminiCliOAuthContext = {
@@ -343,6 +347,65 @@ async function exchangeCodeForTokens(code: string, verifier: string): Promise<Ge
     expires: expiresAt,
     projectId,
     email,
+    // Store credentials used during login for refresh
+    clientId,
+    clientSecret,
+  };
+}
+
+/**
+ * Refresh Google Cloud Code Assist (Gemini CLI) token.
+ * Uses the OAuth client credentials stored during login, or falls back to
+ * resolveOAuthClientConfig() if credentials aren't stored.
+ */
+export async function refreshGeminiCliToken(params: {
+  refreshToken: string;
+  projectId: string;
+  clientId?: string;
+  clientSecret?: string;
+}): Promise<GeminiCliOAuthCredentials> {
+  // Use stored credentials, or resolve from Gemini CLI / env vars
+  let clientId = params.clientId;
+  let clientSecret = params.clientSecret;
+  if (!clientId) {
+    const config = resolveOAuthClientConfig();
+    clientId = config.clientId;
+    clientSecret = config.clientSecret;
+  }
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    refresh_token: params.refreshToken,
+    grant_type: "refresh_token",
+  });
+  if (clientSecret) {
+    body.set("client_secret", clientSecret);
+  }
+
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Google Cloud token refresh failed: ${errorText}`);
+  }
+
+  const data = (await response.json()) as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in: number;
+  };
+
+  return {
+    refresh: data.refresh_token ?? params.refreshToken,
+    access: data.access_token,
+    expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
+    projectId: params.projectId,
+    clientId,
+    clientSecret,
   };
 }
 

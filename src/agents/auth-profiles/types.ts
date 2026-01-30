@@ -25,7 +25,10 @@ export type TokenCredential = {
 export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
+  /** OAuth client ID used during login, needed for refresh (e.g., google-gemini-cli) */
   clientId?: string;
+  /** OAuth client secret used during login, needed for refresh (e.g., google-gemini-cli) */
+  clientSecret?: string;
   email?: string;
 };
 
