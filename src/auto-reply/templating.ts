@@ -103,6 +103,8 @@ export type MsgContext = {
   CommandTargetSessionKey?: string;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
+  /** Topic name from config (Telegram forum topics). */
+  TopicName?: string;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
   /**

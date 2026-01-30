@@ -37,6 +37,7 @@ const TelegramCapabilitiesSchema = z.union([
 
 export const TelegramTopicSchema = z
   .object({
+    name: z.string().optional(),
     requireMention: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),

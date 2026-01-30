@@ -495,7 +495,9 @@ export const buildTelegramMessageContext = async ({
         forwardOrigin.date ? ` at ${new Date(forwardOrigin.date * 1000).toISOString()}` : ""
       }]\n`
     : "";
-  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
+  const groupLabel = isGroup
+    ? buildGroupLabel(msg, chatId, resolvedThreadId, topicConfig?.name)
+    : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
@@ -605,6 +607,8 @@ export const buildTelegramMessageContext = async ({
     CommandAuthorized: commandAuthorized,
     // For groups: use resolvedThreadId (forum topics only); for DMs: use raw messageThreadId
     MessageThreadId: isGroup ? resolvedThreadId : messageThreadId,
+    // Topic name from config (if configured)
+    TopicName: isGroup && resolvedThreadId != null ? topicConfig?.name : undefined,
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,

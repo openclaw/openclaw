@@ -106,9 +106,16 @@ export function buildGroupLabel(
   msg: TelegramMessage,
   chatId: number | string,
   messageThreadId?: number,
+  topicName?: string,
 ) {
   const title = msg.chat?.title;
-  const topicSuffix = messageThreadId != null ? ` topic:${messageThreadId}` : "";
+  // Include topic name if available, otherwise just show topic ID
+  const topicSuffix =
+    messageThreadId != null
+      ? topicName
+        ? ` topic:${topicName}`
+        : ` topic:${messageThreadId}`
+      : "";
   if (title) return `${title} id:${chatId}${topicSuffix}`;
   return `group:${chatId}${topicSuffix}`;
 }
