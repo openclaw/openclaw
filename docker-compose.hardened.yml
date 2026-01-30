@@ -1,0 +1,41 @@
+# Hardened Docker Compose Overrides
+# This file adds security hardening while keeping Documents/Downloads access
+# Place this in the same directory as docker-compose.yml
+
+services:
+  clawdbot-gateway:
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    # Mount volumes read-only for security
+    volumes:
+      - clawdbot_state:/home/node/.clawdbot
+      - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd:rw
+      - /c/Users/grumb/Documents:/home/node/documents:ro
+      - /c/Users/grumb/Downloads:/home/node/downloads:ro
+
+  clawdbot-cli:
+    # Mount volumes read-only for security
+    volumes:
+      - clawdbot_state:/home/node/.clawdbot
+      - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd:rw
+      - /c/Users/grumb/Documents:/home/node/documents:ro
+      - /c/Users/grumb/Downloads:/home/node/downloads:ro
