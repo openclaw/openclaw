@@ -195,6 +195,11 @@ export async function launchOpenClawChrome(
       "--disable-sync",
       "--disable-background-networking",
       "--disable-component-update",
+      // Keep renderers running even when the window is occluded/backgrounded.
+      // Without this, Chromium can stop producing compositor frames and CDP
+      // Page.captureScreenshot may hang indefinitely on some Linux setups.
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
       "--disable-features=Translate,MediaRouter",
       "--disable-session-crashed-bubble",
       "--hide-crash-restore-bubble",
@@ -212,6 +217,15 @@ export async function launchOpenClawChrome(
     }
     if (process.platform === "linux") {
       args.push("--disable-dev-shm-usage");
+
+      // Workaround: On some Linux systems Chromium is launched with Ozone/Wayland
+      // (often via distro wrappers that append --ozone-platform=wayland). We've
+      // observed CDP Page.captureScreenshot hanging indefinitely in that mode.
+      // If X11 is available, prefer it for the managed clawd browser.
+      if (process.env.DISPLAY?.trim()) {
+        args.push("--ozone-platform=x11");
+        args.push("--ozone-platform-hint=x11");
+      }
     }
 
     // Stealth: hide navigator.webdriver from automation detection (#80)

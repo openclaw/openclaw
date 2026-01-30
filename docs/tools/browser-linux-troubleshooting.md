@@ -110,6 +110,53 @@ curl -s -X POST http://127.0.0.1:18791/start
 curl -s http://127.0.0.1:18791/tabs
 ```
 
+## Problem: `browser screenshot` hangs or times out (Ozone/Wayland)
+
+### Symptoms
+
+- `browser snapshot` works (you get a text snapshot), but:
+  - `browser screenshot` (or `POST /screenshot`) hangs and eventually times out.
+- `browser pdf` may still work.
+
+### Root cause
+
+On some Linux setups, Chromium runs in **Ozone/Wayland** mode (often via distro wrapper
+flags like `--ozone-platform=wayland`). In that mode, CDP `Page.captureScreenshot` can
+hang indefinitely.
+
+### Solution
+
+Prefer running the managed **clawd** browser in X11 mode when X11 is available.
+Clawdbot will prefer X11 when a `DISPLAY` is present.
+
+If you need to force it (or you’re on an older build), point `browser.executablePath`
+at a small wrapper that injects the X11 flags:
+
+```bash
+# ~/bin/clawd-chromium-x11
+#!/usr/bin/env bash
+exec /usr/bin/chromium \
+  --ozone-platform=x11 \
+  --ozone-platform-hint=x11 \
+  "$@"
+```
+
+Then in `~/.clawdbot/clawdbot.json`:
+
+```json5
+{
+  browser: {
+    executablePath: "~/bin/clawd-chromium-x11"
+  }
+}
+```
+
+To confirm which mode Chromium is using:
+
+```bash
+pgrep -af chromium | rg -- '--ozone-platform='
+```
+
 ### Config Reference
 
 | Option                   | Description                                                          | Default                                                     |

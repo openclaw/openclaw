@@ -72,7 +72,10 @@ export async function captureScreenshot(opts: {
       format,
       ...(quality !== undefined ? { quality } : {}),
       fromSurface: true,
-      captureBeyondViewport: true,
+      // NOTE: Chromium on some Linux/Wayland setups can hang indefinitely when
+      // captureBeyondViewport=true (even for normal viewport screenshots).
+      // Full-page shots are handled via `clip` above, so keep this false.
+      captureBeyondViewport: false,
       ...(clip ? { clip } : {}),
     })) as { data?: string };
 
