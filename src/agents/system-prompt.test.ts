@@ -145,6 +145,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Current Date & Time");
+    expect(prompt).toMatch(/Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday/);
     expect(prompt).toContain("Time zone: America/Chicago");
   });
 

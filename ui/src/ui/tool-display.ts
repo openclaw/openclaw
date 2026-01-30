@@ -1,4 +1,5 @@
 import rawConfig from "./tool-display.json";
+// Localization: import zhCNConfig from "./tool-display.zh-CN.json";
 import type { IconName } from "./icons";
 
 type ToolDisplayActionSpec = {

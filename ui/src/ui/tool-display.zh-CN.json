@@ -1,0 +1,408 @@
+{
+    "version": 1,
+    "fallback": {
+        "icon": "puzzle",
+        "detailKeys": [
+            "command",
+            "path",
+            "url",
+            "targetUrl",
+            "targetId",
+            "ref",
+            "element",
+            "node",
+            "nodeId",
+            "id",
+            "requestId",
+            "to",
+            "channelId",
+            "guildId",
+            "userId",
+            "name",
+            "query",
+            "pattern",
+            "messageId"
+        ]
+    },
+    "tools": {
+        "bash": {
+            "icon": "wrench",
+            "title": "Bash",
+            "detailKeys": [
+                "command"
+            ]
+        },
+        "process": {
+            "icon": "wrench",
+            "title": "处理",
+            "detailKeys": [
+                "sessionId"
+            ]
+        },
+        "read": {
+            "icon": "fileText",
+            "title": "读取",
+            "detailKeys": [
+                "path"
+            ]
+        },
+        "write": {
+            "icon": "edit",
+            "title": "写入",
+            "detailKeys": [
+                "path"
+            ]
+        },
+        "edit": {
+            "icon": "penLine",
+            "title": "编辑",
+            "detailKeys": [
+                "path"
+            ]
+        },
+        "attach": {
+            "icon": "paperclip",
+            "title": "附加",
+            "detailKeys": [
+                "path",
+                "url",
+                "fileName"
+            ]
+        },
+        "browser": {
+            "icon": "globe",
+            "title": "浏览器",
+            "actions": {
+                "status": {
+                    "label": "状态"
+                },
+                "start": {
+                    "label": "启动"
+                },
+                "stop": {
+                    "label": "停止"
+                },
+                "tabs": {
+                    "label": "标签页"
+                },
+                "open": {
+                    "label": "打开",
+                    "detailKeys": [
+                        "targetUrl"
+                    ]
+                },
+                "focus": {
+                    "label": "聚焦",
+                    "detailKeys": [
+                        "targetId"
+                    ]
+                },
+                "close": {
+                    "label": "关闭",
+                    "detailKeys": [
+                        "targetId"
+                    ]
+                },
+                "snapshot": {
+                    "label": "快照",
+                    "detailKeys": [
+                        "targetUrl",
+                        "targetId",
+                        "ref",
+                        "element",
+                        "format"
+                    ]
+                },
+                "screenshot": {
+                    "label": "截图",
+                    "detailKeys": [
+                        "targetUrl",
+                        "targetId",
+                        "ref",
+                        "element"
+                    ]
+                },
+                "navigate": {
+                    "label": "导航",
+                    "detailKeys": [
+                        "targetUrl",
+                        "targetId"
+                    ]
+                },
+                "console": {
+                    "label": "控制台",
+                    "detailKeys": [
+                        "level",
+                        "targetId"
+                    ]
+                },
+                "pdf": {
+                    "label": "PDF",
+                    "detailKeys": [
+                        "targetId"
+                    ]
+                },
+                "upload": {
+                    "label": "上传",
+                    "detailKeys": [
+                        "paths",
+                        "ref",
+                        "inputRef",
+                        "element",
+                        "targetId"
+                    ]
+                },
+                "dialog": {
+                    "label": "对话框",
+                    "detailKeys": [
+                        "accept",
+                        "promptText",
+                        "targetId"
+                    ]
+                },
+                "act": {
+                    "label": "操作",
+                    "detailKeys": [
+                        "request.kind",
+                        "request.ref",
+                        "request.selector",
+                        "request.text",
+                        "request.value"
+                    ]
+                }
+            }
+        },
+        "canvas": {
+            "icon": "image",
+            "title": "画布",
+            "actions": {
+                "present": {
+                    "label": "展示",
+                    "detailKeys": [
+                        "target",
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "hide": {
+                    "label": "隐藏",
+                    "detailKeys": [
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "navigate": {
+                    "label": "导航",
+                    "detailKeys": [
+                        "url",
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "eval": {
+                    "label": "执行",
+                    "detailKeys": [
+                        "javaScript",
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "snapshot": {
+                    "label": "快照",
+                    "detailKeys": [
+                        "format",
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "a2ui_push": {
+                    "label": "A2UI 推送",
+                    "detailKeys": [
+                        "jsonlPath",
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "a2ui_reset": {
+                    "label": "A2UI 重置",
+                    "detailKeys": [
+                        "node",
+                        "nodeId"
+                    ]
+                }
+            }
+        },
+        "nodes": {
+            "icon": "smartphone",
+            "title": "节点",
+            "actions": {
+                "status": {
+                    "label": "状态"
+                },
+                "describe": {
+                    "label": "描述",
+                    "detailKeys": [
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "pending": {
+                    "label": "待定"
+                },
+                "approve": {
+                    "label": "批准",
+                    "detailKeys": [
+                        "requestId"
+                    ]
+                },
+                "reject": {
+                    "label": "拒绝",
+                    "detailKeys": [
+                        "requestId"
+                    ]
+                },
+                "notify": {
+                    "label": "通知",
+                    "detailKeys": [
+                        "node",
+                        "nodeId",
+                        "title",
+                        "body"
+                    ]
+                },
+                "camera_snap": {
+                    "label": "拍照",
+                    "detailKeys": [
+                        "node",
+                        "nodeId",
+                        "facing",
+                        "deviceId"
+                    ]
+                },
+                "camera_list": {
+                    "label": "摄像头列表",
+                    "detailKeys": [
+                        "node",
+                        "nodeId"
+                    ]
+                },
+                "camera_clip": {
+                    "label": "摄像头片段",
+                    "detailKeys": [
+                        "node",
+                        "nodeId",
+                        "facing",
+                        "duration",
+                        "durationMs"
+                    ]
+                },
+                "screen_record": {
+                    "label": "屏幕录制",
+                    "detailKeys": [
+                        "node",
+                        "nodeId",
+                        "duration",
+                        "durationMs",
+                        "fps",
+                        "screenIndex"
+                    ]
+                }
+            }
+        },
+        "cron": {
+            "icon": "loader",
+            "title": "Cron",
+            "actions": {
+                "status": {
+                    "label": "状态"
+                },
+                "list": {
+                    "label": "列表"
+                },
+                "add": {
+                    "label": "添加",
+                    "detailKeys": [
+                        "job.name",
+                        "job.id",
+                        "job.schedule",
+                        "job.cron"
+                    ]
+                },
+                "update": {
+                    "label": "更新",
+                    "detailKeys": [
+                        "id"
+                    ]
+                },
+                "remove": {
+                    "label": "移除",
+                    "detailKeys": [
+                        "id"
+                    ]
+                },
+                "run": {
+                    "label": "运行",
+                    "detailKeys": [
+                        "id"
+                    ]
+                },
+                "runs": {
+                    "label": "运行记录",
+                    "detailKeys": [
+                        "id"
+                    ]
+                },
+                "wake": {
+                    "label": "唤醒",
+                    "detailKeys": [
+                        "text",
+                        "mode"
+                    ]
+                }
+            }
+        },
+        "gateway": {
+            "icon": "plug",
+            "title": "网关",
+            "actions": {
+                "restart": {
+                    "label": "重启",
+                    "detailKeys": [
+                        "reason",
+                        "delayMs"
+                    ]
+                },
+                "config.get": {
+                    "label": "获取配置"
+                },
+                "config.schema": {
+                    "label": "获取架构"
+                },
+                "config.apply": {
+                    "label": "应用配置",
+                    "detailKeys": [
+                        "restartDelayMs"
+                    ]
+                },
+                "update.run": {
+                    "label": "运行更新",
+                    "detailKeys": [
+                        "restartDelayMs"
+                    ]
+                }
+            }
+        },
+        "whatsapp_login": {
+            "icon": "circle",
+            "title": "WhatsApp 登录",
+            "actions": {
+                "start": {
+                    "label": "开始"
+                },
+                "wait": {
+                    "label": "等待"
+                }
+            }
+        }
+    }
+}
