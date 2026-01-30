@@ -63,8 +63,8 @@ export function randomToken(): string {
 }
 
 export function normalizeGatewayTokenInput(value: unknown): string {
-  if (value == null) return "";
-  return String(value).trim();
+  if (typeof value !== "string") return "";
+  return value.trim();
 }
 
 export function printWizardHeader(runtime: RuntimeEnv) {
