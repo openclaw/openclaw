@@ -57,9 +57,9 @@ import {
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
-import { buildEmbeddedExtensionPaths } from "../extensions.js";
 
 import { isAbortError } from "../abort.js";
+import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import {
