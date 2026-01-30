@@ -20,6 +20,7 @@ import {
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
 import { setupInternalHooks } from "../commands/onboard-hooks.js";
+import { setupMemoryOptimization } from "../commands/onboard-memory.js";
 import type {
   GatewayAuthChoice,
   OnboardMode,
@@ -434,6 +435,9 @@ export async function runOnboardingWizard(
 
   // Setup hooks (session memory on /new)
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+
+  // Memory optimization (hybrid search, caching, flush, session memory)
+  nextConfig = await setupMemoryOptimization(nextConfig, runtime, prompter);
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);

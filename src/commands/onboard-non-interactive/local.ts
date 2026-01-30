@@ -21,6 +21,48 @@ import { logNonInteractiveOnboardingJson } from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
 import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
 
+/**
+ * Apply sensible memory optimization defaults for non-interactive onboarding.
+ * Enables hybrid search, embedding cache, and pre-compaction memory flush.
+ */
+function applyNonInteractiveMemoryDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const agentDefaults = cfg.agents?.defaults ?? {};
+  const memorySearch = agentDefaults.memorySearch ?? {};
+  const compaction = agentDefaults.compaction ?? {};
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...agentDefaults,
+        memorySearch: {
+          ...memorySearch,
+          query: {
+            ...memorySearch.query,
+            hybrid: memorySearch.query?.hybrid ?? {
+              enabled: true,
+              vectorWeight: 0.7,
+              textWeight: 0.3,
+              candidateMultiplier: 4,
+            },
+          },
+          cache: memorySearch.cache ?? {
+            enabled: true,
+            maxEntries: 50000,
+          },
+        },
+        compaction: {
+          ...compaction,
+          memoryFlush: compaction.memoryFlush ?? {
+            enabled: true,
+          },
+        },
+      },
+    },
+  };
+}
+
 export async function runNonInteractiveOnboardingLocal(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -72,6 +114,9 @@ export async function runNonInteractiveOnboardingLocal(params: {
   nextConfig = gatewayResult.nextConfig;
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+
+  // Apply memory optimization defaults for non-interactive mode
+  nextConfig = applyNonInteractiveMemoryDefaults(nextConfig);
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
