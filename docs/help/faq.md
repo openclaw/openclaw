@@ -291,7 +291,7 @@ Other useful CLI checks: `openclaw status --all`, `openclaw logs --follow`,
 Quick debug loop: [First 60 seconds if something's broken](#first-60-seconds-if-somethings-broken).
 Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
-### Whats the recommended way to install and set up OpenClaw
+### What's the recommended way to install and set up OpenClaw
 
 The repo recommends running from source and using the onboarding wizard:
 
@@ -424,7 +424,7 @@ Please help us unblock it by reporting here: https://spa.xfinity.com/check_url_s
 If you still can't reach the site, the docs are mirrored on GitHub:
 https://github.com/openclaw/openclaw/tree/main/docs
 
-### Whats the difference between stable and beta
+### What's the difference between stable and beta
 
 **Stable** and **beta** are **npm dist‑tags**, not separate code lines:
 - `latest` = stable
@@ -784,7 +784,7 @@ brew install <formula>
 If you run OpenClaw via systemd, ensure the service PATH includes `/home/linuxbrew/.linuxbrew/bin` (or your brew prefix) so `brew`-installed tools resolve in non‑login shells.
 Recent builds also prepend common user bin dirs on Linux systemd services (for example `~/.local/bin`, `~/.npm-global/bin`, `~/.local/share/pnpm`, `~/.bun/bin`) and honor `PNPM_HOME`, `NPM_CONFIG_PREFIX`, `BUN_INSTALL`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `NVM_DIR`, and `FNM_DIR` when set.
 
-### Whats the difference between the hackable git install and npm install
+### What's the difference between the hackable git install and npm install
 
 - **Hackable (git) install:** full source checkout, editable, best for contributors.
   You run builds locally and can patch code/docs.
@@ -880,7 +880,7 @@ If you are running macOS in a VM, see [macOS VM](/platforms/macos-vm).
 
 OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Google Chat, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
 
-### Whats the value proposition
+### What's the value proposition
 
 OpenClaw is not “just a Claude wrapper.” It’s a **local-first control plane** that lets you run a
 capable assistant on **your own hardware**, reachable from the chat apps you already use, with
@@ -1230,7 +1230,7 @@ AGENTS.md or MEMORY.md** rather than relying on chat history.
 
 See [Agent workspace](/concepts/agent-workspace) and [Memory](/concepts/memory).
 
-### Whats the recommended backup strategy
+### What's the recommended backup strategy
 
 Put your **agent workspace** in a **private** git repo and back it up somewhere
 private (for example GitHub private). This captures memory + AGENTS/SOUL/USER
@@ -1526,7 +1526,7 @@ Avoid it:
 
 Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
 
-### Whats a minimal sane config for a first install
+### What's a minimal sane config for a first install
 
 ```json5
 {
@@ -2522,7 +2522,7 @@ Docs: [Gateway service runbook](/gateway).
 If you installed the service, use the gateway commands. Use `openclaw gateway` when
 you want a one-off, foreground run.
 
-### Whats the fastest way to get more details when something fails
+### What's the fastest way to get more details when something fails
 
 Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for channel auth, model routing, and RPC errors.
 
