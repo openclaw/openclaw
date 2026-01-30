@@ -93,7 +93,10 @@ function resolveAnnounceOrigin(
   entry?: DeliveryContextSource,
   requesterOrigin?: DeliveryContext,
 ): DeliveryContext | undefined {
-  return mergeDeliveryContext(deliveryContextFromSession(entry), requesterOrigin);
+  // requesterOrigin (captured at spawn time) reflects the channel the user is
+  // actually on and must take priority over the session entry, which may carry
+  // stale lastChannel / lastTo values from a previous channel interaction.
+  return mergeDeliveryContext(requesterOrigin, deliveryContextFromSession(entry));
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
