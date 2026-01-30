@@ -74,6 +74,7 @@ Status: stable.
 
 ### Fixes
 - Telegram: use undici fetch for per-account proxy dispatcher. (#4456) Thanks @spiceoogway.
+- Telegram: fix HTML nesting for overlapping styles and links. (#4578) Thanks @ThanhNguyxn.
 - Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)
 - Telegram: accept numeric messageId/chatId in react action and honor channelId fallback. (#4533) Thanks @Ayush10.
 - Telegram: scope native skill commands to bound agent per bot. (#4360) Thanks @robhparker.

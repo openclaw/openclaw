@@ -59,4 +59,14 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml("**bold [link](https://example.com) text**");
     expect(res).toBe('<b>bold <a href="https://example.com">link</a> text</b>');
   });
+
+  it("properly nests bold wrapping a link with trailing text", () => {
+    const res = markdownToTelegramHtml("**[link](https://example.com) rest**");
+    expect(res).toBe('<b><a href="https://example.com">link</a> rest</b>');
+  });
+
+  it("properly nests bold inside a link", () => {
+    const res = markdownToTelegramHtml("[**bold**](https://example.com)");
+    expect(res).toBe('<a href="https://example.com"><b>bold</b></a>');
+  });
 });
