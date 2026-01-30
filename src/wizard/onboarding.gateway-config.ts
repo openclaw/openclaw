@@ -182,7 +182,9 @@ export async function configureGatewayForOnboarding(
         placeholder: "Needed for multi-machine or non-loopback access",
         initialValue: quickstartGateway.token ?? "",
       });
-      gatewayToken = String(tokenInput).trim() || randomToken();
+      // FIX: Ensure undefined becomes an empty string, not "undefined" string
+      const rawInput = tokenInput ? String(tokenInput).trim() : "";
+      gatewayToken = rawInput || randomToken();
     }
   }
 
