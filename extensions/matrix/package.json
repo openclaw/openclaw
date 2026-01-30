@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.1.27-beta.1",
+  "version": "2026.1.29",
   "type": "module",
   "description": "OpenClaw Matrix channel plugin",
   "openclaw": {
