@@ -37,4 +37,6 @@ ENV NODE_ENV=production
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
-CMD ["node", "dist/index.js"]
+# Default: run the gateway server (most common container use case)
+# Override with: docker run moltbot node dist/index.js <other-command>
+CMD ["node", "dist/index.js", "gateway", "run", "--bind", "0.0.0.0", "--port", "18789"]
