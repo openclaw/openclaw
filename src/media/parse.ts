@@ -85,7 +85,6 @@ export function splitMediaFromOutput(raw: string): {
 
     const pieces: string[] = [];
     let cursor = 0;
-    let hasValidMediaOnLine = false;
 
     for (const match of matches) {
       const start = match.index ?? 0;
@@ -104,7 +103,6 @@ export function splitMediaFromOutput(raw: string): {
         if (isValidMedia(candidate, unwrapped ? { allowSpaces: true } : undefined)) {
           media.push(candidate);
           hasValidMedia = true;
-          hasValidMediaOnLine = true;
           foundMediaToken = true;
           validCount += 1;
         } else {
@@ -130,7 +128,6 @@ export function splitMediaFromOutput(raw: string): {
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
-          hasValidMediaOnLine = true;
           foundMediaToken = true;
           validCount = 1;
           invalidParts.length = 0;
@@ -142,7 +139,6 @@ export function splitMediaFromOutput(raw: string): {
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.push(fallback);
           hasValidMedia = true;
-          hasValidMediaOnLine = true;
           foundMediaToken = true;
           invalidParts.length = 0;
         }
