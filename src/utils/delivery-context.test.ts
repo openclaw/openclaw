@@ -75,6 +75,19 @@ describe("delivery context helpers", () => {
       accountId: undefined,
       threadId: "999",
     });
+
+    expect(
+      deliveryContextFromSession({
+        channel: "telegram",
+        lastTo: " -1001 ",
+        origin: { threadId: 42 },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "-1001",
+      accountId: undefined,
+      threadId: 42,
+    });
   });
 
   it("normalizes delivery fields and mirrors them on session entries", () => {
