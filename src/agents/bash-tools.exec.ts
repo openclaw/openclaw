@@ -755,6 +755,13 @@ export function createExecTool(
         throw new Error("Provide a command to start.");
       }
 
+      // Some models (e.g. Kimi K2.5) prefix commands with colons or whitespace
+      // e.g. ":which npx" instead of "which npx". Strip these artifacts.
+      params.command = params.command.replace(/^[\s:]+/, "");
+      if (!params.command) {
+        throw new Error("Provide a non-empty command to start.");
+      }
+
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
