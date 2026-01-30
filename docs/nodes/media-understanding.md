@@ -120,7 +120,7 @@ working option**:
    - `whisper` (Python CLI; downloads models automatically)
 2) **Gemini CLI** (`gemini`) using `read_many_files`
 3) **Provider keys**
-   - Audio: OpenAI → Groq → Deepgram → Google
+   - Audio: OpenAI → Groq → Deepgram → Google → Telnyx
    - Image: OpenAI → Anthropic → Google → MiniMax
    - Video: Google
 
@@ -145,6 +145,7 @@ lists, Moltbot can infer defaults:
 - `google` (Gemini API): **image + audio + video**
 - `groq`: **audio**
 - `deepgram`: **audio**
+- `telnyx`: **audio**
 
 For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
@@ -153,7 +154,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 | Capability | Provider integration | Notes |
 |------------|----------------------|-------|
 | Image | OpenAI / Anthropic / Google / others via `pi-ai` | Any image-capable model in the registry works. |
-| Audio | OpenAI, Groq, Deepgram, Google | Provider transcription (Whisper/Deepgram/Gemini). |
+| Audio | OpenAI, Groq, Deepgram, Google, Telnyx | Provider transcription (Whisper/Deepgram/Gemini/Telnyx). |
 | Video | Google (Gemini API) | Provider video understanding. |
 
 ## Recommended providers
@@ -162,9 +163,10 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 - Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-5`, `google/gemini-3-pro-preview`.
 
 **Audio**
-- `openai/gpt-4o-mini-transcribe`, `groq/whisper-large-v3-turbo`, or `deepgram/nova-3`.
+- `openai/gpt-4o-mini-transcribe`, `groq/whisper-large-v3-turbo`, `deepgram/nova-3`, or `telnyx/openai/whisper-large-v3-turbo`.
 - CLI fallback: `whisper-cli` (whisper-cpp) or `whisper`.
 - Deepgram setup: [Deepgram (audio transcription)](/providers/deepgram).
+- Telnyx setup: [Telnyx (audio transcription)](/providers/telnyx).
 
 **Video**
 - `google/gemini-3-flash-preview` (fast), `google/gemini-3-pro-preview` (richer).
