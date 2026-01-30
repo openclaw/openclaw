@@ -85,7 +85,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "react") {
-      const messageId = readStringParam(params, "messageId", {
+      const messageId = readStringOrNumberParam(params, "messageId", {
         required: true,
       });
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
@@ -94,7 +94,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         {
           action: "react",
           chatId:
-            readStringParam(params, "chatId") ?? readStringParam(params, "to", { required: true }),
+            readStringOrNumberParam(params, "chatId") ??
+            readStringOrNumberParam(params, "channelId") ??
+            readStringParam(params, "to", { required: true }),
           messageId,
           emoji,
           remove,
