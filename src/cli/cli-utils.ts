@@ -1,3 +1,5 @@
+import type { Command } from "commander";
+
 export type ManagerLookupResult<T> = {
   manager: T | null;
   error?: string;
@@ -45,4 +47,17 @@ export async function runCommandWithRuntime(
     runtime.error(String(err));
     runtime.exit(1);
   }
+}
+
+export function resolveOptionFromCommand<T>(
+  command: Command | undefined,
+  key: string,
+): T | undefined {
+  let current: Command | null | undefined = command;
+  while (current) {
+    const opts = (current.opts?.() ?? {}) as Record<string, T | undefined>;
+    if (opts[key] !== undefined) return opts[key];
+    current = current.parent ?? undefined;
+  }
+  return undefined;
 }
