@@ -8,6 +8,9 @@ services:
       - NODE_ENV=production
       - HOME=/home/node
       - TERM=xterm-256color
+      # Gateway auth token - required when binding to non-loopback
+      # Generate with: openssl rand -hex 32
+      - CLAWDBOT_GATEWAY_TOKEN=changeme_replace_with_secure_token
     restart: unless-stopped
     networks:
       - easyrunner_proxy_network

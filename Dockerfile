@@ -43,6 +43,6 @@ USER node
 # Default: run the gateway server (most common container use case)
 # --allow-unconfigured: starts without pre-existing config (configure via Control UI)
 # --bind lan: binds to all interfaces (0.0.0.0) for container networking
-# --no-auth: disables token authentication (set CLAWDBOT_GATEWAY_TOKEN for production)
+# IMPORTANT: Set CLAWDBOT_GATEWAY_TOKEN env var for auth when using --bind lan
 # Override with: docker run moltbot node dist/index.js <other-command>
-CMD ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789", "--allow-unconfigured", "--no-auth"]
+CMD ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789", "--allow-unconfigured"]
