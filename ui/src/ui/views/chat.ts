@@ -16,6 +16,7 @@ import {
 } from "../chat/grouped-render";
 import { renderMarkdownSidebar } from "./markdown-sidebar";
 import "../components/resizable-divider";
+import { t, type Locale } from "../i18n";
 
 export type CompactionIndicatorStatus = {
   active: boolean;
@@ -24,6 +25,7 @@ export type CompactionIndicatorStatus = {
 };
 
 export type ChatProps = {
+  locale: Locale;
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
@@ -68,6 +70,13 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  voiceSupported: boolean;
+  voiceListening: boolean;
+  voiceSpeaking: boolean;
+  voiceError: string | null;
+  onToggleVoiceInput: () => void;
+  onSpeakLastReply: () => void;
+  onStopSpeaking: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -77,14 +86,17 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
-function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
+function renderCompactionIndicator(
+  status: CompactionIndicatorStatus | null | undefined,
+  locale: Locale,
+) {
   if (!status) return nothing;
 
   // Show "compacting..." while active
   if (status.active) {
     return html`
       <div class="callout info compaction-indicator compaction-indicator--active">
-        ${icons.loader} Compacting context...
+        ${icons.loader} ${t(locale, "chat.compaction.active")}
       </div>
     `;
   }
@@ -95,7 +107,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
         <div class="callout success compaction-indicator compaction-indicator--complete">
-          ${icons.check} Context compacted
+          ${icons.check} ${t(locale, "chat.compaction.done")}
         </div>
       `;
     }
@@ -157,13 +169,13 @@ function renderAttachmentPreview(props: ChatProps) {
           <div class="chat-attachment">
             <img
               src=${att.dataUrl}
-              alt="Attachment preview"
+              alt=${t(props.locale, "chat.compose.attachment.preview")}
               class="chat-attachment__img"
             />
             <button
               class="chat-attachment__remove"
               type="button"
-              aria-label="Remove attachment"
+              aria-label=${t(props.locale, "chat.compose.attachment.remove")}
               @click=${() => {
                 const next = (props.attachments ?? []).filter(
                   (a) => a.id !== att.id,
@@ -197,9 +209,9 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
-    : "Connect to the gateway to start chatting…";
+      ? t(props.locale, "chat.compose.placeholder.attachments")
+      : t(props.locale, "chat.compose.placeholder")
+    : t(props.locale, "chat.compose.placeholder.disconnected");
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
@@ -210,7 +222,9 @@ export function renderChat(props: ChatProps) {
       aria-live="polite"
       @scroll=${props.onChatScroll}
     >
-      ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
+      ${props.loading
+        ? html`<div class="muted">${t(props.locale, "chat.loading")}</div>`
+        : nothing}
       ${repeat(buildChatItems(props), (item) => item.key, (item) => {
         if (item.kind === "reading-indicator") {
           return renderReadingIndicatorGroup(assistantIdentity);
@@ -249,7 +263,11 @@ export function renderChat(props: ChatProps) {
         ? html`<div class="callout danger">${props.error}</div>`
         : nothing}
 
-      ${renderCompactionIndicator(props.compactionStatus)}
+      ${props.voiceError
+        ? html`<div class="callout warn">${props.voiceError}</div>`
+        : nothing}
+
+      ${renderCompactionIndicator(props.compactionStatus, props.locale)}
 
       ${props.focusMode
         ? html`
@@ -257,8 +275,8 @@ export function renderChat(props: ChatProps) {
               class="chat-focus-exit"
               type="button"
               @click=${props.onToggleFocusMode}
-              aria-label="Exit focus mode"
-              title="Exit focus mode"
+              aria-label=${t(props.locale, "chat.focus.exit")}
+              title=${t(props.locale, "chat.focus.exit")}
             >
               ${icons.x}
             </button>
@@ -300,7 +318,9 @@ export function renderChat(props: ChatProps) {
       ${props.queue.length
         ? html`
             <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
+              <div class="chat-queue__title">
+                ${t(props.locale, "chat.queue.title", { count: props.queue.length })}
+              </div>
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
@@ -308,13 +328,15 @@ export function renderChat(props: ChatProps) {
                       <div class="chat-queue__text">
                         ${item.text ||
                         (item.attachments?.length
-                          ? `Image (${item.attachments.length})`
+                          ? t(props.locale, "chat.queue.image", {
+                              count: item.attachments.length,
+                            })
                           : "")}
                       </div>
                       <button
                         class="btn chat-queue__remove"
                         type="button"
-                        aria-label="Remove queued message"
+                        aria-label=${t(props.locale, "chat.queue.remove")}
                         @click=${() => props.onQueueRemove(item.id)}
                       >
                         ${icons.x}
@@ -331,7 +353,7 @@ export function renderChat(props: ChatProps) {
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
-            <span>Message</span>
+            <span>${t(props.locale, "chat.compose.label")}</span>
             <textarea
               ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
               .value=${props.draft}
@@ -359,14 +381,48 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected || (!canAbort && props.sending)}
               @click=${canAbort ? props.onAbort : props.onNewSession}
             >
-              ${canAbort ? "Stop" : "New session"}
+              ${canAbort
+                ? t(props.locale, "chat.compose.stop")
+                : t(props.locale, "chat.compose.new")}
+            </button>
+            <button
+              class="btn btn--icon ${props.voiceListening ? "active" : ""}"
+              ?disabled=${!props.voiceSupported}
+              @click=${props.onToggleVoiceInput}
+              title=${props.voiceSupported
+                ? props.voiceListening
+                  ? t(props.locale, "voice.stop")
+                  : t(props.locale, "voice.start")
+                : t(props.locale, "voice.unsupported")}
+              aria-label=${props.voiceSupported
+                ? props.voiceListening
+                  ? t(props.locale, "voice.stop")
+                  : t(props.locale, "voice.start")
+                : t(props.locale, "voice.unsupported")}
+            >
+              ${icons.mic}
+            </button>
+            <button
+              class="btn btn--icon ${props.voiceSpeaking ? "active" : ""}"
+              @click=${props.voiceSpeaking ? props.onStopSpeaking : props.onSpeakLastReply}
+              title=${props.voiceSpeaking
+                ? t(props.locale, "voice.speak.stop")
+                : t(props.locale, "voice.speak")}
+              aria-label=${props.voiceSpeaking
+                ? t(props.locale, "voice.speak.stop")
+                : t(props.locale, "voice.speak")}
+            >
+              ${icons.volume2}
             </button>
             <button
               class="btn primary"
               ?disabled=${!props.connected}
               @click=${props.onSend}
             >
-              ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+              ${isBusy
+                ? t(props.locale, "chat.compose.queue")
+                : t(props.locale, "chat.compose.send")}
+              <kbd class="btn-kbd">↵</kbd>
             </button>
           </div>
         </div>
@@ -423,11 +479,14 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     items.push({
       kind: "message",
       key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
-      },
+        message: {
+          role: "system",
+          content: t(props.locale, "chat.history.notice", {
+            limit: CHAT_HISTORY_RENDER_LIMIT,
+            hidden: historyStart,
+          }),
+          timestamp: Date.now(),
+        },
     });
   }
   for (let i = historyStart; i < history.length; i++) {

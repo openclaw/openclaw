@@ -16,6 +16,7 @@ function createSessions(): SessionsListResult {
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   return {
+    locale: "en",
     sessionKey: "main",
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
@@ -45,6 +46,13 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    voiceSupported: true,
+    voiceListening: false,
+    voiceSpeaking: false,
+    voiceError: null,
+    onToggleVoiceInput: () => undefined,
+    onSpeakLastReply: () => undefined,
+    onStopSpeaking: () => undefined,
     ...overrides,
   };
 }

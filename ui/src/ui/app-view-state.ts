@@ -3,6 +3,7 @@ import type { Tab } from "./navigation";
 import type { UiSettings } from "./storage";
 import type { ThemeMode } from "./theme";
 import type { ThemeTransitionContext } from "./theme-transition";
+import type { Locale } from "./i18n";
 import type {
   AgentsListResult,
   ChannelsStatusSnapshot,
@@ -32,6 +33,8 @@ import type { NostrProfileFormState } from "./views/channels.nostr-profile-form"
 
 export type AppViewState = {
   settings: UiSettings;
+  locale: Locale;
+  dir: "ltr" | "rtl";
   password: string;
   tab: Tab;
   onboarding: boolean;
@@ -57,6 +60,10 @@ export type AppViewState = {
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
+  voiceSupported: boolean;
+  voiceListening: boolean;
+  voiceSpeaking: boolean;
+  voiceError: string | null;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   devicesLoading: boolean;
@@ -151,6 +158,9 @@ export type AppViewState = {
   setTab: (tab: Tab) => void;
   setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
   applySettings: (next: UiSettings) => void;
+  toggleVoiceInput: () => void;
+  speakLastReply: () => void;
+  stopSpeaking: () => void;
   loadOverview: () => Promise<void>;
   loadAssistantIdentity: () => Promise<void>;
   loadCron: () => Promise<void>;

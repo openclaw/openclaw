@@ -22,6 +22,18 @@
   overflow: hidden;
 }
 
+:root[dir="rtl"] .shell {
+  grid-template-columns: minmax(0, 1fr) var(--shell-nav-width);
+  grid-template-areas:
+    "topbar topbar"
+    "content nav";
+}
+
+:root[dir="rtl"] .shell--nav-collapsed,
+:root[dir="rtl"] .shell--chat-focus {
+  grid-template-columns: minmax(0, 1fr) 0px;
+}
+
 @supports (height: 100dvh) {
   .shell {
     height: 100dvh;
@@ -82,6 +94,18 @@
   height: var(--shell-topbar-height);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+}
+
+:root[dir="rtl"] .topbar {
+  flex-direction: row-reverse;
+}
+
+:root[dir="rtl"] .topbar-left {
+  flex-direction: row-reverse;
+}
+
+:root[dir="rtl"] .brand-text {
+  text-align: right;
 }
 
 .topbar-left {
@@ -153,6 +177,48 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.language-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.language-toggle__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.language-toggle__icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+}
+
+.language-toggle select {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-family: var(--font-body);
+  outline: none;
+  cursor: pointer;
+}
+
+:root[dir="rtl"] .language-toggle {
+  flex-direction: row-reverse;
 }
 
 .topbar-status .pill {
@@ -316,6 +382,10 @@
     background var(--duration-fast) ease;
 }
 
+:root[dir="rtl"] .nav-label {
+  text-align: right;
+}
+
 .nav-label:hover {
   color: var(--text);
   background: var(--bg-hover);
@@ -362,6 +432,14 @@
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+:root[dir="rtl"] .nav-item {
+  justify-content: flex-end;
+}
+
+:root[dir="rtl"] .nav-item__text {
+  text-align: right;
 }
 
 .nav-item__icon {

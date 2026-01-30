@@ -27,53 +27,53 @@ describe("iconForTab", () => {
   });
 
   it("returns stable icons for known tabs", () => {
-    expect(iconForTab("chat")).toBe("💬");
-    expect(iconForTab("overview")).toBe("📊");
-    expect(iconForTab("channels")).toBe("🔗");
-    expect(iconForTab("instances")).toBe("📡");
-    expect(iconForTab("sessions")).toBe("📄");
-    expect(iconForTab("cron")).toBe("⏰");
-    expect(iconForTab("skills")).toBe("⚡️");
-    expect(iconForTab("nodes")).toBe("🖥️");
-    expect(iconForTab("config")).toBe("⚙️");
-    expect(iconForTab("debug")).toBe("🐞");
-    expect(iconForTab("logs")).toBe("🧾");
+    expect(iconForTab("chat")).toBe("messageSquare");
+    expect(iconForTab("overview")).toBe("barChart");
+    expect(iconForTab("channels")).toBe("link");
+    expect(iconForTab("instances")).toBe("radio");
+    expect(iconForTab("sessions")).toBe("fileText");
+    expect(iconForTab("cron")).toBe("loader");
+    expect(iconForTab("skills")).toBe("zap");
+    expect(iconForTab("nodes")).toBe("monitor");
+    expect(iconForTab("config")).toBe("settings");
+    expect(iconForTab("debug")).toBe("bug");
+    expect(iconForTab("logs")).toBe("scrollText");
   });
 
   it("returns a fallback icon for unknown tab", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
     const unknownTab = "unknown" as Tab;
-    expect(iconForTab(unknownTab)).toBe("📁");
+    expect(iconForTab(unknownTab)).toBe("folder");
   });
 });
 
 describe("titleForTab", () => {
   it("returns a non-empty string for every tab", () => {
     for (const tab of ALL_TABS) {
-      const title = titleForTab(tab);
+      const title = titleForTab(tab, "en");
       expect(title).toBeTruthy();
       expect(typeof title).toBe("string");
     }
   });
 
   it("returns expected titles", () => {
-    expect(titleForTab("chat")).toBe("Chat");
-    expect(titleForTab("overview")).toBe("Overview");
-    expect(titleForTab("cron")).toBe("Cron Jobs");
+    expect(titleForTab("chat", "en")).toBe("Chat");
+    expect(titleForTab("overview", "en")).toBe("Overview");
+    expect(titleForTab("cron", "en")).toBe("Cron Jobs");
   });
 });
 
 describe("subtitleForTab", () => {
   it("returns a string for every tab", () => {
     for (const tab of ALL_TABS) {
-      const subtitle = subtitleForTab(tab);
+      const subtitle = subtitleForTab(tab, "en");
       expect(typeof subtitle).toBe("string");
     }
   });
 
   it("returns descriptive subtitles", () => {
-    expect(subtitleForTab("chat")).toContain("chat session");
-    expect(subtitleForTab("config")).toContain("moltbot.json");
+    expect(subtitleForTab("chat", "en")).toContain("chat session");
+    expect(subtitleForTab("config", "en")).toContain("moltbot.json");
   });
 });
 
@@ -175,11 +175,11 @@ describe("inferBasePathFromPathname", () => {
 
 describe("TAB_GROUPS", () => {
   it("contains all expected groups", () => {
-    const labels = TAB_GROUPS.map((g) => g.label);
-    expect(labels).toContain("Chat");
-    expect(labels).toContain("Control");
-    expect(labels).toContain("Agent");
-    expect(labels).toContain("Settings");
+    const ids = TAB_GROUPS.map((g) => g.id);
+    expect(ids).toContain("chat");
+    expect(ids).toContain("control");
+    expect(ids).toContain("agent");
+    expect(ids).toContain("settings");
   });
 
   it("all tabs are unique", () => {

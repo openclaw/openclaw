@@ -80,6 +80,15 @@
     flex-wrap: nowrap;
   }
 
+  .language-toggle {
+    height: 28px;
+    padding: 0 6px;
+  }
+
+  .language-toggle select {
+    font-size: 11px;
+  }
+
   .topbar-status .pill {
     padding: 4px 8px;
     font-size: 11px;

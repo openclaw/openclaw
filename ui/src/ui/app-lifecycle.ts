@@ -5,6 +5,7 @@ import {
   attachThemeListener,
   detachThemeListener,
   inferBasePath,
+  syncLocaleWithSettings,
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings";
@@ -44,6 +45,9 @@ export function handleConnected(host: LifecycleHost) {
   );
   syncThemeWithSettings(
     host as unknown as Parameters<typeof syncThemeWithSettings>[0],
+  );
+  syncLocaleWithSettings(
+    host as unknown as Parameters<typeof syncLocaleWithSettings>[0],
   );
   attachThemeListener(
     host as unknown as Parameters<typeof attachThemeListener>[0],

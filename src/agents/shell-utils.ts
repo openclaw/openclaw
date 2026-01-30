@@ -38,8 +38,14 @@ export function getShellConfig(): { shell: string; args: string[] } {
     if (bash) return { shell: bash, args: ["-c"] };
     const sh = resolveShellFromPath("sh");
     if (sh) return { shell: sh, args: ["-c"] };
+    return { shell: envShell, args: ["-c"] };
   }
-  const shell = envShell && envShell.length > 0 ? envShell : "sh";
+  if (envShell && envShell.length > 0) {
+    return { shell: envShell, args: ["-c"] };
+  }
+  const fallbackShell =
+    resolveShellFromPath("sh") ?? resolveShellFromCandidates(["/bin/sh", "/usr/bin/sh"]);
+  const shell = fallbackShell ?? "sh";
   return { shell, args: ["-c"] };
 }
 
@@ -49,6 +55,18 @@ function resolveShellFromPath(name: string): string | undefined {
   const entries = envPath.split(path.delimiter).filter(Boolean);
   for (const entry of entries) {
     const candidate = path.join(entry, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // ignore missing or non-executable entries
+    }
+  }
+  return undefined;
+}
+
+function resolveShellFromCandidates(candidates: string[]): string | undefined {
+  for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
       return candidate;

@@ -7,6 +7,7 @@ import { loadSettings, type UiSettings } from "./storage";
 import { renderApp } from "./app-render";
 import type { Tab } from "./navigation";
 import type { ResolvedTheme, ThemeMode } from "./theme";
+import { isRtl, resolveLocale, t, type Locale } from "./i18n";
 import type {
   AgentsListResult,
   ConfigSnapshot,
@@ -78,6 +79,13 @@ import {
 } from "./app-channels";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity";
+import {
+  getSpeechRecognitionConstructor,
+  resolveSpeechLanguage,
+  supportsSpeechRecognition,
+  type SpeechRecognitionLike,
+} from "./voice";
+import { normalizeMessage } from "./chat/message-normalizer";
 
 declare global {
   interface Window {
@@ -99,6 +107,8 @@ function resolveOnboardingMode(): boolean {
 @customElement("moltbot-app")
 export class MoltbotApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
+  @state() locale: Locale = resolveLocale(this.settings.language);
+  @state() dir: "ltr" | "rtl" = isRtl(this.locale) ? "rtl" : "ltr";
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
@@ -111,6 +121,9 @@ export class MoltbotApp extends LitElement {
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
+  private speechRecognition: SpeechRecognitionLike | null = null;
+  private speechUtterance: SpeechSynthesisUtterance | null = null;
+  private speechDraftSnapshot: string = "";
 
   @state() assistantName = injectedAssistantIdentity.name;
   @state() assistantAvatar = injectedAssistantIdentity.avatar;
@@ -130,6 +143,10 @@ export class MoltbotApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() voiceSupported = supportsSpeechRecognition();
+  @state() voiceListening = false;
+  @state() voiceSpeaking = false;
+  @state() voiceError: string | null = null;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -282,6 +299,8 @@ export class MoltbotApp extends LitElement {
   }
 
   disconnectedCallback() {
+    this.stopVoiceInput();
+    this.stopSpeaking();
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
     super.disconnectedCallback();
   }
@@ -386,6 +405,128 @@ export class MoltbotApp extends LitElement {
       messageOverride,
       opts,
     );
+  }
+
+  toggleVoiceInput() {
+    if (this.voiceListening) {
+      this.stopVoiceInput();
+      return;
+    }
+    this.startVoiceInput();
+  }
+
+  private ensureSpeechRecognition() {
+    if (!this.voiceSupported) return null;
+    if (this.speechRecognition) return this.speechRecognition;
+    const ctor = getSpeechRecognitionConstructor();
+    if (!ctor) {
+      this.voiceSupported = false;
+      return null;
+    }
+    const recognition = new ctor();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      this.voiceListening = true;
+      this.voiceError = null;
+    };
+    recognition.onend = () => {
+      this.voiceListening = false;
+    };
+    recognition.onerror = () => {
+      this.voiceListening = false;
+      this.voiceError = t(this.locale, "voice.error");
+    };
+    recognition.onresult = (event) => {
+      let finalText = "";
+      let interimText = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript ?? "";
+        if (result.isFinal) {
+          finalText += transcript;
+        } else {
+          interimText += transcript;
+        }
+      }
+      const nextText = (finalText || interimText).trim();
+      const prefix = this.speechDraftSnapshot.trim();
+      if (nextText) {
+        this.chatMessage = [prefix, nextText].filter(Boolean).join(" ");
+      } else if (!prefix) {
+        this.chatMessage = "";
+      }
+    };
+    this.speechRecognition = recognition;
+    return recognition;
+  }
+
+  private startVoiceInput() {
+    const recognition = this.ensureSpeechRecognition();
+    if (!recognition) {
+      this.voiceError = t(this.locale, "voice.error");
+      return;
+    }
+    this.voiceError = null;
+    this.speechDraftSnapshot = this.chatMessage;
+    recognition.lang = resolveSpeechLanguage(this.locale);
+    try {
+      recognition.start();
+    } catch {
+      this.voiceError = t(this.locale, "voice.error");
+      this.voiceListening = false;
+    }
+  }
+
+  private stopVoiceInput() {
+    this.speechRecognition?.stop();
+    this.voiceListening = false;
+  }
+
+  speakLastReply() {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      this.voiceError = t(this.locale, "voice.error");
+      return;
+    }
+    const text = this.resolveLastAssistantText();
+    if (!text) return;
+    this.stopSpeaking();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = resolveSpeechLanguage(this.locale);
+    utterance.onend = () => {
+      this.voiceSpeaking = false;
+      this.speechUtterance = null;
+    };
+    utterance.onerror = () => {
+      this.voiceSpeaking = false;
+      this.speechUtterance = null;
+      this.voiceError = t(this.locale, "voice.error");
+    };
+    this.speechUtterance = utterance;
+    this.voiceSpeaking = true;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  stopSpeaking() {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    this.voiceSpeaking = false;
+    this.speechUtterance = null;
+  }
+
+  private resolveLastAssistantText(): string | null {
+    if (!Array.isArray(this.chatMessages)) return null;
+    for (let i = this.chatMessages.length - 1; i >= 0; i--) {
+      const normalized = normalizeMessage(this.chatMessages[i]);
+      if (normalized.role.toLowerCase() !== "assistant") continue;
+      const text = normalized.content
+        .map((item) => (typeof item.text === "string" ? item.text.trim() : ""))
+        .filter(Boolean)
+        .join(" ");
+      if (text) return text;
+    }
+    return null;
   }
 
   async handleWhatsAppStart(force: boolean) {

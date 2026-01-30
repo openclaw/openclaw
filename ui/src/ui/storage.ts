@@ -1,6 +1,7 @@
 const KEY = "moltbot.control.settings.v1";
 
 import type { ThemeMode } from "./theme";
+import type { LanguageSetting } from "./i18n";
 
 export type UiSettings = {
   gatewayUrl: string;
@@ -13,6 +14,7 @@ export type UiSettings = {
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  language: LanguageSetting;
 };
 
 export function loadSettings(): UiSettings {
@@ -32,6 +34,27 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    language: "system",
+  };
+
+  const normalizeNavGroupsCollapsed = (
+    raw: unknown,
+  ): UiSettings["navGroupsCollapsed"] => {
+    if (typeof raw !== "object" || raw === null) return defaults.navGroupsCollapsed;
+    const entries = raw as Record<string, boolean>;
+    const mapped: Record<string, boolean> = { ...entries };
+    const legacyMap: Record<string, string> = {
+      Chat: "chat",
+      Control: "control",
+      Agent: "agent",
+      Settings: "settings",
+    };
+    for (const [legacy, next] of Object.entries(legacyMap)) {
+      if (legacy in mapped && !(next in mapped)) {
+        mapped[next] = Boolean(mapped[legacy]);
+      }
+    }
+    return mapped;
   };
 
   try {
@@ -79,11 +102,11 @@ export function loadSettings(): UiSettings {
         typeof parsed.navCollapsed === "boolean"
           ? parsed.navCollapsed
           : defaults.navCollapsed,
-      navGroupsCollapsed:
-        typeof parsed.navGroupsCollapsed === "object" &&
-        parsed.navGroupsCollapsed !== null
-          ? parsed.navGroupsCollapsed
-          : defaults.navGroupsCollapsed,
+      navGroupsCollapsed: normalizeNavGroupsCollapsed(parsed.navGroupsCollapsed),
+      language:
+        parsed.language === "en" || parsed.language === "ar" || parsed.language === "system"
+          ? parsed.language
+          : defaults.language,
     };
   } catch {
     return defaults;

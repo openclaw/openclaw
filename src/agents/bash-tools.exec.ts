@@ -876,7 +876,9 @@ export function createExecTool(
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
-      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+      const hasExplicitPath =
+        params.env && Object.prototype.hasOwnProperty.call(params.env, "PATH");
+      if (!sandbox && host === "gateway" && !hasExplicitPath) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
@@ -1398,6 +1400,9 @@ export function createExecTool(
         timeoutSec: effectiveTimeout,
         onUpdate,
       });
+      if (allowBackground && backgroundRequested) {
+        markBackgrounded(run.session);
+      }
 
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;

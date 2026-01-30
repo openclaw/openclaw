@@ -77,6 +77,11 @@ describe("getShellConfig", () => {
     delete process.env.SHELL;
     process.env.PATH = "";
     const { shell } = getShellConfig();
-    expect(shell).toBe("sh");
+    const expected = fs.existsSync("/bin/sh")
+      ? "/bin/sh"
+      : fs.existsSync("/usr/bin/sh")
+        ? "/usr/bin/sh"
+        : "sh";
+    expect(shell).toBe(expected);
   });
 });

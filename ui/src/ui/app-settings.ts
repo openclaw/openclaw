@@ -12,6 +12,7 @@ import { loadSkills } from "./controllers/skills";
 import { inferBasePathFromPathname, normalizeBasePath, normalizePath, pathForTab, tabFromPath, type Tab } from "./navigation";
 import { saveSettings, type UiSettings } from "./storage";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme";
+import { applyLocaleToDocument, isRtl, resolveLocale, type Locale } from "./i18n";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
 import { startLogsPolling, stopLogsPolling, startDebugPolling, stopDebugPolling } from "./app-polling";
@@ -20,6 +21,8 @@ import type { MoltbotApp } from "./app";
 
 type SettingsHost = {
   settings: UiSettings;
+  locale: Locale;
+  dir: "ltr" | "rtl";
   theme: ThemeMode;
   themeResolved: ResolvedTheme;
   applySessionKey: string;
@@ -37,6 +40,7 @@ type SettingsHost = {
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
+  const nextLocale = resolveLocale(next.language);
   const normalized = {
     ...next,
     lastActiveSessionKey: next.lastActiveSessionKey?.trim() || next.sessionKey.trim() || "main",
@@ -46,6 +50,11 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   if (next.theme !== host.theme) {
     host.theme = next.theme;
     applyResolvedTheme(host, resolveTheme(next.theme));
+  }
+  if (host.locale !== nextLocale) {
+    host.locale = nextLocale;
+    host.dir = isRtl(nextLocale) ? "rtl" : "ltr";
+    applyLocaleToDocument(nextLocale);
   }
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }
@@ -192,6 +201,12 @@ export function inferBasePath() {
 export function syncThemeWithSettings(host: SettingsHost) {
   host.theme = host.settings.theme ?? "system";
   applyResolvedTheme(host, resolveTheme(host.theme));
+}
+
+export function syncLocaleWithSettings(host: SettingsHost) {
+  host.locale = resolveLocale(host.settings.language);
+  host.dir = isRtl(host.locale) ? "rtl" : "ltr";
+  applyLocaleToDocument(host.locale);
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {

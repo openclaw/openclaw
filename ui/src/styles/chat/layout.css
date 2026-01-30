@@ -313,6 +313,12 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
+.btn--icon.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-muted);
+}
+
 /* Controls separator */
 .chat-controls__separator {
   color: rgba(255, 255, 255, 0.4);
@@ -336,6 +342,12 @@
   border-color: var(--border);
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   color: var(--muted);
+}
+
+:root[data-theme="light"] .btn--icon.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-muted);
 }
 
 :root[data-theme="light"] .btn--icon:hover {
@@ -394,4 +406,26 @@
   .chat-controls__session {
     min-width: 120px;
   }
+}
+
+:root[dir="rtl"] .chat-focus-exit {
+  right: auto;
+  left: 12px;
+}
+
+:root[dir="rtl"] .chat-attachment__remove {
+  right: auto;
+  left: 4px;
+}
+
+:root[dir="rtl"] .chat-compose__actions {
+  flex-direction: row-reverse;
+}
+
+:root[dir="rtl"] .chat-compose__field textarea {
+  text-align: right;
+}
+
+:root[dir="rtl"] .chat-attachments {
+  align-self: flex-end;
 }
