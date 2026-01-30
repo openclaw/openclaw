@@ -418,7 +418,7 @@ export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
 /**
  * Apply NanoGPT provider configuration without changing the default model.
  */
-export function applyNanoGptProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyNanoGptProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[NANOGPT_DEFAULT_MODEL_REF] = {
     ...models[NANOGPT_DEFAULT_MODEL_REF],
@@ -468,7 +468,7 @@ export function applyNanoGptProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
 /**
  * Apply NanoGPT provider configuration AND set NanoGPT as the default model.
  */
-export function applyNanoGptConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyNanoGptConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyNanoGptProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
