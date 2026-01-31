@@ -20,11 +20,17 @@ function runGitCommand(args, options = {}) {
 }
 
 function ensureExecutable(targetPath) {
-  if (process.platform === "win32") return;
-  if (!fs.existsSync(targetPath)) return;
+  if (process.platform === "win32") {
+    return;
+  }
+  if (!fs.existsSync(targetPath)) {
+    return;
+  }
   try {
     const mode = fs.statSync(targetPath).mode & 0o777;
-    if (mode & 0o100) return;
+    if (mode & 0o100) {
+      return;
+    }
     fs.chmodSync(targetPath, 0o755);
   } catch (err) {
     console.warn(`[setup-git-hooks] chmod failed: ${err}`);
@@ -41,7 +47,9 @@ function isGitRepo({ repoRoot = getRepoRoot(), runGit = runGitCommand } = {}) {
     cwd: repoRoot,
     stdio: "pipe",
   });
-  if (result.status !== 0) return false;
+  if (result.status !== 0) {
+    return false;
+  }
   return String(result.stdout ?? "").trim() === "true";
 }
 

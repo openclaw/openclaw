@@ -28,7 +28,9 @@ function which(cmd) {
       for (const ext of extensions) {
         const candidate = path.join(entry, process.platform === "win32" ? `${cmd}${ext}` : cmd);
         try {
-          if (fs.existsSync(candidate)) return candidate;
+          if (fs.existsSync(candidate)) {
+            return candidate;
+          }
         } catch {
           // ignore
         }
@@ -42,7 +44,9 @@ function which(cmd) {
 
 function resolveRunner() {
   const pnpm = which("pnpm");
-  if (pnpm) return { cmd: pnpm, kind: "pnpm" };
+  if (pnpm) {
+    return { cmd: pnpm, kind: "pnpm" };
+  }
   return null;
 }
 
@@ -54,7 +58,9 @@ function run(cmd, args) {
     shell: process.platform === "win32",
   });
   child.on("exit", (code, signal) => {
-    if (signal) process.exit(1);
+    if (signal) {
+      process.exit(1);
+    }
     process.exit(code ?? 1);
   });
 }
@@ -66,8 +72,12 @@ function runSync(cmd, args, envOverride) {
     env: envOverride ?? process.env,
     shell: process.platform === "win32",
   });
-  if (result.signal) process.exit(1);
-  if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
+  if (result.signal) {
+    process.exit(1);
+  }
+  if ((result.status ?? 1) !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
 
 function depsInstalled(kind) {
@@ -114,8 +124,9 @@ if (action !== "install" && !script) {
   process.exit(2);
 }
 
-if (action === "install") run(runner.cmd, ["install", ...rest]);
-else {
+if (action === "install") {
+  run(runner.cmd, ["install", ...rest]);
+} else {
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv =
       action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;

@@ -72,7 +72,9 @@ function camelCase(input: string) {
 
 function safeName(name: string) {
   const cc = camelCase(name.replace(/-/g, "_"));
-  if (reserved.has(cc)) return `_${cc}`;
+  if (reserved.has(cc)) {
+    return `_${cc}`;
+  }
   return cc;
 }
 
@@ -86,11 +88,15 @@ function swiftType(schema: JsonSchema, required: boolean): string {
   const named = schemaNameByObject.get(schema as object);
   if (named) {
     base = named;
-  } else if (t === "string") base = "String";
-  else if (t === "integer") base = "Int";
-  else if (t === "number") base = "Double";
-  else if (t === "boolean") base = "Bool";
-  else if (t === "array") {
+  } else if (t === "string") {
+    base = "String";
+  } else if (t === "integer") {
+    base = "Int";
+  } else if (t === "number") {
+    base = "Double";
+  } else if (t === "boolean") {
+    base = "Bool";
+  } else if (t === "array") {
     base = `[${swiftType(schema.items ?? { type: "Any" }, true)}]`;
   } else if (schema.enum) {
     base = "String";
@@ -213,7 +219,9 @@ async function generate() {
 
   // Value structs
   for (const [name, schema] of definitions) {
-    if (name === "GatewayFrame") continue;
+    if (name === "GatewayFrame") {
+      continue;
+    }
     if (schema.type === "object") {
       parts.push(emitStruct(name, schema));
     }

@@ -18,20 +18,28 @@ const DEFAULT_RUNS = 10;
 
 function parseArg(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
-  if (idx === -1) return undefined;
+  if (idx === -1) {
+    return undefined;
+  }
   return process.argv[idx + 1];
 }
 
 function parseRuns(raw: string | undefined): number {
-  if (!raw) return DEFAULT_RUNS;
+  if (!raw) {
+    return DEFAULT_RUNS;
+  }
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_RUNS;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_RUNS;
+  }
   return Math.floor(parsed);
 }
 
 function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
+  if (values.length === 0) {
+    return 0;
+  }
+  const sorted = [...values].toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
     return Math.round((sorted[mid - 1] + sorted[mid]) / 2);

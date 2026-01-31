@@ -18,7 +18,9 @@ const userAgent =
 const timeoutMs = 30_000;
 
 function truncate(value: string, max = 180): string {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
@@ -89,8 +91,12 @@ async function run() {
     }
 
     console.log(`local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`);
-    if (localError) console.log(`local error: ${localError}`);
-    if (localText) console.log(`local sample: ${truncate(localText)}`);
+    if (localError) {
+      console.log(`local error: ${localError}`);
+    }
+    if (localText) {
+      console.log(`local sample: ${truncate(localText)}`);
+    }
 
     if (apiKey) {
       try {
@@ -111,8 +117,12 @@ async function run() {
             80,
           )} status=${firecrawl.status ?? "n/a"}`,
         );
-        if (firecrawl.warning) console.log(`firecrawl warning: ${firecrawl.warning}`);
-        if (firecrawl.text) console.log(`firecrawl sample: ${truncate(firecrawl.text)}`);
+        if (firecrawl.warning) {
+          console.log(`firecrawl warning: ${firecrawl.warning}`);
+        }
+        if (firecrawl.text) {
+          console.log(`firecrawl sample: ${truncate(firecrawl.text)}`);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.log(`firecrawl: error ${message}`);

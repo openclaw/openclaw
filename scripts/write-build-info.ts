@@ -19,7 +19,9 @@ const readPackageVersion = () => {
 
 const resolveCommit = () => {
   const envCommit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim();
-  if (envCommit) return envCommit;
+  if (envCommit) {
+    return envCommit;
+  }
   try {
     return execSync("git rev-parse HEAD", {
       cwd: rootDir,
