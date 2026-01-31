@@ -32,6 +32,12 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
   if (direct) {
     return direct;
   }
+  // For internal channels (webchat, tui), don't fallback to configured messaging channels.
+  // These channels are always trusted and should not inherit allowFrom restrictions.
+  const provider = (ctx.Provider ?? ctx.Surface ?? "").trim().toLowerCase();
+  if (provider === "webchat" || provider === "tui") {
+    return undefined;
+  }
   const candidates = [ctx.From, ctx.To]
     .filter((value): value is string => Boolean(value?.trim()))
     .flatMap((value) => value.split(":").map((part) => part.trim()));
