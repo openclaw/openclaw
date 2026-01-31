@@ -346,6 +346,8 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Minimum milliseconds between requests (rate limiting). */
+      rateLimitMs?: number;
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
         /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */

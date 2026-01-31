@@ -30,6 +30,35 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
+
+let lastSearchRequestTime = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function throttleRequest(rateLimitMs: number): Promise<void> {
+  if (rateLimitMs <= 0) {
+    return;
+  }
+  const now = Date.now();
+  const elapsed = now - lastSearchRequestTime;
+  if (elapsed < rateLimitMs) {
+    await sleep(rateLimitMs - elapsed);
+  }
+  lastSearchRequestTime = Date.now();
+}
+
+function resolveRateLimitMs(search?: WebSearchConfig): number {
+  if (!search || typeof search !== "object") {
+    return 0;
+  }
+  const raw = "rateLimitMs" in search ? search.rateLimitMs : undefined;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    return Math.floor(raw);
+  }
+  return 0;
+}
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 
 const WebSearchSchema = Type.Object({
@@ -356,6 +385,7 @@ async function runWebSearch(params: {
   apiKey: string;
   timeoutSeconds: number;
   cacheTtlMs: number;
+  rateLimitMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
   country?: string;
   search_lang?: string;
@@ -375,6 +405,9 @@ async function runWebSearch(params: {
   }
 
   const start = Date.now();
+
+  // Apply rate limiting before making the request
+  await throttleRequest(params.rateLimitMs);
 
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
@@ -513,6 +546,7 @@ export function createWebSearchTool(options?: {
         apiKey,
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+        rateLimitMs: resolveRateLimitMs(search),
         provider,
         country,
         search_lang,
@@ -534,4 +568,9 @@ export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   normalizeFreshness,
+  resolveRateLimitMs,
+  throttleRequest,
+  resetLastSearchRequestTime: () => {
+    lastSearchRequestTime = 0;
+  },
 } as const;

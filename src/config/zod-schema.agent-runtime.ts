@@ -176,6 +176,7 @@ export const ToolsWebSearchSchema = z
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
+    rateLimitMs: z.number().int().nonnegative().optional(),
     perplexity: z
       .object({
         apiKey: z.string().optional(),

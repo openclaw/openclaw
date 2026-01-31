@@ -193,6 +193,7 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
+  "tools.web.search.rateLimitMs": "Web Search Rate Limit (ms)",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.timeoutSeconds": "Web Fetch Timeout (sec)",
@@ -440,6 +441,8 @@ const FIELD_HELP: Record<string, string> = {
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.rateLimitMs":
+    "Minimum milliseconds between requests (rate limiting for free API tiers).",
   "tools.web.search.perplexity.apiKey":
     "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var).",
   "tools.web.search.perplexity.baseUrl":
