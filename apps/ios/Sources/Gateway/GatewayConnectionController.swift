@@ -373,12 +373,15 @@ final class GatewayConnectionController {
         }
         if caps.contains(OpenClawCapability.contacts.rawValue) {
             commands.append(OpenClawContactsCommand.search.rawValue)
+            commands.append(OpenClawContactsCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.calendar.rawValue) {
             commands.append(OpenClawCalendarCommand.events.rawValue)
+            commands.append(OpenClawCalendarCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.reminders.rawValue) {
             commands.append(OpenClawRemindersCommand.list.rawValue)
+            commands.append(OpenClawRemindersCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.motion.rawValue) {
             commands.append(OpenClawMotionCommand.activity.rawValue)
@@ -400,12 +403,15 @@ final class GatewayConnectionController {
 
         let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
-        permissions["contacts"] = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
+        permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] = calendarStatus == .authorized || calendarStatus == .fullAccess
+        permissions["calendar"] =
+            calendarStatus == .authorized || calendarStatus == .fullAccess || calendarStatus == .writeOnly
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] = remindersStatus == .authorized || remindersStatus == .fullAccess
+        permissions["reminders"] =
+            remindersStatus == .authorized || remindersStatus == .fullAccess || remindersStatus == .writeOnly
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()

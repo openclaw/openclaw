@@ -44,11 +44,11 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>OpenClaw can read recent photos when requested via the gateway.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>OpenClaw can read your contacts when requested via the gateway.</string>
+	<string>OpenClaw can access your contacts when requested via the gateway.</string>
 	<key>NSCalendarsUsageDescription</key>
-	<string>OpenClaw can read your calendar events when requested via the gateway.</string>
+	<string>OpenClaw can read and add calendar events when requested via the gateway.</string>
 	<key>NSRemindersUsageDescription</key>
-	<string>OpenClaw can read your reminders when requested via the gateway.</string>
+	<string>OpenClaw can read and add reminders when requested via the gateway.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>OpenClaw can read motion activity and pedometer data when requested via the gateway.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

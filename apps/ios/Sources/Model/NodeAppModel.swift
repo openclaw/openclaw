@@ -615,11 +615,14 @@ final class NodeAppModel {
                 return try await self.handleDeviceInvoke(req)
             case OpenClawPhotosCommand.latest.rawValue:
                 return try await self.handlePhotosInvoke(req)
-            case OpenClawContactsCommand.search.rawValue:
+            case OpenClawContactsCommand.search.rawValue,
+                 OpenClawContactsCommand.add.rawValue:
                 return try await self.handleContactsInvoke(req)
-            case OpenClawCalendarCommand.events.rawValue:
+            case OpenClawCalendarCommand.events.rawValue,
+                 OpenClawCalendarCommand.add.rawValue:
                 return try await self.handleCalendarInvoke(req)
-            case OpenClawRemindersCommand.list.rawValue:
+            case OpenClawRemindersCommand.list.rawValue,
+                 OpenClawRemindersCommand.add.rawValue:
                 return try await self.handleRemindersInvoke(req)
             case OpenClawMotionCommand.activity.rawValue,
                  OpenClawMotionCommand.pedometer.rawValue:
@@ -1063,27 +1066,66 @@ final class NodeAppModel {
     }
 
     private func handleContactsInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
-            OpenClawContactsSearchParams()
-        let payload = try await self.contactsService.search(params: params)
-        let json = try Self.encodePayload(payload)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        switch req.command {
+        case OpenClawContactsCommand.search.rawValue:
+            let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
+                OpenClawContactsSearchParams()
+            let payload = try await self.contactsService.search(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawContactsCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawContactsAddParams.self, from: req.paramsJSON)
+            let payload = try await self.contactsService.add(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        default:
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+        }
     }
 
     private func handleCalendarInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
-            OpenClawCalendarEventsParams()
-        let payload = try await self.calendarService.events(params: params)
-        let json = try Self.encodePayload(payload)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        switch req.command {
+        case OpenClawCalendarCommand.events.rawValue:
+            let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
+                OpenClawCalendarEventsParams()
+            let payload = try await self.calendarService.events(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawCalendarCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawCalendarAddParams.self, from: req.paramsJSON)
+            let payload = try await self.calendarService.add(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        default:
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+        }
     }
 
     private func handleRemindersInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
-            OpenClawRemindersListParams()
-        let payload = try await self.remindersService.list(params: params)
-        let json = try Self.encodePayload(payload)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        switch req.command {
+        case OpenClawRemindersCommand.list.rawValue:
+            let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
+                OpenClawRemindersListParams()
+            let payload = try await self.remindersService.list(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawRemindersCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawRemindersAddParams.self, from: req.paramsJSON)
+            let payload = try await self.remindersService.add(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        default:
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+        }
     }
 
     private func handleMotionInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
