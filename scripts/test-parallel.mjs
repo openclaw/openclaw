@@ -74,11 +74,15 @@ const runOnce = (entry, extraArgs = []) =>
   });
 
 const run = async (entry) => {
-  if (shardCount <= 1) return runOnce(entry);
+  if (shardCount <= 1) {
+    return runOnce(entry);
+  }
   for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
     // eslint-disable-next-line no-await-in-loop
     const code = await runOnce(entry, ["--shard", `${shardIndex}/${shardCount}`]);
-    if (code !== 0) return code;
+    if (code !== 0) {
+      return code;
+    }
   }
   return 0;
 };

@@ -32,8 +32,14 @@ function compactStrings(values) {
     if (value === null || value === undefined) {
       continue;
     }
-    const normalized = String(value).trim();
-    if (normalized.length > 0) {
+    const normalized =
+      typeof value === "string"
+        ? value.trim()
+        : typeof value === "number" || typeof value === "boolean"
+          ? String(value).trim()
+          : null;
+
+    if (normalized?.length > 0) {
       result.push(normalized);
     }
   }
@@ -62,7 +68,7 @@ function walkMarkdownFiles(dir, base = dir) {
       files.push(relative(base, fullPath));
     }
   }
-  return files.sort((a, b) => a.localeCompare(b));
+  return files.toSorted((a, b) => a.localeCompare(b));
 }
 
 /**

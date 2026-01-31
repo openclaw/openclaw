@@ -229,7 +229,7 @@ const lines: string[] = [];
 for (let i = 0; i < entries.length; i += PER_LINE) {
   const chunk = entries.slice(i, i + PER_LINE);
   const parts = chunk.map((entry) => {
-    return `<a href=\"${entry.html_url}\"><img src=\"${entry.avatar_url}\" width=\"48\" height=\"48\" alt=\"${entry.display}\" title=\"${entry.display}\"/></a>`;
+    return `<a href="${entry.html_url}"><img src="${entry.avatar_url}" width="48" height="48" alt="${entry.display}" title="${entry.display}"/></a>`;
   });
   lines.push(`  ${parts.join(" ")}`);
 }
@@ -243,7 +243,7 @@ if (start === -1 || end === -1) {
   throw new Error("README.md missing clawtributors block");
 }
 
-const next = `${readme.slice(0, start)}<p align=\"left\">\n${block}${readme.slice(end)}`;
+const next = `${readme.slice(0, start)}<p align="left">\n${block}${readme.slice(end)}`;
 writeFileSync(readmePath, next);
 
 console.log(`Updated README clawtributors: ${entries.length} entries`);
@@ -419,7 +419,7 @@ function parseReadmeEntries(
   }
   const block = content.slice(start, end);
   const entries: Array<{ display: string; html_url: string; avatar_url: string }> = [];
-  const linked = /<a href=\"([^\"]+)\"><img src=\"([^\"]+)\"[^>]*alt=\"([^\"]+)\"[^>]*>/g;
+  const linked = /<a href="([^"]+)"><img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of block.matchAll(linked)) {
     const [, href, src, alt] = match;
     if (!href || !src || !alt) {
@@ -427,7 +427,7 @@ function parseReadmeEntries(
     }
     entries.push({ html_url: href, avatar_url: src, display: alt });
   }
-  const standalone = /<img src=\"([^\"]+)\"[^>]*alt=\"([^\"]+)\"[^>]*>/g;
+  const standalone = /<img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of block.matchAll(standalone)) {
     const [, src, alt] = match;
     if (!src || !alt) {
@@ -442,7 +442,7 @@ function parseReadmeEntries(
 }
 
 function loginFromUrl(url: string): string | null {
-  const match = /^https?:\/\/github\.com\/([^\/?#]+)/i.exec(url);
+  const match = /^https?:\/\/github\.com\/([^/?#]+)/i.exec(url);
   if (!match) {
     return null;
   }

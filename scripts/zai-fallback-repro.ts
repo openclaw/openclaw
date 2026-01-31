@@ -13,9 +13,13 @@ type RunResult = {
 
 function pickAnthropicEnv(): { type: "oauth" | "api"; value: string } | null {
   const oauth = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
-  if (oauth) return { type: "oauth", value: oauth };
+  if (oauth) {
+    return { type: "oauth", value: oauth };
+  }
   const api = process.env.ANTHROPIC_API_KEY?.trim();
-  if (api) return { type: "api", value: api };
+  if (api) {
+    return { type: "api", value: api };
+  }
   return null;
 }
 

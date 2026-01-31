@@ -32,7 +32,6 @@
     "Swabble/",
     "vendor/",
     "extensions/",
-    "scripts/",
     "ui/"
   ]
 }

@@ -44,7 +44,9 @@ function replaceBlockLines(
   ];
 
   const replacement = replacementLines.join("\n");
-  if (!after) return `${before}${replacement}`;
+  if (!after) {
+    return `${before}${replacement}`;
+  }
   return `${before}${replacement}\n${after}`;
 }
 

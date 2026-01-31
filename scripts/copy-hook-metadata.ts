@@ -26,7 +26,9 @@ function copyHookMetadata() {
   const entries = fs.readdirSync(srcBundled, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory()) {
+      continue;
+    }
 
     const hookName = entry.name;
     const srcHookDir = path.join(srcBundled, hookName);
