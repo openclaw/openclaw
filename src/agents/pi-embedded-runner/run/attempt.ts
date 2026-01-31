@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -869,7 +869,7 @@ export async function runEmbeddedAttempt(
       const lastAssistant = messagesSnapshot
         .slice()
         .toReversed()
-        .find((m) => m?.role === "assistant") as AssistantMessage | undefined;
+        .find((m) => m?.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(
