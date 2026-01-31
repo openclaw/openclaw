@@ -15,6 +15,8 @@ The Gateway serves a small **browser Control UI** (Vite + Lit) from the same por
 Capabilities live in [Control UI](/web/control-ui).
 This page focuses on bind modes, security, and web-facing surfaces.
 
+If you are building your own browser app, start with [Custom web UI](/web/custom-ui).
+
 ## Webhooks
 
 When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
