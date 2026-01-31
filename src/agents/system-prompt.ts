@@ -7,7 +7,7 @@ import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 /**
  * Controls which hardcoded sections are included in the system prompt.
  * - "full": All sections (default, for main agent)
- * - "minimal": Reduced sections (Tooling, Workspace, Runtime) - used for subagents
+ * - "minimal": Reduced sections (Tooling, Safety, Workspace, Sandbox, Runtime) - used for subagents
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
@@ -62,6 +62,16 @@ function buildTimeSection(params: { userTimezone?: string }) {
     return [];
   }
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+}
+
+function buildSafetySection() {
+  return [
+    "## Safety",
+    "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
+    "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
+    "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
+    "",
+  ];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -382,6 +392,7 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "",
+    ...buildSafetySection(),
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
