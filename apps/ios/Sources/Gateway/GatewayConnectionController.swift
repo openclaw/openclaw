@@ -301,17 +301,16 @@ final class GatewayConnectionController {
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
         let key = "node.displayName"
-        let existing = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !existing.isEmpty, existing != "iOS Node" { return existing }
-
-        let deviceName = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidate = deviceName.isEmpty ? "iOS Node" : deviceName
-
-        if existing.isEmpty || existing == "iOS Node" {
-            defaults.set(candidate, forKey: key)
+        let existingRaw = defaults.string(forKey: key)
+        let resolved = NodeDisplayName.resolve(
+            existing: existingRaw,
+            deviceName: UIDevice.current.name,
+            interfaceIdiom: UIDevice.current.userInterfaceIdiom)
+        let existing = existingRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if existing.isEmpty || NodeDisplayName.isGeneric(existing) {
+            defaults.set(resolved, forKey: key)
         }
-
-        return candidate
+        return resolved
     }
 
     private func currentCaps() -> [String] {
