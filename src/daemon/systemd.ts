@@ -245,7 +245,8 @@ export async function installSystemdService({
   });
   await fs.writeFile(unitPath, unit, "utf8");
 
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  // Use resolveSystemdServiceName to respect OPENCLAW_SYSTEMD_UNIT override (for node vs gateway)
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   const reload = await execSystemctl(["--user", "daemon-reload"]);
   if (reload.code !== 0) {
@@ -276,7 +277,8 @@ export async function uninstallSystemdService({
   stdout: NodeJS.WritableStream;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  // Use resolveSystemdServiceName to respect OPENCLAW_SYSTEMD_UNIT override (for node vs gateway)
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctl(["--user", "disable", "--now", unitName]);
 
