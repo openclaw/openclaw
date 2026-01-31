@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../../../config/config.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";

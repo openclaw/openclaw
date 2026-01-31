@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
 
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";

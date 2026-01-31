@@ -1,13 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import {
-  type Api,
-  type AssistantMessage,
-  type Context,
-  complete,
-  type Model,
-} from "@mariozechner/pi-ai";
+import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { Type } from "@sinclair/typebox";
 

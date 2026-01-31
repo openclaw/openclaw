@@ -1,11 +1,4 @@
-import type {
-  MessageEvent,
-  TextEventMessage,
-  StickerEventMessage,
-  LocationEventMessage,
-  EventSource,
-  PostbackEvent,
-} from "@line/bot-sdk";
+import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";

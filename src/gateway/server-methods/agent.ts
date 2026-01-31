@@ -26,8 +26,6 @@ import {
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import {
-  type AgentIdentityParams,
-  type AgentWaitParams,
   ErrorCodes,
   errorShape,
   formatValidationErrors,

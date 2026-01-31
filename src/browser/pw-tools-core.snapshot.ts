@@ -1,5 +1,3 @@
-import type { Page } from "playwright-core";
-
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
