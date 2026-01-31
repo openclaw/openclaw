@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { optimizeImageToPng } from "../media/image-ops.js";
-import { loadWebMedia, optimizeImageToJpeg } from "./media.js";
+import { loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } from "./media.js";
 
 const tmpFiles: string[] = [];
 
@@ -262,5 +262,51 @@ describe("web media loading", () => {
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
+  });
+
+  it("handles data: URLs with base64-encoded images", async () => {
+    // Create a small PNG image
+    const pngBuffer = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: "#ff0000" },
+    })
+      .png()
+      .toBuffer();
+
+    const base64 = pngBuffer.toString("base64");
+    const dataUrl = `data:image/png;base64,${base64}`;
+
+    // Use loadWebMediaRaw to avoid optimization that converts PNG to JPEG
+    const result = await loadWebMediaRaw(dataUrl, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/png");
+    expect(result.buffer.length).toBe(pngBuffer.length);
+    expect(result.fileName).toBe("media.png");
+  });
+
+  it("rejects invalid data: URL format", async () => {
+    // data: URL without base64 encoding marker
+    const invalidDataUrl = "data:image/png,notbase64";
+
+    await expect(loadWebMediaRaw(invalidDataUrl, 1024 * 1024)).rejects.toThrow(
+      /Invalid data: URL format/,
+    );
+  });
+
+  it("handles data: URLs with JPEG images", async () => {
+    const jpegBuffer = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: "#00ff00" },
+    })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+
+    const base64 = jpegBuffer.toString("base64");
+    const dataUrl = `data:image/jpeg;base64,${base64}`;
+
+    const result = await loadWebMediaRaw(dataUrl, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.fileName).toBe("media.jpg");
   });
 });

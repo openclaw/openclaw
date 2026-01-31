@@ -200,6 +200,20 @@ async function loadWebMediaInternal(
     };
   };
 
+  // Handle data: URLs (e.g., data:image/png;base64,...) - decode base64 inline
+  if (mediaUrl.startsWith("data:")) {
+    const dataUrlMatch = /^data:([^;]+);base64,(.*)$/.exec(mediaUrl);
+    if (!dataUrlMatch) {
+      throw new Error("Invalid data: URL format (expected base64 encoding)");
+    }
+    const [, mimeType, base64Data] = dataUrlMatch;
+    const buffer = Buffer.from(base64Data, "base64");
+    const kind = mediaKindFromMime(mimeType);
+    const ext = extensionForMime(mimeType);
+    const fileName = ext ? `media${ext}` : undefined;
+    return await clampAndFinalize({ buffer, contentType: mimeType, kind, fileName });
+  }
+
   if (/^https?:\/\//i.test(mediaUrl)) {
     const fetched = await fetchRemoteMedia({ url: mediaUrl });
     const { buffer, contentType, fileName } = fetched;
