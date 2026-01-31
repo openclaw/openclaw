@@ -40,6 +40,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
 
             let resolved = controller._test_resolvedDisplayName(defaults: defaults)
             #expect(!resolved.isEmpty)
+            #expect(resolved != "iOS Node")
             #expect(defaults.string(forKey: displayKey) == resolved)
         }
     }
