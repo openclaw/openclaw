@@ -27,6 +27,8 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+const FALLBACK_RECENT_MESSAGES = 10;
+const MAX_MESSAGE_PREVIEW_CHARS = 500;
 
 type ToolFailure = {
   toolCallId: string;
@@ -187,6 +189,54 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   }
 }
 
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type === "text" && typeof rec.text === "string") {
+      parts.push(rec.text);
+    }
+  }
+  return parts.join("\n");
+}
+
+function formatRecentMessagesSection(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "";
+  }
+  const recent = messages.slice(-FALLBACK_RECENT_MESSAGES);
+  const lines: string[] = [];
+  for (const message of recent) {
+    const role = (message as { role?: unknown }).role;
+    if (role !== "user" && role !== "assistant") {
+      continue;
+    }
+    const content = (message as { content?: unknown }).content;
+    let text = extractMessageText(content);
+    if (!text.trim()) {
+      continue;
+    }
+    if (text.length > MAX_MESSAGE_PREVIEW_CHARS) {
+      text = `${text.slice(0, MAX_MESSAGE_PREVIEW_CHARS)}...`;
+    }
+    const label = role === "user" ? "**User**" : "**Assistant**";
+    lines.push(`${label}: ${text.replace(/\n/g, " ").trim()}`);
+  }
+  if (lines.length === 0) {
+    return "";
+  }
+  return `\n\n## Recent Messages (fallback context)\n${lines.join("\n\n")}`;
+}
+
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
@@ -197,7 +247,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       ...preparation.turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
-    const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
+    const recentMessagesSection = formatRecentMessagesSection(preparation.messagesToSummarize);
+    const fallbackSummary = `${FALLBACK_SUMMARY}${recentMessagesSection}${toolFailureSection}${fileOpsSummary}`;
 
     const model = ctx.model;
     if (!model) {
