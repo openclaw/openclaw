@@ -14,7 +14,7 @@ services:
       # Use only hex characters (a-f, 0-9) to avoid encoding issues
       - OPENCLAW_GATEWAY_TOKEN=79da707a00cce6f610d7dea17e2903346294a4fc8acd2a89021f6c06400b7d31
       # State directory for persistent config
-      - CLAWDBOT_STATE_DIR=/home/node/.moltbot      
+      - CLAWDBOT_STATE_DIR=/home/node/.moltbot
     restart: unless-stopped
     networks:
       - easyrunner_proxy_network
