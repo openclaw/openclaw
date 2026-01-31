@@ -53,9 +53,10 @@ import {
 } from "./bash-tools.shared.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { getShellConfig, sanitizeBinaryOutput, escapeShellCommand } from "./shell-utils.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { scrubSensitiveEnv } from "./sensitive-env-vars.js";
 
 const DEFAULT_MAX_OUTPUT = clampNumber(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
@@ -406,7 +407,7 @@ async function runExecProcess(opts: {
       ],
       options: {
         cwd: opts.workdir,
-        env: process.env,
+        env: scrubSensitiveEnv(process.env),
         detached: process.platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
@@ -437,7 +438,8 @@ async function runExecProcess(opts: {
       if (!spawnPty) {
         throw new Error("PTY support is unavailable (node-pty spawn not found).");
       }
-      pty = spawnPty(shell, [...shellArgs, opts.command], {
+      const escapedCommand = escapeShellCommand(opts.command, shell);
+      pty = spawnPty(shell, [...shellArgs, escapedCommand], {
         cwd: opts.workdir,
         env: opts.env,
         name: process.env.TERM ?? "xterm-256color",
@@ -468,8 +470,9 @@ async function runExecProcess(opts: {
       const warning = `Warning: PTY spawn failed (${errText}); retrying without PTY for \`${opts.command}\`.`;
       logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
       opts.warnings.push(warning);
+      const escapedCommand = escapeShellCommand(opts.command, shell);
       const { child: spawned } = await spawnWithFallback({
-        argv: [shell, ...shellArgs, opts.command],
+        argv: [shell, ...shellArgs, escapedCommand],
         options: {
           cwd: opts.workdir,
           env: opts.env,
@@ -495,8 +498,9 @@ async function runExecProcess(opts: {
     }
   } else {
     const { shell, args: shellArgs } = getShellConfig();
+    const escapedCommand = escapeShellCommand(opts.command, shell);
     const { child: spawned } = await spawnWithFallback({
-      argv: [shell, ...shellArgs, opts.command],
+      argv: [shell, ...shellArgs, escapedCommand],
       options: {
         cwd: opts.workdir,
         env: opts.env,
@@ -918,6 +922,7 @@ export function createExecTool(
 
       const baseEnv = coerceEnv(process.env);
       const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      const scrubbedEnv = scrubSensitiveEnv(mergedEnv);
       const env = sandbox
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
@@ -925,7 +930,7 @@ export function createExecTool(
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
-        : mergedEnv;
+        : scrubbedEnv;
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,

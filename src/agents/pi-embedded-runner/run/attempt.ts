@@ -799,12 +799,15 @@ export async function runEmbeddedAttempt(
             });
           }
 
+          // Wrap the user's message in distinct tags to isolate it from the system prompt.
+          const wrappedPrompt = `[USER_MESSAGE]\n${effectivePrompt}\n[/USER_MESSAGE]`;
+
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            await abortable(activeSession.prompt(wrappedPrompt, { images: imageResult.images }));
           } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+            await abortable(activeSession.prompt(wrappedPrompt));
           }
         } catch (err) {
           promptError = err;

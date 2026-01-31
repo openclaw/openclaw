@@ -67,6 +67,22 @@ function resolveShellFromPath(name: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Escapes a shell command string to be safely passed as a single argument to a shell's -c or -Command option.
+ * @param command The command string to escape.
+ * @param shell The shell executable path (e.g., 'sh', 'powershell.exe').
+ * @returns The escaped command string.
+ */
+export function escapeShellCommand(command: string, shell: string): string {
+  const shellName = path.basename(shell).toLowerCase();
+  if (shellName.includes("powershell")) {
+    // PowerShell escaping: replace ' with '' and wrap in single quotes.
+    return `'${command.replace(/'/g, "''")}'`;
+  }
+  // POSIX shell escaping (sh, bash, etc.): replace ' with '\'' and wrap in single quotes.
+  return `'${command.replace(/'/g, "'\\''")}'`;
+}
+
 export function sanitizeBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) {
