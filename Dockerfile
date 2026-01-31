@@ -37,19 +37,20 @@ EXPOSE 18789
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
-# Create the .clawdbot config directory before switching to node user
-RUN mkdir -p /home/node/.clawdbot && chown -R node:node /home/node/.clawdbot
+# Create state directories before switching to node user (supports both legacy and new paths)
+RUN mkdir -p /home/node/.clawdbot /home/node/.moltbot \
+    && chown -R node:node /home/node/.clawdbot /home/node/.moltbot /home/node
 
 # Create default config for container deployment with reverse proxy support
 # Trust common Docker/Podman network ranges for X-Forwarded-For headers
-RUN echo 'gateway:\n  trustedProxies:\n    - "10.0.0.0/8"\n    - "172.16.0.0/12"\n    - "192.168.0.0/16"' > /home/node/.clawdbot/config.yaml \
-    && chown node:node /home/node/.clawdbot/config.yaml
+RUN echo 'gateway:\n  trustedProxies:\n    - "10.0.0.0/8"\n    - "172.16.0.0/12"\n    - "192.168.0.0/16"' > /home/node/.moltbot/config.yaml \
+    && chown node:node /home/node/.moltbot/config.yaml
 
 USER node
 
 # Default: run the gateway server (most common container use case)
 # --allow-unconfigured: starts without pre-existing config (configure via Control UI)
 # --bind lan: binds to all interfaces (0.0.0.0) for container networking
-# IMPORTANT: Set CLAWDBOT_GATEWAY_TOKEN env var for auth when using --bind lan
+# IMPORTANT: Set SETUP_PASSWORD env var for web setup wizard, or CLAWDBOT_GATEWAY_TOKEN for direct auth
 # Override with: docker run moltbot node dist/index.js <other-command>
 CMD ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789", "--allow-unconfigured"]
