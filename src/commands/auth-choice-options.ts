@@ -83,6 +83,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qwen-portal"],
   },
   {
+    value: "redpill",
+    label: "Redpill AI",
+    hint: "E2E encrypted models with Confidential AI",
+    choices: ["redpill-api-key"],
+  },
+  {
     value: "zai",
     label: "Z.AI",
     hint: "GLM Coding Plan / Global / CN",
@@ -226,6 +232,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "huggingface-api-key",
     label: "Hugging Face API key (HF token)",
     hint: "Inference Providers — OpenAI-compatible chat",
+  },
+  {
+    value: "redpill-api-key",
+    label: "Redpill AI API key",
+    hint: "GPU TEE privacy (DeepSeek, Qwen, Llama)",
   },
   {
     value: "github-copilot",

@@ -38,6 +38,7 @@ See [Venice AI](/providers/venice).
 - [OpenAI (API + Codex)](/providers/openai)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [Qwen (OAuth)](/providers/qwen)
+- [Redpill AI](/providers/redpill) - Privacy-focused inference with GPU TEE protection
 - [OpenRouter](/providers/openrouter)
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)

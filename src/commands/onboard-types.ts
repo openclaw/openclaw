@@ -47,6 +47,7 @@ export type AuthChoice =
   | "xai-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
+  | "redpill-api-key"
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"
@@ -71,7 +72,8 @@ export type AuthChoiceGroupId =
   | "huggingface"
   | "qianfan"
   | "xai"
-  | "custom";
+  | "custom"
+  | "redpill";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -117,6 +119,7 @@ export type OnboardOptions = {
   veniceApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
+  redpillApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;

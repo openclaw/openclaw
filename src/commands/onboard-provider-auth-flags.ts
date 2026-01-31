@@ -17,6 +17,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "veniceApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
+  | "redpillApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
   | "litellmApiKey"
@@ -137,6 +138,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--huggingface-api-key",
     cliOption: "--huggingface-api-key <key>",
     description: "Hugging Face API key (HF token)",
+  },
+  {
+    optionKey: "redpillApiKey",
+    authChoice: "redpill-api-key",
+    cliFlag: "--redpill-api-key",
+    cliOption: "--redpill-api-key <key>",
+    description: "Redpill AI API key",
   },
   {
     optionKey: "opencodeZenApiKey",

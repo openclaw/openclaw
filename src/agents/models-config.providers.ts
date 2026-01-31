@@ -18,6 +18,7 @@ import {
 } from "./huggingface-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import { discoverRedpillModels, REDPILL_BASE_URL } from "./redpill-models.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -545,6 +546,15 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildRedpillProvider(): Promise<ProviderConfig> {
+  const models = discoverRedpillModels();
+  return {
+    baseUrl: REDPILL_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 async function buildOllamaProvider(configuredBaseUrl?: string): Promise<ProviderConfig> {
   const models = await discoverOllamaModels(configuredBaseUrl);
   return {
@@ -699,6 +709,17 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  // Redpill
+  const redpillKey =
+    resolveEnvApiKeyVarName("redpill") ??
+    resolveApiKeyFromProfiles({ provider: "redpill", store: authStore });
+  if (redpillKey) {
+    providers.redpill = {
+      ...(await buildRedpillProvider()),
+      apiKey: redpillKey,
+    };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");
