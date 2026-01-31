@@ -72,6 +72,9 @@ jobs:
       matrix:
         include:
           - runtime: node
+            task: tsgo
+            command: pnpm tsgo
+          - runtime: node
             task: lint
             command: pnpm lint
           - runtime: node
