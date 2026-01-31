@@ -66,7 +66,9 @@ export async function agentCommand(
   deps: CliDeps = createDefaultDeps(),
 ) {
   const body = (opts.message ?? "").trim();
-  if (!body) throw new Error("Message (--message) is required");
+  if (!body) {
+    throw new Error("Message (--message) is required");
+  }
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -217,8 +219,11 @@ export async function agentCommand(
         sessionEntry ?? { sessionId, updatedAt: Date.now() };
       const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
       if (thinkOverride) {
-        if (thinkOverride === "off") delete next.thinkingLevel;
-        else next.thinkingLevel = thinkOverride;
+        if (thinkOverride === "off") {
+          delete next.thinkingLevel;
+        } else {
+          next.thinkingLevel = thinkOverride;
+        }
       }
       applyVerboseOverride(next, verboseOverride);
       sessionStore[sessionKey] = next;

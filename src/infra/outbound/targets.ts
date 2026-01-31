@@ -184,7 +184,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
     const normalized = normalizeChannelId(rawTarget);
-    if (normalized) target = normalized;
+    if (normalized) {
+      target = normalized;
+    }
   }
 
   if (target === "none") {
@@ -279,12 +281,16 @@ function resolveHeartbeatSenderId(params: {
   }
   if (candidates.length > 0 && allowList.length > 0) {
     const matched = candidates.find((candidate) => allowList.includes(candidate));
-    if (matched) return matched;
+    if (matched) {
+      return matched;
+    }
   }
   if (candidates.length > 0 && allowList.length === 0) {
     return candidates[0];
   }
-  if (allowList.length > 0) return allowList[0];
+  if (allowList.length > 0) {
+    return allowList[0];
+  }
   return candidates[0] ?? "heartbeat";
 }
 

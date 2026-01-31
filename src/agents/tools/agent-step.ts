@@ -52,6 +52,8 @@ export async function runAgentStep(params: {
     },
     timeoutMs: stepWaitMs + 2000,
   });
-  if (wait?.status !== "ok") return undefined;
+  if (wait?.status !== "ok") {
+    return undefined;
+  }
   return await readLatestAssistantReply({ sessionKey: params.sessionKey });
 }

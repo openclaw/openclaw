@@ -112,7 +112,9 @@ export function registerNodesCanvasCommands(nodes: Command) {
             height: opts.height ? Number.parseFloat(opts.height) : undefined,
           };
           const params: Record<string, unknown> = {};
-          if (opts.target) params.url = String(opts.target);
+          if (opts.target) {
+            params.url = String(opts.target);
+          }
           if (
             Number.isFinite(placement.x) ||
             Number.isFinite(placement.y) ||
@@ -176,7 +178,9 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .action(async (jsArg: string | undefined, opts: NodesRpcOpts) => {
         await runNodesCommand("canvas eval", async () => {
           const js = opts.js ?? jsArg;
-          if (!js) throw new Error("missing --js or <js>");
+          if (!js) {
+            throw new Error("missing --js or <js>");
+          }
           const raw = await invokeCanvas(opts, "canvas.eval", {
             javaScript: js,
           });
@@ -188,8 +192,9 @@ export function registerNodesCanvasCommands(nodes: Command) {
             typeof raw === "object" && raw !== null
               ? (raw as { payload?: { result?: string } }).payload
               : undefined;
-          if (payload?.result) defaultRuntime.log(payload.result);
-          else {
+          if (payload?.result) {
+            defaultRuntime.log(payload.result);
+          } else {
             const { ok } = getNodesTheme();
             defaultRuntime.log(ok("canvas eval ok"));
           }

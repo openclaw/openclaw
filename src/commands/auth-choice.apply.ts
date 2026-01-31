@@ -50,7 +50,9 @@ export async function applyAuthChoice(
 
   for (const handler of handlers) {
     const result = await handler(params);
-    if (result) return result;
+    if (result) {
+      return result;
+    }
   }
 
   return { config: params.config };

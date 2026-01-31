@@ -58,18 +58,28 @@ const emptyTotals = (): CostUsageTotals => ({
 });
 
 const toFiniteNumber = (value: unknown): number | undefined => {
-  if (typeof value !== "number") return undefined;
-  if (!Number.isFinite(value)) return undefined;
+  if (typeof value !== "number") {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
   return value;
 };
 
 const extractCostTotal = (usageRaw?: UsageLike | null): number | undefined => {
-  if (!usageRaw || typeof usageRaw !== "object") return undefined;
+  if (!usageRaw || typeof usageRaw !== "object") {
+    return undefined;
+  }
   const record = usageRaw as Record<string, unknown>;
   const cost = record.cost as Record<string, unknown> | undefined;
   const total = toFiniteNumber(cost?.total);
-  if (total === undefined) return undefined;
-  if (total < 0) return undefined;
+  if (total === undefined) {
+    return undefined;
+  }
+  if (total < 0) {
+    return undefined;
+  }
   return total;
 };
 
@@ -77,13 +87,17 @@ const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   const raw = entry.timestamp;
   if (typeof raw === "string") {
     const parsed = new Date(raw);
-    if (!Number.isNaN(parsed.valueOf())) return parsed;
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
   }
   const message = entry.message as Record<string, unknown> | undefined;
   const messageTimestamp = toFiniteNumber(message?.timestamp);
   if (messageTimestamp !== undefined) {
     const parsed = new Date(messageTimestamp);
-    if (!Number.isNaN(parsed.valueOf())) return parsed;
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
   }
   return undefined;
 };
@@ -91,12 +105,16 @@ const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
 const parseUsageEntry = (entry: Record<string, unknown>): ParsedUsageEntry | null => {
   const message = entry.message as Record<string, unknown> | undefined;
   const role = message?.role;
-  if (role !== "assistant") return null;
+  if (role !== "assistant") {
+    return null;
+  }
 
   const usageRaw =
     (message?.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
   const usage = normalizeUsage(usageRaw);
-  if (!usage) return null;
+  if (!usage) {
+    return null;
+  }
 
   const provider =
     (typeof message?.provider === "string" ? message?.provider : undefined) ??
@@ -146,11 +164,15 @@ async function scanUsageFile(params: {
 
   for await (const line of rl) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      continue;
+    }
     try {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       const entry = parseUsageEntry(parsed);
-      if (!entry) continue;
+      if (!entry) {
+        continue;
+      }
 
       if (entry.costTotal === undefined) {
         const cost = resolveModelCostConfig({
@@ -191,8 +213,12 @@ export async function loadCostUsageSummary(params?: {
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
-          if (!stats) return null;
-          if (stats.mtimeMs < sinceTime) return null;
+          if (!stats) {
+            return null;
+          }
+          if (stats.mtimeMs < sinceTime) {
+            return null;
+          }
           return filePath;
         }),
     )
@@ -204,7 +230,9 @@ export async function loadCostUsageSummary(params?: {
       config: params?.config,
       onEntry: (entry) => {
         const ts = entry.timestamp?.getTime();
-        if (!ts || ts < sinceTime) return;
+        if (!ts || ts < sinceTime) {
+          return;
+        }
         const dayKey = formatDayKey(entry.timestamp ?? now);
         const bucket = dailyMap.get(dayKey) ?? emptyTotals();
         applyUsageTotals(bucket, entry.usage);
@@ -238,7 +266,9 @@ export async function loadSessionCostSummary(params: {
   const sessionFile =
     params.sessionFile ??
     (params.sessionId ? resolveSessionFilePath(params.sessionId, params.sessionEntry) : undefined);
-  if (!sessionFile || !fs.existsSync(sessionFile)) return null;
+  if (!sessionFile || !fs.existsSync(sessionFile)) {
+    return null;
+  }
 
   const totals = emptyTotals();
   let lastActivity: number | undefined;

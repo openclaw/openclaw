@@ -38,11 +38,17 @@ const SessionsSpawnToolSchema = Type.Object({
 });
 
 function splitModelRef(ref?: string) {
-  if (!ref) return { provider: undefined, model: undefined };
+  if (!ref) {
+    return { provider: undefined, model: undefined };
+  }
   const trimmed = ref.trim();
-  if (!trimmed) return { provider: undefined, model: undefined };
+  if (!trimmed) {
+    return { provider: undefined, model: undefined };
+  }
   const [provider, model] = trimmed.split("/", 2);
-  if (model) return { provider, model };
+  if (model) {
+    return { provider, model };
+  }
   return { provider: undefined, model: trimmed };
 }
 
@@ -51,9 +57,13 @@ function normalizeModelSelection(value: unknown): string | undefined {
     const trimmed = value.trim();
     return trimmed || undefined;
   }
-  if (!value || typeof value !== "object") return undefined;
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
   const primary = (value as { primary?: unknown }).primary;
-  if (typeof primary === "string" && primary.trim()) return primary.trim();
+  if (typeof primary === "string" && primary.trim()) {
+    return primary.trim();
+  }
   return undefined;
 }
 
@@ -96,7 +106,9 @@ export function createSessionsSpawnTool(opts?: {
           typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
             ? Math.max(0, Math.floor(params.runTimeoutSeconds))
             : undefined;
-        if (explicit !== undefined) return explicit;
+        if (explicit !== undefined) {
+          return explicit;
+        }
         const legacy =
           typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
             ? Math.max(0, Math.floor(params.timeoutSeconds))

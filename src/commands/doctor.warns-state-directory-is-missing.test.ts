@@ -421,8 +421,11 @@ describe("doctor command", () => {
         { nonInteractive: true, workspaceSuggestions: false },
       );
     } finally {
-      if (prevToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      else process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
     }
 
     const warned = note.mock.calls.some(([message]) =>

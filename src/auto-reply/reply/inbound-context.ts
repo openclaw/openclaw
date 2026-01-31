@@ -12,7 +12,9 @@ export type FinalizeInboundContextOptions = {
 };
 
 function normalizeTextField(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
   return normalizeInboundTextNewlines(value);
 }
 
@@ -51,7 +53,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   const explicitLabel = normalized.ConversationLabel?.trim();
   if (opts.forceConversationLabel || !explicitLabel) {
     const resolved = resolveConversationLabel(normalized)?.trim();
-    if (resolved) normalized.ConversationLabel = resolved;
+    if (resolved) {
+      normalized.ConversationLabel = resolved;
+    }
   } else {
     normalized.ConversationLabel = explicitLabel;
   }

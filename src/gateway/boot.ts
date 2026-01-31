@@ -38,11 +38,15 @@ async function loadBootFile(
   try {
     const content = await fs.readFile(bootPath, "utf-8");
     const trimmed = content.trim();
-    if (!trimmed) return { status: "empty" };
+    if (!trimmed) {
+      return { status: "empty" };
+    }
     return { status: "ok", content: trimmed };
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code === "ENOENT") return { status: "missing" };
+    if (anyErr.code === "ENOENT") {
+      return { status: "missing" };
+    }
     throw err;
   }
 }

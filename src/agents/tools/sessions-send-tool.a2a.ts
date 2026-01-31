@@ -48,7 +48,9 @@ export async function runSessionsSendA2AFlow(params: {
         latestReply = primaryReply;
       }
     }
-    if (!latestReply) return;
+    if (!latestReply) {
+      return;
+    }
 
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
