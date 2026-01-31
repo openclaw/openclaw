@@ -75,20 +75,6 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
-// Audio file extensions: skip regardless of MIME type to prevent incorrect text extraction
-const AUDIO_EXTS = new Set([
-  ".ogg",
-  ".opus",
-  ".mp3",
-  ".wav",
-  ".m4a",
-  ".oga",
-  ".weba",
-  ".webm",
-  ".aac",
-  ".flac",
-]);
-
 const XML_ESCAPE_MAP: Record<string, string> = {
   "<": "&lt;",
   ">": "&gt;",
@@ -242,15 +228,6 @@ async function extractFileBlocks(params: {
     if (!attachment) {
       continue;
     }
-    // Skip audio files by extension to prevent garbled text from incorrect MIME detection
-    const nameForExt = attachment.path ?? attachment.url ?? "";
-    const ext = path.extname(nameForExt).toLowerCase();
-    if (AUDIO_EXTS.has(ext)) {
-      if (shouldLogVerbose()) {
-        logVerbose(`media: file attachment skipped (audio ext ${ext}) index=${attachment.index}`);
-      }
-      continue;
-    }
     const forcedTextMime = resolveTextMimeFromName(attachment.path ?? attachment.url ?? "");
     const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
     if (!forcedTextMime && (kind === "image" || kind === "video")) {
@@ -280,7 +257,7 @@ async function extractFileBlocks(params: {
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
     const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
-    if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
+    if (!forcedTextMimeResolved && (kind === "audio" || kind === "video")) {
       continue;
     }
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
