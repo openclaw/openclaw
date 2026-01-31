@@ -1,0 +1,88 @@
+name: Formal models (informational conformance)
+
+on:
+  pull_request:
+
+jobs:
+  formal_conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout openclaw (PR)
+        uses: actions/checkout@v4
+        with:
+          path: openclaw
+
+      - name: Checkout formal models
+        uses: actions/checkout@v4
+        with:
+          repository: vignesh07/clawdbot-formal-models
+          path: clawdbot-formal-models
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Regenerate extracted constants from openclaw
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+          export OPENCLAW_REPO_DIR="${GITHUB_WORKSPACE}/openclaw"
+          node scripts/extract-tool-groups.mjs
+
+      - name: Compute drift
+        id: drift
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+
+          if git diff --quiet; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+          git diff > "${GITHUB_WORKSPACE}/formal-models-drift.diff"
+
+      - name: Upload drift diff artifact
+        if: steps.drift.outputs.drift == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-models-conformance-drift
+          path: formal-models-drift.diff
+
+      - name: Comment on PR (informational)
+        if: steps.drift.outputs.drift == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              '⚠️ **Formal models conformance drift detected**',
+              '',
+              'The formal models extracted constants (`generated/*`) do not match this openclaw PR.',
+              '',
+              'This check is **informational** (not blocking merges yet).',
+              'See the `formal-models-conformance-drift` artifact for the diff.',
+              '',
+              'If this change is intentional, follow up by updating the formal models repo or regenerating the extracted artifacts there.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.drift.outputs.drift }}" = "true" ]; then
+            echo "Formal conformance drift detected (informational)."
+          else
+            echo "Formal conformance: no drift."
+          fi
