@@ -284,6 +284,9 @@ final class GatewayConnectionController {
     private func makeConnectOptions() -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
+        let manualClientId = defaults.string(forKey: "gateway.manual.clientId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedClientId = manualClientId?.isEmpty == false ? manualClientId! : "openclaw-ios"
 
         return GatewayConnectOptions(
             role: "node",
@@ -291,7 +294,7 @@ final class GatewayConnectionController {
             caps: self.currentCaps(),
             commands: self.currentCommands(),
             permissions: self.currentPermissions(),
-            clientId: "openclaw-ios",
+            clientId: resolvedClientId,
             clientMode: "node",
             clientDisplayName: displayName)
     }

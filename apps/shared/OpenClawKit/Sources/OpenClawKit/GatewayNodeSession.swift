@@ -190,10 +190,11 @@ public actor GatewayNodeSession {
     private func handleEvent(_ evt: EventFrame) async {
         self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
+        self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
         do {
-            let data = try self.encoder.encode(payload)
-            let request = try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
+            let request = try self.decodeInvokeRequest(from: payload)
+            self.logger.info("node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public)")
             guard let onInvoke else { return }
             let req = BridgeInvokeRequest(id: request.id, command: request.command, paramsJSON: request.paramsJSON)
             let response = await Self.invokeWithTimeout(
@@ -207,8 +208,21 @@ public actor GatewayNodeSession {
         }
     }
 
+    private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
+        do {
+            let data = try self.encoder.encode(payload)
+            return try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
+        } catch {
+            if let raw = payload.value as? String, let data = raw.data(using: .utf8) {
+                return try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
+            }
+            throw error
+        }
+    }
+
     private func sendInvokeResult(request: NodeInvokeRequestPayload, response: BridgeInvokeResponse) async {
         guard let channel = self.channel else { return }
+        self.logger.info("node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         var params: [String: AnyCodable] = [
             "id": AnyCodable(request.id),
             "nodeId": AnyCodable(request.nodeId),
@@ -226,7 +240,7 @@ public actor GatewayNodeSession {
         do {
             try await channel.send(method: "node.invoke.result", params: params)
         } catch {
-            self.logger.error("node invoke result failed: \(error.localizedDescription, privacy: .public)")
+            self.logger.error("node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
