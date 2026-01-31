@@ -103,7 +103,12 @@ vi.mock("../memory/manager.js", () => ({
         sourceCounts: [{ source: "memory", files: 2, chunks: 3 }],
         cache: { enabled: true, entries: 10, maxEntries: 500 },
         fts: { enabled: true, available: true },
-        vector: { enabled: true, available: true, extensionPath: "/opt/vec0.dylib", dims: 1024 },
+        vector: {
+          enabled: true,
+          available: true,
+          extensionPath: "/opt/vec0.dylib",
+          dims: 1024,
+        },
       }),
       close: vi.fn(async () => {}),
       __agentId: agentId,
@@ -254,7 +259,7 @@ vi.mock("../daemon/service.js", () => ({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 1234 }),
     readCommand: async () => ({
-      programArguments: ["node", "dist/entry.mjs", "gateway"],
+      programArguments: ["node", "dist/entry.js", "gateway"],
       sourcePath: "/tmp/Library/LaunchAgents/bot.molt.gateway.plist",
     }),
   }),
@@ -267,7 +272,7 @@ vi.mock("../daemon/node-service.js", () => ({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 4321 }),
     readCommand: async () => ({
-      programArguments: ["node", "dist/entry.mjs", "node-host"],
+      programArguments: ["node", "dist/entry.js", "node-host"],
       sourcePath: "/tmp/Library/LaunchAgents/bot.molt.node.plist",
     }),
   }),

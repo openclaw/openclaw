@@ -83,7 +83,7 @@ TRASH
   }
 
   start_gateway() {
-    node dist/index.mjs gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
+    node dist/index.js gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
     GATEWAY_PID="$!"
   }
 
@@ -185,7 +185,7 @@ TRASH
     local validate_fn="${4:-}"
 
     # Default onboarding command wrapper.
-    run_wizard_cmd "$case_name" "$home_dir" "node dist/index.mjs onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
+    run_wizard_cmd "$case_name" "$home_dir" "node dist/index.js onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
   }
 
   make_home() {
@@ -268,7 +268,7 @@ TRASH
     home_dir="$(make_home local-basic)"
     export HOME="$home_dir"
     mkdir -p "$HOME"
-    node dist/index.mjs onboard \
+    node dist/index.js onboard \
       --non-interactive \
       --accept-risk \
       --flow quickstart \
@@ -345,7 +345,7 @@ NODE
     export HOME="$home_dir"
     mkdir -p "$HOME"
     # Smoke test non-interactive remote config write.
-    node dist/index.mjs onboard --non-interactive --accept-risk \
+    node dist/index.js onboard --non-interactive --accept-risk \
       --mode remote \
       --remote-url ws://gateway.local:18789 \
       --remote-token remote-token \
@@ -398,7 +398,7 @@ NODE
 }
 JSON
 
-    node dist/index.mjs onboard \
+    node dist/index.js onboard \
       --non-interactive \
       --accept-risk \
       --flow quickstart \
@@ -441,7 +441,7 @@ NODE
     local home_dir
     home_dir="$(make_home channels)"
     # Channels-only configure flow.
-    run_wizard_cmd channels "$home_dir" "node dist/index.mjs configure --section channels" send_channels_flow
+    run_wizard_cmd channels "$home_dir" "node dist/index.js configure --section channels" send_channels_flow
 
     config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"
@@ -492,7 +492,7 @@ NODE
 }
 JSON
 
-    run_wizard_cmd skills "$home_dir" "node dist/index.mjs configure --section skills" send_skills_flow
+    run_wizard_cmd skills "$home_dir" "node dist/index.js configure --section skills" send_skills_flow
 
     config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"
