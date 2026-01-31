@@ -57,7 +57,9 @@ function normalizeNodeKey(value: string) {
 
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
   const q = String(query ?? "").trim();
-  if (!q) throw new Error("node required");
+  if (!q) {
+    throw new Error("node required");
+  }
 
   let nodes: NodeListNode[] = [];
   try {
@@ -77,15 +79,25 @@ export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
 
   const qNorm = normalizeNodeKey(q);
   const matches = nodes.filter((n) => {
-    if (n.nodeId === q) return true;
-    if (typeof n.remoteIp === "string" && n.remoteIp === q) return true;
+    if (n.nodeId === q) {
+      return true;
+    }
+    if (typeof n.remoteIp === "string" && n.remoteIp === q) {
+      return true;
+    }
     const name = typeof n.displayName === "string" ? n.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) return true;
-    if (q.length >= 6 && n.nodeId.startsWith(q)) return true;
+    if (name && normalizeNodeKey(name) === qNorm) {
+      return true;
+    }
+    if (q.length >= 6 && n.nodeId.startsWith(q)) {
+      return true;
+    }
     return false;
   });
 
-  if (matches.length === 1) return matches[0].nodeId;
+  if (matches.length === 1) {
+    return matches[0].nodeId;
+  }
   if (matches.length === 0) {
     const known = nodes
       .map((n) => n.displayName || n.remoteIp || n.nodeId)

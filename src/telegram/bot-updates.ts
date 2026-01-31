@@ -29,9 +29,13 @@ export const resolveTelegramUpdateId = (ctx: TelegramUpdateKeyContext) =>
 
 export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
   const updateId = resolveTelegramUpdateId(ctx);
-  if (typeof updateId === "number") return `update:${updateId}`;
+  if (typeof updateId === "number") {
+    return `update:${updateId}`;
+  }
   const callbackId = ctx.callbackQuery?.id;
-  if (callbackId) return `callback:${callbackId}`;
+  if (callbackId) {
+    return `callback:${callbackId}`;
+  }
   const msg =
     ctx.message ?? ctx.update?.message ?? ctx.update?.edited_message ?? ctx.callbackQuery?.message;
   const chatId = msg?.chat?.id;

@@ -6,9 +6,13 @@ export function collectChannelStatusIssues(payload: Record<string, unknown>): Ch
   const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
   for (const plugin of listChannelPlugins()) {
     const collect = plugin.status?.collectStatusIssues;
-    if (!collect) continue;
+    if (!collect) {
+      continue;
+    }
     const raw = accountsByChannel?.[plugin.id];
-    if (!Array.isArray(raw)) continue;
+    if (!Array.isArray(raw)) {
+      continue;
+    }
 
     issues.push(...collect(raw as ChannelAccountSnapshot[]));
   }

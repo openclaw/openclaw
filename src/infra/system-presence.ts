@@ -32,9 +32,13 @@ const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
-  if (!key) return undefined;
+  if (!key) {
+    return undefined;
+  }
   const trimmed = key.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   return trimmed.toLowerCase();
 }
 
@@ -45,11 +49,15 @@ function resolvePrimaryIPv4(): string | undefined {
     for (const name of names) {
       const list = nets[name];
       const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
-      if (entry?.address) return entry.address;
+      if (entry?.address) {
+        return entry.address;
+      }
     }
     for (const list of Object.values(nets)) {
       const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
-      if (entry?.address) return entry.address;
+      if (entry?.address) {
+        return entry.address;
+      }
     }
     return undefined;
   };
@@ -81,15 +89,25 @@ function initSelfPresence() {
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();
-    if (p === "darwin") return `macos ${macOSVersion()}`;
-    if (p === "win32") return `windows ${rel}`;
+    if (p === "darwin") {
+      return `macos ${macOSVersion()}`;
+    }
+    if (p === "win32") {
+      return `windows ${rel}`;
+    }
     return `${p} ${rel}`;
   })();
   const deviceFamily = (() => {
     const p = os.platform();
-    if (p === "darwin") return "Mac";
-    if (p === "win32") return "Windows";
-    if (p === "linux") return "Linux";
+    if (p === "darwin") {
+      return "Mac";
+    }
+    if (p === "win32") {
+      return "Windows";
+    }
+    if (p === "linux") {
+      return "Linux";
+    }
     return p;
   })();
   const text = `Gateway: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode gateway · reason self`;
@@ -175,10 +193,14 @@ type SystemPresencePayload = {
 function mergeStringList(...values: Array<string[] | undefined>): string[] | undefined {
   const out = new Set<string>();
   for (const list of values) {
-    if (!Array.isArray(list)) continue;
+    if (!Array.isArray(list)) {
+      continue;
+    }
     for (const item of list) {
       const trimmed = String(item).trim();
-      if (trimmed) out.add(trimmed);
+      if (trimmed) {
+        out.add(trimmed);
+      }
     }
   }
   return out.size > 0 ? [...out] : undefined;
@@ -266,7 +288,9 @@ export function listSystemPresence(): SystemPresence[] {
   // prune expired
   const now = Date.now();
   for (const [k, v] of entries) {
-    if (now - v.ts > TTL_MS) entries.delete(k);
+    if (now - v.ts > TTL_MS) {
+      entries.delete(k);
+    }
   }
   // enforce max size (LRU by ts)
   if (entries.size > MAX_ENTRIES) {

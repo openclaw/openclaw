@@ -47,8 +47,12 @@ const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma
 
 function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
   const modelPath = options.local?.modelPath?.trim();
-  if (!modelPath) return false;
-  if (/^(hf:|https?:)/i.test(modelPath)) return false;
+  if (!modelPath) {
+    return false;
+  }
+  if (/^(hf:|https?:)/i.test(modelPath)) {
+    return false;
+  }
   const resolved = resolveUserPath(modelPath);
   try {
     return fsSync.statSync(resolved).isFile();
@@ -193,12 +197,16 @@ export async function createEmbeddingProvider(
 }
 
 function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    return err.message;
+  }
   return String(err);
 }
 
 function isNodeLlamaCppMissing(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
+  if (!(err instanceof Error)) {
+    return false;
+  }
   const code = (err as Error & { code?: unknown }).code;
   if (code === "ERR_MODULE_NOT_FOUND") {
     return err.message.includes("node-llama-cpp");

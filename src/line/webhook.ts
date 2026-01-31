@@ -14,7 +14,9 @@ function readRawBody(req: Request): string | null {
   const rawBody =
     (req as { rawBody?: string | Buffer }).rawBody ??
     (typeof req.body === "string" || Buffer.isBuffer(req.body) ? req.body : null);
-  if (!rawBody) return null;
+  if (!rawBody) {
+    return null;
+  }
   return Buffer.isBuffer(rawBody) ? rawBody.toString("utf-8") : rawBody;
 }
 

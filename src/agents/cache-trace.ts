@@ -104,7 +104,9 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 
 function getWriter(filePath: string): CacheTraceWriter {
   const existing = writers.get(filePath);
-  if (existing) return existing;
+  if (existing) {
+    return existing;
+  }
 
   const dir = path.dirname(filePath);
   const ready = fs.mkdir(dir, { recursive: true }).catch(() => undefined);
@@ -125,10 +127,18 @@ function getWriter(filePath: string): CacheTraceWriter {
 }
 
 function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === "number" && !Number.isFinite(value)) return JSON.stringify(String(value));
-  if (typeof value === "bigint") return JSON.stringify(value.toString());
-  if (typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return JSON.stringify(String(value));
+  }
+  if (typeof value === "bigint") {
+    return JSON.stringify(value.toString());
+  }
+  if (typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
   if (value instanceof Error) {
     return stableStringify({
       name: value.name,
@@ -174,8 +184,12 @@ function summarizeMessages(messages: AgentMessage[]): {
 function safeJsonStringify(value: unknown): string | null {
   try {
     return JSON.stringify(value, (_key, val) => {
-      if (typeof val === "bigint") return val.toString();
-      if (typeof val === "function") return "[Function]";
+      if (typeof val === "bigint") {
+        return val.toString();
+      }
+      if (typeof val === "function") {
+        return "[Function]";
+      }
       if (val instanceof Error) {
         return { name: val.name, message: val.message, stack: val.stack };
       }
@@ -191,7 +205,9 @@ function safeJsonStringify(value: unknown): string | null {
 
 export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const cfg = resolveCacheTraceConfig(params);
-  if (!cfg.enabled) return null;
+  if (!cfg.enabled) {
+    return null;
+  }
 
   const writer = params.writer ?? getWriter(cfg.filePath);
   let seq = 0;
@@ -221,8 +237,12 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.system = payload.system;
       event.systemDigest = digest(payload.system);
     }
-    if (payload.options) event.options = payload.options;
-    if (payload.model) event.model = payload.model;
+    if (payload.options) {
+      event.options = payload.options;
+    }
+    if (payload.model) {
+      event.model = payload.model;
+    }
 
     const messages = payload.messages;
     if (Array.isArray(messages)) {
@@ -236,11 +256,17 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       }
     }
 
-    if (payload.note) event.note = payload.note;
-    if (payload.error) event.error = payload.error;
+    if (payload.note) {
+      event.note = payload.note;
+    }
+    if (payload.error) {
+      event.error = payload.error;
+    }
 
     const line = safeJsonStringify(event);
-    if (!line) return;
+    if (!line) {
+      return;
+    }
     writer.write(`${line}\n`);
   };
 

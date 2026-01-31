@@ -36,8 +36,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
-  if (previousToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  else process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+  if (previousToken === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  } else {
+    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+  }
 });
 
 const openClient = async (opts?: Parameters<typeof connectOk>[1]) => {
@@ -210,7 +213,9 @@ describe("gateway server health/presence", () => {
       expect(evt.payload?.presence?.length).toBeGreaterThan(0);
       expect(typeof evt.seq).toBe("number");
     }
-    for (const c of clients) c.close();
+    for (const c of clients) {
+      c.close();
+    }
   });
 
   test("presence includes client fingerprint", async () => {

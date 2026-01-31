@@ -228,7 +228,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
-    if (!name) return;
+    if (!name) {
+      return;
+    }
     switch (name) {
       case "help":
         chatLog.addSystem(
@@ -247,7 +249,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }
           if (status && typeof status === "object") {
             const lines = formatStatusSummary(status as GatewayStatusSummary);
-            for (const line of lines) chatLog.addSystem(line);
+            for (const line of lines) {
+              chatLog.addSystem(line);
+            }
             break;
           }
           chatLog.addSystem("status: unknown response");

@@ -38,7 +38,9 @@ export function createTtsTool(opts?: {
       if (result.success && result.audioPath) {
         const lines: string[] = [];
         // Tag Telegram Opus output as a voice bubble instead of a file attachment.
-        if (result.voiceCompatible) lines.push("[[audio_as_voice]]");
+        if (result.voiceCompatible) {
+          lines.push("[[audio_as_voice]]");
+        }
         lines.push(`MEDIA:${result.audioPath}`);
         return {
           content: [{ type: "text", text: lines.join("\n") }],

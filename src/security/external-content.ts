@@ -171,8 +171,14 @@ export function isExternalHookSession(sessionKey: string): boolean {
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  if (sessionKey.startsWith("hook:gmail:")) return "email";
-  if (sessionKey.startsWith("hook:webhook:")) return "webhook";
-  if (sessionKey.startsWith("hook:")) return "webhook";
+  if (sessionKey.startsWith("hook:gmail:")) {
+    return "email";
+  }
+  if (sessionKey.startsWith("hook:webhook:")) {
+    return "webhook";
+  }
+  if (sessionKey.startsWith("hook:")) {
+    return "webhook";
+  }
   return "unknown";
 }

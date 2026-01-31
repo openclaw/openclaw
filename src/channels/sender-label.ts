@@ -20,7 +20,9 @@ export function resolveSenderLabel(params: SenderLabelParams): string | null {
 
   const display = name ?? username ?? tag ?? "";
   const idPart = e164 ?? id ?? "";
-  if (display && idPart && display !== idPart) return `${display} (${idPart})`;
+  if (display && idPart && display !== idPart) {
+    return `${display} (${idPart})`;
+  }
   return display || idPart || null;
 }
 
@@ -32,12 +34,24 @@ export function listSenderLabelCandidates(params: SenderLabelParams): string[] {
   const e164 = normalize(params.e164);
   const id = normalize(params.id);
 
-  if (name) candidates.add(name);
-  if (username) candidates.add(username);
-  if (tag) candidates.add(tag);
-  if (e164) candidates.add(e164);
-  if (id) candidates.add(id);
+  if (name) {
+    candidates.add(name);
+  }
+  if (username) {
+    candidates.add(username);
+  }
+  if (tag) {
+    candidates.add(tag);
+  }
+  if (e164) {
+    candidates.add(e164);
+  }
+  if (id) {
+    candidates.add(id);
+  }
   const resolved = resolveSenderLabel(params);
-  if (resolved) candidates.add(resolved);
+  if (resolved) {
+    candidates.add(resolved);
+  }
   return Array.from(candidates);
 }

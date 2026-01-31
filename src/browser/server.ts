@@ -14,11 +14,15 @@ const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
 
 export async function startBrowserControlServerFromConfig(): Promise<BrowserServerState | null> {
-  if (state) return state;
+  if (state) {
+    return state;
+  }
 
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  if (!resolved.enabled) return null;
+  if (!resolved.enabled) {
+    return null;
+  }
 
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -37,7 +41,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     return null;
   });
 
-  if (!server) return null;
+  if (!server) {
+    return null;
+  }
 
   state = {
     server,
@@ -50,7 +56,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   // so the extension can connect before the first browser action.
   for (const name of Object.keys(resolved.profiles)) {
     const profile = resolveProfile(resolved, name);
-    if (!profile || profile.driver !== "extension") continue;
+    if (!profile || profile.driver !== "extension") {
+      continue;
+    }
     await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch((err) => {
       logServer.warn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
     });
@@ -62,7 +70,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
 export async function stopBrowserControlServer(): Promise<void> {
   const current = state;
-  if (!current) return;
+  if (!current) {
+    return;
+  }
 
   const ctx = createBrowserRouteContext({
     getState: () => state,

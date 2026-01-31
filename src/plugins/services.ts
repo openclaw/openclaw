@@ -58,7 +58,9 @@ export async function startPluginServices(params: {
   return {
     stop: async () => {
       for (const entry of running.toReversed()) {
-        if (!entry.stop) continue;
+        if (!entry.stop) {
+          continue;
+        }
         try {
           await entry.stop();
         } catch (err) {

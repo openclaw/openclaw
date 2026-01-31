@@ -190,11 +190,16 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
     let settled = false;
     let ignoreClose = false;
     const stop = (err?: Error, value?: T) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(value as T);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(value as T);
+      }
     };
 
     const client = new GatewayClient({
@@ -228,7 +233,9 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
         }
       },
       onClose: (code, reason) => {
-        if (settled || ignoreClose) return;
+        if (settled || ignoreClose) {
+          return;
+        }
         ignoreClose = true;
         client.stop();
         stop(new Error(formatCloseError(code, reason)));

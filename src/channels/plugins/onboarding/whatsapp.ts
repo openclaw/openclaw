@@ -68,9 +68,13 @@ async function promptWhatsAppAllowFrom(
       initialValue: existingAllowFrom[0],
       validate: (value) => {
         const raw = String(value ?? "").trim();
-        if (!raw) return "Required";
+        if (!raw) {
+          return "Required";
+        }
         const normalized = normalizeE164(raw);
-        if (!normalized) return `Invalid number: ${raw}`;
+        if (!normalized) {
+          return `Invalid number: ${raw}`;
+        }
         return undefined;
       },
     });
@@ -126,9 +130,13 @@ async function promptWhatsAppAllowFrom(
       initialValue: existingAllowFrom[0],
       validate: (value) => {
         const raw = String(value ?? "").trim();
-        if (!raw) return "Required";
+        if (!raw) {
+          return "Required";
+        }
         const normalized = normalizeE164(raw);
-        if (!normalized) return `Invalid number: ${raw}`;
+        if (!normalized) {
+          return `Invalid number: ${raw}`;
+        }
         return undefined;
       },
     });
@@ -170,7 +178,9 @@ async function promptWhatsAppAllowFrom(
   if (policy === "open") {
     next = setWhatsAppAllowFrom(next, ["*"]);
   }
-  if (policy === "disabled") return next;
+  if (policy === "disabled") {
+    return next;
+  }
 
   const allowOptions =
     existingAllowFrom.length > 0
@@ -205,16 +215,24 @@ async function promptWhatsAppAllowFrom(
       placeholder: "+15555550123, +447700900123",
       validate: (value) => {
         const raw = String(value ?? "").trim();
-        if (!raw) return "Required";
+        if (!raw) {
+          return "Required";
+        }
         const parts = raw
           .split(/[\n,;]+/g)
           .map((p) => p.trim())
           .filter(Boolean);
-        if (parts.length === 0) return "Required";
+        if (parts.length === 0) {
+          return "Required";
+        }
         for (const part of parts) {
-          if (part === "*") continue;
+          if (part === "*") {
+            continue;
+          }
           const normalized = normalizeE164(part);
-          if (!normalized) return `Invalid number: ${part}`;
+          if (!normalized) {
+            return `Invalid number: ${part}`;
+          }
         }
         return undefined;
       },

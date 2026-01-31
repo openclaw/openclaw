@@ -3,9 +3,13 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 const formatCommit = (value?: string | null) => {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
 };
 
@@ -30,7 +34,9 @@ const resolveGitHead = (startDir: string) => {
       // ignore missing .git at this level
     }
     const parent = path.dirname(current);
-    if (parent === current) break;
+    if (parent === current) {
+      break;
+    }
     current = parent;
   }
   return null;
@@ -64,7 +70,9 @@ const readCommitFromBuildInfo = () => {
 };
 
 export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) => {
-  if (cachedCommit !== undefined) return cachedCommit;
+  if (cachedCommit !== undefined) {
+    return cachedCommit;
+  }
   const env = options.env ?? process.env;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   const normalized = formatCommit(envCommit);

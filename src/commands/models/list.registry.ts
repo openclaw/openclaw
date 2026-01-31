@@ -31,10 +31,18 @@ const isLocalBaseUrl = (baseUrl: string) => {
 };
 
 const hasAuthForProvider = (provider: string, cfg: OpenClawConfig, authStore: AuthProfileStore) => {
-  if (listProfilesForProvider(authStore, provider).length > 0) return true;
-  if (provider === "amazon-bedrock" && resolveAwsSdkEnvVarName()) return true;
-  if (resolveEnvApiKey(provider)) return true;
-  if (getCustomProviderApiKey(cfg, provider)) return true;
+  if (listProfilesForProvider(authStore, provider).length > 0) {
+    return true;
+  }
+  if (provider === "amazon-bedrock" && resolveAwsSdkEnvVarName()) {
+    return true;
+  }
+  if (resolveEnvApiKey(provider)) {
+    return true;
+  }
+  if (getCustomProviderApiKey(cfg, provider)) {
+    return true;
+  }
   return false;
 };
 
@@ -82,9 +90,13 @@ export function toModelRow(params: {
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {
     for (const tag of mergedTags) {
-      if (tag === "alias" || tag.startsWith("alias:")) mergedTags.delete(tag);
+      if (tag === "alias" || tag.startsWith("alias:")) {
+        mergedTags.delete(tag);
+      }
     }
-    for (const tag of aliasTags) mergedTags.add(tag);
+    for (const tag of aliasTags) {
+      mergedTags.add(tag);
+    }
   }
 
   return {

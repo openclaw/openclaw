@@ -34,17 +34,22 @@ function coerceSchedule(schedule: UnknownRecord) {
       typeof schedule.atMs === "number" ||
       typeof schedule.at === "string" ||
       typeof schedule.atMs === "string"
-    )
+    ) {
       next.kind = "at";
-    else if (typeof schedule.everyMs === "number") next.kind = "every";
-    else if (typeof schedule.expr === "string") next.kind = "cron";
+    } else if (typeof schedule.everyMs === "number") {
+      next.kind = "every";
+    } else if (typeof schedule.expr === "string") {
+      next.kind = "cron";
+    }
   }
 
   if (typeof schedule.atMs !== "number" && parsedAtMs !== null) {
     next.atMs = parsedAtMs;
   }
 
-  if ("at" in next) delete next.at;
+  if ("at" in next) {
+    delete next.at;
+  }
 
   return next;
 }
@@ -57,8 +62,12 @@ function coercePayload(payload: UnknownRecord) {
 }
 
 function unwrapJob(raw: UnknownRecord) {
-  if (isRecord(raw.data)) return raw.data;
-  if (isRecord(raw.job)) return raw.job;
+  if (isRecord(raw.data)) {
+    return raw.data;
+  }
+  if (isRecord(raw.job)) {
+    return raw.job;
+  }
   return raw;
 }
 
@@ -66,7 +75,9 @@ export function normalizeCronJobInput(
   raw: unknown,
   options: NormalizeOptions = DEFAULT_OPTIONS,
 ): UnknownRecord | null {
-  if (!isRecord(raw)) return null;
+  if (!isRecord(raw)) {
+    return null;
+  }
   const base = unwrapJob(raw);
   const next: UnknownRecord = { ...base };
 
@@ -76,8 +87,11 @@ export function normalizeCronJobInput(
       next.agentId = null;
     } else if (typeof agentId === "string") {
       const trimmed = agentId.trim();
-      if (trimmed) next.agentId = sanitizeAgentId(trimmed);
-      else delete next.agentId;
+      if (trimmed) {
+        next.agentId = sanitizeAgentId(trimmed);
+      } else {
+        delete next.agentId;
+      }
     }
   }
 
@@ -87,8 +101,12 @@ export function normalizeCronJobInput(
       next.enabled = enabled;
     } else if (typeof enabled === "string") {
       const trimmed = enabled.trim().toLowerCase();
-      if (trimmed === "true") next.enabled = true;
-      if (trimmed === "false") next.enabled = false;
+      if (trimmed === "true") {
+        next.enabled = true;
+      }
+      if (trimmed === "false") {
+        next.enabled = false;
+      }
     }
   }
 
@@ -101,11 +119,17 @@ export function normalizeCronJobInput(
   }
 
   if (options.applyDefaults) {
-    if (!next.wakeMode) next.wakeMode = "next-heartbeat";
+    if (!next.wakeMode) {
+      next.wakeMode = "next-heartbeat";
+    }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
-      if (kind === "systemEvent") next.sessionTarget = "main";
-      if (kind === "agentTurn") next.sessionTarget = "isolated";
+      if (kind === "systemEvent") {
+        next.sessionTarget = "main";
+      }
+      if (kind === "agentTurn") {
+        next.sessionTarget = "isolated";
+      }
     }
   }
 

@@ -69,7 +69,9 @@ const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
   ctx: z.RefinementCtx,
 ) => {
-  if (!value.customCommands || value.customCommands.length === 0) return;
+  if (!value.customCommands || value.customCommands.length === 0) {
+    return;
+  }
   const { issues } = resolveTelegramCustomCommands({
     commands: value.customCommands,
     checkReserved: false,
@@ -476,12 +478,20 @@ export const SlackConfigSchema = SlackAccountSchema.extend({
       path: ["signingSecret"],
     });
   }
-  if (!value.accounts) return;
+  if (!value.accounts) {
+    return;
+  }
   for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) continue;
-    if (account.enabled === false) continue;
+    if (!account) {
+      continue;
+    }
+    if (account.enabled === false) {
+      continue;
+    }
     const accountMode = account.mode ?? baseMode;
-    if (accountMode !== "http") continue;
+    if (accountMode !== "http") {
+      continue;
+    }
     const accountSecret = account.signingSecret ?? value.signingSecret;
     if (!accountSecret) {
       ctx.addIssue({

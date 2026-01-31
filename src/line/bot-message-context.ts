@@ -335,7 +335,9 @@ export async function buildLinePostbackContext(params: {
 
   const timestamp = event.timestamp;
   const rawData = event.postback?.data?.trim() ?? "";
-  if (!rawData) return null;
+  if (!rawData) {
+    return null;
+  }
   let rawBody = rawData;
   if (rawData.includes("line.action=")) {
     const params = new URLSearchParams(rawData);

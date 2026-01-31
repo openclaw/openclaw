@@ -37,9 +37,15 @@ export function createDoctorPrompter(params: {
 
   const canPrompt = isTty && !yes && !nonInteractive;
   const confirmDefault = async (p: Parameters<typeof confirm>[0]) => {
-    if (nonInteractive) return false;
-    if (shouldRepair) return true;
-    if (!canPrompt) return Boolean(p.initialValue ?? false);
+    if (nonInteractive) {
+      return false;
+    }
+    if (shouldRepair) {
+      return true;
+    }
+    if (!canPrompt) {
+      return Boolean(p.initialValue ?? false);
+    }
     return guardCancel(
       await confirm({
         ...p,
@@ -52,14 +58,24 @@ export function createDoctorPrompter(params: {
   return {
     confirm: confirmDefault,
     confirmRepair: async (p) => {
-      if (nonInteractive) return false;
+      if (nonInteractive) {
+        return false;
+      }
       return confirmDefault(p);
     },
     confirmAggressive: async (p) => {
-      if (nonInteractive) return false;
-      if (shouldRepair && shouldForce) return true;
-      if (shouldRepair && !shouldForce) return false;
-      if (!canPrompt) return Boolean(p.initialValue ?? false);
+      if (nonInteractive) {
+        return false;
+      }
+      if (shouldRepair && shouldForce) {
+        return true;
+      }
+      if (shouldRepair && !shouldForce) {
+        return false;
+      }
+      if (!canPrompt) {
+        return Boolean(p.initialValue ?? false);
+      }
       return guardCancel(
         await confirm({
           ...p,
@@ -69,12 +85,18 @@ export function createDoctorPrompter(params: {
       );
     },
     confirmSkipInNonInteractive: async (p) => {
-      if (nonInteractive) return false;
-      if (shouldRepair) return true;
+      if (nonInteractive) {
+        return false;
+      }
+      if (shouldRepair) {
+        return true;
+      }
       return confirmDefault(p);
     },
     select: async <T>(p: Parameters<typeof select>[0], fallback: T) => {
-      if (!canPrompt || shouldRepair) return fallback;
+      if (!canPrompt || shouldRepair) {
+        return fallback;
+      }
       return guardCancel(
         await select({
           ...p,

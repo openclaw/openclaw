@@ -358,8 +358,11 @@ describe("statusCommand", () => {
       const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
       expect(logs.some((l) => l.includes("auth token"))).toBe(true);
     } finally {
-      if (prevToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      else process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
     }
   });
 
@@ -459,10 +462,14 @@ describe("statusCommand", () => {
       payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"),
     ).toBe(true);
 
-    if (originalAgents) mocks.listAgentsForGateway.mockImplementation(originalAgents);
-    if (originalResolveStorePath)
+    if (originalAgents) {
+      mocks.listAgentsForGateway.mockImplementation(originalAgents);
+    }
+    if (originalResolveStorePath) {
       mocks.resolveStorePath.mockImplementation(originalResolveStorePath);
-    if (originalLoadSessionStore)
+    }
+    if (originalLoadSessionStore) {
       mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+    }
   });
 });

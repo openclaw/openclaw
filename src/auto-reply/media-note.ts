@@ -27,7 +27,9 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   }
   if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
     for (const decision of ctx.MediaUnderstandingDecisions) {
-      if (decision.outcome !== "success") continue;
+      if (decision.outcome !== "success") {
+        continue;
+      }
       for (const attachment of decision.attachments) {
         if (attachment.chosen?.outcome === "success") {
           suppressed.add(attachment.attachmentIndex);
@@ -42,7 +44,9 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       : ctx.MediaPath?.trim()
         ? [ctx.MediaPath.trim()]
         : [];
-  if (paths.length === 0) return undefined;
+  if (paths.length === 0) {
+    return undefined;
+  }
 
   const urls =
     Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length === paths.length
@@ -61,7 +65,9 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       index,
     }))
     .filter((entry) => !suppressed.has(entry.index));
-  if (entries.length === 0) return undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
   if (entries.length === 1) {
     return formatMediaAttachedLine({
       path: entries[0]?.path ?? "",

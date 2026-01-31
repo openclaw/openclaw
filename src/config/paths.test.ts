@@ -114,20 +114,41 @@ describe("state + config path candidates", () => {
       } else {
         process.env.HOME = previousHome;
       }
-      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = previousUserProfile;
-      if (previousHomeDrive === undefined) delete process.env.HOMEDRIVE;
-      else process.env.HOMEDRIVE = previousHomeDrive;
-      if (previousHomePath === undefined) delete process.env.HOMEPATH;
-      else process.env.HOMEPATH = previousHomePath;
-      if (previousOpenClawConfig === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
-      else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
-      if (previousOpenClawConfig === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
-      else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
-      if (previousOpenClawState === undefined) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
-      if (previousOpenClawState === undefined) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
+      }
+      if (previousHomeDrive === undefined) {
+        delete process.env.HOMEDRIVE;
+      } else {
+        process.env.HOMEDRIVE = previousHomeDrive;
+      }
+      if (previousHomePath === undefined) {
+        delete process.env.HOMEPATH;
+      } else {
+        process.env.HOMEPATH = previousHomePath;
+      }
+      if (previousOpenClawConfig === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
+      }
+      if (previousOpenClawConfig === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
+      }
+      if (previousOpenClawState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
+      }
+      if (previousOpenClawState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
+      }
       await fs.rm(root, { recursive: true, force: true });
       vi.resetModules();
     }

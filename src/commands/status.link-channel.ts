@@ -44,7 +44,9 @@ export async function resolveLinkChannelContext(
     const summaryRecord = summary;
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
-    if (linked === null) continue;
+    if (linked === null) {
+      continue;
+    }
     const authAgeMs =
       summaryRecord && typeof summaryRecord.authAgeMs === "number" ? summaryRecord.authAgeMs : null;
     return { linked, authAgeMs, account, accountId: defaultAccountId, plugin };

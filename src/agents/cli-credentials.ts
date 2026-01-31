@@ -112,7 +112,9 @@ function readCodexKeychainCredentials(options?: {
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const platform = options?.platform ?? process.platform;
-  if (platform !== "darwin") return null;
+  if (platform !== "darwin") {
+    return null;
+  }
   const execSyncImpl = options?.execSync ?? execSync;
 
   const codexHome = resolveCodexHomePath();
@@ -132,8 +134,12 @@ function readCodexKeychainCredentials(options?: {
     const tokens = parsed.tokens as Record<string, unknown> | undefined;
     const accessToken = tokens?.access_token;
     const refreshToken = tokens?.refresh_token;
-    if (typeof accessToken !== "string" || !accessToken) return null;
-    if (typeof refreshToken !== "string" || !refreshToken) return null;
+    if (typeof accessToken !== "string" || !accessToken) {
+      return null;
+    }
+    if (typeof refreshToken !== "string" || !refreshToken) {
+      return null;
+    }
 
     // No explicit expiry stored; treat as fresh for an hour from last_refresh or now.
     const lastRefreshRaw = parsed.last_refresh;
@@ -167,15 +173,23 @@ function readCodexKeychainCredentials(options?: {
 function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
   const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
   const data = raw as Record<string, unknown>;
   const accessToken = data.access_token;
   const refreshToken = data.refresh_token;
   const expiresAt = data.expiry_date;
 
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof refreshToken !== "string" || !refreshToken) return null;
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return null;
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return null;
+  }
 
   return {
     type: "oauth",
@@ -197,14 +211,20 @@ function readClaudeCliKeychainCredentials(
 
     const data = JSON.parse(result.trim());
     const claudeOauth = data?.claudeAiOauth;
-    if (!claudeOauth || typeof claudeOauth !== "object") return null;
+    if (!claudeOauth || typeof claudeOauth !== "object") {
+      return null;
+    }
 
     const accessToken = claudeOauth.accessToken;
     const refreshToken = claudeOauth.refreshToken;
     const expiresAt = claudeOauth.expiresAt;
 
-    if (typeof accessToken !== "string" || !accessToken) return null;
-    if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
+    if (typeof accessToken !== "string" || !accessToken) {
+      return null;
+    }
+    if (typeof expiresAt !== "number" || expiresAt <= 0) {
+      return null;
+    }
 
     if (typeof refreshToken === "string" && refreshToken) {
       return {
@@ -246,18 +266,26 @@ export function readClaudeCliCredentials(options?: {
 
   const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
 
   const data = raw as Record<string, unknown>;
   const claudeOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-  if (!claudeOauth || typeof claudeOauth !== "object") return null;
+  if (!claudeOauth || typeof claudeOauth !== "object") {
+    return null;
+  }
 
   const accessToken = claudeOauth.accessToken;
   const refreshToken = claudeOauth.refreshToken;
   const expiresAt = claudeOauth.expiresAt;
 
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || expiresAt <= 0) {
+    return null;
+  }
 
   if (typeof refreshToken === "string" && refreshToken) {
     return {
@@ -362,11 +390,15 @@ export function writeClaudeCliFileCredentials(
 
   try {
     const raw = loadJsonFile(credPath);
-    if (!raw || typeof raw !== "object") return false;
+    if (!raw || typeof raw !== "object") {
+      return false;
+    }
 
     const data = raw as Record<string, unknown>;
     const existingOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-    if (!existingOauth || typeof existingOauth !== "object") return false;
+    if (!existingOauth || typeof existingOauth !== "object") {
+      return false;
+    }
 
     data.claudeAiOauth = {
       ...existingOauth,
@@ -416,21 +448,31 @@ export function readCodexCliCredentials(options?: {
     platform: options?.platform,
     execSync: options?.execSync,
   });
-  if (keychain) return keychain;
+  if (keychain) {
+    return keychain;
+  }
 
   const authPath = resolveCodexCliAuthPath();
   const raw = loadJsonFile(authPath);
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
 
   const data = raw as Record<string, unknown>;
   const tokens = data.tokens as Record<string, unknown> | undefined;
-  if (!tokens || typeof tokens !== "object") return null;
+  if (!tokens || typeof tokens !== "object") {
+    return null;
+  }
 
   const accessToken = tokens.access_token;
   const refreshToken = tokens.refresh_token;
 
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof refreshToken !== "string" || !refreshToken) return null;
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
 
   let expires: number;
   try {

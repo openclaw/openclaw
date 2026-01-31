@@ -10,12 +10,18 @@ describe("createOpenClawCodingTools", () => {
     const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
 
     const collectActionValues = (schema: unknown, values: Set<string>): void => {
-      if (!schema || typeof schema !== "object") return;
+      if (!schema || typeof schema !== "object") {
+        return;
+      }
       const record = schema as Record<string, unknown>;
-      if (typeof record.const === "string") values.add(record.const);
+      if (typeof record.const === "string") {
+        values.add(record.const);
+      }
       if (Array.isArray(record.enum)) {
         for (const value of record.enum) {
-          if (typeof value === "string") values.add(value);
+          if (typeof value === "string") {
+            values.add(value);
+          }
         }
       }
       if (Array.isArray(record.anyOf)) {

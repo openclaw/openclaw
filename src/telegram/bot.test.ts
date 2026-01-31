@@ -167,7 +167,9 @@ vi.mock("../auto-reply/reply.js", () => {
 
 const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
-  if (!handler) throw new Error(`Missing handler for event: ${event}`);
+  if (!handler) {
+    throw new Error(`Missing handler for event: ${event}`);
+  }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
@@ -2339,7 +2341,9 @@ describe("createTelegramBot", () => {
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2380,7 +2384,9 @@ describe("createTelegramBot", () => {
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2422,7 +2428,9 @@ describe("createTelegramBot", () => {
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2467,7 +2475,9 @@ describe("createTelegramBot", () => {
     const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!verboseHandler) throw new Error("verbose command handler missing");
+    if (!verboseHandler) {
+      throw new Error("verbose command handler missing");
+    }
 
     await verboseHandler({
       message: {

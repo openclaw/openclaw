@@ -19,7 +19,9 @@ const parseFacing = (value: string): CameraFacing => {
   const v = String(value ?? "")
     .trim()
     .toLowerCase();
-  if (v === "front" || v === "back") return v;
+  if (v === "front" || v === "back") {
+    return v;
+  }
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 

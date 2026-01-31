@@ -155,7 +155,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       mode: "explicit",
     });
-    if (!resolvedTarget.ok) throw resolvedTarget.error;
+    if (!resolvedTarget.ok) {
+      throw resolvedTarget.error;
+    }
 
     const results = await deliverOutboundPayloads({
       cfg,

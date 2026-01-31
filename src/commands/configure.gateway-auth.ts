@@ -28,7 +28,9 @@ export function buildGatewayAuthConfig(params: {
 }): GatewayAuthConfig | undefined {
   const allowTailscale = params.existing?.allowTailscale;
   const base: GatewayAuthConfig = {};
-  if (typeof allowTailscale === "boolean") base.allowTailscale = allowTailscale;
+  if (typeof allowTailscale === "boolean") {
+    base.allowTailscale = allowTailscale;
+  }
 
   if (params.mode === "token") {
     return { ...base, mode: "token", token: params.token };

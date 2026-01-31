@@ -7,7 +7,9 @@ const subsystemPrefixRe = /^([a-z][a-z0-9-]{1,20}):\s+(.*)$/i;
 
 function splitSubsystem(message: string) {
   const match = message.match(subsystemPrefixRe);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const [, subsystem, rest] = match;
   return { subsystem, rest };
 }

@@ -34,14 +34,18 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
     }
     while (cache.size > maxSize) {
       const oldestKey = cache.keys().next().value;
-      if (!oldestKey) break;
+      if (!oldestKey) {
+        break;
+      }
       cache.delete(oldestKey);
     }
   };
 
   return {
     check: (key, now = Date.now()) => {
-      if (!key) return false;
+      if (!key) {
+        return false;
+      }
       const existing = cache.get(key);
       if (existing !== undefined && (ttlMs <= 0 || now - existing < ttlMs)) {
         touch(key, now);
