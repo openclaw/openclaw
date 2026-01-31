@@ -98,7 +98,7 @@ export function deliveryContextFromSession(
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.origin?.threadId,
+    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
     deliveryContext: entry.deliveryContext,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;

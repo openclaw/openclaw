@@ -60,7 +60,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.origin?.threadId,
+    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
     deliveryContext: entry.deliveryContext,
   });
   const nextDelivery = normalized.deliveryContext;
