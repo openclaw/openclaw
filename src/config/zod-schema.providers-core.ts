@@ -141,8 +141,17 @@ export const TelegramAccountSchemaBase = z
         enabled: z.boolean().optional(),
         messages: z.array(z.string()).optional(),
         deleteOnResponse: z.boolean().optional(),
-        showTools: z.boolean().optional(),
-        toolMessageFormat: z.string().optional(),
+        toolDisplay: z
+          .record(
+            z.string(),
+            z
+              .object({
+                emoji: z.string().optional(),
+                label: z.string().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),

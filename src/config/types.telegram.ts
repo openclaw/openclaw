@@ -20,6 +20,12 @@ export type TelegramActionConfig = {
   sticker?: boolean;
 };
 
+/** Tool display override for placeholder. */
+export type ToolDisplayConfig = {
+  emoji?: string;
+  label?: string;
+};
+
 /**
  * Placeholder message config - shows a temporary "thinking" message
  * while processing, then deletes it when the response is ready.
@@ -31,10 +37,8 @@ export type TelegramPlaceholderConfig = {
   messages?: string[];
   /** Delete placeholder when response is ready. Default: true. */
   deleteOnResponse?: boolean;
-  /** Show tool names as they're called. Default: false. */
-  showTools?: boolean;
-  /** Tool message format. Use {tool} as placeholder. Default: "🔧 Using {tool}..." */
-  toolMessageFormat?: string;
+  /** Tool display overrides. Key is tool name, value is {emoji, label}. */
+  toolDisplay?: Record<string, ToolDisplayConfig>;
 };
 
 export type TelegramNetworkConfig = {

@@ -5,6 +5,11 @@
  * then deletes or edits it when the actual response is ready.
  */
 
+export type ToolDisplayConfig = {
+  emoji?: string;
+  label?: string;
+};
+
 export type PlaceholderConfig = {
   /** Enable placeholder messages. Default: false. */
   enabled?: boolean;
@@ -12,10 +17,8 @@ export type PlaceholderConfig = {
   messages?: string[];
   /** Delete placeholder when response is ready. Default: true. */
   deleteOnResponse?: boolean;
-  /** Show tool names as they're called. Default: false. */
-  showTools?: boolean;
-  /** Tool message format. Default: "🔧 Using {tool}..." */
-  toolMessageFormat?: string;
+  /** Tool display overrides. Key is tool name. */
+  toolDisplay?: Record<string, ToolDisplayConfig>;
 };
 
 export type PlaceholderSender = {
@@ -39,67 +42,6 @@ const DEFAULT_MESSAGES = ["🤔 Thinking...", "💭 Processing...", "🧠 Workin
 
 const DEFAULT_TOOL_FORMAT = "{emoji} {label}...";
 
-/** Map tool names to friendly labels and emojis */
-const TOOL_DISPLAY: Record<string, { emoji: string; label: string }> = {
-  // Search & Web
-  web_search: { emoji: "🔍", label: "Searching" },
-  web_fetch: { emoji: "🌐", label: "Fetching" },
-  browser: { emoji: "🖥️", label: "Browsing" },
-
-  // File operations
-  Read: { emoji: "📖", label: "Reading" },
-  Write: { emoji: "✍️", label: "Writing" },
-  Edit: { emoji: "📝", label: "Editing" },
-
-  // Execution
-  exec: { emoji: "⚡", label: "Running" },
-  process: { emoji: "🔄", label: "Processing" },
-
-  // Memory
-  memory_search: { emoji: "🧠", label: "Searching memory" },
-  memory_get: { emoji: "💭", label: "Recalling" },
-
-  // Messaging
-  message: { emoji: "💬", label: "Sending message" },
-  tts: { emoji: "🔊", label: "Generating audio" },
-
-  // Sessions
-  sessions_spawn: { emoji: "🚀", label: "Spawning task" },
-  sessions_send: { emoji: "📤", label: "Sending" },
-  sessions_list: { emoji: "📋", label: "Listing sessions" },
-
-  // Image
-  image: { emoji: "🖼️", label: "Analyzing image" },
-
-  // Cron
-  cron: { emoji: "⏰", label: "Scheduling" },
-
-  // Gateway
-  gateway: { emoji: "🔧", label: "Configuring" },
-
-  // Nodes
-  nodes: { emoji: "📱", label: "Controlling device" },
-
-  // Canvas
-  canvas: { emoji: "🎨", label: "Rendering" },
-};
-
-function getToolDisplay(toolName: string): { emoji: string; label: string } {
-  // Try exact match first
-  if (TOOL_DISPLAY[toolName]) {
-    return TOOL_DISPLAY[toolName];
-  }
-  // Try lowercase
-  const lower = toolName.toLowerCase();
-  for (const [key, value] of Object.entries(TOOL_DISPLAY)) {
-    if (key.toLowerCase() === lower) {
-      return value;
-    }
-  }
-  // Default fallback
-  return { emoji: "🔧", label: toolName };
-}
-
 export function createPlaceholderController(params: {
   config: PlaceholderConfig;
   sender: PlaceholderSender;
@@ -112,11 +54,18 @@ export function createPlaceholderController(params: {
   let currentToolText = "";
 
   const messages = config.messages?.length ? config.messages : DEFAULT_MESSAGES;
-  const toolFormat = config.toolMessageFormat ?? DEFAULT_TOOL_FORMAT;
 
   const getRandomMessage = () => {
     const idx = Math.floor(Math.random() * messages.length);
     return messages[idx] ?? messages[0] ?? DEFAULT_MESSAGES[0];
+  };
+
+  const getToolDisplay = (toolName: string) => {
+    const override = config.toolDisplay?.[toolName];
+    return {
+      emoji: override?.emoji ?? "🔧",
+      label: override?.label ?? toolName,
+    };
   };
 
   const start = async () => {
@@ -134,43 +83,13 @@ export function createPlaceholderController(params: {
     }
   };
 
-  const onTool = async (toolName: string, args?: Record<string, unknown>) => {
+  const onTool = async (toolName: string, _args?: Record<string, unknown>) => {
     if (!config.enabled) return;
     if (!active || !placeholderMessageId) return;
 
     try {
       const display = getToolDisplay(toolName);
-      let detail = "";
-
-      // Extract meaningful details from args
-      if (args) {
-        if (toolName === "exec" && args.command) {
-          // Show first part of command
-          const cmd = String(args.command);
-          detail = cmd.length > 30 ? cmd.slice(0, 30) + "..." : cmd;
-        } else if (
-          (toolName === "Read" || toolName === "Write" || toolName === "Edit") &&
-          (args.path || args.file_path)
-        ) {
-          // Show filename
-          const path = String(args.path || args.file_path);
-          const filename = path.split("/").pop() || path;
-          detail = filename.length > 25 ? "..." + filename.slice(-25) : filename;
-        } else if (toolName === "web_search" && args.query) {
-          detail = String(args.query).slice(0, 30);
-        } else if (toolName === "web_fetch" && args.url) {
-          const url = String(args.url);
-          try {
-            detail = new URL(url).hostname;
-          } catch {
-            detail = url.slice(0, 30);
-          }
-        }
-      }
-
-      currentToolText = detail
-        ? `${display.emoji} ${display.label}: ${detail}`
-        : `${display.emoji} ${display.label}...`;
+      currentToolText = `${display.emoji} ${display.label}...`;
 
       await sender.edit(placeholderMessageId, currentToolText);
       log?.(`Placeholder updated: ${toolName} -> ${currentToolText}`);
