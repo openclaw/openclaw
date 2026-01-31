@@ -195,6 +195,20 @@ echo ""
 docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
 
 echo ""
+echo "==> Configuring gateway for Docker"
+# Sync the token from .env to config (onboard may generate a different one)
+# Also enable controlUi.dangerouslyDisableDeviceAuth for Docker (container sees Docker bridge IP, not localhost)
+CONFIG_FILE="$OPENCLAW_CONFIG_DIR/openclaw.json"
+if [[ -f "$CONFIG_FILE" ]] && command -v jq >/dev/null 2>&1; then
+  jq --arg token "$OPENCLAW_GATEWAY_TOKEN" \
+    '.gateway.auth.token = $token | .gateway.controlUi = {"dangerouslyDisableDeviceAuth": true}' \
+    "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  echo "Token synced and controlUi device auth disabled for Docker networking."
+else
+  echo "Warning: Could not update config. Ensure gateway token matches: $OPENCLAW_GATEWAY_TOKEN"
+fi
+
+echo ""
 echo "==> Provider setup (optional)"
 echo "WhatsApp (QR):"
 echo "  ${COMPOSE_HINT} run --rm openclaw-cli channels login"

@@ -1,6 +1,7 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: root
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -8,24 +9,31 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      GH_TOKEN: ${GH_TOKEN}
+      CLAUDE_CONFIG_DIR: /home/node/.claude
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CODEX_HOME: /home/node/.codex
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${HOME}/.claude:/home/node/.claude
+      - ${HOME}/.codex:/home/node/.codex
+      - openclaw-npm-global:/usr/local/lib/node_modules
+      - openclaw-apt-cache:/var/cache/apt
+      - openclaw-apt-lib:/var/lib/apt
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
     command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
+      - /bin/sh
+      - -c
+      - |
+        apt-get update -qq && apt-get install -y -qq gh >/dev/null 2>&1
+        npm install -g @openai/codex clawhub >/dev/null 2>&1
+        ln -sf /home/node/.codex /root/.codex
+        exec node dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-lan} --port 18789
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
@@ -37,10 +45,18 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CODEX_HOME: /home/node/.codex
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${HOME}/.codex:/home/node/.codex
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+volumes:
+  openclaw-npm-global:
+  openclaw-apt-cache:
+  openclaw-apt-lib:
