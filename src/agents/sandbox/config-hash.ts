@@ -20,14 +20,14 @@ function normalizeForHash(value: unknown): unknown {
       .filter((item): item is unknown => item !== undefined);
     const primitives = normalized.filter(isPrimitive);
     if (primitives.length === normalized.length) {
-      return [...primitives].sort((a, b) =>
+      return [...primitives].toSorted((a, b) =>
         primitiveToString(a).localeCompare(primitiveToString(b)),
       );
     }
     return normalized;
   }
   if (value && typeof value === "object") {
-    const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
     const normalized: Record<string, unknown> = {};
     for (const [key, entryValue] of entries) {
       const next = normalizeForHash(entryValue);

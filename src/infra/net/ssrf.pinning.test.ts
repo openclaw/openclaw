@@ -16,7 +16,7 @@ describe("ssrf pinning", () => {
     const first = await new Promise<{ address: string; family?: number }>((resolve, reject) => {
       pinned.lookup("example.com", (err, address, family) => {
         if (err) reject(err);
-        else resolve({ address: address as string, family });
+        else resolve({ address: address, family });
       });
     });
     expect(first.address).toBe("93.184.216.34");
@@ -53,7 +53,7 @@ describe("ssrf pinning", () => {
     const result = await new Promise<{ address: string }>((resolve, reject) => {
       lookup("other.test", (err, address) => {
         if (err) reject(err);
-        else resolve({ address: address as string });
+        else resolve({ address: address });
       });
     });
 

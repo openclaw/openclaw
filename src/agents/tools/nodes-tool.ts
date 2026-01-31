@@ -199,7 +199,7 @@ export function createNodesTool(options?: {
             const details: Array<Record<string, unknown>> = [];
 
             for (const facing of facings) {
-              const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+              const raw = await callGatewayTool("node.invoke", gatewayOpts, {
                 nodeId,
                 command: "camera.snap",
                 params: {
@@ -211,7 +211,7 @@ export function createNodesTool(options?: {
                   deviceId,
                 },
                 idempotencyKey: crypto.randomUUID(),
-              })) as { payload?: unknown };
+              });
               const payload = parseCameraSnapPayload(raw?.payload);
               const normalizedFormat = payload.format.toLowerCase();
               if (
@@ -250,12 +250,12 @@ export function createNodesTool(options?: {
           case "camera_list": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
               nodeId,
               command: "camera.list",
               params: {},
               idempotencyKey: crypto.randomUUID(),
-            })) as { payload?: unknown };
+            });
             const payload =
               raw && typeof raw.payload === "object" && raw.payload !== null ? raw.payload : {};
             return jsonResult(payload);
@@ -280,7 +280,7 @@ export function createNodesTool(options?: {
               typeof params.deviceId === "string" && params.deviceId.trim()
                 ? params.deviceId.trim()
                 : undefined;
-            const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
               nodeId,
               command: "camera.clip",
               params: {
@@ -291,7 +291,7 @@ export function createNodesTool(options?: {
                 deviceId,
               },
               idempotencyKey: crypto.randomUUID(),
-            })) as { payload?: unknown };
+            });
             const payload = parseCameraClipPayload(raw?.payload);
             const filePath = cameraTempPath({
               kind: "clip",
@@ -326,7 +326,7 @@ export function createNodesTool(options?: {
                 : 0;
             const includeAudio =
               typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-            const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
               nodeId,
               command: "screen.record",
               params: {
@@ -337,7 +337,7 @@ export function createNodesTool(options?: {
                 includeAudio,
               },
               idempotencyKey: crypto.randomUUID(),
-            })) as { payload?: unknown };
+            });
             const payload = parseScreenRecordPayload(raw?.payload);
             const filePath =
               typeof params.outPath === "string" && params.outPath.trim()
@@ -373,7 +373,7 @@ export function createNodesTool(options?: {
               Number.isFinite(params.locationTimeoutMs)
                 ? params.locationTimeoutMs
                 : undefined;
-            const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
               nodeId,
               command: "location.get",
               params: {
@@ -382,7 +382,7 @@ export function createNodesTool(options?: {
                 timeoutMs: locationTimeoutMs,
               },
               idempotencyKey: crypto.randomUUID(),
-            })) as { payload?: unknown };
+            });
             return jsonResult(raw?.payload ?? {});
           }
           case "run": {
@@ -423,7 +423,7 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
               nodeId,
               command: "system.run",
               params: {
@@ -437,7 +437,7 @@ export function createNodesTool(options?: {
               },
               timeoutMs: invokeTimeoutMs,
               idempotencyKey: crypto.randomUUID(),
-            })) as { payload?: unknown };
+            });
             return jsonResult(raw?.payload ?? {});
           }
           default:
@@ -454,6 +454,7 @@ export function createNodesTool(options?: {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(
           `agent=${agentLabel} node=${nodeLabel} gateway=${gatewayLabel} action=${action}: ${message}`,
+          { cause: err },
         );
       }
     },

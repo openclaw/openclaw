@@ -145,11 +145,10 @@ export async function handleToolsInvokeHttpRequest(
   const action = typeof body.action === "string" ? body.action.trim() : undefined;
 
   const argsRaw = body.args;
-  const args = (
+  const args =
     argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
       ? (argsRaw as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>;
+      : {};
 
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =

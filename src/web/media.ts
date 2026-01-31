@@ -250,7 +250,7 @@ export async function optimizeImageToJpeg(
     try {
       source = await convertHeicToJpeg(buffer);
     } catch (err) {
-      throw new Error(`HEIC image conversion failed: ${String(err)}`);
+      throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
     }
   }
   const sides = [2048, 1536, 1280, 1024, 800];

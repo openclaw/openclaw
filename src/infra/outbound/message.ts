@@ -116,7 +116,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   if (!channel) {
     throw new Error(`Unknown channel: ${params.channel}`);
   }
-  const plugin = getChannelPlugin(channel as ChannelId);
+  const plugin = getChannelPlugin(channel);
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }
@@ -149,7 +149,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   }
 
   if (deliveryMode !== "gateway") {
-    const outboundChannel = channel as Exclude<OutboundChannel, "none">;
+    const outboundChannel = channel;
     const resolvedTarget = resolveOutboundTarget({
       channel: outboundChannel,
       to: params.to,
@@ -235,7 +235,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     maxSelections: params.maxSelections,
     durationHours: params.durationHours,
   };
-  const plugin = getChannelPlugin(channel as ChannelId);
+  const plugin = getChannelPlugin(channel);
   const outbound = plugin?.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);

@@ -16,7 +16,7 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
       if (!item || item.type !== "message") return;
 
       const channelInfo = item.channel ? await ctx.resolveChannelName(item.channel) : {};
-      const channelType = channelInfo?.type as SlackMessageEvent["channel_type"];
+      const channelType = channelInfo?.type;
       if (
         !ctx.isChannelAllowed({
           channelId: item.channel,

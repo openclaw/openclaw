@@ -60,7 +60,7 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
       out.push(msg);
       continue;
     }
-    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const assistant = msg;
     if (!Array.isArray(assistant.content)) {
       out.push(msg);
       continue;

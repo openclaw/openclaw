@@ -123,7 +123,7 @@ export async function maybeInstallDaemon(params: {
     await ensureSystemdUserLingerInteractive({
       runtime: params.runtime,
       prompter: {
-        confirm: async (p) => guardCancel(await confirm(p), params.runtime) === true,
+        confirm: async (p) => guardCancel(await confirm(p), params.runtime),
         note,
       },
       reason:

@@ -167,7 +167,7 @@ describeLive("live models (profile keys)", () => {
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const models = modelRegistry.getAll() as Array<Model<Api>>;
+      const models = modelRegistry.getAll();
 
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";

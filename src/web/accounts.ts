@@ -66,7 +66,7 @@ export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
 export function listWhatsAppAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultWhatsAppAccountId(cfg: OpenClawConfig): string {

@@ -24,7 +24,7 @@ export function createEchoTracker(params: {
 
   const trim = () => {
     while (recentlySent.size > maxItems) {
-      const firstKey = recentlySent.values().next().value as string | undefined;
+      const firstKey = recentlySent.values().next().value;
       if (!firstKey) break;
       recentlySent.delete(firstKey);
     }

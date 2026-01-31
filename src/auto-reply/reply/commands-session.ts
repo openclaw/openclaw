@@ -289,7 +289,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     params.sessionStore[abortTarget.key] = abortTarget.entry;
     if (params.storePath) {
       await updateSessionStore(params.storePath, (store) => {
-        store[abortTarget.key] = abortTarget.entry as SessionEntry;
+        store[abortTarget.key] = abortTarget.entry;
       });
     }
   } else if (params.command.abortKey) {
@@ -336,7 +336,7 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     params.sessionStore[abortTarget.key] = abortTarget.entry;
     if (params.storePath) {
       await updateSessionStore(params.storePath, (store) => {
-        store[abortTarget.key] = abortTarget.entry as SessionEntry;
+        store[abortTarget.key] = abortTarget.entry;
       });
     }
   } else if (params.command.abortKey) {

@@ -224,7 +224,7 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i] as ModelCandidate;
+    const candidate = candidates[i];
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -330,7 +330,7 @@ export async function runWithImageModelFallback<T>(params: {
   let lastError: unknown;
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i] as ModelCandidate;
+    const candidate = candidates[i];
     try {
       const result = await params.run(candidate.provider, candidate.model);
       return {

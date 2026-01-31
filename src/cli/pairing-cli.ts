@@ -29,10 +29,10 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
 
   const normalized = normalizeChannelId(value);
   if (normalized) {
-    if (!channels.includes(normalized as PairingChannel)) {
+    if (!channels.includes(normalized)) {
       throw new Error(`Channel ${normalized} does not support pairing`);
     }
-    return normalized as PairingChannel;
+    return normalized;
   }
 
   // Allow extension channels: validate format but don't require registry

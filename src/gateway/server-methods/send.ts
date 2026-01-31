@@ -46,7 +46,7 @@ const getInflightMap = (context: GatewayRequestContext) => {
 
 export const sendHandlers: GatewayRequestHandlers = {
   send: async ({ params, respond, context }) => {
-    const p = params as Record<string, unknown>;
+    const p = params;
     if (!validateSendParams(p)) {
       respond(
         false,
@@ -104,8 +104,8 @@ export const sendHandlers: GatewayRequestHandlers = {
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
         : undefined;
-    const outboundChannel = channel as Exclude<OutboundChannel, "none">;
-    const plugin = getChannelPlugin(channel as ChannelId);
+    const outboundChannel = channel;
+    const plugin = getChannelPlugin(channel);
     if (!plugin) {
       respond(
         false,
@@ -237,7 +237,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
   },
   poll: async ({ params, respond, context }) => {
-    const p = params as Record<string, unknown>;
+    const p = params;
     if (!validatePollParams(p)) {
       respond(
         false,
@@ -290,7 +290,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = getChannelPlugin(channel as ChannelId);
+      const plugin = getChannelPlugin(channel);
       const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
         respond(
@@ -302,7 +302,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
       const cfg = loadConfig();
       const resolved = resolveOutboundTarget({
-        channel: channel as Exclude<OutboundChannel, "none">,
+        channel: channel,
         to,
         cfg,
         accountId,

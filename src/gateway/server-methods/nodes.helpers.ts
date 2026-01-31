@@ -34,7 +34,7 @@ export function uniqueSortedStrings(values: unknown[]) {
   return [...new Set(values.filter((v) => typeof v === "string"))]
     .map((v) => v.trim())
     .filter(Boolean)
-    .sort();
+    .toSorted();
 }
 
 export function safeParseJson(value: string | null | undefined): unknown {

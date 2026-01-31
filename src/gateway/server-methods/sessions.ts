@@ -53,7 +53,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as import("../protocol/index.js").SessionsListParams;
+    const p = params;
     const cfg = loadConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
     const result = listSessionsFromStore({
@@ -78,7 +78,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as import("../protocol/index.js").SessionsPreviewParams;
+    const p = params;
     const keysRaw = Array.isArray(p.keys) ? p.keys : [];
     const keys = keysRaw
       .map((key) => String(key ?? "").trim())
@@ -144,7 +144,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as import("../protocol/index.js").SessionsResolveParams;
+    const p = params;
     const cfg = loadConfig();
 
     const resolved = resolveSessionKeyFromResolveParams({ cfg, p });
@@ -166,7 +166,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as import("../protocol/index.js").SessionsPatchParams;
+    const p = params;
     const key = String(p.key ?? "").trim();
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
@@ -215,7 +215,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as import("../protocol/index.js").SessionsResetParams;
+    const p = params;
     const key = String(p.key ?? "").trim();
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
@@ -273,7 +273,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as import("../protocol/index.js").SessionsDeleteParams;
+    const p = params;
     const key = String(p.key ?? "").trim();
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
@@ -359,7 +359,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as import("../protocol/index.js").SessionsCompactParams;
+    const p = params;
     const key = String(p.key ?? "").trim();
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
