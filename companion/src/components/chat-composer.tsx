@@ -17,10 +17,14 @@ export function ChatComposer({ connected, busy, onSend, onStop }: Props) {
   const canSend = connected && draft.trim().length > 0 && !busy;
 
   const handleSend = useCallback(() => {
-    if (!canSend) return;
+    if (!canSend) {
+      return;
+    }
     onSend(draft);
     setDraft("");
-    if (taRef.current) taRef.current.style.height = "auto";
+    if (taRef.current) {
+      taRef.current.style.height = "auto";
+    }
   }, [canSend, draft, onSend]);
 
   const handleKeydown = useCallback(

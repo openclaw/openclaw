@@ -55,11 +55,17 @@ type ToolStreamHost = {
 };
 
 function extractParts(content: unknown): MessagePart[] {
-  if (typeof content === "string") return [{ type: "text", text: content }];
-  if (!Array.isArray(content)) return [];
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  if (!Array.isArray(content)) {
+    return [];
+  }
   const parts: MessagePart[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const b = block as Record<string, unknown>;
     const kind = String(b.type ?? "").toLowerCase();
     if (kind === "text" && typeof b.text === "string") {
@@ -93,13 +99,19 @@ function rawToChatMessage(raw: unknown): ChatMessage | null {
   const m = raw as Record<string, unknown>;
   const role = m.role as string;
   const isToolRole = role === "tool" || role === "toolResult";
-  if (role !== "user" && role !== "assistant" && !isToolRole) return null;
+  if (role !== "user" && role !== "assistant" && !isToolRole) {
+    return null;
+  }
   const text = extractTextCached(raw);
-  if (!text && role !== "assistant" && !isToolRole) return null;
+  if (!text && role !== "assistant" && !isToolRole) {
+    return null;
+  }
   const parts = extractParts(m.content);
   if (isToolRole) {
     const toolCallId = String(m.tool_call_id ?? m.toolCallId ?? m.id ?? "");
-    if (!toolCallId) return null;
+    if (!toolCallId) {
+      return null;
+    }
     const content = typeof m.content === "string"
       ? m.content
       : text ?? JSON.stringify(m.content ?? "");
@@ -122,7 +134,9 @@ function toolStreamToParts(host: ToolStreamHost): MessagePart[] {
   const parts: MessagePart[] = [];
   for (const id of host.toolStreamOrder) {
     const entry = host.toolStreamById.get(id);
-    if (!entry) continue;
+    if (!entry) {
+      continue;
+    }
     parts.push({
       type: "toolCall",
       toolCallId: entry.toolCallId,
@@ -233,6 +247,9 @@ export function useGateway() {
           if (result === "final" || result === "error" || result === "aborted") {
             resetToolStream(s);
           }
+          if (result === "final") {
+            void loadChatHistory(s).then(() => syncReactState());
+          }
           syncReactState();
         }
       },
@@ -253,14 +270,18 @@ export function useGateway() {
 
   const send = useCallback(async (text: string) => {
     const s = stateRef.current;
-    if (!text.trim() || !s.client) return;
+    if (!text.trim() || !s.client) {
+      return;
+    }
     await sendChatMessage(s, text.trim());
     syncReactState();
   }, [syncReactState]);
 
   const stop = useCallback(async () => {
     const s = stateRef.current;
-    if (!s.client || s.chatRunId === null) return;
+    if (!s.client || s.chatRunId === null) {
+      return;
+    }
     await abortChatRun(s);
     resetToolStream(s);
     s.chatStream = null;
@@ -272,7 +293,9 @@ export function useGateway() {
 
   const newSession = useCallback(async () => {
     const s = stateRef.current;
-    if (!s.client) return;
+    if (!s.client) {
+      return;
+    }
     if (s.chatSending || s.chatStream !== null) {
       await abortChatRun(s);
       resetToolStream(s);
@@ -280,10 +303,8 @@ export function useGateway() {
       s.chatRunId = null;
       s.chatStreamStartedAt = null;
       s.chatSending = false;
+      syncReactState();
     }
-    s.chatMessages = [];
-    resetToolStream(s);
-    syncReactState();
     await sendChatMessage(s, "/new");
     syncReactState();
   }, [syncReactState]);

@@ -15,7 +15,9 @@ type Props = {
 function buildToolResultMap(parts: MessagePart[]): Map<string, ToolResultPart> {
   const map = new Map<string, ToolResultPart>();
   for (const p of parts) {
-    if (p.type === "toolResult") map.set(p.toolCallId, p);
+    if (p.type === "toolResult") {
+      map.set(p.toolCallId, p);
+    }
   }
   return map;
 }
@@ -67,6 +69,8 @@ export function ChatMessages({ messages, stream, streamParts, busy }: Props) {
     messages.filter((m) => m.role === "user" || m.text || m.parts.some((p) => p.type === "text" || p.type === "toolCall")),
   [messages]);
 
+  const lastVisibleRole = visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].role : null;
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: mounted.current ? "smooth" : "instant" });
     mounted.current = true;
@@ -104,8 +108,8 @@ export function ChatMessages({ messages, stream, streamParts, busy }: Props) {
           );
         })}
         {stream !== null && (stream || streamParts.length > 0) && (
-          <div className="pt-6">
-            {streamParts.length > 0 && streamParts.some((p) => p.type !== "text") ? (
+          <div className={lastVisibleRole === "assistant" ? "mt-1" : "mt-3"}>
+            {streamParts.some((p) => p.type !== "text") ? (
               <AssistantMessage parts={streamParts} isAnimating={true} resultMap={globalResultMap} />
             ) : (
               <Streamdown plugins={{ code }} isAnimating={true} linkSafety={{ enabled: false }}>
@@ -114,8 +118,8 @@ export function ChatMessages({ messages, stream, streamParts, busy }: Props) {
             )}
           </div>
         )}
-        {busy && stream === null && (
-          <div className="pt-6">
+        {busy && !stream && streamParts.length === 0 && (
+          <div className={lastVisibleRole === "assistant" ? "mt-1" : "mt-3"}>
             <StreamingDots />
           </div>
         )}
