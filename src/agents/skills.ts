@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { SkillsInstallPreferences } from "./skills/types.js";
+import type { SkillsInstallPreferences } from "./skills/types.js";
 
 export {
   hasBinary,
@@ -38,7 +38,7 @@ export function resolveSkillsInstallPreferences(config?: OpenClawConfig): Skills
   const preferBrew = raw?.preferBrew ?? true;
   const managerRaw = typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "";
   const manager = managerRaw.toLowerCase();
-  const nodeManager =
+  const nodeManager: SkillsInstallPreferences["nodeManager"] =
     manager === "pnpm" || manager === "yarn" || manager === "bun" || manager === "npm"
       ? manager
       : "npm";

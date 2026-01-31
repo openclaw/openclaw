@@ -1083,10 +1083,11 @@ export function createExecTool(
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
-              decision =
+              const decisionValue =
                 decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult.decision ?? null)
-                  : null;
+                  ? (decisionResult as { decision?: unknown }).decision
+                  : undefined;
+              decision = typeof decisionValue === "string" ? decisionValue : null;
             } catch {
               emitExecSystemEvent(
                 `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${commandText}`,
@@ -1177,28 +1178,32 @@ export function createExecTool(
         }
 
         const startedAt = Date.now();
-        const raw = await callGatewayTool<{
-          payload: {
-            exitCode: number;
-            success?: string;
-            stdout?: string;
-            stderr?: string;
-            error?: string;
-          };
-        }>("node.invoke", { timeoutMs: invokeTimeoutMs }, buildInvokeParams(false, null));
-        const payload = raw?.payload ?? {};
+        const raw = await callGatewayTool(
+          "node.invoke",
+          { timeoutMs: invokeTimeoutMs },
+          buildInvokeParams(false, null),
+        );
+        const payload =
+          raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;
+        const payloadObj =
+          payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+        const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
+        const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
+        const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
+        const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
+        const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
         return {
           content: [
             {
               type: "text",
-              text: payload.stdout || payload.stderr || payload.error || "",
+              text: stdout || stderr || errorText || "",
             },
           ],
           details: {
-            status: payload.success ? "completed" : "failed",
-            exitCode: payload.exitCode ?? null,
+            status: success ? "completed" : "failed",
+            exitCode,
             durationMs: Date.now() - startedAt,
-            aggregated: [payload.stdout, payload.stderr, payload.error].filter(Boolean).join("\n"),
+            aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
             cwd: workdir,
           } satisfies ExecToolDetails,
         };
@@ -1261,10 +1266,11 @@ export function createExecTool(
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
-              decision =
+              const decisionValue =
                 decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult.decision ?? null)
-                  : null;
+                  ? (decisionResult as { decision?: unknown }).decision
+                  : undefined;
+              decision = typeof decisionValue === "string" ? decisionValue : null;
             } catch {
               emitExecSystemEvent(
                 `Exec denied (gateway id=${approvalId}, approval-request-failed): ${commandText}`,

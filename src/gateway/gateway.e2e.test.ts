@@ -109,7 +109,7 @@ describe("gateway e2e", () => {
       try {
         const sessionKey = "agent:dev:mock-openai";
 
-        await client.request<Record<string, unknown>>("sessions.patch", {
+        await client.request("sessions.patch", {
           key: sessionKey,
           model: "openai/gpt-5.2",
         });

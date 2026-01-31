@@ -16,6 +16,14 @@ type DiscordChannelSummary = {
   archived?: boolean;
 };
 
+type DiscordChannelPayload = {
+  id?: string;
+  name?: string;
+  type?: number;
+  guild_id?: string;
+  thread_metadata?: { archived?: boolean };
+};
+
 export type DiscordChannelResolution = {
   input: string;
   resolved: boolean;
@@ -83,27 +91,23 @@ async function listGuildChannels(
   fetcher: typeof fetch,
   guildId: string,
 ): Promise<DiscordChannelSummary[]> {
-  const raw = await fetchDiscord<Array<DiscordChannelSummary>>(
+  const raw = await fetchDiscord<DiscordChannelPayload[]>(
     `/guilds/${guildId}/channels`,
     token,
     fetcher,
   );
   return raw
-    .filter((channel) => Boolean(channel.id) && "name" in channel)
     .map((channel) => {
-      const archived =
-        "thread_metadata" in channel
-          ? (channel as { thread_metadata?: { archived?: boolean } }).thread_metadata?.archived
-          : undefined;
+      const archived = channel.thread_metadata?.archived;
       return {
-        id: channel.id,
-        name: "name" in channel ? (channel.name ?? "") : "",
+        id: typeof channel.id === "string" ? channel.id : "",
+        name: typeof channel.name === "string" ? channel.name : "",
         guildId,
         type: channel.type,
         archived,
       };
     })
-    .filter((channel) => Boolean(channel.name));
+    .filter((channel) => Boolean(channel.id) && Boolean(channel.name));
 }
 
 async function fetchChannel(
@@ -111,18 +115,12 @@ async function fetchChannel(
   fetcher: typeof fetch,
   channelId: string,
 ): Promise<DiscordChannelSummary | null> {
-  const raw = await fetchDiscord<DiscordChannelSummary & { guild_id: string }>(
-    `/channels/${channelId}`,
-    token,
-    fetcher,
-  );
-  if (!raw || !("guild_id" in raw)) {
-    return null;
-  }
+  const raw = await fetchDiscord<DiscordChannelPayload>(`/channels/${channelId}`, token, fetcher);
+  if (!raw || typeof raw.guild_id !== "string" || typeof raw.id !== "string") return null;
   return {
     id: raw.id,
-    name: "name" in raw ? (raw.name ?? "") : "",
-    guildId: raw.guild_id ?? "",
+    name: typeof raw.name === "string" ? raw.name : "",
+    guildId: raw.guild_id,
     type: raw.type,
   };
 }
