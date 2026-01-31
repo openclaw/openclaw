@@ -31,6 +31,9 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
+# Install jq for JSON parsing in mail_to_tasks script
+RUN apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*
+
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
