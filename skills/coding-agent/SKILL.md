@@ -177,16 +177,40 @@ bash pty:true workdir:~/project command:"opencode run 'Your task'"
 
 ## Pi Coding Agent
 
+**Default model:** Cerebras GLM 4.7 (`zai-glm-4.7`) - ultra-fast inference
+
 ```bash
 # Install: npm install -g @mariozechner/pi-coding-agent
+# Or: bun install -g @mariozechner/pi-coding-agent
+
+# Default usage (uses Cerebras GLM 4.7)
 bash pty:true workdir:~/project command:"pi 'Your task'"
 
-# Non-interactive mode (PTY still recommended)
-bash pty:true command:"pi -p 'Summarize src/'"
+# Non-interactive mode
+bash pty:true command:"pi --non-interactive 'Summarize src/'"
 
-# Different provider/model
-bash pty:true command:"pi --provider openai --model gpt-4o-mini -p 'Your task'"
+# Explicit Cerebras model
+bash pty:true command:"pi --provider cerebras --model zai-glm-4.7 'Your task'"
+
+# Other Cerebras models available:
+# - llama-3.3-70b
+# - qwen-3-235b-a22b-instruct-2507
+# - gpt-oss-120b
+
+# Different provider/model (if needed)
+bash pty:true command:"pi --provider openai --model gpt-4o-mini 'Your task'"
 ```
+
+### Cerebras Configuration
+
+Pi is configured to use Cerebras by default via alias in `~/.bashrc` and `~/.zshrc`:
+```bash
+alias pi="pi --provider cerebras --model zai-glm-4.7"
+```
+
+Config files:
+- `~/.pi/agent/models.json` - Cerebras provider definition
+- `CEREBRAS_API_KEY` env var in shell profile
 
 **Note:** Pi now has Anthropic prompt caching enabled (PR #584, merged Jan 2026)!
 
