@@ -40,6 +40,11 @@
       - any-glob-to-any-file:
           - "extensions/msteams/**"
           - "docs/channels/msteams.md"
+"channel: dingtalk":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dingtalk/**"
+          - "docs/channels/dingtalk.md"
 "channel: nextcloud-talk":
   - changed-files:
       - any-glob-to-any-file:

@@ -81,6 +81,14 @@ if [[ -f "$HASH_FILE" ]]; then
   fi
 fi
 
+# Ensure vendor dependencies are installed
+if [[ ! -d "$A2UI_RENDERER_DIR/node_modules" ]]; then
+  echo "Installing vendor dependencies for A2UI renderer..."
+  (cd "$A2UI_RENDERER_DIR" && pnpm install --silent) || {
+    echo "Warning: Failed to install vendor dependencies. A2UI bundling may fail." >&2
+  }
+fi
+
 pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
 rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 

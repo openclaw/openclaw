@@ -770,3 +770,57 @@ export const MSTeamsConfigSchema = z
         'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
     });
   });
+
+export const DingTalkChannelSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+  })
+  .strict();
+
+export const DingTalkGroupSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+    channels: z.record(z.string(), DingTalkChannelSchema.optional()).optional(),
+  })
+  .strict();
+
+export const DingTalkConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    capabilities: z.array(z.string()).optional(),
+    markdown: MarkdownConfigSchema,
+    configWrites: z.boolean().optional(),
+    appKey: z.string().optional(),
+    appSecret: z.string().optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.string()).optional(),
+    groupAllowFrom: z.array(z.string()).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    textChunkLimit: z.number().int().positive().optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    mediaAllowHosts: z.array(z.string()).optional(),
+    requireMention: z.boolean().optional(),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    groups: z.record(z.string(), DingTalkGroupSchema.optional()).optional(),
+    /** Max media size in MB (default: 20MB). */
+    mediaMaxMb: z.number().positive().optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.dingtalk.dmPolicy="open" requires channels.dingtalk.allowFrom to include "*"',
+    });
+  });

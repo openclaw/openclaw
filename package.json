@@ -283,5 +283,6 @@
       "apps/macos/.build/**",
       "dist/OpenClaw.app/**"
     ]
-  }
+  },
+  "repository": "https://github.com/Niyuhang2/openclaw.git"
 }

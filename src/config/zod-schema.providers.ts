@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   BlueBubblesConfigSchema,
+  DingTalkConfigSchema,
   DiscordConfigSchema,
   GoogleChatConfigSchema,
   IMessageConfigSchema,
@@ -36,6 +37,7 @@ export const ChannelsSchema = z
     imessage: IMessageConfigSchema.optional(),
     bluebubbles: BlueBubblesConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
+    dingtalk: DingTalkConfigSchema.optional(),
   })
   .passthrough() // Allow extension channel configs (nostr, matrix, zalo, etc.)
   .optional();

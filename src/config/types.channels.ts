@@ -1,4 +1,5 @@
 import type { DiscordConfig } from "./types.discord.js";
+import type { DingTalkConfig } from "./types.dingtalk.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
 import type { MSTeamsConfig } from "./types.msteams.js";
@@ -33,5 +34,6 @@ export type ChannelsConfig = {
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;
+  dingtalk?: DingTalkConfig;
   [key: string]: unknown;
 };
