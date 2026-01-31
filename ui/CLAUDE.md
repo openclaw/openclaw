@@ -63,6 +63,79 @@ src/ui-zh-CN/
 - `src/ui/gateway.ts` - WebSocket connection to gateway
 - `src/ui-zh-CN/views/model-config.ts` - Main config view
 
+## Git Workflow
+
+### Repository Setup
+```
+origin    → https://github.com/moltbot/moltbot.git       (upstream - official)
+fork      → https://github.com/octopuslabs-fl/openclaw   (our fork)
+```
+
+### Current Branch
+- `feature/ui-config-i18n` — English i18n translation work
+
+### Syncing with Upstream
+```bash
+# Fetch latest from official repo
+git fetch origin
+
+# Update local main branch
+git checkout main
+git merge origin/main
+
+# Rebase feature branch on latest main
+git checkout feature/ui-config-i18n
+git rebase main
+
+# Push to fork (force needed after rebase)
+git push fork feature/ui-config-i18n --force-with-lease
+```
+
+**Or use gh CLI:**
+```bash
+# Sync fork's main with upstream
+~/bin/gh repo sync octopuslabs-fl/openclaw --branch main
+```
+
+### Before Creating PR to Upstream
+
+**Checklist:**
+- [ ] All tests passing (`npm test`)
+- [ ] Build clean (`npm run build`)
+- [ ] Tested against live gateway
+- [ ] English translations complete (688/688)
+- [ ] No console errors in browser
+- [ ] Code reviewed / self-reviewed
+
+**Create PR:**
+```bash
+# Ensure branch is up to date with upstream main
+git fetch origin
+git rebase origin/main
+
+# Push final changes
+git push fork feature/ui-config-i18n --force-with-lease
+
+# Create PR via CLI
+~/bin/gh pr create \
+  --repo moltbot/moltbot \
+  --head octopuslabs-fl:feature/ui-config-i18n \
+  --base main \
+  --title "feat(ui): Complete English i18n translation" \
+  --body "## Summary
+- Translate all 688 i18n keys from Chinese to English
+- Add complete i18n system with language switcher
+- All 131 tests passing
+
+## Changes
+- Complete English translations (688 keys)
+- Partial Spanish (193/688) and Chinese (536/688) translations
+- Updated components to use i18n system"
+```
+
+**Or create via web:**
+https://github.com/moltbot/moltbot/compare/main...octopuslabs-fl:feature/ui-config-i18n
+
 ## Contributing Guidelines
 - Use `t('key')` for all user-facing strings
 - Add new keys to all 3 language files
