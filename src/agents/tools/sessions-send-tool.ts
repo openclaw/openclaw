@@ -81,7 +81,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       const listSessions = async (listParams: Record<string, unknown>) => {
-        const result = await callGateway({
+        const result = await callGateway<{ sessions: Array<{ key: string }> }>({
           method: "sessions.list",
           params: listParams,
           timeoutMs: 10_000,
@@ -136,7 +136,7 @@ export function createSessionsSendTool(opts?: {
         };
         let resolvedKey = "";
         try {
-          const resolved = await callGateway({
+          const resolved = await callGateway<{ key: string }>({
             method: "sessions.resolve",
             params: resolveParams,
             timeoutMs: 10_000,
@@ -283,7 +283,7 @@ export function createSessionsSendTool(opts?: {
 
       if (timeoutSeconds === 0) {
         try {
-          const response = await callGateway({
+          const response = await callGateway<{ runId: string }>({
             method: "agent",
             params: sendParams,
             timeoutMs: 10_000,
@@ -311,7 +311,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       try {
-        const response = await callGateway({
+        const response = await callGateway<{ runId: string }>({
           method: "agent",
           params: sendParams,
           timeoutMs: 10_000,
@@ -333,7 +333,7 @@ export function createSessionsSendTool(opts?: {
       let waitStatus: string | undefined;
       let waitError: string | undefined;
       try {
-        const wait = await callGateway({
+        const wait = await callGateway<{ status?: string; error?: string }>({
           method: "agent.wait",
           params: {
             runId,
@@ -371,7 +371,7 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      const history = await callGateway({
+      const history = await callGateway<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit: 50 },
       });

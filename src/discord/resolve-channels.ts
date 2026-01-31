@@ -83,7 +83,11 @@ async function listGuildChannels(
   fetcher: typeof fetch,
   guildId: string,
 ): Promise<DiscordChannelSummary[]> {
-  const raw = await fetchDiscord(`/guilds/${guildId}/channels`, token, fetcher);
+  const raw = await fetchDiscord<Array<DiscordChannelSummary>>(
+    `/guilds/${guildId}/channels`,
+    token,
+    fetcher,
+  );
   return raw
     .filter((channel) => Boolean(channel.id) && "name" in channel)
     .map((channel) => {
@@ -107,7 +111,11 @@ async function fetchChannel(
   fetcher: typeof fetch,
   channelId: string,
 ): Promise<DiscordChannelSummary | null> {
-  const raw = await fetchDiscord(`/channels/${channelId}`, token, fetcher);
+  const raw = await fetchDiscord<DiscordChannelSummary & { guild_id: string }>(
+    `/channels/${channelId}`,
+    token,
+    fetcher,
+  );
   if (!raw || !("guild_id" in raw)) {
     return null;
   }
