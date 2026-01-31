@@ -4,7 +4,7 @@ services:
     runtime: docker
     plan: standard
     healthCheckPath: /health
-    dockerCommand: node dist/index.js gateway --bind lan --port 8080 --allow-unconfigured
+    dockerCommand: sh -c "mkdir -p /data/.openclaw && echo 'gateway:\n  controlUi:\n    dangerouslyDisableDeviceAuth: true' > /data/.openclaw/config.yaml && node dist/index.js gateway --bind lan --port 8080"
     envVars:
       - key: PORT
         value: "8080"
