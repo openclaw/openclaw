@@ -13,11 +13,14 @@ describe("gateway.customBindHost", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts customBindHost without bind mode", async () => {
+  it("accepts customBindHost with lan bind mode", async () => {
+    // customBindHost is documented for bind="custom", but Zod validates
+    // schema shape only - runtime handles semantic validation.
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       gateway: {
+        bind: "lan",
         customBindHost: "10.0.0.5",
       },
     });
