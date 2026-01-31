@@ -13,6 +13,8 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const CONNECT_TIMEOUT_MS = 30_000; // 30 second connection timeout
+const RESPONSE_TIMEOUT_MS = 5 * 60_000; // 5 minute total response timeout
 
 /**
  * Sanitize a filename for cross-platform safety.
@@ -110,50 +112,61 @@ async function downloadToFile(
     const requestImpl = parsedUrl.protocol === "https:" ? httpsRequest : httpRequest;
     resolvePinnedHostname(parsedUrl.hostname)
       .then((pinned) => {
-        const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          // Follow redirects
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-            const location = res.headers.location;
-            if (!location || maxRedirects <= 0) {
-              reject(new Error(`Redirect loop or missing Location header`));
+        const req = requestImpl(
+          parsedUrl,
+          { headers, lookup: pinned.lookup, timeout: CONNECT_TIMEOUT_MS },
+          (res) => {
+            // Follow redirects
+            if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
+              const location = res.headers.location;
+              if (!location || maxRedirects <= 0) {
+                reject(new Error(`Redirect loop or missing Location header`));
+                return;
+              }
+              const redirectUrl = new URL(location, url).href;
+              resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
               return;
             }
-            const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
-            return;
-          }
-          if (!res.statusCode || res.statusCode >= 400) {
-            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
-            return;
-          }
-          let total = 0;
-          const sniffChunks: Buffer[] = [];
-          let sniffLen = 0;
-          const out = createWriteStream(dest, { mode: 0o600 });
-          res.on("data", (chunk) => {
-            total += chunk.length;
-            if (sniffLen < 16384) {
-              sniffChunks.push(chunk);
-              sniffLen += chunk.length;
+            if (!res.statusCode || res.statusCode >= 400) {
+              reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
+              return;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
-            }
-          });
-          pipeline(res, out)
-            .then(() => {
-              const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
-              const rawHeader = res.headers["content-type"];
-              const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-              resolve({
-                headerMime,
-                sniffBuffer,
-                size: total,
-              });
-            })
-            .catch(reject);
-        });
+            // Set response timeout - destroys if download takes too long
+            res.setTimeout(RESPONSE_TIMEOUT_MS, () => {
+              req.destroy(new Error("Download timeout: response took too long"));
+            });
+            let total = 0;
+            const sniffChunks: Buffer[] = [];
+            let sniffLen = 0;
+            const out = createWriteStream(dest, { mode: 0o600 });
+            res.on("data", (chunk) => {
+              total += chunk.length;
+              if (sniffLen < 16384) {
+                sniffChunks.push(chunk);
+                sniffLen += chunk.length;
+              }
+              if (total > MAX_BYTES) {
+                req.destroy(new Error("Media exceeds 5MB limit"));
+              }
+            });
+            pipeline(res, out)
+              .then(() => {
+                const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
+                const rawHeader = res.headers["content-type"];
+                const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+                resolve({
+                  headerMime,
+                  sniffBuffer,
+                  size: total,
+                });
+              })
+              .catch(reject);
+          },
+        );
         req.on("error", reject);
+        req.on("timeout", () => {
+          req.destroy(new Error("Connection timeout"));
+        });
         req.end();
       })
       .catch(reject);

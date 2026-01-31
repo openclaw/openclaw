@@ -44,7 +44,13 @@ describe("media store redirects", () => {
     let call = 0;
     mockRequest.mockImplementation((_url, _opts, cb) => {
       call += 1;
-      const res = new PassThrough();
+      const res = new PassThrough() as PassThrough & {
+        statusCode?: number;
+        headers?: Record<string, string>;
+        setTimeout: (ms: number, cb?: () => void) => void;
+      };
+      // Add setTimeout method for response timeout handling
+      res.setTimeout = () => {};
       const req = {
         on: (event: string, handler: (...args: unknown[]) => void) => {
           if (event === "error") {
@@ -87,7 +93,13 @@ describe("media store redirects", () => {
   it("sniffs xlsx from zip content when headers and url extension are missing", async () => {
     const { saveMediaSource } = await loadStore();
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const res = new PassThrough();
+      const res = new PassThrough() as PassThrough & {
+        statusCode?: number;
+        headers?: Record<string, string>;
+        setTimeout: (ms: number, cb?: () => void) => void;
+      };
+      // Add setTimeout method for response timeout handling
+      res.setTimeout = () => {};
       const req = {
         on: (event: string, handler: (...args: unknown[]) => void) => {
           if (event === "error") {
