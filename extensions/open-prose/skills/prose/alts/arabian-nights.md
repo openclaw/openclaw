@@ -28,55 +28,55 @@ An alternative register for OpenProse that draws from One Thousand and One Night
 
 ### Core Constructs
 
-| Functional | Nights | Reference |
-|------------|--------|-----------|
-| `agent` | `djinn` | Spirit bound to serve, grants wishes |
-| `session` | `tale` | A story told, a narrative unit |
+| Functional | Nights   | Reference                             |
+| ---------- | -------- | ------------------------------------- |
+| `agent`    | `djinn`  | Spirit bound to serve, grants wishes  |
+| `session`  | `tale`   | A story told, a narrative unit        |
 | `parallel` | `bazaar` | Many voices, many stalls, all at once |
-| `block` | `frame` | A story that contains other stories |
+| `block`    | `frame`  | A story that contains other stories   |
 
 ### Composition & Binding
 
-| Functional | Nights | Reference |
-|------------|--------|-----------|
-| `use` | `conjure` | Summoning from elsewhere |
-| `input` | `wish` | What is asked of the djinn |
-| `output` | `gift` | What is granted in return |
-| `let` | `name` | Naming has power (same as folk) |
-| `const` | `oath` | Unbreakable vow, sealed |
-| `context` | `scroll` | What is written and passed along |
+| Functional | Nights    | Reference                        |
+| ---------- | --------- | -------------------------------- |
+| `use`      | `conjure` | Summoning from elsewhere         |
+| `input`    | `wish`    | What is asked of the djinn       |
+| `output`   | `gift`    | What is granted in return        |
+| `let`      | `name`    | Naming has power (same as folk)  |
+| `const`    | `oath`    | Unbreakable vow, sealed          |
+| `context`  | `scroll`  | What is written and passed along |
 
 ### Control Flow
 
-| Functional | Nights | Reference |
-|------------|--------|-----------|
-| `repeat N` | `N nights` | "For a thousand and one nights..." |
+| Functional | Nights             | Reference                            |
+| ---------- | ------------------ | ------------------------------------ |
+| `repeat N` | `N nights`         | "For a thousand and one nights..."   |
 | `for...in` | `for each...among` | Among the merchants, among the tales |
-| `loop` | `telling` | The telling continues |
-| `until` | `until` | Unchanged |
-| `while` | `while` | Unchanged |
-| `choice` | `crossroads` | Where the story forks |
-| `option` | `path` | One way the story could go |
-| `if` | `should` | Narrative conditional |
-| `elif` | `or should` | Continued conditional |
-| `else` | `otherwise` | The other telling |
+| `loop`     | `telling`          | The telling continues                |
+| `until`    | `until`            | Unchanged                            |
+| `while`    | `while`            | Unchanged                            |
+| `choice`   | `crossroads`       | Where the story forks                |
+| `option`   | `path`             | One way the story could go           |
+| `if`       | `should`           | Narrative conditional                |
+| `elif`     | `or should`        | Continued conditional                |
+| `else`     | `otherwise`        | The other telling                    |
 
 ### Error Handling
 
-| Functional | Nights | Reference |
-|------------|--------|-----------|
-| `try` | `venture` | Setting out on the journey |
-| `catch` | `should misfortune strike` | The tale turns dark |
-| `finally` | `and so it was` | The inevitable ending |
-| `throw` | `curse` | Ill fate pronounced |
-| `retry` | `persist` | The hero tries again |
+| Functional | Nights                     | Reference                  |
+| ---------- | -------------------------- | -------------------------- |
+| `try`      | `venture`                  | Setting out on the journey |
+| `catch`    | `should misfortune strike` | The tale turns dark        |
+| `finally`  | `and so it was`            | The inevitable ending      |
+| `throw`    | `curse`                    | Ill fate pronounced        |
+| `retry`    | `persist`                  | The hero tries again       |
 
 ### Session Properties
 
-| Functional | Nights | Reference |
-|------------|--------|-----------|
-| `prompt` | `command` | What is commanded of the djinn |
-| `model` | `spirit` | Which spirit answers |
+| Functional | Nights    | Reference                      |
+| ---------- | --------- | ------------------------------ |
+| `prompt`   | `command` | What is commanded of the djinn |
+| `model`    | `spirit`  | Which spirit answers           |
 
 ### Unchanged
 
@@ -297,14 +297,14 @@ oath config = { spirit: "opus", persist: 3 }
 
 ## Key Arabian Nights Concepts
 
-| Term | Meaning | Used for |
-|------|---------|----------|
-| Scheherazade | The narrator who tells tales to survive | (the program author) |
-| Djinn | Supernatural spirit, bound to serve | `agent` → `djinn` |
-| Frame story | A story that contains other stories | `block` → `frame` |
-| Wish | What is asked of the djinn | `input` → `wish` |
-| Oath | Unbreakable promise | `const` → `oath` |
-| Bazaar | Marketplace, many vendors | `parallel` → `bazaar` |
+| Term         | Meaning                                 | Used for              |
+| ------------ | --------------------------------------- | --------------------- |
+| Scheherazade | The narrator who tells tales to survive | (the program author)  |
+| Djinn        | Supernatural spirit, bound to serve     | `agent` → `djinn`     |
+| Frame story  | A story that contains other stories     | `block` → `frame`     |
+| Wish         | What is asked of the djinn              | `input` → `wish`      |
+| Oath         | Unbreakable promise                     | `const` → `oath`      |
+| Bazaar       | Marketplace, many vendors               | `parallel` → `bazaar` |
 
 ---
 
@@ -312,36 +312,36 @@ oath config = { spirit: "opus", persist: 3 }
 
 ### For `djinn` (agent)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `genie` | Disney connotation, less literary |
-| `spirit` | Used for `model` |
-| `ifrit` | Too specific (a type of djinn) |
+| Keyword    | Rejected because                   |
+| ---------- | ---------------------------------- |
+| `genie`    | Disney connotation, less literary  |
+| `spirit`   | Used for `model`                   |
+| `ifrit`    | Too specific (a type of djinn)     |
 | `narrator` | Too meta, Scheherazade is the user |
 
 ### For `tale` (session)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `story` | Good but `tale` feels more literary |
-| `night` | Reserved for `repeat N nights` |
-| `chapter` | More Western/novelistic |
+| Keyword   | Rejected because                    |
+| --------- | ----------------------------------- |
+| `story`   | Good but `tale` feels more literary |
+| `night`   | Reserved for `repeat N nights`      |
+| `chapter` | More Western/novelistic             |
 
 ### For `bazaar` (parallel)
 
-| Keyword | Rejected because |
-|---------|------------------|
+| Keyword   | Rejected because                           |
+| --------- | ------------------------------------------ |
 | `caravan` | Sequential connotation (one after another) |
-| `chorus` | Greek, wrong tradition |
-| `souk` | Less widely known |
+| `chorus`  | Greek, wrong tradition                     |
+| `souk`    | Less widely known                          |
 
 ### For `scroll` (context)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `letter` | Too small/personal |
-| `tome` | Too large |
-| `message` | Too plain |
+| Keyword   | Rejected because   |
+| --------- | ------------------ |
+| `letter`  | Too small/personal |
+| `tome`    | Too large          |
+| `message` | Too plain          |
 
 ---
 

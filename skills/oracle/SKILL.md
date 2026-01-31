@@ -2,7 +2,24 @@
 name: oracle
 description: Best practices for using the oracle CLI (prompt + file bundling, engines, sessions, and file attachment patterns).
 homepage: https://askoracle.dev
-metadata: {"openclaw":{"emoji":"🧿","requires":{"bins":["oracle"]},"install":[{"id":"node","kind":"node","package":"@steipete/oracle","bins":["oracle"],"label":"Install oracle (node)"}]}}
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🧿",
+        "requires": { "bins": ["oracle"] },
+        "install":
+          [
+            {
+              "id": "node",
+              "kind": "node",
+              "package": "@steipete/oracle",
+              "bins": ["oracle"],
+              "label": "Install oracle (node)",
+            },
+          ],
+      },
+  }
 ---
 
 # oracle — best use
@@ -14,6 +31,7 @@ Oracle bundles your prompt + selected files into one “one-shot” request so a
 Default workflow here: `--engine browser` with GPT‑5.2 Pro in ChatGPT. This is the common “long think” path: ~10 minutes to ~1 hour is normal; expect a stored session you can reattach to.
 
 Recommended defaults:
+
 - Engine: browser (`--engine browser`)
 - Model: GPT‑5.2 Pro (`--model gpt-5.2-pro` or `--model "5.2 Pro"`)
 
@@ -85,6 +103,7 @@ Recommended defaults:
 ## Prompt template (high signal)
 
 Oracle starts with **zero** project knowledge. Assume the model cannot infer your stack, build tooling, conventions, or “obvious” paths. Include:
+
 - Project briefing (stack + build/test commands + platform constraints).
 - “Where things live” (key directories, entrypoints, config files, boundaries).
 - Exact question + what you tried + the error text (verbatim).
@@ -98,6 +117,7 @@ Oracle starts with **zero** project knowledge. Assume the model cannot infer you
 ## “Exhaustive prompt” restoration pattern
 
 For long investigations, write a standalone prompt + file set so you can rerun days later:
+
 - 6–30 sentence project briefing + the goal.
 - Repro steps + exact errors + what you tried.
 - Attach all context files needed (entrypoints, configs, key modules, docs).

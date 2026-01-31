@@ -8,8 +8,6 @@
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml/",
-    "scripts/",
-    "skills/",
     "Swabble/",
     "vendor/",
   ],
