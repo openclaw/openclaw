@@ -20,7 +20,7 @@ services:
       [
         'node',
         'dist/index.js',
-        'gateway',
+        "gateway",
         '--bind',
         '${OPENCLAW_GATEWAY_BIND:-lan}',
         '--port',
