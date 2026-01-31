@@ -223,8 +223,8 @@ enum WideAreaGatewayDiscovery {
         process.arguments = args
         let outPipe = Pipe()
         process.standardOutput = outPipe
+        // Avoid stderr pipe backpressure; we don't consume it.
         process.standardError = FileHandle.nullDevice
-
 
         do {
             try process.run()
