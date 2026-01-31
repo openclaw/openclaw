@@ -64,7 +64,9 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function waitForSubscribe() {
   for (let i = 0; i < 5; i += 1) {
-    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) return;
+    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) {
+      return;
+    }
     await flush();
   }
 }
@@ -84,7 +86,9 @@ beforeEach(() => {
     },
   };
   requestMock.mockReset().mockImplementation((method: string) => {
-    if (method === "watch.subscribe") return Promise.resolve({ subscription: 1 });
+    if (method === "watch.subscribe") {
+      return Promise.resolve({ subscription: 1 });
+    }
     return Promise.resolve({});
   });
   stopMock.mockReset().mockResolvedValue(undefined);

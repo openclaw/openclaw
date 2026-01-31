@@ -60,7 +60,9 @@ async function isPortFree(port: number) {
     await ensurePortAvailable(port);
     return true;
   } catch (err) {
-    if (err instanceof PortInUseError) return false;
+    if (err instanceof PortInUseError) {
+      return false;
+    }
     throw err;
   }
 }

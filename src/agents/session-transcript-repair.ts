@@ -9,13 +9,19 @@ function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
   const content = msg.content;
-  if (!Array.isArray(content)) return [];
+  if (!Array.isArray(content)) {
+    return [];
+  }
 
   const toolCalls: ToolCallLike[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) continue;
+    if (typeof rec.id !== "string" || !rec.id) {
+      continue;
+    }
 
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
       toolCalls.push({
@@ -29,9 +35,13 @@ function extractToolCallsFromAssistant(
 
 function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
-  if (typeof toolCallId === "string" && toolCallId) return toolCallId;
+  if (typeof toolCallId === "string" && toolCallId) {
+    return toolCallId;
+  }
   const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
-  if (typeof toolUseId === "string" && toolUseId) return toolUseId;
+  if (typeof toolUseId === "string" && toolUseId) {
+    return toolUseId;
+  }
   return null;
 }
 
@@ -90,12 +100,14 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       changed = true;
       return;
     }
-    if (id) seenToolResultIds.add(id);
+    if (id) {
+      seenToolResultIds.add(id);
+    }
     out.push(msg);
   };
 
   for (let i = 0; i < messages.length; i += 1) {
-    const msg = messages[i] as AgentMessage;
+    const msg = messages[i];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -129,14 +141,16 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
     let j = i + 1;
     for (; j < messages.length; j += 1) {
-      const next = messages[j] as AgentMessage;
+      const next = messages[j];
       if (!next || typeof next !== "object") {
         remainder.push(next);
         continue;
       }
 
       const nextRole = (next as { role?: unknown }).role;
-      if (nextRole === "assistant") break;
+      if (nextRole === "assistant") {
+        break;
+      }
 
       if (nextRole === "toolResult") {
         const toolResult = next as Extract<AgentMessage, { role: "toolResult" }>;

@@ -19,7 +19,9 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
   });
-  if (res.error) throw res.error;
+  if (res.error) {
+    throw res.error;
+  }
   if (!opts?.allowFailure && res.status !== 0) {
     const errText =
       typeof res.stderr === "string" && res.stderr.trim()
@@ -46,7 +48,9 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     encoding: "utf-8",
     stdio: ["pipe", "ignore", "inherit"],
   });
-  if (res.error) throw res.error;
+  if (res.error) {
+    throw res.error;
+  }
   if (res.status !== 0) {
     throw new Error(`sudo tee ${filePath} failed: exit ${res.status ?? "unknown"}`);
   }
@@ -67,7 +71,9 @@ function mkdirSudoIfNeeded(dirPath: string): void {
 }
 
 function zoneFileNeedsBootstrap(zonePath: string): boolean {
-  if (!fs.existsSync(zonePath)) return true;
+  if (!fs.existsSync(zonePath)) {
+    return true;
+  }
   try {
     const content = fs.readFileSync(zonePath, "utf-8");
     return !/\bSOA\b/.test(content) || !/\bNS\b/.test(content);
@@ -79,13 +85,17 @@ function zoneFileNeedsBootstrap(zonePath: string): boolean {
 function detectBrewPrefix(): string {
   const out = run("brew", ["--prefix"]);
   const prefix = out.trim();
-  if (!prefix) throw new Error("failed to resolve Homebrew prefix");
+  if (!prefix) {
+    throw new Error("failed to resolve Homebrew prefix");
+  }
   return prefix;
 }
 
 function ensureImportLine(corefilePath: string, importGlob: string): boolean {
   const existing = fs.readFileSync(corefilePath, "utf-8");
-  if (existing.includes(importGlob)) return false;
+  if (existing.includes(importGlob)) {
+    return false;
+  }
   const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
   writeFileSudoIfNeeded(corefilePath, next);
   return true;

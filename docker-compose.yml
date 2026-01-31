@@ -12,19 +12,19 @@ services:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - '${OPENCLAW_GATEWAY_PORT:-18789}:18789'
+      - '${OPENCLAW_BRIDGE_PORT:-18790}:18790'
     init: true
     restart: unless-stopped
     command:
       [
-        "node",
-        "dist/index.mjs",
+        'node',
+        'dist/index.js',
         "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "${OPENCLAW_GATEWAY_PORT:-18789}"
+        '--bind',
+        '${OPENCLAW_GATEWAY_BIND:-lan}',
+        '--port',
+        '${OPENCLAW_GATEWAY_PORT:-18789}',
       ]
 
   openclaw-cli:
@@ -42,4 +42,4 @@ services:
     stdin_open: true
     tty: true
     init: true
-    entrypoint: ["node", "dist/index.mjs"]
+    entrypoint: ['node', 'dist/index.js']

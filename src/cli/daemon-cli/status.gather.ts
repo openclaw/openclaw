@@ -96,8 +96,12 @@ export type DaemonStatus = {
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
-  if (status !== "busy") return false;
-  if (rpcOk === true) return false;
+  if (status !== "busy") {
+    return false;
+  }
+  if (rpcOk === true) {
+    return false;
+  }
   return true;
 }
 
@@ -271,7 +275,9 @@ export async function gatherDaemonStatus(
 }
 
 export function renderPortDiagnosticsForCli(status: DaemonStatus, rpcOk?: boolean): string[] {
-  if (!status.port || !shouldReportPortUsage(status.port.status, rpcOk)) return [];
+  if (!status.port || !shouldReportPortUsage(status.port.status, rpcOk)) {
+    return [];
+  }
   return formatPortDiagnostics({
     port: status.port.port,
     status: status.port.status,

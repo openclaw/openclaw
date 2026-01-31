@@ -20,8 +20,11 @@ describe("media store", () => {
 
   const restoreEnv = () => {
     for (const [key, value] of Object.entries(envSnapshot)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   };
 

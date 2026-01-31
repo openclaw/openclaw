@@ -29,7 +29,9 @@ import {
 
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   const command = status.service.command;
-  if (!command?.environment) return status;
+  if (!command?.environment) {
+    return status;
+  }
   const safeEnv = filterDaemonEnv(command.environment);
   const nextCommand = {
     ...command,
@@ -189,7 +191,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
-      if (rpc.url) defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
+      if (rpc.url) {
+        defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
+      }
       const lines = String(rpc.error ?? "unknown")
         .split(/\r?\n/)
         .filter(Boolean);

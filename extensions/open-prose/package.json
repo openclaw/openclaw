@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/open-prose",
-  "version": "2026.1.29",
+  "version": "2026.1.30",
   "type": "module",
   "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
   "openclaw": {

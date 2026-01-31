@@ -26,10 +26,16 @@ type ParsedTtsCommand = {
 
 function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   // Accept `/tts` and `/tts <action> [args]` as a single control surface.
-  if (normalized === "/tts") return { action: "status", args: "" };
-  if (!normalized.startsWith("/tts ")) return null;
+  if (normalized === "/tts") {
+    return { action: "status", args: "" };
+  }
+  if (!normalized.startsWith("/tts ")) {
+    return null;
+  }
   const rest = normalized.slice(5).trim();
-  if (!rest) return { action: "status", args: "" };
+  if (!rest) {
+    return { action: "status", args: "" };
+  }
   const [action, ...tail] = rest.split(/\s+/);
   return { action: action.toLowerCase(), args: tail.join(" ").trim() };
 }
@@ -63,9 +69,13 @@ function ttsUsage(): ReplyPayload {
 }
 
 export const handleTtsCommands: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const parsed = parseTtsCommand(params.command.commandBodyNormalized);
-  if (!parsed) return null;
+  if (!parsed) {
+    return null;
+  }
 
   if (!params.command.isAuthorizedSender) {
     logVerbose(

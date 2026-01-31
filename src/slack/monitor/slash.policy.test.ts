@@ -101,7 +101,9 @@ describe("slack slash commands channel policy", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = [...commands.values()][0];
-    if (!handler) throw new Error("Missing slash handler");
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -133,7 +135,9 @@ describe("slack slash commands channel policy", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = [...commands.values()][0];
-    if (!handler) throw new Error("Missing slash handler");
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -166,7 +170,9 @@ describe("slack slash commands channel policy", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = [...commands.values()][0];
-    if (!handler) throw new Error("Missing slash handler");
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({

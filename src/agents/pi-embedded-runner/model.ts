@@ -25,7 +25,9 @@ export function buildInlineProviderModels(
 ): InlineModelEntry[] {
   return Object.entries(providers).flatMap(([providerId, entry]) => {
     const trimmed = providerId.trim();
-    if (!trimmed) return [];
+    if (!trimmed) {
+      return [];
+    }
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
@@ -40,13 +42,17 @@ export function buildModelAliasLines(cfg?: OpenClawConfig) {
   const entries: Array<{ alias: string; model: string }> = [];
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
     const model = String(keyRaw ?? "").trim();
-    if (!model) continue;
+    if (!model) {
+      continue;
+    }
     const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) continue;
+    if (!alias) {
+      continue;
+    }
     entries.push({ alias, model });
   }
   return entries
-    .sort((a, b) => a.alias.localeCompare(b.alias))
+    .toSorted((a, b) => a.alias.localeCompare(b.alias))
     .map((entry) => `- ${entry.alias}: ${entry.model}`);
 }
 

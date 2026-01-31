@@ -18,10 +18,12 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
+const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
 const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
+const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 const MINIMAX_API_COST = {
   input: 15,
@@ -135,7 +137,9 @@ function normalizeApiKeyConfig(value: string): string {
 
 function resolveEnvApiKeyVarName(provider: string): string | undefined {
   const resolved = resolveEnvApiKey(provider);
-  if (!resolved) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
   const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
   return match ? match[1] : undefined;
 }
@@ -151,16 +155,26 @@ function resolveApiKeyFromProfiles(params: {
   const ids = listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
     const cred = params.store.profiles[id];
-    if (!cred) continue;
-    if (cred.type === "api_key") return cred.key;
-    if (cred.type === "token") return cred.token;
+    if (!cred) {
+      continue;
+    }
+    if (cred.type === "api_key") {
+      return cred.key;
+    }
+    if (cred.type === "token") {
+      return cred.token;
+    }
   }
   return undefined;
 }
 
 export function normalizeGoogleModelId(id: string): string {
-  if (id === "gemini-3-pro") return "gemini-3-pro-preview";
-  if (id === "gemini-3-flash") return "gemini-3-flash-preview";
+  if (id === "gemini-3-pro") {
+    return "gemini-3-pro-preview";
+  }
+  if (id === "gemini-3-flash") {
+    return "gemini-3-flash-preview";
+  }
   return id;
 }
 
@@ -168,7 +182,9 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
     const nextId = normalizeGoogleModelId(model.id);
-    if (nextId === model.id) return model;
+    if (nextId === model.id) {
+      return model;
+    }
     mutated = true;
     return { ...model, id: nextId };
   });
@@ -180,7 +196,9 @@ export function normalizeProviders(params: {
   agentDir: string;
 }): ModelsConfig["providers"] {
   const { providers } = params;
-  if (!providers) return providers;
+  if (!providers) {
+    return providers;
+  }
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -230,7 +248,9 @@ export function normalizeProviders(params: {
 
     if (normalizedKey === "google") {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
-      if (googleNormalized !== normalizedProvider) mutated = true;
+      if (googleNormalized !== normalizedProvider) {
+        mutated = true;
+      }
       normalizedProvider = googleNormalized;
     }
 
@@ -259,6 +279,24 @@ function buildMinimaxProvider(): ProviderConfig {
         name: "MiniMax VL 01",
         reasoning: false,
         input: ["text", "image"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+function buildMinimaxPortalProvider(): ProviderConfig {
+  return {
+    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
+        reasoning: false,
+        input: ["text"],
         cost: MINIMAX_API_COST,
         contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
         maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
@@ -371,6 +409,14 @@ export async function resolveImplicitProviders(params: {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
   }
 
+  const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
+  if (minimaxOauthProfile.length > 0) {
+    providers["minimax-portal"] = {
+      ...buildMinimaxPortalProvider(),
+      apiKey: MINIMAX_OAUTH_PLACEHOLDER,
+    };
+  }
+
   const moonshotKey =
     resolveEnvApiKeyVarName("moonshot") ??
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
@@ -428,7 +474,9 @@ export async function resolveImplicitCopilotProvider(params: {
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 
-  if (!hasProfile && !githubToken) return null;
+  if (!hasProfile && !githubToken) {
+    return null;
+  }
 
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
@@ -484,12 +532,18 @@ export async function resolveImplicitBedrockProvider(params: {
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
-  if (enabled === false) return null;
-  if (enabled !== true && !hasAwsCreds) return null;
+  if (enabled === false) {
+    return null;
+  }
+  if (enabled !== true && !hasAwsCreds) {
+    return null;
+  }
 
   const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
   const models = await discoverBedrockModels({ region, config: discoveryConfig });
-  if (models.length === 0) return null;
+  if (models.length === 0) {
+    return null;
+  }
 
   return {
     baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,

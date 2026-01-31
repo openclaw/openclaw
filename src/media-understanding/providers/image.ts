@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai";
+import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 
@@ -54,10 +54,10 @@ export async function describeImageWithModel(
       },
     ],
   };
-  const message = (await complete(model, context, {
+  const message = await complete(model, context, {
     apiKey,
     maxTokens: params.maxTokens ?? 512,
-  })) as AssistantMessage;
+  });
   const text = coerceImageAssistantText({
     message,
     provider: model.provider,

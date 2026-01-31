@@ -15,7 +15,9 @@ function hasFlag(args: string[], flag: string): boolean {
 async function patchBunLongForProtobuf(): Promise<void> {
   // Bun ships a global `Long` that protobufjs detects, but it is not long.js and
   // misses critical APIs (fromBits, ...). Baileys WAProto expects long.js.
-  if (typeof process.versions.bun !== "string") return;
+  if (typeof process.versions.bun !== "string") {
+    return;
+  }
   const mod = await import("long");
   const Long = (mod as unknown as { default?: unknown }).default ?? mod;
   (globalThis as unknown as { Long?: unknown }).Long = Long;

@@ -19,7 +19,9 @@ beforeEach(() => {
 
 const resolveGatewayToken = (): string => {
   const token = (testState.gatewayAuth as { token?: string } | undefined)?.token;
-  if (!token) throw new Error("test gateway token missing");
+  if (!token) {
+    throw new Error("test gateway token missing");
+  }
   return token;
 };
 

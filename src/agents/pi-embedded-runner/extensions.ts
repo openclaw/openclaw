@@ -45,11 +45,17 @@ function buildContextPruningExtension(params: {
   model: Model<Api> | undefined;
 }): { additionalExtensionPaths?: string[] } {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
-  if (raw?.mode !== "cache-ttl") return {};
-  if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) return {};
+  if (raw?.mode !== "cache-ttl") {
+    return {};
+  }
+  if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) {
+    return {};
+  }
 
   const settings = computeEffectiveSettings(raw);
-  if (!settings) return {};
+  if (!settings) {
+    return {};
+  }
 
   setContextPruningRuntime(params.sessionManager, {
     settings,

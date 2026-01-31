@@ -236,9 +236,13 @@ export async function runReplyAgent(params: {
     buildLogMessage,
     cleanupTranscripts,
   }: SessionResetOptions): Promise<boolean> => {
-    if (!sessionKey || !activeSessionStore || !storePath) return false;
+    if (!sessionKey || !activeSessionStore || !storePath) {
+      return false;
+    }
     const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
-    if (!prevEntry) return false;
+    if (!prevEntry) {
+      return false;
+    }
     const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
     const nextSessionId = crypto.randomUUID();
     const nextEntry: SessionEntry = {
@@ -273,7 +277,9 @@ export async function runReplyAgent(params: {
     if (cleanupTranscripts && prevSessionId) {
       const transcriptCandidates = new Set<string>();
       const resolved = resolveSessionFilePath(prevSessionId, prevEntry, { agentId });
-      if (resolved) transcriptCandidates.add(resolved);
+      if (resolved) {
+        transcriptCandidates.add(resolved);
+      }
       transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
       for (const candidate of transcriptCandidates) {
         try {
@@ -391,8 +397,9 @@ export async function runReplyAgent(params: {
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
-    if (payloadArray.length === 0)
+    if (payloadArray.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
 
     const payloadResult = buildReplyPayloads({
       payloads: payloadArray,
@@ -413,8 +420,9 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
-    if (replyPayloads.length === 0)
+    if (replyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
 
     await signalTypingIfNeeded(replyPayloads, typingSignals);
 
@@ -477,7 +485,9 @@ export async function runReplyAgent(params: {
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session ${sessionKey}`;
       }
-      if (formatted) responseUsageLine = formatted;
+      if (formatted) {
+        responseUsageLine = formatted;
+      }
     }
 
     // If verbose is enabled and this is a new session, prepend a session hint.

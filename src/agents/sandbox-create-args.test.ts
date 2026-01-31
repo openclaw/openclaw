@@ -84,7 +84,9 @@ describe("buildSandboxCreateArgs", () => {
     for (let i = 0; i < args.length; i += 1) {
       if (args[i] === "--ulimit") {
         const value = args[i + 1];
-        if (value) ulimitValues.push(value);
+        if (value) {
+          ulimitValues.push(value);
+        }
       }
     }
     expect(ulimitValues).toEqual(
@@ -116,7 +118,9 @@ describe("buildSandboxCreateArgs", () => {
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "-v") {
         const value = args[i + 1];
-        if (value) vFlags.push(value);
+        if (value) {
+          vFlags.push(value);
+        }
       }
     }
     expect(vFlags).toContain("/home/user/source:/source:rw");

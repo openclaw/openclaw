@@ -59,8 +59,12 @@ describe("setupGitHooks", () => {
 
   it("returns not-repo when not inside a work tree", () => {
     const runGit = vi.fn((args) => {
-      if (args[0] === "--version") return { status: 0, stdout: "git version" };
-      if (args[0] === "rev-parse") return { status: 0, stdout: "false" };
+      if (args[0] === "--version") {
+        return { status: 0, stdout: "git version" };
+      }
+      if (args[0] === "rev-parse") {
+        return { status: 0, stdout: "false" };
+      }
       return { status: 1, stdout: "" };
     });
 
@@ -77,9 +81,15 @@ describe("setupGitHooks", () => {
     fs.chmodSync(hookPath, 0o644);
 
     const runGit = vi.fn((args) => {
-      if (args[0] === "--version") return { status: 0, stdout: "git version" };
-      if (args[0] === "rev-parse") return { status: 0, stdout: "true" };
-      if (args[0] === "config") return { status: 0, stdout: "" };
+      if (args[0] === "--version") {
+        return { status: 0, stdout: "git version" };
+      }
+      if (args[0] === "rev-parse") {
+        return { status: 0, stdout: "true" };
+      }
+      if (args[0] === "config") {
+        return { status: 0, stdout: "" };
+      }
       return { status: 1, stdout: "" };
     });
 

@@ -24,16 +24,24 @@ export function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
 
 export function resolveSandboxScopeKey(scope: "session" | "agent" | "shared", sessionKey: string) {
   const trimmed = sessionKey.trim() || "main";
-  if (scope === "shared") return "shared";
-  if (scope === "session") return trimmed;
+  if (scope === "shared") {
+    return "shared";
+  }
+  if (scope === "session") {
+    return trimmed;
+  }
   const agentId = resolveAgentIdFromSessionKey(trimmed);
   return `agent:${agentId}`;
 }
 
 export function resolveSandboxAgentId(scopeKey: string): string | undefined {
   const trimmed = scopeKey.trim();
-  if (!trimmed || trimmed === "shared") return undefined;
+  if (!trimmed || trimmed === "shared") {
+    return undefined;
+  }
   const parts = trimmed.split(":").filter(Boolean);
-  if (parts[0] === "agent" && parts[1]) return normalizeAgentId(parts[1]);
+  if (parts[0] === "agent" && parts[1]) {
+    return normalizeAgentId(parts[1]);
+  }
   return resolveAgentIdFromSessionKey(trimmed);
 }

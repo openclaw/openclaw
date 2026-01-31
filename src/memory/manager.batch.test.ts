@@ -79,7 +79,9 @@ describe("memory indexing with OpenAI batches", () => {
           throw new Error("expected FormData upload");
         }
         for (const [key, value] of body.entries()) {
-          if (key !== "file") continue;
+          if (key !== "file") {
+            continue;
+          }
           if (typeof value === "string") {
             uploadedRequests = value
               .split("\n")
@@ -149,13 +151,17 @@ describe("memory indexing with OpenAI batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     const labels: string[] = [];
     await manager.sync({
       force: true,
       progress: (update) => {
-        if (update.label) labels.push(update.label);
+        if (update.label) {
+          labels.push(update.label);
+        }
       },
     });
 
@@ -181,7 +187,9 @@ describe("memory indexing with OpenAI batches", () => {
           throw new Error("expected FormData upload");
         }
         for (const [key, value] of body.entries()) {
-          if (key !== "file") continue;
+          if (key !== "file") {
+            continue;
+          }
           if (typeof value === "string") {
             uploadedRequests = value
               .split("\n")
@@ -255,7 +263,9 @@ describe("memory indexing with OpenAI batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     await manager.sync({ force: true });
 
@@ -279,7 +289,9 @@ describe("memory indexing with OpenAI batches", () => {
           throw new Error("expected FormData upload");
         }
         for (const [key, value] of body.entries()) {
-          if (key !== "file") continue;
+          if (key !== "file") {
+            continue;
+          }
           if (typeof value === "string") {
             uploadedRequests = value
               .split("\n")
@@ -352,7 +364,9 @@ describe("memory indexing with OpenAI batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
 
     await manager.sync({ force: true });
@@ -388,7 +402,9 @@ describe("memory indexing with OpenAI batches", () => {
           throw new Error("expected FormData upload");
         }
         for (const [key, value] of body.entries()) {
-          if (key !== "file") continue;
+          if (key !== "file") {
+            continue;
+          }
           if (typeof value === "string") {
             uploadedRequests = value
               .split("\n")
@@ -449,7 +465,9 @@ describe("memory indexing with OpenAI batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
 
     await manager.sync({ force: true });

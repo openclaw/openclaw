@@ -230,10 +230,14 @@ describe("partial reply gating", () => {
         string,
         { lastChannel?: string; lastTo?: string }
       >;
-      if (stored[mainSessionKey]?.lastChannel && stored[mainSessionKey]?.lastTo) break;
+      if (stored[mainSessionKey]?.lastChannel && stored[mainSessionKey]?.lastTo) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    if (!stored) throw new Error("store not loaded");
+    if (!stored) {
+      throw new Error("store not loaded");
+    }
     expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
 
@@ -295,11 +299,14 @@ describe("partial reply gating", () => {
         stored[groupSessionKey]?.lastChannel &&
         stored[groupSessionKey]?.lastTo &&
         stored[groupSessionKey]?.lastAccountId
-      )
+      ) {
         break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    if (!stored) throw new Error("store not loaded");
+    if (!stored) {
+      throw new Error("store not loaded");
+    }
     expect(stored[groupSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
     expect(stored[groupSessionKey]?.lastAccountId).toBe("work");

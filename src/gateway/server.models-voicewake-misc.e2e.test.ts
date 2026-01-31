@@ -376,7 +376,9 @@ describe("gateway server misc", () => {
 
   test("auto-enables configured channel plugins on startup", async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) throw new Error("Missing OPENCLAW_CONFIG_PATH");
+    if (!configPath) {
+      throw new Error("Missing OPENCLAW_CONFIG_PATH");
+    }
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,

@@ -86,14 +86,19 @@ export async function buildStatusAllReportLines(params: {
     for (const issue of params.channelIssues) {
       const key = issue.channel;
       const list = map.get(key);
-      if (list) list.push(issue);
-      else map.set(key, [issue]);
+      if (list) {
+        list.push(issue);
+      } else {
+        map.set(key, [issue]);
+      }
     }
     return map;
   })();
   const channelRowsWithIssues = channelRows.map((row) => {
     const issues = channelIssuesByChannel.get(row.channelId) ?? [];
-    if (issues.length === 0) return row;
+    if (issues.length === 0) {
+      return row;
+    }
     const issue = issues[0];
     const suffix = ` · ${warn(`gateway: ${String(issue.message).slice(0, 90)}`)}`;
     return {

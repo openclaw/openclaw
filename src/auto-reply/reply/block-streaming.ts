@@ -16,7 +16,9 @@ const getBlockChunkProviders = () =>
   new Set<TextChunkProvider>([...listDeliverableMessageChannels(), INTERNAL_MESSAGE_CHANNEL]);
 
 function normalizeChunkProvider(provider?: string): TextChunkProvider | undefined {
-  if (!provider) return undefined;
+  if (!provider) {
+    return undefined;
+  }
   const cleaned = provider.trim().toLowerCase();
   return getBlockChunkProviders().has(cleaned as TextChunkProvider)
     ? (cleaned as TextChunkProvider)
@@ -34,9 +36,13 @@ function resolveProviderBlockStreamingCoalesce(params: {
   accountId?: string | null;
 }): BlockStreamingCoalesceConfig | undefined {
   const { cfg, providerKey, accountId } = params;
-  if (!cfg || !providerKey) return undefined;
+  if (!cfg || !providerKey) {
+    return undefined;
+  }
   const providerCfg = (cfg as Record<string, unknown>)[providerKey];
-  if (!providerCfg || typeof providerCfg !== "object") return undefined;
+  if (!providerCfg || typeof providerCfg !== "object") {
+    return undefined;
+  }
   const normalizedAccountId = normalizeAccountId(accountId);
   const typed = providerCfg as ProviderBlockStreamingConfig;
   const accountCfg = typed.accounts?.[normalizedAccountId];

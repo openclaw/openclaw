@@ -88,9 +88,13 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
       signal: ctrl.signal,
       headers: getHeadersWithAuth(versionUrl),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return null;
+    }
     const data = (await res.json()) as ChromeVersion;
-    if (!data || typeof data !== "object") return null;
+    if (!data || typeof data !== "object") {
+      return null;
+    }
     return data;
   } catch {
     return null;
@@ -105,7 +109,9 @@ export async function getChromeWebSocketUrl(
 ): Promise<string | null> {
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   const wsUrl = String(version?.webSocketDebuggerUrl ?? "").trim();
-  if (!wsUrl) return null;
+  if (!wsUrl) {
+    return null;
+  }
   return normalizeCdpWsUrl(wsUrl, cdpUrl);
 }
 
@@ -149,7 +155,9 @@ export async function isChromeCdpReady(
   handshakeTimeoutMs = 800,
 ): Promise<boolean> {
   const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs);
-  if (!wsUrl) return false;
+  if (!wsUrl) {
+    return false;
+  }
   return await canOpenWebSocket(wsUrl, handshakeTimeoutMs);
 }
 
@@ -232,7 +240,9 @@ export async function launchOpenClawChrome(
     const bootstrap = spawnOnce();
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      if (exists(localStatePath) && exists(preferencesPath)) break;
+      if (exists(localStatePath) && exists(preferencesPath)) {
+        break;
+      }
       await new Promise((r) => setTimeout(r, 100));
     }
     try {
@@ -242,7 +252,9 @@ export async function launchOpenClawChrome(
     }
     const exitDeadline = Date.now() + 5000;
     while (Date.now() < exitDeadline) {
-      if (bootstrap.exitCode != null) break;
+      if (bootstrap.exitCode != null) {
+        break;
+      }
       await new Promise((r) => setTimeout(r, 50));
     }
   }
@@ -269,7 +281,9 @@ export async function launchOpenClawChrome(
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl, 500)) break;
+    if (await isChromeReachable(profile.cdpUrl, 500)) {
+      break;
+    }
     await new Promise((r) => setTimeout(r, 200));
   }
 
@@ -301,7 +315,9 @@ export async function launchOpenClawChrome(
 
 export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
   const proc = running.proc;
-  if (proc.killed) return;
+  if (proc.killed) {
+    return;
+  }
   try {
     proc.kill("SIGTERM");
   } catch {
@@ -310,8 +326,12 @@ export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 250
 
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (!proc.exitCode && proc.killed) break;
-    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), 200))) return;
+    if (!proc.exitCode && proc.killed) {
+      break;
+    }
+    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), 200))) {
+      return;
+    }
     await new Promise((r) => setTimeout(r, 100));
   }
 

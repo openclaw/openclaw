@@ -32,7 +32,9 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   if (heartbeatAgents.length > 0) {
     const heartbeatParts = heartbeatAgents.map((agent) => {
       const agentId = agent.agentId ?? "unknown";
-      if (!agent.enabled || !agent.everyMs) return `disabled (${agentId})`;
+      if (!agent.enabled || !agent.everyMs) {
+        return `disabled (${agentId})`;
+      }
       return `${agent.every ?? "unknown"} (${agentId})`;
     });
     lines.push("");

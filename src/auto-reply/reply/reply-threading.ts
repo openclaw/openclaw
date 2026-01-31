@@ -12,7 +12,9 @@ export function resolveReplyToMode(
   chatType?: string | null,
 ): ReplyToMode {
   const provider = normalizeChannelId(channel);
-  if (!provider) return "all";
+  if (!provider) {
+    return "all";
+  }
   const resolved = getChannelDock(provider)?.threading?.resolveReplyToMode?.({
     cfg,
     accountId,
@@ -27,12 +29,18 @@ export function createReplyToModeFilter(
 ) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
-    if (!payload.replyToId) return payload;
+    if (!payload.replyToId) {
+      return payload;
+    }
     if (mode === "off") {
-      if (opts.allowTagsWhenOff && payload.replyToTag) return payload;
+      if (opts.allowTagsWhenOff && payload.replyToTag) {
+        return payload;
+      }
       return { ...payload, replyToId: undefined };
     }
-    if (mode === "all") return payload;
+    if (mode === "all") {
+      return payload;
+    }
     if (hasThreaded) {
       return { ...payload, replyToId: undefined };
     }

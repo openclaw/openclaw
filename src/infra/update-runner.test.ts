@@ -299,8 +299,11 @@ describe("runGatewayUpdate", () => {
       expect(result.after?.version).toBe("2.0.0");
       expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(true);
     } finally {
-      if (oldBunInstall === undefined) delete process.env.BUN_INSTALL;
-      else process.env.BUN_INSTALL = oldBunInstall;
+      if (oldBunInstall === undefined) {
+        delete process.env.BUN_INSTALL;
+      } else {
+        process.env.BUN_INSTALL = oldBunInstall;
+      }
     }
   });
 

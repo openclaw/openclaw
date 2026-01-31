@@ -168,7 +168,9 @@ export function matchPluginCommand(
   commandBody: string,
 ): { command: RegisteredPluginCommand; args?: string } | null {
   const trimmed = commandBody.trim();
-  if (!trimmed.startsWith("/")) return null;
+  if (!trimmed.startsWith("/")) {
+    return null;
+  }
 
   // Extract command name and args
   const spaceIndex = trimmed.indexOf(" ");
@@ -178,10 +180,14 @@ export function matchPluginCommand(
   const key = commandName.toLowerCase();
   const command = pluginCommands.get(key);
 
-  if (!command) return null;
+  if (!command) {
+    return null;
+  }
 
   // If command doesn't accept args but args were provided, don't match
-  if (args && !command.acceptsArgs) return null;
+  if (args && !command.acceptsArgs) {
+    return null;
+  }
 
   return { command, args: args || undefined };
 }
@@ -191,7 +197,9 @@ export function matchPluginCommand(
  * Removes control characters and enforces length limits.
  */
 function sanitizeArgs(args: string | undefined): string | undefined {
-  if (!args) return undefined;
+  if (!args) {
+    return undefined;
+  }
 
   // Enforce length limit
   if (args.length > MAX_ARGS_LENGTH) {
@@ -203,7 +211,9 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   for (const char of args) {
     const code = char.charCodeAt(0);
     const isControl = (code <= 0x1f && code !== 0x09 && code !== 0x0a) || code === 0x7f;
-    if (!isControl) sanitized += char;
+    if (!isControl) {
+      sanitized += char;
+    }
   }
   return sanitized;
 }

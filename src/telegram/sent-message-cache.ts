@@ -50,7 +50,9 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
 export function wasSentByBot(chatId: number | string, messageId: number): boolean {
   const key = getChatKey(chatId);
   const entry = sentMessages.get(key);
-  if (!entry) return false;
+  if (!entry) {
+    return false;
+  }
   // Clean up expired entries on read
   cleanupExpired(entry);
   return entry.messageIds.has(messageId);

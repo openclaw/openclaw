@@ -25,7 +25,9 @@ export function resolveChannelMatchConfig<
   TEntry,
   TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
 >(match: ChannelEntryMatch<TEntry>, resolveEntry: (entry: TEntry) => TResult): TResult | null {
-  if (!match.entry) return null;
+  if (!match.entry) {
+    return null;
+  }
   return applyChannelMatchMeta(resolveEntry(match.entry), match);
 }
 
@@ -42,9 +44,13 @@ export function buildChannelKeyCandidates(...keys: Array<string | undefined | nu
   const seen = new Set<string>();
   const candidates: string[] = [];
   for (const key of keys) {
-    if (typeof key !== "string") continue;
+    if (typeof key !== "string") {
+      continue;
+    }
     const trimmed = key.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
     seen.add(trimmed);
     candidates.push(trimmed);
   }
@@ -59,7 +65,9 @@ export function resolveChannelEntryMatch<T>(params: {
   const entries = params.entries ?? {};
   const match: ChannelEntryMatch<T> = {};
   for (const key of params.keys) {
-    if (!Object.prototype.hasOwnProperty.call(entries, key)) continue;
+    if (!Object.prototype.hasOwnProperty.call(entries, key)) {
+      continue;
+    }
     match.entry = entries[key];
     match.key = key;
     break;
@@ -161,8 +169,14 @@ export function resolveNestedAllowlistDecision(params: {
   innerConfigured: boolean;
   innerMatched: boolean;
 }): boolean {
-  if (!params.outerConfigured) return true;
-  if (!params.outerMatched) return false;
-  if (!params.innerConfigured) return true;
+  if (!params.outerConfigured) {
+    return true;
+  }
+  if (!params.outerMatched) {
+    return false;
+  }
+  if (!params.innerConfigured) {
+    return true;
+  }
   return params.innerMatched;
 }

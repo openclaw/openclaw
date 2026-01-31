@@ -53,8 +53,11 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(resolved).toBe("zai:work");
       expect(sessionEntry.authProfileOverride).toBe("zai:work");
     } finally {
-      if (prevStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

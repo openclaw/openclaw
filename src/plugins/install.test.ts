@@ -28,7 +28,9 @@ function resolveNpmCliJs() {
     "bin",
     "npm-cli.js",
   );
-  if (fs.existsSync(fromNodeDir)) return fromNodeDir;
+  if (fs.existsSync(fromNodeDir)) {
+    return fromNodeDir;
+  }
 
   const fromLibNodeModules = path.resolve(
     path.dirname(process.execPath),
@@ -39,7 +41,9 @@ function resolveNpmCliJs() {
     "bin",
     "npm-cli.js",
   );
-  if (fs.existsSync(fromLibNodeModules)) return fromLibNodeModules;
+  if (fs.existsSync(fromLibNodeModules)) {
+    return fromLibNodeModules;
+  }
 
   return null;
 }
@@ -98,7 +102,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "@openclaw/voice-call",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.mjs"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -117,7 +121,9 @@ describe("installPluginFromArchive", () => {
       extensionsDir,
     });
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
     expect(result.pluginId).toBe("voice-call");
     expect(result.targetDir).toBe(path.join(stateDir, "extensions", "voice-call"));
     expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
@@ -134,7 +140,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "@openclaw/voice-call",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.mjs"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -159,7 +165,9 @@ describe("installPluginFromArchive", () => {
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(false);
-    if (second.ok) return;
+    if (second.ok) {
+      return;
+    }
     expect(second.error).toContain("already exists");
   });
 
@@ -174,10 +182,10 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "@openclaw/zipper",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.mjs"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
     );
-    zip.file("package/dist/index.mjs", "export {};");
+    zip.file("package/dist/index.js", "export {};");
     const buffer = await zip.generateAsync({ type: "nodebuffer" });
     fs.writeFileSync(archivePath, buffer);
 
@@ -189,7 +197,9 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
     expect(result.pluginId).toBe("zipper");
     expect(result.targetDir).toBe(path.join(stateDir, "extensions", "zipper"));
     expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
@@ -206,7 +216,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "@openclaw/voice-call",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.mjs"] },
+        openclaw: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -224,7 +234,7 @@ describe("installPluginFromArchive", () => {
         JSON.stringify({
           name: "@openclaw/voice-call",
           version: "0.0.2",
-          openclaw: { extensions: ["./dist/index.mjs"] },
+          openclaw: { extensions: ["./dist/index.js"] },
         }),
         "utf-8",
       );
@@ -249,7 +259,9 @@ describe("installPluginFromArchive", () => {
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
-    if (!second.ok) return;
+    if (!second.ok) {
+      return;
+    }
     const manifest = JSON.parse(
       fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
     ) as { version?: string };
@@ -280,7 +292,9 @@ describe("installPluginFromArchive", () => {
       extensionsDir,
     });
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok) {
+      return;
+    }
     expect(result.error).toContain("openclaw.extensions");
   });
 });

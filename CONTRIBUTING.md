@@ -25,7 +25,7 @@ Welcome to the lobster tank! 🦞
 
 ## Before You PR
 - Test locally with your OpenClaw instance
-- Run linter: `npm run lint`
+- Run tests: `pnpm tsgo && pnpm format && pnpm lint && pnpm build && pnpm test`
 - Keep PRs focused (one thing per PR)
 - Describe what & why
 

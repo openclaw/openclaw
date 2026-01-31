@@ -11,14 +11,18 @@ export function classifyPortListener(listener: PortListener, port: number): Port
     const tunnelPattern = new RegExp(
       `-(l|r)\\s*${portToken}\\b|-(l|r)${portToken}\\b|:${portToken}\\b`,
     );
-    if (!raw || tunnelPattern.test(raw)) return "ssh";
+    if (!raw || tunnelPattern.test(raw)) {
+      return "ssh";
+    }
     return "ssh";
   }
   return "unknown";
 }
 
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
-  if (listeners.length === 0) return [];
+  if (listeners.length === 0) {
+    return [];
+  }
   const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
   const hints: string[] = [];
   if (kinds.has("gateway")) {

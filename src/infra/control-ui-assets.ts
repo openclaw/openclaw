@@ -8,13 +8,17 @@ import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 export function resolveControlUiRepoRoot(
   argv1: string | undefined = process.argv[1],
 ): string | null {
-  if (!argv1) return null;
+  if (!argv1) {
+    return null;
+  }
   const normalized = path.resolve(argv1);
   const parts = normalized.split(path.sep);
   const srcIndex = parts.lastIndexOf("src");
   if (srcIndex !== -1) {
     const root = parts.slice(0, srcIndex).join(path.sep);
-    if (fs.existsSync(path.join(root, "ui", "vite.config.ts"))) return root;
+    if (fs.existsSync(path.join(root, "ui", "vite.config.ts"))) {
+      return root;
+    }
   }
 
   let dir = path.dirname(normalized);
@@ -26,7 +30,9 @@ export function resolveControlUiRepoRoot(
       return dir;
     }
     const parent = path.dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir) {
+      break;
+    }
     dir = parent;
   }
 
@@ -36,7 +42,9 @@ export function resolveControlUiRepoRoot(
 export async function resolveControlUiDistIndexPath(
   argv1: string | undefined = process.argv[1],
 ): Promise<string | null> {
-  if (!argv1) return null;
+  if (!argv1) {
+    return null;
+  }
   const normalized = path.resolve(argv1);
 
   // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js)
@@ -46,7 +54,9 @@ export async function resolveControlUiDistIndexPath(
   }
 
   const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
-  if (!packageRoot) return null;
+  if (!packageRoot) {
+    return null;
+  }
   return path.join(packageRoot, "dist", "control-ui", "index.html");
 }
 
@@ -61,9 +71,13 @@ function summarizeCommandOutput(text: string): string | undefined {
     .split(/\r?\n/g)
     .map((l) => l.trim())
     .filter(Boolean);
-  if (!lines.length) return undefined;
+  if (!lines.length) {
+    return undefined;
+  }
   const last = lines.at(-1);
-  if (!last) return undefined;
+  if (!last) {
+    return undefined;
+  }
   return last.length > 240 ? `${last.slice(0, 239)}…` : last;
 }
 

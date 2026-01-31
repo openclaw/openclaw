@@ -3,7 +3,9 @@ import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
 function splitLongWord(word: string, maxLen: number): string[] {
-  if (maxLen <= 0) return [word];
+  if (maxLen <= 0) {
+    return [word];
+  }
   const chars = Array.from(word);
   const parts: string[] = [];
   for (let i = 0; i < chars.length; i += maxLen) {
@@ -13,7 +15,9 @@ function splitLongWord(word: string, maxLen: number): string[] {
 }
 
 function wrapLine(line: string, maxWidth: number): string[] {
-  if (line.trim().length === 0) return [line];
+  if (line.trim().length === 0) {
+    return [line];
+  }
   const match = line.match(/^(\s*)([-*\u2022]\s+)?(.*)$/);
   const indent = match?.[1] ?? "";
   const bullet = match?.[2] ?? "";
@@ -37,7 +41,9 @@ function wrapLine(line: string, maxWidth: number): string[] {
         lines.push(prefix + first);
         prefix = nextPrefix;
         available = nextWidth;
-        for (const part of parts) lines.push(prefix + part);
+        for (const part of parts) {
+          lines.push(prefix + part);
+        }
         continue;
       }
       current = word;
@@ -58,7 +64,9 @@ function wrapLine(line: string, maxWidth: number): string[] {
       const parts = splitLongWord(word, available);
       const first = parts.shift() ?? "";
       lines.push(prefix + first);
-      for (const part of parts) lines.push(prefix + part);
+      for (const part of parts) {
+        lines.push(prefix + part);
+      }
       current = "";
       continue;
     }

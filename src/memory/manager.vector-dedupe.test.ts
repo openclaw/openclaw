@@ -60,7 +60,9 @@ describe("memory vector dedupe", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
 
     const db = (

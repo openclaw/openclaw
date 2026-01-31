@@ -120,6 +120,8 @@ export function registerBrowserExtensionCommands(
       const displayPath = shortenHomePath(dir);
       defaultRuntime.log(displayPath);
       const copied = await copyToClipboard(dir).catch(() => false);
-      if (copied) defaultRuntime.error(info("Copied to clipboard."));
+      if (copied) {
+        defaultRuntime.error(info("Copied to clipboard."));
+      }
     });
 }

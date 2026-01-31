@@ -66,7 +66,9 @@ describe("memory embedding batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     await manager.sync({ force: true });
 
@@ -100,7 +102,9 @@ describe("memory embedding batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     await manager.sync({ force: true });
 
@@ -131,7 +135,9 @@ describe("memory embedding batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     const updates: Array<{ completed: number; total: number; label?: string }> = [];
     await manager.sync({
@@ -194,7 +200,9 @@ describe("memory embedding batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     try {
       await manager.sync({ force: true });
@@ -251,7 +259,9 @@ describe("memory embedding batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     try {
       await manager.sync({ force: true });
@@ -283,7 +293,9 @@ describe("memory embedding batches", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     await manager.sync({ force: true });
 

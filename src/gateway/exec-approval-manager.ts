@@ -64,7 +64,9 @@ export class ExecApprovalManager {
 
   resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
     const pending = this.pending.get(recordId);
-    if (!pending) return false;
+    if (!pending) {
+      return false;
+    }
     clearTimeout(pending.timer);
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = decision;

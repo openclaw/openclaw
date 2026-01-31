@@ -21,7 +21,9 @@ export type GroupHistoryEntry = {
 
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
   const sender = normalizeE164(msg.senderE164 ?? "");
-  if (!sender) return false;
+  if (!sender) {
+    return false;
+  }
   const owners = resolveOwnerList(baseMentionConfig, msg.selfE164 ?? undefined);
   return owners.includes(sender);
 }

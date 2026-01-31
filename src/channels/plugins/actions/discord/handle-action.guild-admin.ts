@@ -347,7 +347,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const deleteMessageDays = readNumberParam(actionParams, "deleteDays", {
       integer: true,
     });
-    const discordAction = action as "timeout" | "kick" | "ban";
+    const discordAction = action;
     return await handleDiscordAction(
       {
         action: discordAction,

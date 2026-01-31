@@ -110,8 +110,8 @@ merge_framework_machos() {
 echo "📦 Ensuring deps (pnpm install)"
 (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
-  echo "📦 Building JS (pnpm tsdown)"
-  (cd "$ROOT_DIR" && pnpm tsdown)
+  echo "📦 Building JS (pnpm tsc)"
+  (cd "$ROOT_DIR" && pnpm tsc -p tsconfig.json --noEmit false)
 else
   echo "📦 Skipping TS build (SKIP_TSC=1)"
 fi

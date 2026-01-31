@@ -37,9 +37,13 @@ export function createTelegramDraftStream(params: {
   let stopped = false;
 
   const sendDraft = async (text: string) => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     const trimmed = text.trimEnd();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     if (trimmed.length > maxChars) {
       // Drafts are capped at 4096 chars. Stop streaming once we exceed the cap
       // so we don't keep sending failing updates or a truncated preview.
@@ -47,7 +51,9 @@ export function createTelegramDraftStream(params: {
       params.warn?.(`telegram draft stream stopped (draft length ${trimmed.length} > ${maxChars})`);
       return;
     }
-    if (trimmed === lastSentText) return;
+    if (trimmed === lastSentText) {
+      return;
+    }
     lastSentText = trimmed;
     lastSentAt = Date.now();
     try {
@@ -72,7 +78,9 @@ export function createTelegramDraftStream(params: {
     const text = pendingText;
     pendingText = "";
     if (!text.trim()) {
-      if (pendingText) schedule();
+      if (pendingText) {
+        schedule();
+      }
       return;
     }
     inFlight = true;
@@ -81,11 +89,15 @@ export function createTelegramDraftStream(params: {
     } finally {
       inFlight = false;
     }
-    if (pendingText) schedule();
+    if (pendingText) {
+      schedule();
+    }
   };
 
   const schedule = () => {
-    if (timer) return;
+    if (timer) {
+      return;
+    }
     const delay = Math.max(0, throttleMs - (Date.now() - lastSentAt));
     timer = setTimeout(() => {
       void flush();
@@ -93,7 +105,9 @@ export function createTelegramDraftStream(params: {
   };
 
   const update = (text: string) => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     pendingText = text;
     if (inFlight) {
       schedule();

@@ -28,10 +28,14 @@ export function resolveTelegramToken(
   // be normalized, so resolve per-account config by matching normalized IDs.
   const resolveAccountCfg = (id: string): TelegramAccountConfig | undefined => {
     const accounts = telegramCfg?.accounts;
-    if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) return undefined;
+    if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
+      return undefined;
+    }
     // Direct hit (already normalized key)
     const direct = accounts[id];
-    if (direct) return direct;
+    if (direct) {
+      return direct;
+    }
     // Fallback: match by normalized key
     const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === id);
     return matchKey ? accounts[matchKey] : undefined;

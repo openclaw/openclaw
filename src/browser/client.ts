@@ -92,7 +92,9 @@ function buildProfileQuery(profile?: string): string {
 
 function withBaseUrl(baseUrl: string | undefined, path: string): string {
   const trimmed = baseUrl?.trim();
-  if (!trimmed) return path;
+  if (!trimmed) {
+    return path;
+  }
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
@@ -291,21 +293,42 @@ export async function browserSnapshot(
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
   q.set("format", opts.format);
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (typeof opts.limit === "number") q.set("limit", String(opts.limit));
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (typeof opts.limit === "number") {
+    q.set("limit", String(opts.limit));
+  }
   if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
     q.set("maxChars", String(opts.maxChars));
   }
-  if (opts.refs === "aria" || opts.refs === "role") q.set("refs", opts.refs);
-  if (typeof opts.interactive === "boolean") q.set("interactive", String(opts.interactive));
-  if (typeof opts.compact === "boolean") q.set("compact", String(opts.compact));
-  if (typeof opts.depth === "number" && Number.isFinite(opts.depth))
+  if (opts.refs === "aria" || opts.refs === "role") {
+    q.set("refs", opts.refs);
+  }
+  if (typeof opts.interactive === "boolean") {
+    q.set("interactive", String(opts.interactive));
+  }
+  if (typeof opts.compact === "boolean") {
+    q.set("compact", String(opts.compact));
+  }
+  if (typeof opts.depth === "number" && Number.isFinite(opts.depth)) {
     q.set("depth", String(opts.depth));
-  if (opts.selector?.trim()) q.set("selector", opts.selector.trim());
-  if (opts.frame?.trim()) q.set("frame", opts.frame.trim());
-  if (opts.labels === true) q.set("labels", "1");
-  if (opts.mode) q.set("mode", opts.mode);
-  if (opts.profile) q.set("profile", opts.profile);
+  }
+  if (opts.selector?.trim()) {
+    q.set("selector", opts.selector.trim());
+  }
+  if (opts.frame?.trim()) {
+    q.set("frame", opts.frame.trim());
+  }
+  if (opts.labels === true) {
+    q.set("labels", "1");
+  }
+  if (opts.mode) {
+    q.set("mode", opts.mode);
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
     timeoutMs: 20000,
   });

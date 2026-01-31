@@ -100,12 +100,21 @@ describe("models-config", () => {
           expect.objectContaining({ githubToken: "alpha-token" }),
         );
       } finally {
-        if (previous === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
-        else process.env.COPILOT_GITHUB_TOKEN = previous;
-        if (previousGh === undefined) delete process.env.GH_TOKEN;
-        else process.env.GH_TOKEN = previousGh;
-        if (previousGithub === undefined) delete process.env.GITHUB_TOKEN;
-        else process.env.GITHUB_TOKEN = previousGithub;
+        if (previous === undefined) {
+          delete process.env.COPILOT_GITHUB_TOKEN;
+        } else {
+          process.env.COPILOT_GITHUB_TOKEN = previous;
+        }
+        if (previousGh === undefined) {
+          delete process.env.GH_TOKEN;
+        } else {
+          process.env.GH_TOKEN = previousGh;
+        }
+        if (previousGithub === undefined) {
+          delete process.env.GITHUB_TOKEN;
+        } else {
+          process.env.GITHUB_TOKEN = previousGithub;
+        }
       }
     });
   });

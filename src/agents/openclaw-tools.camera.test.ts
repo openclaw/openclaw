@@ -37,7 +37,9 @@ describe("nodes camera_snap", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
-    if (!tool) throw new Error("missing nodes tool");
+    if (!tool) {
+      throw new Error("missing nodes tool");
+    }
 
     const result = await tool.execute("call1", {
       action: "camera_snap",
@@ -73,7 +75,9 @@ describe("nodes camera_snap", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
-    if (!tool) throw new Error("missing nodes tool");
+    if (!tool) {
+      throw new Error("missing nodes tool");
+    }
 
     await tool.execute("call1", {
       action: "camera_snap",
@@ -114,7 +118,9 @@ describe("nodes run", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
-    if (!tool) throw new Error("missing nodes tool");
+    if (!tool) {
+      throw new Error("missing nodes tool");
+    }
 
     await tool.execute("call1", {
       action: "run",

@@ -104,8 +104,11 @@ describe("buildWorkspaceSkillsPrompt", () => {
       });
       expect(enabledPrompt).toContain("nano-banana-pro");
     } finally {
-      if (originalEnv === undefined) delete process.env.GEMINI_API_KEY;
-      else process.env.GEMINI_API_KEY = originalEnv;
+      if (originalEnv === undefined) {
+        delete process.env.GEMINI_API_KEY;
+      } else {
+        process.env.GEMINI_API_KEY = originalEnv;
+      }
     }
   });
   it("applies skill filters, including empty lists", async () => {

@@ -18,10 +18,14 @@ type DiscordApiErrorPayload = {
 
 function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | null {
   const trimmed = text.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
   try {
     const payload = JSON.parse(trimmed);
-    if (payload && typeof payload === "object") return payload as DiscordApiErrorPayload;
+    if (payload && typeof payload === "object") {
+      return payload as DiscordApiErrorPayload;
+    }
   } catch {
     return null;
   }
@@ -34,22 +38,30 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
     payload && typeof payload.retry_after === "number" && Number.isFinite(payload.retry_after)
       ? payload.retry_after
       : undefined;
-  if (retryAfter !== undefined) return retryAfter;
+  if (retryAfter !== undefined) {
+    return retryAfter;
+  }
   const header = response.headers.get("Retry-After");
-  if (!header) return undefined;
+  if (!header) {
+    return undefined;
+  }
   const parsed = Number(header);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function formatRetryAfterSeconds(value: number | undefined): string | undefined {
-  if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
   const rounded = value < 10 ? value.toFixed(1) : Math.round(value).toString();
   return `${rounded}s`;
 }
 
 function formatDiscordApiErrorText(text: string): string | undefined {
   const trimmed = text.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const payload = parseDiscordApiErrorPayload(trimmed);
   if (!payload) {
     const looksJson = trimmed.startsWith("{") && trimmed.endsWith("}");

@@ -268,7 +268,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     handler: GatewayRequestHandler,
   ) => {
     const trimmed = method.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     if (coreGatewayMethods.has(trimmed) || registry.gatewayHandlers[trimmed]) {
       pushDiagnostic({
         level: "error",
@@ -397,7 +399,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
     const id = service.id.trim();
-    if (!id) return;
+    if (!id) {
+      return;
+    }
     record.services.push(id);
     registry.services.push({
       pluginId: record.id,

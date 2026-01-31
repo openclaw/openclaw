@@ -12,7 +12,9 @@ export function resolveAgentIdentity(
 
 export function resolveAckReaction(cfg: OpenClawConfig, agentId: string): string {
   const configured = cfg.messages?.ackReaction;
-  if (configured !== undefined) return configured.trim();
+  if (configured !== undefined) {
+    return configured.trim();
+  }
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;
 }
@@ -22,7 +24,9 @@ export function resolveIdentityNamePrefix(
   agentId: string,
 ): string | undefined {
   const name = resolveAgentIdentity(cfg, agentId)?.name?.trim();
-  if (!name) return undefined;
+  if (!name) {
+    return undefined;
+  }
   return `[${name}]`;
 }
 
@@ -37,10 +41,14 @@ export function resolveMessagePrefix(
   opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
 ): string {
   const configured = opts?.configured ?? cfg.messages?.messagePrefix;
-  if (configured !== undefined) return configured;
+  if (configured !== undefined) {
+    return configured;
+  }
 
   const hasAllowFrom = opts?.hasAllowFrom === true;
-  if (hasAllowFrom) return "";
+  if (hasAllowFrom) {
+    return "";
+  }
 
   return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]";
 }
@@ -76,7 +84,9 @@ export function resolveHumanDelayConfig(
 ): HumanDelayConfig | undefined {
   const defaults = cfg.agents?.defaults?.humanDelay;
   const overrides = resolveAgentConfig(cfg, agentId)?.humanDelay;
-  if (!defaults && !overrides) return undefined;
+  if (!defaults && !overrides) {
+    return undefined;
+  }
   return {
     mode: overrides?.mode ?? defaults?.mode,
     minMs: overrides?.minMs ?? defaults?.minMs,

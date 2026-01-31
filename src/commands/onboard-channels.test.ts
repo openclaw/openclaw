@@ -90,8 +90,12 @@ describe("setupChannels", () => {
 
   it("prompts for configured channel action and skips configuration when told to skip", async () => {
     const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Select channel (QuickStart)") return "telegram";
-      if (message.includes("already configured")) return "skip";
+      if (message === "Select channel (QuickStart)") {
+        return "telegram";
+      }
+      if (message.includes("already configured")) {
+        return "skip";
+      }
       throw new Error(`unexpected select prompt: ${message}`);
     });
     const multiselect = vi.fn(async () => {
@@ -156,7 +160,9 @@ describe("setupChannels", () => {
         expect(telegram?.hint).toContain("disabled");
         return selectionCount === 1 ? "telegram" : "__done__";
       }
-      if (message.includes("already configured")) return "skip";
+      if (message.includes("already configured")) {
+        return "skip";
+      }
       return "__done__";
     });
     const multiselect = vi.fn(async () => {

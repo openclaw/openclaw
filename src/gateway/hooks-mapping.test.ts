@@ -65,7 +65,7 @@ describe("hooks mapping", () => {
   it("runs transform module", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-"));
     const modPath = path.join(dir, "transform.mjs");
-    const placeholder = "${" + "payload.name}";
+    const placeholder = "${payload.name}";
     fs.writeFileSync(
       modPath,
       `export default ({ payload }) => ({ kind: "wake", text: \`Ping ${placeholder}\` });`,

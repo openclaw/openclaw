@@ -83,7 +83,9 @@ const createStubPlugin = (params: {
     listAccountIds: (cfg: OpenClawConfig) => {
       const channels = cfg.channels as Record<string, unknown> | undefined;
       const entry = channels?.[params.id];
-      if (!entry || typeof entry !== "object") return [];
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
       const accounts = (entry as { accounts?: Record<string, unknown> }).accounts;
       const ids = accounts ? Object.keys(accounts).filter(Boolean) : [];
       return ids.length > 0 ? ids : ["default"];
@@ -91,7 +93,9 @@ const createStubPlugin = (params: {
     resolveAccount: (cfg: OpenClawConfig, accountId: string) => {
       const channels = cfg.channels as Record<string, unknown> | undefined;
       const entry = channels?.[params.id];
-      if (!entry || typeof entry !== "object") return {};
+      if (!entry || typeof entry !== "object") {
+        return {};
+      }
       const accounts = (entry as { accounts?: Record<string, unknown> }).accounts;
       const match = accounts?.[accountId];
       return (match && typeof match === "object") || typeof match === "string" ? match : entry;

@@ -16,7 +16,9 @@ import { loadSessionEntry } from "./session-utils.js";
 
 export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
-  if (!sentinel) return;
+  if (!sentinel) {
+    return;
+  }
   const payload = sentinel.payload;
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);

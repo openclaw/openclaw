@@ -172,7 +172,9 @@ export function createFollowupRunner(params: {
               runId,
               blockReplyBreak: queued.run.blockReplyBreak,
               onAgentEvent: (evt) => {
-                if (evt.stream !== "compaction") return;
+                if (evt.stream !== "compaction") {
+                  return;
+                }
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 const willRetry = Boolean(evt.data.willRetry);
                 if (phase === "end" && !willRetry) {
@@ -212,13 +214,19 @@ export function createFollowupRunner(params: {
       }
 
       const payloadArray = runResult.payloads ?? [];
-      if (payloadArray.length === 0) return;
+      if (payloadArray.length === 0) {
+        return;
+      }
       const sanitizedPayloads = payloadArray.flatMap((payload) => {
         const text = payload.text;
-        if (!text || !text.includes("HEARTBEAT_OK")) return [payload];
+        if (!text || !text.includes("HEARTBEAT_OK")) {
+          return [payload];
+        }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
         const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-        if (stripped.shouldSkip && !hasMedia) return [];
+        if (stripped.shouldSkip && !hasMedia) {
+          return [];
+        }
         return [{ ...payload, text: stripped.text }];
       });
       const replyToChannel =
@@ -249,7 +257,9 @@ export function createFollowupRunner(params: {
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
 
-      if (finalPayloads.length === 0) return;
+      if (finalPayloads.length === 0) {
+        return;
+      }
 
       if (autoCompactionCompleted) {
         const count = await incrementCompactionCount({

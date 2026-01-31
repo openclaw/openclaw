@@ -115,8 +115,8 @@ const hoisted = vi.hoisted(() => {
 
   const startGatewayConfigReloader = vi.fn(
     (opts: { onHotReload: typeof onHotReload; onRestart: typeof onRestart }) => {
-      onHotReload = opts.onHotReload as typeof onHotReload;
-      onRestart = opts.onRestart as typeof onRestart;
+      onHotReload = opts.onHotReload;
+      onRestart = opts.onRestart;
       return { stop: reloaderStop };
     },
   );

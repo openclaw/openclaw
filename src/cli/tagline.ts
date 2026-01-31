@@ -127,7 +127,9 @@ const onSpecificDates =
   (date) => {
     const parts = utcParts(date);
     return dates.some(([year, month, day]) => {
-      if (parts.year !== year) return false;
+      if (parts.year !== year) {
+        return false;
+      }
       const start = Date.UTC(year, month, day);
       const current = Date.UTC(parts.year, parts.month, parts.day);
       return current >= start && current < start + durationDays * DAY_MS;
@@ -146,7 +148,9 @@ const inYearWindow =
   (date) => {
     const parts = utcParts(date);
     const window = windows.find((entry) => entry.year === parts.year);
-    if (!window) return false;
+    if (!window) {
+      return false;
+    }
     const start = Date.UTC(window.year, window.month, window.day);
     const current = Date.UTC(parts.year, parts.month, parts.day);
     return current >= start && current < start + window.duration * DAY_MS;
@@ -154,7 +158,9 @@ const inYearWindow =
 
 const isFourthThursdayOfNovember: HolidayRule = (date) => {
   const parts = utcParts(date);
-  if (parts.month !== 10) return false; // November
+  if (parts.month !== 10) {
+    return false;
+  } // November
   const firstDay = new Date(Date.UTC(parts.year, 10, 1)).getUTCDay();
   const offsetToThursday = (4 - firstDay + 7) % 7; // 4 = Thursday
   const fourthThursday = 1 + offsetToThursday + 21; // 1st + offset + 3 weeks
@@ -224,7 +230,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
 
 function isTaglineActive(tagline: string, date: Date): boolean {
   const rule = HOLIDAY_RULES.get(tagline);
-  if (!rule) return true;
+  if (!rule) {
+    return true;
+  }
   return rule(date);
 }
 
@@ -235,7 +243,9 @@ export interface TaglineOptions {
 }
 
 export function activeTaglines(options: TaglineOptions = {}): string[] {
-  if (TAGLINES.length === 0) return [DEFAULT_TAGLINE];
+  if (TAGLINES.length === 0) {
+    return [DEFAULT_TAGLINE];
+  }
   const today = options.now ? options.now() : new Date();
   const filtered = TAGLINES.filter((tagline) => isTaglineActive(tagline, today));
   return filtered.length > 0 ? filtered : TAGLINES;

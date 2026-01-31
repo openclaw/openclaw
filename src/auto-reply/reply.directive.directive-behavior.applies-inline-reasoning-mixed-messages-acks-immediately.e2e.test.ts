@@ -82,7 +82,9 @@ describe("directive behavior", () => {
         },
         {
           onBlockReply: (payload) => {
-            if (payload.text) blockReplies.push(payload.text);
+            if (payload.text) {
+              blockReplies.push(payload.text);
+            }
           },
         },
         {
@@ -125,7 +127,9 @@ describe("directive behavior", () => {
         },
         {
           onBlockReply: (payload) => {
-            if (payload.text) blockReplies.push(payload.text);
+            if (payload.text) {
+              blockReplies.push(payload.text);
+            }
           },
         },
         {
@@ -149,7 +153,9 @@ describe("directive behavior", () => {
         },
         {
           onBlockReply: (payload) => {
-            if (payload.text) blockReplies.push(payload.text);
+            if (payload.text) {
+              blockReplies.push(payload.text);
+            }
           },
         },
         {

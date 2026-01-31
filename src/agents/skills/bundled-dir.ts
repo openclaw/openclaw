@@ -4,13 +4,17 @@ import { fileURLToPath } from "node:url";
 
 export function resolveBundledSkillsDir(): string | undefined {
   const override = process.env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
-  if (override) return override;
+  if (override) {
+    return override;
+  }
 
   // bun --compile: ship a sibling `skills/` next to the executable.
   try {
     const execDir = path.dirname(process.execPath);
     const sibling = path.join(execDir, "skills");
-    if (fs.existsSync(sibling)) return sibling;
+    if (fs.existsSync(sibling)) {
+      return sibling;
+    }
   } catch {
     // ignore
   }
@@ -20,7 +24,9 @@ export function resolveBundledSkillsDir(): string | undefined {
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const root = path.resolve(moduleDir, "..", "..", "..");
     const candidate = path.join(root, "skills");
-    if (fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
   } catch {
     // ignore
   }

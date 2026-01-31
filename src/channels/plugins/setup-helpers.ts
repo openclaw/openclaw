@@ -18,8 +18,12 @@ function shouldStoreNameInAccounts(params: {
   accountId: string;
   alwaysUseAccounts?: boolean;
 }): boolean {
-  if (params.alwaysUseAccounts) return true;
-  if (params.accountId !== DEFAULT_ACCOUNT_ID) return true;
+  if (params.alwaysUseAccounts) {
+    return true;
+  }
+  if (params.accountId !== DEFAULT_ACCOUNT_ID) {
+    return true;
+  }
   return channelHasAccounts(params.cfg, params.channelKey);
 }
 
@@ -31,7 +35,9 @@ export function applyAccountNameToChannelSection(params: {
   alwaysUseAccounts?: boolean;
 }): OpenClawConfig {
   const trimmed = params.name?.trim();
-  if (!trimmed) return params.cfg;
+  if (!trimmed) {
+    return params.cfg;
+  }
   const accountId = normalizeAccountId(params.accountId);
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[params.channelKey];
@@ -85,11 +91,15 @@ export function migrateBaseNameToDefaultAccount(params: {
   channelKey: string;
   alwaysUseAccounts?: boolean;
 }): OpenClawConfig {
-  if (params.alwaysUseAccounts) return params.cfg;
+  if (params.alwaysUseAccounts) {
+    return params.cfg;
+  }
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.channelKey] as ChannelSectionBase | undefined;
   const baseName = base?.name?.trim();
-  if (!baseName) return params.cfg;
+  if (!baseName) {
+    return params.cfg;
+  }
   const accounts: Record<string, Record<string, unknown>> = {
     ...base?.accounts,
   };

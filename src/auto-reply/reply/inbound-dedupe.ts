@@ -18,9 +18,13 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
   const messageId = ctx.MessageSid?.trim();
-  if (!provider || !messageId) return null;
+  if (!provider || !messageId) {
+    return null;
+  }
   const peerId = resolveInboundPeerId(ctx);
-  if (!peerId) return null;
+  if (!peerId) {
+    return null;
+  }
   const sessionKey = ctx.SessionKey?.trim() ?? "";
   const accountId = ctx.AccountId?.trim() ?? "";
   const threadId =
@@ -35,7 +39,9 @@ export function shouldSkipDuplicateInbound(
   opts?: { cache?: DedupeCache; now?: number },
 ): boolean {
   const key = buildInboundDedupeKey(ctx);
-  if (!key) return false;
+  if (!key) {
+    return false;
+  }
   const cache = opts?.cache ?? inboundDedupeCache;
   const skipped = cache.check(key, opts?.now);
   if (skipped && shouldLogVerbose()) {

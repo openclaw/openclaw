@@ -62,9 +62,13 @@ export const WhatsAppAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.dmPolicy !== "open") return;
+    if (value.dmPolicy !== "open") {
+      return;
+    }
     const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
-    if (allow.includes("*")) return;
+    if (allow.includes("*")) {
+      return;
+    }
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["allowFrom"],
@@ -127,9 +131,13 @@ export const WhatsAppConfigSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.dmPolicy !== "open") return;
+    if (value.dmPolicy !== "open") {
+      return;
+    }
     const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
-    if (allow.includes("*")) return;
+    if (allow.includes("*")) {
+      return;
+    }
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["allowFrom"],

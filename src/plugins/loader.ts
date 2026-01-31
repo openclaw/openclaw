@@ -56,10 +56,14 @@ const resolvePluginSdkAlias = (): string | null => {
         ? [distCandidate, srcCandidate]
         : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
-        if (fs.existsSync(candidate)) return candidate;
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
       }
       const parent = path.dirname(cursor);
-      if (parent === cursor) break;
+      if (parent === cursor) {
+        break;
+      }
       cursor = parent;
     }
   } catch {
@@ -405,7 +409,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     try {
       const result = register(api);
-      if (result && typeof (result as Promise<void>).then === "function") {
+      if (result && typeof result.then === "function") {
         registry.diagnostics.push({
           level: "warn",
           pluginId: record.id,

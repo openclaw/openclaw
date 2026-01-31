@@ -422,7 +422,9 @@ describe("gateway server agent", () => {
     const finalChatP = onceMessage(
       webchatWs,
       (o) => {
-        if (o.type !== "event" || o.event !== "chat") return false;
+        if (o.type !== "event" || o.event !== "chat") {
+          return false;
+        }
         const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
         return payload?.state === "final" && payload.runId === "run-auto-1";
       },

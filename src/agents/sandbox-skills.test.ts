@@ -57,7 +57,9 @@ async function writeSkill(params: { dir: string; name: string; description: stri
 
 function restoreEnv(snapshot: Record<string, string | undefined>) {
   for (const key of Object.keys(process.env)) {
-    if (!(key in snapshot)) delete process.env[key];
+    if (!(key in snapshot)) {
+      delete process.env[key];
+    }
   }
   for (const [key, value] of Object.entries(snapshot)) {
     if (value === undefined) {

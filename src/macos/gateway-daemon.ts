@@ -11,7 +11,9 @@ const BUNDLED_VERSION =
 
 function argValue(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
-  if (idx < 0) return undefined;
+  if (idx < 0) {
+    return undefined;
+  }
   const value = args[idx + 1];
   return value && !value.startsWith("-") ? value : undefined;
 }
@@ -65,9 +67,7 @@ async function main() {
   setConsoleTimestampPrefix(true);
   setVerbose(hasFlag(args, "--verbose"));
 
-  const wsLogRaw = (hasFlag(args, "--compact") ? "compact" : argValue(args, "--ws-log")) as
-    | string
-    | undefined;
+  const wsLogRaw = hasFlag(args, "--compact") ? "compact" : argValue(args, "--ws-log");
   const wsLogStyle: GatewayWsLogStyle =
     wsLogRaw === "compact" ? "compact" : wsLogRaw === "full" ? "full" : "auto";
   setGatewayWsLogStyle(wsLogStyle);
@@ -147,7 +147,9 @@ async function main() {
       } catch (err) {
         defaultRuntime.error(`gateway: shutdown error: ${String(err)}`);
       } finally {
-        if (forceExitTimer) clearTimeout(forceExitTimer);
+        if (forceExitTimer) {
+          clearTimeout(forceExitTimer);
+        }
         server = null;
         if (isRestart) {
           shuttingDown = false;

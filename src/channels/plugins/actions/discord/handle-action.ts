@@ -12,8 +12,12 @@ import { resolveDiscordChannelId } from "../../../../discord/targets.js";
 const providerId = "discord";
 
 function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
-  if (params.clearParent === true) return null;
-  if (params.parentId === null) return null;
+  if (params.clearParent === true) {
+    return null;
+  }
+  if (params.parentId === null) {
+    return null;
+  }
   return readStringParam(params, "parentId");
 }
 
@@ -219,7 +223,9 @@ export async function handleDiscordMessageAction(
     resolveChannelId,
     readParentIdParam,
   });
-  if (adminResult !== undefined) return adminResult;
+  if (adminResult !== undefined) {
+    return adminResult;
+  }
 
   throw new Error(`Action ${String(action)} is not supported for provider ${providerId}.`);
 }

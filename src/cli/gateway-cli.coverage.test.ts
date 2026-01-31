@@ -32,16 +32,22 @@ async function withEnvOverride<T>(
   const saved: Record<string, string | undefined> = {};
   for (const key of Object.keys(overrides)) {
     saved[key] = process.env[key];
-    if (overrides[key] === undefined) delete process.env[key];
-    else process.env[key] = overrides[key];
+    if (overrides[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = overrides[key];
+    }
   }
   vi.resetModules();
   try {
     return await fn();
   } finally {
     for (const key of Object.keys(saved)) {
-      if (saved[key] === undefined) delete process.env[key];
-      else process.env[key] = saved[key];
+      if (saved[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved[key];
+      }
     }
     vi.resetModules();
   }
@@ -284,10 +290,14 @@ describe("gateway-cli coverage", () => {
       ),
     ).rejects.toThrow("__exit__:1");
     for (const listener of process.listeners("SIGTERM")) {
-      if (!beforeSigterm.has(listener)) process.removeListener("SIGTERM", listener);
+      if (!beforeSigterm.has(listener)) {
+        process.removeListener("SIGTERM", listener);
+      }
     }
     for (const listener of process.listeners("SIGINT")) {
-      if (!beforeSigint.has(listener)) process.removeListener("SIGINT", listener);
+      if (!beforeSigint.has(listener)) {
+        process.removeListener("SIGINT", listener);
+      }
     }
   });
 

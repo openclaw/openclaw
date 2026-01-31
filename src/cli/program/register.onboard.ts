@@ -17,14 +17,20 @@ function resolveInstallDaemonFlag(
   command: unknown,
   opts: { installDaemon?: boolean },
 ): boolean | undefined {
-  if (!command || typeof command !== "object") return undefined;
+  if (!command || typeof command !== "object") {
+    return undefined;
+  }
   const getOptionValueSource =
     "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
-  if (typeof getOptionValueSource !== "function") return undefined;
+  if (typeof getOptionValueSource !== "function") {
+    return undefined;
+  }
 
   // Commander doesn't support option conflicts natively; keep original behavior.
   // If --skip-daemon is explicitly passed, it wins.
-  if (getOptionValueSource.call(command, "skipDaemon") === "cli") return false;
+  if (getOptionValueSource.call(command, "skipDaemon") === "cli") {
+    return false;
+  }
   if (getOptionValueSource.call(command, "installDaemon") === "cli") {
     return Boolean(opts.installDaemon);
   }

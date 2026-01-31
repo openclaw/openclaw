@@ -13,9 +13,15 @@ const MEDIA_ID_PATTERN = /^[\p{L}\p{N}._-]+$/u;
 const MAX_MEDIA_BYTES = MEDIA_MAX_BYTES;
 
 const isValidMediaId = (id: string) => {
-  if (!id) return false;
-  if (id.length > MAX_MEDIA_ID_CHARS) return false;
-  if (id === "." || id === "..") return false;
+  if (!id) {
+    return false;
+  }
+  if (id.length > MAX_MEDIA_ID_CHARS) {
+    return false;
+  }
+  if (id === "." || id === "..") {
+    return false;
+  }
   return MEDIA_ID_PATTERN.test(id);
 };
 
@@ -51,7 +57,9 @@ export function attachMediaRoutes(
       const data = await handle.readFile();
       await handle.close().catch(() => {});
       const mime = await detectMime({ buffer: data, filePath: realPath });
-      if (mime) res.type(mime);
+      if (mime) {
+        res.type(mime);
+      }
       res.send(data);
       // best-effort single-use cleanup after response ends
       res.on("finish", () => {

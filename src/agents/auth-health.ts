@@ -44,12 +44,20 @@ export function resolveAuthProfileSource(_profileId: string): AuthProfileSource 
 }
 
 export function formatRemainingShort(remainingMs?: number): string {
-  if (remainingMs === undefined || Number.isNaN(remainingMs)) return "unknown";
-  if (remainingMs <= 0) return "0m";
+  if (remainingMs === undefined || Number.isNaN(remainingMs)) {
+    return "unknown";
+  }
+  if (remainingMs <= 0) {
+    return "0m";
+  }
   const minutes = Math.max(1, Math.round(remainingMs / 60_000));
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
   const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h`;
+  if (hours < 48) {
+    return `${hours}h`;
+  }
   const days = Math.round(hours / 24);
   return `${days}d`;
 }
@@ -169,7 +177,7 @@ export function buildAuthHealthSummary(params: {
         warnAfterMs,
       }),
     )
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       if (a.provider !== b.provider) {
         return a.provider.localeCompare(b.provider);
       }
@@ -226,17 +234,17 @@ export function buildAuthHealthSummary(params: {
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    const statuses = expirable.map((p) => p.status);
-    if (statuses.includes("expired") || statuses.includes("missing")) {
+    const statuses = new Set(expirable.map((p) => p.status));
+    if (statuses.has("expired") || statuses.has("missing")) {
       provider.status = "expired";
-    } else if (statuses.includes("expiring")) {
+    } else if (statuses.has("expiring")) {
       provider.status = "expiring";
     } else {
       provider.status = "ok";
     }
   }
 
-  const providers = Array.from(providersMap.values()).sort((a, b) =>
+  const providers = Array.from(providersMap.values()).toSorted((a, b) =>
     a.provider.localeCompare(b.provider),
   );
 

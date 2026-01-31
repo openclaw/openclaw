@@ -54,9 +54,13 @@ const SCOPES = new Set<AllowlistScope>(["dm", "group", "all"]);
 
 function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("/allowlist")) return null;
+  if (!trimmed.toLowerCase().startsWith("/allowlist")) {
+    return null;
+  }
   const rest = trimmed.slice("/allowlist".length).trim();
-  if (!rest) return { action: "list", scope: "dm" };
+  if (!rest) {
+    return { action: "list", scope: "dm" };
+  }
 
   const tokens = rest.split(/\s+/);
   let action: AllowlistAction = "list";
@@ -107,11 +111,15 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
       const key = kv[0]?.trim().toLowerCase();
       const value = kv[1]?.trim();
       if (key === "channel") {
-        if (value) channel = value;
+        if (value) {
+          channel = value;
+        }
         continue;
       }
       if (key === "account") {
-        if (value) account = value;
+        if (value) {
+          account = value;
+        }
         continue;
       }
       if (key === "scope" && value && SCOPES.has(value.toLowerCase() as AllowlistScope)) {
@@ -151,7 +159,9 @@ function normalizeAllowFrom(params: {
 }
 
 function formatEntryList(entries: string[], resolved?: Map<string, string>): string {
-  if (entries.length === 0) return "(none)";
+  if (entries.length === 0) {
+    return "(none)";
+  }
   return entries
     .map((entry) => {
       const name = resolved?.get(entry);
@@ -185,7 +195,9 @@ function resolveAccountTarget(
 function getNestedValue(root: Record<string, unknown>, path: string[]): unknown {
   let current: unknown = root;
   for (const key of path) {
-    if (!current || typeof current !== "object") return undefined;
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
     current = (current as Record<string, unknown>)[key];
   }
   return current;
@@ -207,7 +219,9 @@ function ensureNestedObject(
 }
 
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
-  if (path.length === 0) return;
+  if (path.length === 0) {
+    return;
+  }
   if (path.length === 1) {
     root[path[0]] = value;
     return;
@@ -217,13 +231,17 @@ function setNestedValue(root: Record<string, unknown>, path: string[], value: un
 }
 
 function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
-  if (path.length === 0) return;
+  if (path.length === 0) {
+    return;
+  }
   if (path.length === 1) {
     delete root[path[0]];
     return;
   }
   const parent = getNestedValue(root, path.slice(0, -1));
-  if (!parent || typeof parent !== "object") return;
+  if (!parent || typeof parent !== "object") {
+    return;
+  }
   delete (parent as Record<string, unknown>)[path[path.length - 1]];
 }
 
@@ -231,9 +249,13 @@ function resolveChannelAllowFromPaths(
   channelId: ChannelId,
   scope: AllowlistScope,
 ): string[] | null {
-  if (scope === "all") return null;
+  if (scope === "all") {
+    return null;
+  }
   if (scope === "dm") {
-    if (channelId === "slack" || channelId === "discord") return ["dm", "allowFrom"];
+    if (channelId === "slack" || channelId === "discord") {
+      return ["dm", "allowFrom"];
+    }
     if (
       channelId === "telegram" ||
       channelId === "whatsapp" ||
@@ -265,11 +287,15 @@ async function resolveSlackNames(params: {
 }) {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = account.config.userToken?.trim() || account.botToken?.trim();
-  if (!token) return new Map<string, string>();
+  if (!token) {
+    return new Map<string, string>();
+  }
   const resolved = await resolveSlackUserAllowlist({ token, entries: params.entries });
   const map = new Map<string, string>();
   for (const entry of resolved) {
-    if (entry.resolved && entry.name) map.set(entry.input, entry.name);
+    if (entry.resolved && entry.name) {
+      map.set(entry.input, entry.name);
+    }
   }
   return map;
 }
@@ -281,19 +307,27 @@ async function resolveDiscordNames(params: {
 }) {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = account.token?.trim();
-  if (!token) return new Map<string, string>();
+  if (!token) {
+    return new Map<string, string>();
+  }
   const resolved = await resolveDiscordUserAllowlist({ token, entries: params.entries });
   const map = new Map<string, string>();
   for (const entry of resolved) {
-    if (entry.resolved && entry.name) map.set(entry.input, entry.name);
+    if (entry.resolved && entry.name) {
+      map.set(entry.input, entry.name);
+    }
   }
   return map;
 }
 
 export const handleAllowlistCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const parsed = parseAllowlistCommand(params.command.commandBodyNormalized);
-  if (!parsed) return null;
+  if (!parsed) {
+    return null;
+  }
   if (parsed.action === "error") {
     return { shouldContinue: false, reply: { text: `⚠️ ${parsed.message}` } };
   }
@@ -444,8 +478,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
 
     const lines: string[] = ["🧾 Allowlist"];
     lines.push(`Channel: ${channelId}${accountId ? ` (account ${accountId})` : ""}`);
-    if (dmPolicy) lines.push(`DM policy: ${dmPolicy}`);
-    if (groupPolicy) lines.push(`Group policy: ${groupPolicy}`);
+    if (dmPolicy) {
+      lines.push(`DM policy: ${dmPolicy}`);
+    }
+    if (groupPolicy) {
+      lines.push(`Group policy: ${groupPolicy}`);
+    }
 
     const showDm = scope === "dm" || scope === "all";
     const showGroup = scope === "group" || scope === "all";

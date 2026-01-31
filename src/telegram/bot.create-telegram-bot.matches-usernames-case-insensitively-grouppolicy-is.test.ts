@@ -128,7 +128,9 @@ let replyModule: typeof import("../auto-reply/reply.js");
 
 const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
-  if (!handler) throw new Error(`Missing handler for event: ${event}`);
+  if (!handler) {
+    throw new Error(`Missing handler for event: ${event}`);
+  }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 

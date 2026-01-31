@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 
 import type { OpenClawConfig } from "../../config/config.js";
@@ -29,9 +29,15 @@ function resolveCacheControlTtl(
   modelId: string,
 ): CacheControlTtl | undefined {
   const raw = extraParams?.cacheControlTtl;
-  if (raw !== "5m" && raw !== "1h") return undefined;
-  if (provider === "anthropic") return raw;
-  if (provider === "openrouter" && modelId.startsWith("anthropic/")) return raw;
+  if (raw !== "5m" && raw !== "1h") {
+    return undefined;
+  }
+  if (provider === "anthropic") {
+    return raw;
+  }
+  if (provider === "openrouter" && modelId.startsWith("anthropic/")) {
+    return raw;
+  }
   return undefined;
 }
 
@@ -65,7 +71,7 @@ function createStreamFnWithExtraParams(
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) =>
-    underlying(model as Model<Api>, context, {
+    underlying(model, context, {
       ...streamParams,
       ...options,
     });

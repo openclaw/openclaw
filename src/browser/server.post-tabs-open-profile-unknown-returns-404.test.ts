@@ -72,7 +72,9 @@ function makeProc(pid = 123) {
       return undefined;
     },
     emitExit: () => {
-      for (const cb of handlers.get("exit") ?? []) cb(0);
+      for (const cb of handlers.get("exit") ?? []) {
+        cb(0);
+      }
     },
     kill: () => {
       return true;
@@ -162,7 +164,9 @@ async function getFreePort(): Promise<number> {
         s.close((err) => (err ? reject(err) : resolve(assigned)));
       });
     });
-    if (port < 65535) return port;
+    if (port < 65535) {
+      return port;
+    }
   }
 }
 
@@ -188,12 +192,18 @@ describe("browser control server", () => {
     createTargetId = null;
 
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
-      if (createTargetId) return { targetId: createTargetId };
+      if (createTargetId) {
+        return { targetId: createTargetId };
+      }
       throw new Error("cdp disabled");
     });
 
-    for (const fn of Object.values(pwMocks)) fn.mockClear();
-    for (const fn of Object.values(cdpMocks)) fn.mockClear();
+    for (const fn of Object.values(pwMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(cdpMocks)) {
+      fn.mockClear();
+    }
 
     testPort = await getFreePort();
     _cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
@@ -207,7 +217,9 @@ describe("browser control server", () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         if (u.includes("/json/list")) {
-          if (!reachable) return makeResponse([]);
+          if (!reachable) {
+            return makeResponse([]);
+          }
           return makeResponse([
             {
               id: "abcd1234",
@@ -240,8 +252,12 @@ describe("browser control server", () => {
             type: "page",
           });
         }
-        if (u.includes("/json/activate/")) return makeResponse("ok");
-        if (u.includes("/json/close/")) return makeResponse("ok");
+        if (u.includes("/json/activate/")) {
+          return makeResponse("ok");
+        }
+        if (u.includes("/json/close/")) {
+          return makeResponse("ok");
+        }
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );
@@ -280,8 +296,12 @@ describe("profile CRUD endpoints", () => {
     reachable = false;
     cfgAttachOnly = false;
 
-    for (const fn of Object.values(pwMocks)) fn.mockClear();
-    for (const fn of Object.values(cdpMocks)) fn.mockClear();
+    for (const fn of Object.values(pwMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(cdpMocks)) {
+      fn.mockClear();
+    }
 
     testPort = await getFreePort();
     _cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
@@ -295,7 +315,9 @@ describe("profile CRUD endpoints", () => {
       "fetch",
       vi.fn(async (url: string) => {
         const u = String(url);
-        if (u.includes("/json/list")) return makeResponse([]);
+        if (u.includes("/json/list")) {
+          return makeResponse([]);
+        }
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );

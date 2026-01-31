@@ -146,7 +146,9 @@ r1USnb+wUdA7Zoj/mQ==
     const error = await new Promise<Error>((resolve) => {
       let settled = false;
       const finish = (err: Error) => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         resolve(err);
       };

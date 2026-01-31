@@ -47,7 +47,9 @@ const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY
 
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
   const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   return GATEWAY_CLIENT_ID_SET.has(normalized as GatewayClientId)
     ? (normalized as GatewayClientId)
     : undefined;
@@ -59,7 +61,9 @@ export function normalizeGatewayClientName(raw?: string | null): GatewayClientNa
 
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
   const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   return GATEWAY_CLIENT_MODE_SET.has(normalized as GatewayClientMode)
     ? (normalized as GatewayClientMode)
     : undefined;
