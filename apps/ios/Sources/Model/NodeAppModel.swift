@@ -72,6 +72,7 @@ final class NodeAppModel {
     private let remindersService: any RemindersServicing
     private let motionService: any MotionServicing
     private var lastAutoA2uiURL: String?
+    private var pttVoiceWakeSuspended = false
 
     private var gatewayConnected = false
     var gatewaySession: GatewayNodeSession { self.gateway }
@@ -1164,11 +1165,14 @@ final class NodeAppModel {
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
+            self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             let payload = try await self.talkMode.beginPushToTalk()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttStop.rawValue:
             let payload = await self.talkMode.endPushToTalk()
+            self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
+            self.pttVoiceWakeSuspended = false
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:
