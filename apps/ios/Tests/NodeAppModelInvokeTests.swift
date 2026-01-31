@@ -108,18 +108,24 @@ private struct TestPhotosService: PhotosServicing {
 }
 
 private struct TestContactsService: ContactsServicing {
-    let payload: OpenClawContactsSearchPayload
-    func search(params: OpenClawContactsSearchParams) async throws -> OpenClawContactsSearchPayload { payload }
+    let searchPayload: OpenClawContactsSearchPayload
+    let addPayload: OpenClawContactsAddPayload
+    func search(params: OpenClawContactsSearchParams) async throws -> OpenClawContactsSearchPayload { searchPayload }
+    func add(params: OpenClawContactsAddParams) async throws -> OpenClawContactsAddPayload { addPayload }
 }
 
 private struct TestCalendarService: CalendarServicing {
-    let payload: OpenClawCalendarEventsPayload
-    func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload { payload }
+    let eventsPayload: OpenClawCalendarEventsPayload
+    let addPayload: OpenClawCalendarAddPayload
+    func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload { eventsPayload }
+    func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload { addPayload }
 }
 
 private struct TestRemindersService: RemindersServicing {
-    let payload: OpenClawRemindersListPayload
-    func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload { payload }
+    let listPayload: OpenClawRemindersListPayload
+    let addPayload: OpenClawRemindersAddPayload
+    func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload { listPayload }
+    func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload { addPayload }
 }
 
 private struct TestMotionService: MotionServicing {
@@ -316,13 +322,41 @@ private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throw
                 appVersion: "dev",
                 appBuild: "0",
                 locale: "en-US"))
+        let emptyContact = OpenClawContactPayload(
+            identifier: "c0",
+            displayName: "",
+            givenName: "",
+            familyName: "",
+            organizationName: "",
+            phoneNumbers: [],
+            emails: [])
+        let emptyEvent = OpenClawCalendarEventPayload(
+            identifier: "e0",
+            title: "Test",
+            startISO: "2024-01-01T00:00:00Z",
+            endISO: "2024-01-01T00:30:00Z",
+            isAllDay: false,
+            location: nil,
+            calendarTitle: nil)
+        let emptyReminder = OpenClawReminderPayload(
+            identifier: "r0",
+            title: "Test",
+            dueISO: nil,
+            completed: false,
+            listName: nil)
         let appModel = makeTestAppModel(
             notificationCenter: notifier,
             deviceStatusService: deviceStatus,
             photosService: TestPhotosService(payload: OpenClawPhotosLatestPayload(photos: [])),
-            contactsService: TestContactsService(payload: OpenClawContactsSearchPayload(contacts: [])),
-            calendarService: TestCalendarService(payload: OpenClawCalendarEventsPayload(events: [])),
-            remindersService: TestRemindersService(payload: OpenClawRemindersListPayload(reminders: [])),
+            contactsService: TestContactsService(
+                searchPayload: OpenClawContactsSearchPayload(contacts: []),
+                addPayload: OpenClawContactsAddPayload(contact: emptyContact)),
+            calendarService: TestCalendarService(
+                eventsPayload: OpenClawCalendarEventsPayload(events: []),
+                addPayload: OpenClawCalendarAddPayload(event: emptyEvent)),
+            remindersService: TestRemindersService(
+                listPayload: OpenClawRemindersListPayload(reminders: []),
+                addPayload: OpenClawRemindersAddPayload(reminder: emptyReminder)),
             motionService: TestMotionService(
                 activityPayload: OpenClawMotionActivityPayload(activities: []),
                 pedometerPayload: OpenClawPedometerPayload(
@@ -383,6 +417,15 @@ private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throw
                     phoneNumbers: ["+1"],
                     emails: ["jane@example.com"]),
             ])
+        let contactsAddPayload = OpenClawContactsAddPayload(
+            contact: OpenClawContactPayload(
+                identifier: "c2",
+                displayName: "Added",
+                givenName: "Added",
+                familyName: "",
+                organizationName: "",
+                phoneNumbers: ["+2"],
+                emails: ["add@example.com"]))
         let calendarPayload = OpenClawCalendarEventsPayload(
             events: [
                 OpenClawCalendarEventPayload(
@@ -394,6 +437,15 @@ private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throw
                     location: nil,
                     calendarTitle: "Work"),
             ])
+        let calendarAddPayload = OpenClawCalendarAddPayload(
+            event: OpenClawCalendarEventPayload(
+                identifier: "e2",
+                title: "Added Event",
+                startISO: "2024-01-02T00:00:00Z",
+                endISO: "2024-01-02T01:00:00Z",
+                isAllDay: false,
+                location: "HQ",
+                calendarTitle: "Work"))
         let remindersPayload = OpenClawRemindersListPayload(
             reminders: [
                 OpenClawReminderPayload(
@@ -403,6 +455,13 @@ private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throw
                     completed: false,
                     listName: "Inbox"),
             ])
+        let remindersAddPayload = OpenClawRemindersAddPayload(
+            reminder: OpenClawReminderPayload(
+                identifier: "r2",
+                title: "Added Reminder",
+                dueISO: "2024-01-03T00:00:00Z",
+                completed: false,
+                listName: "Inbox"))
         let motionPayload = OpenClawMotionActivityPayload(
             activities: [
                 OpenClawMotionActivityEntry(
@@ -429,9 +488,15 @@ private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throw
                 statusPayload: deviceStatusPayload,
                 infoPayload: deviceInfoPayload),
             photosService: TestPhotosService(payload: photosPayload),
-            contactsService: TestContactsService(payload: contactsPayload),
-            calendarService: TestCalendarService(payload: calendarPayload),
-            remindersService: TestRemindersService(payload: remindersPayload),
+            contactsService: TestContactsService(
+                searchPayload: contactsPayload,
+                addPayload: contactsAddPayload),
+            calendarService: TestCalendarService(
+                eventsPayload: calendarPayload,
+                addPayload: calendarAddPayload),
+            remindersService: TestRemindersService(
+                listPayload: remindersPayload,
+                addPayload: remindersAddPayload),
             motionService: TestMotionService(
                 activityPayload: motionPayload,
                 pedometerPayload: pedometerPayload))
@@ -460,17 +525,61 @@ private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throw
         let decodedContacts = try decodePayload(contactsRes.payloadJSON, as: OpenClawContactsSearchPayload.self)
         #expect(decodedContacts == contactsPayload)
 
+        let contactsAddParams = OpenClawContactsAddParams(
+            givenName: "Added",
+            phoneNumbers: ["+2"],
+            emails: ["add@example.com"])
+        let contactsAddData = try JSONEncoder().encode(contactsAddParams)
+        let contactsAddReq = BridgeInvokeRequest(
+            id: "contacts-add",
+            command: OpenClawContactsCommand.add.rawValue,
+            paramsJSON: String(decoding: contactsAddData, as: UTF8.self))
+        let contactsAddRes = await appModel._test_handleInvoke(contactsAddReq)
+        #expect(contactsAddRes.ok == true)
+        let decodedContactsAdd = try decodePayload(contactsAddRes.payloadJSON, as: OpenClawContactsAddPayload.self)
+        #expect(decodedContactsAdd == contactsAddPayload)
+
         let calendarReq = BridgeInvokeRequest(id: "calendar", command: OpenClawCalendarCommand.events.rawValue)
         let calendarRes = await appModel._test_handleInvoke(calendarReq)
         #expect(calendarRes.ok == true)
         let decodedCalendar = try decodePayload(calendarRes.payloadJSON, as: OpenClawCalendarEventsPayload.self)
         #expect(decodedCalendar == calendarPayload)
 
+        let calendarAddParams = OpenClawCalendarAddParams(
+            title: "Added Event",
+            startISO: "2024-01-02T00:00:00Z",
+            endISO: "2024-01-02T01:00:00Z",
+            location: "HQ",
+            calendarTitle: "Work")
+        let calendarAddData = try JSONEncoder().encode(calendarAddParams)
+        let calendarAddReq = BridgeInvokeRequest(
+            id: "calendar-add",
+            command: OpenClawCalendarCommand.add.rawValue,
+            paramsJSON: String(decoding: calendarAddData, as: UTF8.self))
+        let calendarAddRes = await appModel._test_handleInvoke(calendarAddReq)
+        #expect(calendarAddRes.ok == true)
+        let decodedCalendarAdd = try decodePayload(calendarAddRes.payloadJSON, as: OpenClawCalendarAddPayload.self)
+        #expect(decodedCalendarAdd == calendarAddPayload)
+
         let remindersReq = BridgeInvokeRequest(id: "reminders", command: OpenClawRemindersCommand.list.rawValue)
         let remindersRes = await appModel._test_handleInvoke(remindersReq)
         #expect(remindersRes.ok == true)
         let decodedReminders = try decodePayload(remindersRes.payloadJSON, as: OpenClawRemindersListPayload.self)
         #expect(decodedReminders == remindersPayload)
+
+        let remindersAddParams = OpenClawRemindersAddParams(
+            title: "Added Reminder",
+            dueISO: "2024-01-03T00:00:00Z",
+            listName: "Inbox")
+        let remindersAddData = try JSONEncoder().encode(remindersAddParams)
+        let remindersAddReq = BridgeInvokeRequest(
+            id: "reminders-add",
+            command: OpenClawRemindersCommand.add.rawValue,
+            paramsJSON: String(decoding: remindersAddData, as: UTF8.self))
+        let remindersAddRes = await appModel._test_handleInvoke(remindersAddReq)
+        #expect(remindersAddRes.ok == true)
+        let decodedRemindersAdd = try decodePayload(remindersAddRes.payloadJSON, as: OpenClawRemindersAddPayload.self)
+        #expect(decodedRemindersAdd == remindersAddPayload)
 
         let motionReq = BridgeInvokeRequest(id: "motion", command: OpenClawMotionCommand.activity.rawValue)
         let motionRes = await appModel._test_handleInvoke(motionReq)

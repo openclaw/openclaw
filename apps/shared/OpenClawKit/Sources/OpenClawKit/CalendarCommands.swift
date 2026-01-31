@@ -2,6 +2,7 @@ import Foundation
 
 public enum OpenClawCalendarCommand: String, Codable, Sendable {
     case events = "calendar.events"
+    case add = "calendar.add"
 }
 
 public struct OpenClawCalendarEventsParams: Codable, Sendable, Equatable {
@@ -13,6 +14,37 @@ public struct OpenClawCalendarEventsParams: Codable, Sendable, Equatable {
         self.startISO = startISO
         self.endISO = endISO
         self.limit = limit
+    }
+}
+
+public struct OpenClawCalendarAddParams: Codable, Sendable, Equatable {
+    public var title: String
+    public var startISO: String
+    public var endISO: String
+    public var isAllDay: Bool?
+    public var location: String?
+    public var notes: String?
+    public var calendarId: String?
+    public var calendarTitle: String?
+
+    public init(
+        title: String,
+        startISO: String,
+        endISO: String,
+        isAllDay: Bool? = nil,
+        location: String? = nil,
+        notes: String? = nil,
+        calendarId: String? = nil,
+        calendarTitle: String? = nil)
+    {
+        self.title = title
+        self.startISO = startISO
+        self.endISO = endISO
+        self.isAllDay = isAllDay
+        self.location = location
+        self.notes = notes
+        self.calendarId = calendarId
+        self.calendarTitle = calendarTitle
     }
 }
 
@@ -49,5 +81,13 @@ public struct OpenClawCalendarEventsPayload: Codable, Sendable, Equatable {
 
     public init(events: [OpenClawCalendarEventPayload]) {
         self.events = events
+    }
+}
+
+public struct OpenClawCalendarAddPayload: Codable, Sendable, Equatable {
+    public var event: OpenClawCalendarEventPayload
+
+    public init(event: OpenClawCalendarEventPayload) {
+        self.event = event
     }
 }
