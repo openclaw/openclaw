@@ -60,7 +60,9 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
 
 function normalizeWebhookPath(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return "/";
+  if (!trimmed) {
+    return "/";
+  }
   const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   if (withSlash.length > 1 && withSlash.endsWith("/")) {
     return withSlash.slice(0, -1);
@@ -70,7 +72,9 @@ function normalizeWebhookPath(raw: string): string {
 
 function resolveWebhookPath(webhookPath?: string, webhookUrl?: string): string | null {
   const trimmedPath = webhookPath?.trim();
-  if (trimmedPath) return normalizeWebhookPath(trimmedPath);
+  if (trimmedPath) {
+    return normalizeWebhookPath(trimmedPath);
+  }
   if (webhookUrl?.trim()) {
     try {
       const parsed = new URL(webhookUrl);
@@ -88,7 +92,9 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number) {
   return await new Promise<{ ok: boolean; value?: unknown; error?: string }>((resolve) => {
     let resolved = false;
     const doResolve = (value: { ok: boolean; value?: unknown; error?: string }) => {
-      if (resolved) return;
+      if (resolved) {
+        return;
+      }
       resolved = true;
       req.removeAllListeners();
       resolve(value);
@@ -158,7 +164,9 @@ export async function handleGoogleChatWebhookRequest(
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = normalizeWebhookPath(url.pathname);
   const targets = webhookTargets.get(path);
-  if (!targets || targets.length === 0) return false;
+  if (!targets || targets.length === 0) {
+    return false;
+  }
 
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -279,8 +287,12 @@ export async function handleGoogleChatWebhookRequest(
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
   const eventType = event.type ?? (event as { eventType?: string }).eventType;
-  if (eventType !== "MESSAGE") return;
-  if (!event.message || !event.space) return;
+  if (eventType !== "MESSAGE") {
+    return;
+  }
+  if (!event.message || !event.space) {
+    return;
+  }
 
   await processMessageWithPipeline({
     event,
@@ -295,7 +307,9 @@ async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTar
 
 function normalizeUserId(raw?: string | null): string {
   const trimmed = raw?.trim() ?? "";
-  if (!trimmed) return "";
+  if (!trimmed) {
+    return "";
+  }
   return trimmed.replace(/^users\//i, "").toLowerCase();
 }
 
@@ -304,16 +318,28 @@ export function isSenderAllowed(
   senderEmail: string | undefined,
   allowFrom: string[],
 ) {
-  if (allowFrom.includes("*")) return true;
+  if (allowFrom.includes("*")) {
+    return true;
+  }
   const normalizedSenderId = normalizeUserId(senderId);
   const normalizedEmail = senderEmail?.trim().toLowerCase() ?? "";
   return allowFrom.some((entry) => {
     const normalized = String(entry).trim().toLowerCase();
-    if (!normalized) return false;
-    if (normalized === normalizedSenderId) return true;
-    if (normalizedEmail && normalized === normalizedEmail) return true;
-    if (normalizedEmail && normalized.replace(/^users\//i, "") === normalizedEmail) return true;
-    if (normalized.replace(/^users\//i, "") === normalizedSenderId) return true;
+    if (!normalized) {
+      return false;
+    }
+    if (normalized === normalizedSenderId) {
+      return true;
+    }
+    if (normalizedEmail && normalized === normalizedEmail) {
+      return true;
+    }
+    if (normalizedEmail && normalized.replace(/^users\//i, "") === normalizedEmail) {
+      return true;
+    }
+    if (normalized.replace(/^users\//i, "") === normalizedSenderId) {
+      return true;
+    }
     if (normalized.replace(/^(googlechat|google-chat|gchat):/i, "") === normalizedSenderId) {
       return true;
     }
@@ -357,8 +383,12 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
   const botTargets = new Set(["users/app", botUser?.trim()].filter(Boolean) as string[]);
   const wasMentioned = mentionAnnotations.some((entry) => {
     const userName = entry.userMention?.user?.name;
-    if (!userName) return false;
-    if (botTargets.has(userName)) return true;
+    if (!userName) {
+      return false;
+    }
+    if (botTargets.has(userName)) {
+      return true;
+    }
     return normalizeUserId(userName) === "app";
   });
   return { hasAnyMention, wasMentioned };
@@ -376,9 +406,13 @@ function resolveBotDisplayName(params: {
   config: OpenClawConfig;
 }): string {
   const { accountName, agentId, config } = params;
-  if (accountName?.trim()) return accountName.trim();
+  if (accountName?.trim()) {
+    return accountName.trim();
+  }
   const agent = config.agents?.list?.find((a) => a.id === agentId);
-  if (agent?.name?.trim()) return agent.name.trim();
+  if (agent?.name?.trim()) {
+    return agent.name.trim();
+  }
   return "OpenClaw";
 }
 
@@ -394,10 +428,14 @@ async function processMessageWithPipeline(params: {
   const { event, account, config, runtime, core, statusSink, mediaMaxMb } = params;
   const space = event.space;
   const message = event.message;
-  if (!space || !message) return;
+  if (!space || !message) {
+    return;
+  }
 
   const spaceId = space.name ?? "";
-  if (!spaceId) return;
+  if (!spaceId) {
+    return;
+  }
   const spaceType = (space.type ?? "").toUpperCase();
   const isGroup = spaceType !== "DM";
   const sender = message.sender ?? event.user;
@@ -421,7 +459,9 @@ async function processMessageWithPipeline(params: {
   const attachments = message.attachment ?? [];
   const hasMedia = attachments.length > 0;
   const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
-  if (!rawBody) return;
+  if (!rawBody) {
+    return;
+  }
 
   const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
   const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
@@ -721,7 +761,9 @@ async function downloadAttachment(
   core: GoogleChatCoreRuntime,
 ): Promise<{ path: string; contentType?: string } | null> {
   const resourceName = attachment.attachmentDataRef?.resourceName;
-  if (!resourceName) return null;
+  if (!resourceName) {
+    return null;
+  }
   const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const downloaded = await downloadGoogleChatMedia({ account, resourceName, maxBytes });
   const saved = await core.channel.media.saveMediaBuffer(

@@ -27,7 +27,9 @@ export async function ensureMatrixSdkInstalled(params: {
   runtime: RuntimeEnv;
   confirm?: (message: string) => Promise<boolean>;
 }): Promise<void> {
-  if (isMatrixSdkAvailable()) return;
+  if (isMatrixSdkAvailable()) {
+    return;
+  }
   const confirm = params.confirm;
   if (confirm) {
     const ok = await confirm("Matrix requires @vector-im/matrix-bot-sdk. Install now?");

@@ -29,8 +29,12 @@ const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
 function readRoomId(params: Record<string, unknown>, required = true): string {
   const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
-  if (direct) return direct;
-  if (!required) return readStringParam(params, "to") ?? "";
+  if (direct) {
+    return direct;
+  }
+  if (!required) {
+    return readStringParam(params, "to") ?? "";
+  }
   return readStringParam(params, "to", { required: true });
 }
 

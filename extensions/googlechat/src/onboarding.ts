@@ -32,9 +32,9 @@ function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
     channels: {
       ...cfg.channels,
       googlechat: {
-        ...(cfg.channels?.["googlechat"] ?? {}),
+        ...cfg.channels?.["googlechat"],
         dm: {
-          ...(cfg.channels?.["googlechat"]?.dm ?? {}),
+          ...cfg.channels?.["googlechat"]?.dm,
           policy,
           ...(allowFrom ? { allowFrom } : {}),
         },
@@ -68,10 +68,10 @@ async function promptAllowFrom(params: {
     channels: {
       ...params.cfg.channels,
       googlechat: {
-        ...(params.cfg.channels?.["googlechat"] ?? {}),
+        ...params.cfg.channels?.["googlechat"],
         enabled: true,
         dm: {
-          ...(params.cfg.channels?.["googlechat"]?.dm ?? {}),
+          ...params.cfg.channels?.["googlechat"]?.dm,
           policy: "allowlist",
           allowFrom: unique,
         },
@@ -102,7 +102,7 @@ function applyAccountConfig(params: {
       channels: {
         ...cfg.channels,
         googlechat: {
-          ...(cfg.channels?.["googlechat"] ?? {}),
+          ...cfg.channels?.["googlechat"],
           enabled: true,
           ...patch,
         },
@@ -114,12 +114,12 @@ function applyAccountConfig(params: {
     channels: {
       ...cfg.channels,
       googlechat: {
-        ...(cfg.channels?.["googlechat"] ?? {}),
+        ...cfg.channels?.["googlechat"],
         enabled: true,
         accounts: {
-          ...(cfg.channels?.["googlechat"]?.accounts ?? {}),
+          ...cfg.channels?.["googlechat"]?.accounts,
           [accountId]: {
-            ...(cfg.channels?.["googlechat"]?.accounts?.[accountId] ?? {}),
+            ...cfg.channels?.["googlechat"]?.accounts?.[accountId],
             enabled: true,
             ...patch,
           },
@@ -193,14 +193,14 @@ async function promptAudience(params: {
   });
   const currentType = account.config.audienceType ?? "app-url";
   const currentAudience = account.config.audience ?? "";
-  const audienceType = (await params.prompter.select({
+  const audienceType = await params.prompter.select({
     message: "Webhook audience type",
     options: [
       { value: "app-url", label: "App URL (recommended)" },
       { value: "project-number", label: "Project number" },
     ],
     initialValue: currentType === "project-number" ? "project-number" : "app-url",
-  })) as "app-url" | "project-number";
+  });
   const audience = await params.prompter.text({
     message: audienceType === "project-number" ? "Project number" : "App URL",
     placeholder: audienceType === "project-number" ? "1234567890" : "https://your.host/googlechat",

@@ -67,7 +67,9 @@ export function stripNextcloudTalkFormatting(text: string): string {
  * Truncate text to a maximum length, preserving word boundaries.
  */
 export function truncateNextcloudTalkText(text: string, maxLength: number, suffix = "..."): string {
-  if (text.length <= maxLength) return text;
+  if (text.length <= maxLength) {
+    return text;
+  }
   const truncated = text.slice(0, maxLength - suffix.length);
   const lastSpace = truncated.lastIndexOf(" ");
   if (lastSpace > maxLength * 0.7) {

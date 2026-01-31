@@ -40,7 +40,9 @@ export default function (pi: ExtensionAPI) {
       const toolCalls = new Map<string, { path: string; name: FileToolName; timestamp: number }>();
 
       for (const entry of branch) {
-        if (entry.type !== "message") continue;
+        if (entry.type !== "message") {
+          continue;
+        }
         const msg = entry.message;
 
         if (msg.role === "assistant" && Array.isArray(msg.content)) {
@@ -62,12 +64,16 @@ export default function (pi: ExtensionAPI) {
       const fileMap = new Map<string, FileEntry>();
 
       for (const entry of branch) {
-        if (entry.type !== "message") continue;
+        if (entry.type !== "message") {
+          continue;
+        }
         const msg = entry.message;
 
         if (msg.role === "toolResult") {
           const toolCall = toolCalls.get(msg.toolCallId);
-          if (!toolCall) continue;
+          if (!toolCall) {
+            continue;
+          }
 
           const { path, name } = toolCall;
           const timestamp = msg.timestamp;
@@ -94,7 +100,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Sort by most recent first
-      const files = Array.from(fileMap.values()).sort((a, b) => b.lastTimestamp - a.lastTimestamp);
+      const files = Array.from(fileMap.values()).toSorted(
+        (a, b) => b.lastTimestamp - a.lastTimestamp,
+      );
 
       const openSelected = async (file: FileEntry): Promise<void> => {
         try {
@@ -118,9 +126,15 @@ export default function (pi: ExtensionAPI) {
         // Build select items with colored operations
         const items: SelectItem[] = files.map((f) => {
           const ops: string[] = [];
-          if (f.operations.has("read")) ops.push(theme.fg("muted", "R"));
-          if (f.operations.has("write")) ops.push(theme.fg("success", "W"));
-          if (f.operations.has("edit")) ops.push(theme.fg("warning", "E"));
+          if (f.operations.has("read")) {
+            ops.push(theme.fg("muted", "R"));
+          }
+          if (f.operations.has("write")) {
+            ops.push(theme.fg("success", "W"));
+          }
+          if (f.operations.has("edit")) {
+            ops.push(theme.fg("warning", "E"));
+          }
           const opsLabel = ops.join("");
           return {
             value: f,

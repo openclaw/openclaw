@@ -40,18 +40,24 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
 };
 
 function parseReplyToMessageId(replyToId?: string | null) {
-  if (!replyToId) return undefined;
+  if (!replyToId) {
+    return undefined;
+  }
   const parsed = Number.parseInt(replyToId, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function parseThreadId(threadId?: string | number | null) {
-  if (threadId == null) return undefined;
+  if (threadId == null) {
+    return undefined;
+  }
   if (typeof threadId === "number") {
     return Number.isFinite(threadId) ? Math.trunc(threadId) : undefined;
   }
   const trimmed = threadId.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
@@ -67,7 +73,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     normalizeAllowEntry: (entry) => entry.replace(/^(telegram|tg):/i, ""),
     notifyApproval: async ({ cfg, id }) => {
       const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg);
-      if (!token) throw new Error("telegram token not configured");
+      if (!token) {
+        throw new Error("telegram token not configured");
+      }
       await getTelegramRuntime().channel.telegram.sendMessageTelegram(
         id,
         PAIRING_APPROVED_MESSAGE,
@@ -144,7 +152,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
+      if (groupPolicy !== "open") {
+        return [];
+      }
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
       if (groupAllowlistConfigured) {
@@ -389,7 +399,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
           account.config.proxy,
         );
         const username = probe.ok ? probe.bot?.username?.trim() : null;
-        if (username) telegramBotLabel = ` (@${username})`;
+        if (username) {
+          telegramBotLabel = ` (@${username})`;
+        }
       } catch (err) {
         if (getTelegramRuntime().logging.shouldLogVerbose()) {
           ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);

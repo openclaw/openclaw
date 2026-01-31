@@ -243,8 +243,12 @@ export function mergeProfiles(
   local: NostrProfile | undefined,
   imported: NostrProfile | undefined,
 ): NostrProfile {
-  if (!imported) return local ?? {};
-  if (!local) return imported;
+  if (!imported) {
+    return local ?? {};
+  }
+  if (!local) {
+    return imported;
+  }
 
   return {
     name: local.name ?? imported.name,

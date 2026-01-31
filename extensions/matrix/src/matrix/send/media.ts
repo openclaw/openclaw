@@ -54,7 +54,9 @@ export function buildMatrixMediaInfo(params: {
     };
     return timedInfo;
   }
-  if (Object.keys(base).length === 0) return undefined;
+  if (Object.keys(base).length === 0) {
+    return undefined;
+  }
   return base;
 }
 
@@ -116,7 +118,9 @@ export async function prepareImageInfo(params: {
   const meta = await getCore()
     .media.getImageMetadata(params.buffer)
     .catch(() => null);
-  if (!meta) return undefined;
+  if (!meta) {
+    return undefined;
+  }
   const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
@@ -157,7 +161,9 @@ export async function resolveMediaDurationMs(params: {
   fileName?: string;
   kind: MediaKind;
 }): Promise<number | undefined> {
-  if (params.kind !== "audio" && params.kind !== "video") return undefined;
+  if (params.kind !== "audio" && params.kind !== "video") {
+    return undefined;
+  }
   try {
     const fileInfo: IFileInfo | string | undefined =
       params.contentType || params.fileName

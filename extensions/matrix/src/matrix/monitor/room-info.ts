@@ -11,7 +11,9 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
 
   const getRoomInfo = async (roomId: string): Promise<MatrixRoomInfo> => {
     const cached = roomInfoCache.get(roomId);
-    if (cached) return cached;
+    if (cached) {
+      return cached;
+    }
     let name: string | undefined;
     let canonicalAlias: string | undefined;
     let altAliases: string[] = [];

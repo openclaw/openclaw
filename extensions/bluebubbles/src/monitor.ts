@@ -112,7 +112,9 @@ function rememberBlueBubblesReplyCache(
   }
   while (blueBubblesReplyCacheByMessageId.size > REPLY_CACHE_MAX) {
     const oldest = blueBubblesReplyCacheByMessageId.keys().next().value as string | undefined;
-    if (!oldest) break;
+    if (!oldest) {
+      break;
+    }
     const oldEntry = blueBubblesReplyCacheByMessageId.get(oldest);
     blueBubblesReplyCacheByMessageId.delete(oldest);
     // Clean up short ID mappings for evicted entries
@@ -134,12 +136,16 @@ export function resolveBlueBubblesMessageId(
   opts?: { requireKnownShortId?: boolean },
 ): string {
   const trimmed = shortOrUuid.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
 
   // If it looks like a short ID (numeric), try to resolve it
   if (/^\d+$/.test(trimmed)) {
     const uuid = blueBubblesShortIdToUuid.get(trimmed);
-    if (uuid) return uuid;
+    if (uuid) {
+      return uuid;
+    }
     if (opts?.requireKnownShortId) {
       throw new Error(
         `BlueBubbles short message id "${trimmed}" is no longer available. Use MessageSidFull.`,
@@ -177,11 +183,17 @@ function resolveReplyContextFromCache(params: {
   chatId?: number;
 }): BlueBubblesReplyCacheEntry | null {
   const replyToId = params.replyToId.trim();
-  if (!replyToId) return null;
+  if (!replyToId) {
+    return null;
+  }
 
   const cached = blueBubblesReplyCacheByMessageId.get(replyToId);
-  if (!cached) return null;
-  if (cached.accountId !== params.accountId) return null;
+  if (!cached) {
+    return null;
+  }
+  if (cached.accountId !== params.accountId) {
+    return null;
+  }
 
   const cutoff = Date.now() - REPLY_CACHE_TTL_MS;
   if (cached.timestamp < cutoff) {
@@ -197,7 +209,9 @@ function resolveReplyContextFromCache(params: {
   const cachedChatId = typeof cached.chatId === "number" ? cached.chatId : undefined;
 
   // Avoid cross-chat collisions if we have identifiers.
-  if (chatGuid && cachedChatGuid && chatGuid !== cachedChatGuid) return null;
+  if (chatGuid && cachedChatGuid && chatGuid !== cachedChatGuid) {
+    return null;
+  }
   if (
     !chatGuid &&
     chatIdentifier &&
@@ -300,10 +314,14 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
 
   for (const entry of entries) {
     const text = entry.message.text.trim();
-    if (!text) continue;
+    if (!text) {
+      continue;
+    }
     // Skip duplicate text (URL might be in both text message and balloon)
     const normalizedText = text.toLowerCase();
-    if (seenTexts.has(normalizedText)) continue;
+    if (seenTexts.has(normalizedText)) {
+      continue;
+    }
     seenTexts.add(normalizedText);
     textParts.push(text);
   }
@@ -359,7 +377,9 @@ function resolveBlueBubblesDebounceMs(
   const inbound = config.messages?.inbound;
   const hasExplicitDebounce =
     typeof inbound?.debounceMs === "number" || typeof inbound?.byChannel?.bluebubbles === "number";
-  if (!hasExplicitDebounce) return DEFAULT_INBOUND_DEBOUNCE_MS;
+  if (!hasExplicitDebounce) {
+    return DEFAULT_INBOUND_DEBOUNCE_MS;
+  }
   return core.channel.debounce.resolveInboundDebounceMs({ cfg: config, channel: "bluebubbles" });
 }
 
@@ -368,7 +388,9 @@ function resolveBlueBubblesDebounceMs(
  */
 function getOrCreateDebouncer(target: WebhookTarget) {
   const existing = targetDebouncers.get(target);
-  if (existing) return existing;
+  if (existing) {
+    return existing;
+  }
 
   const { account, config, runtime, core } = target;
 
@@ -402,15 +424,21 @@ function getOrCreateDebouncer(target: WebhookTarget) {
     shouldDebounce: (entry) => {
       const msg = entry.message;
       // Skip debouncing for from-me messages (they're just cached, not processed)
-      if (msg.fromMe) return false;
+      if (msg.fromMe) {
+        return false;
+      }
       // Skip debouncing for control commands - process immediately
-      if (core.channel.text.hasControlCommand(msg.text, config)) return false;
+      if (core.channel.text.hasControlCommand(msg.text, config)) {
+        return false;
+      }
       // Debounce all other messages to coalesce rapid-fire webhook events
       // (e.g., text+image arriving as separate webhooks for the same messageId)
       return true;
     },
     onFlush: async (entries) => {
-      if (entries.length === 0) return;
+      if (entries.length === 0) {
+        return;
+      }
 
       // Use target from first entry (all entries have same target due to key structure)
       const flushTarget = entries[0].target;
@@ -452,7 +480,9 @@ function removeDebouncer(target: WebhookTarget): void {
 
 function normalizeWebhookPath(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return "/";
+  if (!trimmed) {
+    return "/";
+  }
   const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   if (withSlash.length > 1 && withSlash.endsWith("/")) {
     return withSlash.slice(0, -1);
@@ -527,30 +557,40 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function readString(record: Record<string, unknown> | null, key: string): string | undefined {
-  if (!record) return undefined;
+  if (!record) {
+    return undefined;
+  }
   const value = record[key];
   return typeof value === "string" ? value : undefined;
 }
 
 function readNumber(record: Record<string, unknown> | null, key: string): number | undefined {
-  if (!record) return undefined;
+  if (!record) {
+    return undefined;
+  }
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function readBoolean(record: Record<string, unknown> | null, key: string): boolean | undefined {
-  if (!record) return undefined;
+  if (!record) {
+    return undefined;
+  }
   const value = record[key];
   return typeof value === "boolean" ? value : undefined;
 }
 
 function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
   const raw = message["attachments"];
-  if (!Array.isArray(raw)) return [];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
   const out: BlueBubblesAttachment[] = [];
   for (const entry of raw) {
     const record = asRecord(entry);
-    if (!record) continue;
+    if (!record) {
+      continue;
+    }
     out.push({
       guid: readString(record, "guid"),
       uti: readString(record, "uti"),
@@ -566,7 +606,9 @@ function extractAttachments(message: Record<string, unknown>): BlueBubblesAttach
 }
 
 function buildAttachmentPlaceholder(attachments: BlueBubblesAttachment[]): string {
-  if (attachments.length === 0) return "";
+  if (attachments.length === 0) {
+    return "";
+  }
   const mimeTypes = attachments.map((entry) => entry.mimeType ?? "");
   const allImages = mimeTypes.every((entry) => entry.startsWith("image/"));
   const allVideos = mimeTypes.every((entry) => entry.startsWith("video/"));
@@ -585,8 +627,12 @@ function buildAttachmentPlaceholder(attachments: BlueBubblesAttachment[]): strin
 
 function buildMessagePlaceholder(message: NormalizedWebhookMessage): string {
   const attachmentPlaceholder = buildAttachmentPlaceholder(message.attachments ?? []);
-  if (attachmentPlaceholder) return attachmentPlaceholder;
-  if (message.balloonBundleId) return "<media:sticker>";
+  if (attachmentPlaceholder) {
+    return attachmentPlaceholder;
+  }
+  if (message.balloonBundleId) {
+    return "<media:sticker>";
+  }
   return "";
 }
 
@@ -594,17 +640,25 @@ function buildMessagePlaceholder(message: NormalizedWebhookMessage): string {
 function formatReplyTag(message: { replyToId?: string; replyToShortId?: string }): string | null {
   // Prefer short ID
   const rawId = message.replyToShortId || message.replyToId;
-  if (!rawId) return null;
+  if (!rawId) {
+    return null;
+  }
   return `[[reply_to:${rawId}]]`;
 }
 
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
-  if (!record) return undefined;
+  if (!record) {
+    return undefined;
+  }
   const value = record[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
   if (typeof value === "string") {
     const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
   return undefined;
 }
@@ -683,7 +737,9 @@ function extractReplyMetadata(message: Record<string, unknown>): {
 
 function readFirstChatRecord(message: Record<string, unknown>): Record<string, unknown> | null {
   const chats = message["chats"];
-  if (!Array.isArray(chats) || chats.length === 0) return null;
+  if (!Array.isArray(chats) || chats.length === 0) {
+    return null;
+  }
   const first = chats[0];
   return asRecord(first);
 }
@@ -691,12 +747,16 @@ function readFirstChatRecord(message: Record<string, unknown>): Record<string, u
 function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | null {
   if (typeof entry === "string" || typeof entry === "number") {
     const raw = String(entry).trim();
-    if (!raw) return null;
+    if (!raw) {
+      return null;
+    }
     const normalized = normalizeBlueBubblesHandle(raw) || raw;
     return normalized ? { id: normalized } : null;
   }
   const record = asRecord(entry);
-  if (!record) return null;
+  if (!record) {
+    return null;
+  }
   const nestedHandle =
     asRecord(record["handle"]) ?? asRecord(record["sender"]) ?? asRecord(record["contact"]) ?? null;
   const idRaw =
@@ -716,20 +776,28 @@ function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | nul
     readString(nestedHandle, "displayName") ??
     readString(nestedHandle, "name");
   const normalizedId = idRaw ? normalizeBlueBubblesHandle(idRaw) || idRaw.trim() : "";
-  if (!normalizedId) return null;
+  if (!normalizedId) {
+    return null;
+  }
   const name = nameRaw?.trim() || undefined;
   return { id: normalizedId, name };
 }
 
 function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
-  if (!Array.isArray(raw) || raw.length === 0) return [];
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [];
+  }
   const seen = new Set<string>();
   const output: BlueBubblesParticipant[] = [];
   for (const entry of raw) {
     const normalized = normalizeParticipantEntry(entry);
-    if (!normalized?.id) continue;
+    if (!normalized?.id) {
+      continue;
+    }
     const key = normalized.id.toLowerCase();
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      continue;
+    }
     seen.add(key);
     output.push(normalized);
   }
@@ -743,37 +811,57 @@ function formatGroupMembers(params: {
   const seen = new Set<string>();
   const ordered: BlueBubblesParticipant[] = [];
   for (const entry of params.participants ?? []) {
-    if (!entry?.id) continue;
+    if (!entry?.id) {
+      continue;
+    }
     const key = entry.id.toLowerCase();
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      continue;
+    }
     seen.add(key);
     ordered.push(entry);
   }
   if (ordered.length === 0 && params.fallback?.id) {
     ordered.push(params.fallback);
   }
-  if (ordered.length === 0) return undefined;
+  if (ordered.length === 0) {
+    return undefined;
+  }
   return ordered.map((entry) => (entry.name ? `${entry.name} (${entry.id})` : entry.id)).join(", ");
 }
 
 function resolveGroupFlagFromChatGuid(chatGuid?: string | null): boolean | undefined {
   const guid = chatGuid?.trim();
-  if (!guid) return undefined;
+  if (!guid) {
+    return undefined;
+  }
   const parts = guid.split(";");
   if (parts.length >= 3) {
-    if (parts[1] === "+") return true;
-    if (parts[1] === "-") return false;
+    if (parts[1] === "+") {
+      return true;
+    }
+    if (parts[1] === "-") {
+      return false;
+    }
   }
-  if (guid.includes(";+;")) return true;
-  if (guid.includes(";-;")) return false;
+  if (guid.includes(";+;")) {
+    return true;
+  }
+  if (guid.includes(";-;")) {
+    return false;
+  }
   return undefined;
 }
 
 function extractChatIdentifierFromChatGuid(chatGuid?: string | null): string | undefined {
   const guid = chatGuid?.trim();
-  if (!guid) return undefined;
+  if (!guid) {
+    return undefined;
+  }
   const parts = guid.split(";");
-  if (parts.length < 3) return undefined;
+  if (parts.length < 3) {
+    return undefined;
+  }
   const identifier = parts[2]?.trim();
   return identifier || undefined;
 }
@@ -784,11 +872,17 @@ function formatGroupAllowlistEntry(params: {
   chatIdentifier?: string;
 }): string | null {
   const guid = params.chatGuid?.trim();
-  if (guid) return `chat_guid:${guid}`;
+  if (guid) {
+    return `chat_guid:${guid}`;
+  }
   const chatId = params.chatId;
-  if (typeof chatId === "number" && Number.isFinite(chatId)) return `chat_id:${chatId}`;
+  if (typeof chatId === "number" && Number.isFinite(chatId)) {
+    return `chat_id:${chatId}`;
+  }
   const identifier = params.chatIdentifier?.trim();
-  if (identifier) return `chat_identifier:${identifier}`;
+  if (identifier) {
+    return `chat_identifier:${identifier}`;
+  }
   return null;
 }
 
@@ -886,9 +980,15 @@ function isTapbackAssociatedType(type: number | undefined): boolean {
 }
 
 function resolveTapbackActionHint(type: number | undefined): "added" | "removed" | undefined {
-  if (typeof type !== "number" || !Number.isFinite(type)) return undefined;
-  if (type >= 3000 && type < 4000) return "removed";
-  if (type >= 2000 && type < 3000) return "added";
+  if (typeof type !== "number" || !Number.isFinite(type)) {
+    return undefined;
+  }
+  if (type >= 3000 && type < 4000) {
+    return "removed";
+  }
+  if (type >= 2000 && type < 3000) {
+    return "added";
+  }
   return undefined;
 }
 
@@ -900,7 +1000,9 @@ function resolveTapbackContext(message: NormalizedWebhookMessage): {
   const associatedType = message.associatedMessageType;
   const hasTapbackType = isTapbackAssociatedType(associatedType);
   const hasTapbackMarker = Boolean(message.associatedMessageEmoji) || Boolean(message.isTapback);
-  if (!hasTapbackType && !hasTapbackMarker) return null;
+  if (!hasTapbackType && !hasTapbackMarker) {
+    return null;
+  }
   const replyToId = message.associatedMessageGuid?.trim() || message.replyToId?.trim() || undefined;
   const actionHint = resolveTapbackActionHint(associatedType);
   const emojiHint =
@@ -921,7 +1023,9 @@ function parseTapbackText(params: {
 } | null {
   const trimmed = params.text.trim();
   const lower = trimmed.toLowerCase();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
 
   for (const [pattern, { emoji, action }] of TAPBACK_TEXT_MAP) {
     if (lower.startsWith(pattern)) {
@@ -929,7 +1033,9 @@ function parseTapbackText(params: {
       const afterPattern = trimmed.slice(pattern.length).trim();
       if (params.requireQuoted) {
         const strictMatch = afterPattern.match(/^[“"](.+)[”"]$/s);
-        if (!strictMatch) return null;
+        if (!strictMatch) {
+          return null;
+        }
         return { emoji, action, quotedText: strictMatch[1] };
       }
       const quotedText =
@@ -940,18 +1046,26 @@ function parseTapbackText(params: {
 
   if (lower.startsWith("reacted")) {
     const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
-    if (!emoji) return null;
+    if (!emoji) {
+      return null;
+    }
     const quotedText = extractQuotedTapbackText(trimmed);
-    if (params.requireQuoted && !quotedText) return null;
+    if (params.requireQuoted && !quotedText) {
+      return null;
+    }
     const fallback = trimmed.slice("reacted".length).trim();
     return { emoji, action: params.actionHint ?? "added", quotedText: quotedText ?? fallback };
   }
 
   if (lower.startsWith("removed")) {
     const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
-    if (!emoji) return null;
+    if (!emoji) {
+      return null;
+    }
     const quotedText = extractQuotedTapbackText(trimmed);
-    if (params.requireQuoted && !quotedText) return null;
+    if (params.requireQuoted && !quotedText) {
+      return null;
+    }
     const fallback = trimmed.slice("removed".length).trim();
     return { emoji, action: params.actionHint ?? "removed", quotedText: quotedText ?? fallback };
   }
@@ -959,7 +1073,9 @@ function parseTapbackText(params: {
 }
 
 function maskSecret(value: string): string {
-  if (value.length <= 6) return "***";
+  if (value.length <= 6) {
+    return "***";
+  }
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
@@ -970,7 +1086,9 @@ function resolveBlueBubblesAckReaction(params: {
   runtime: BlueBubblesRuntimeEnv;
 }): string | null {
   const raw = resolveAckReaction(params.cfg, params.agentId).trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   try {
     normalizeBlueBubblesReactionInput(raw);
     return raw;
@@ -997,7 +1115,9 @@ function extractMessagePayload(payload: Record<string, unknown>): Record<string,
   const message =
     asRecord(messageRaw) ??
     (typeof messageRaw === "string" ? (asRecord(JSON.parse(messageRaw)) ?? null) : null);
-  if (!message) return null;
+  if (!message) {
+    return null;
+  }
   return message;
 }
 
@@ -1005,7 +1125,9 @@ function normalizeWebhookMessage(
   payload: Record<string, unknown>,
 ): NormalizedWebhookMessage | null {
   const message = extractMessagePayload(payload);
-  if (!message) return null;
+  if (!message) {
+    return null;
+  }
 
   const text =
     readString(message, "text") ??
@@ -1090,7 +1212,7 @@ function normalizeWebhookMessage(
   const isGroup =
     typeof groupFromChatGuid === "boolean"
       ? groupFromChatGuid
-      : (explicitIsGroup ?? (participantsCount > 2 ? true : false));
+      : (explicitIsGroup ?? participantsCount > 2);
 
   const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
   const messageId =
@@ -1131,7 +1253,9 @@ function normalizeWebhookMessage(
       : undefined;
 
   const normalizedSender = normalizeBlueBubblesHandle(senderId);
-  if (!normalizedSender) return null;
+  if (!normalizedSender) {
+    return null;
+  }
   const replyMetadata = extractReplyMetadata(message);
 
   return {
@@ -1163,7 +1287,9 @@ function normalizeWebhookReaction(
   payload: Record<string, unknown>,
 ): NormalizedWebhookReaction | null {
   const message = extractMessagePayload(payload);
-  if (!message) return null;
+  if (!message) {
+    return null;
+  }
 
   const associatedGuid =
     readString(message, "associatedMessageGuid") ??
@@ -1172,7 +1298,9 @@ function normalizeWebhookReaction(
   const associatedType =
     readNumberLike(message, "associatedMessageType") ??
     readNumberLike(message, "associated_message_type");
-  if (!associatedGuid || associatedType === undefined) return null;
+  if (!associatedGuid || associatedType === undefined) {
+    return null;
+  }
 
   const mapping = REACTION_TYPE_MAP.get(associatedType);
   const associatedEmoji =
@@ -1258,7 +1386,7 @@ function normalizeWebhookReaction(
   const isGroup =
     typeof groupFromChatGuid === "boolean"
       ? groupFromChatGuid
-      : (explicitIsGroup ?? (participantsCount > 2 ? true : false));
+      : (explicitIsGroup ?? participantsCount > 2);
 
   const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
   const timestampRaw =
@@ -1273,7 +1401,9 @@ function normalizeWebhookReaction(
       : undefined;
 
   const normalizedSender = normalizeBlueBubblesHandle(senderId);
-  if (!normalizedSender) return null;
+  if (!normalizedSender) {
+    return null;
+  }
 
   return {
     action,
@@ -1298,7 +1428,9 @@ export async function handleBlueBubblesWebhookRequest(
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = normalizeWebhookPath(url.pathname);
   const targets = webhookTargets.get(path);
-  if (!targets || targets.length === 0) return false;
+  if (!targets || targets.length === 0) {
+    return false;
+  }
 
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -1368,7 +1500,9 @@ export async function handleBlueBubblesWebhookRequest(
 
   const matching = targets.filter((target) => {
     const token = target.account.config.password?.trim();
-    if (!token) return true;
+    if (!token) {
+      return true;
+    }
     const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
     const headerToken =
       req.headers["x-guid"] ??
@@ -1376,7 +1510,9 @@ export async function handleBlueBubblesWebhookRequest(
       req.headers["x-bluebubbles-guid"] ??
       req.headers["authorization"];
     const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
-    if (guid && guid.trim() === token) return true;
+    if (guid && guid.trim() === token) {
+      return true;
+    }
     const remote = req.socket?.remoteAddress ?? "";
     if (remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1") {
       return true;
@@ -1466,7 +1602,9 @@ async function processMessage(
   const cacheMessageId = message.messageId?.trim();
   let messageShortId: string | undefined;
   const cacheInboundMessage = () => {
-    if (!cacheMessageId) return;
+    if (!cacheMessageId) {
+      return;
+    }
     const cacheEntry = rememberBlueBubblesReplyCache({
       accountId: account.accountId,
       messageId: cacheMessageId,
@@ -1743,7 +1881,9 @@ async function processMessage(
       logVerbose(core, runtime, "attachment download skipped (missing serverUrl/password)");
     } else {
       for (const attachment of attachments) {
-        if (!attachment.guid) continue;
+        if (!attachment.guid) {
+          continue;
+        }
         if (attachment.totalBytes && attachment.totalBytes > maxBytes) {
           logVerbose(
             core,
@@ -1797,8 +1937,12 @@ async function processMessage(
       chatId: message.chatId,
     });
     if (cached) {
-      if (!replyToBody && cached.body) replyToBody = cached.body;
-      if (!replyToSender && cached.senderLabel) replyToSender = cached.senderLabel;
+      if (!replyToBody && cached.body) {
+        replyToBody = cached.body;
+      }
+      if (!replyToSender && cached.senderLabel) {
+        replyToSender = cached.senderLabel;
+      }
       replyToShortId = cached.shortId;
       if (core.logging.shouldLogVerbose()) {
         const preview = (cached.body ?? "").replace(/\s+/g, " ").slice(0, 120);
@@ -1940,7 +2084,9 @@ async function processMessage(
 
   const maybeEnqueueOutboundMessageId = (messageId?: string, snippet?: string) => {
     const trimmed = messageId?.trim();
-    if (!trimmed || trimmed === "ok" || trimmed === "unknown") return;
+    if (!trimmed || trimmed === "ok" || trimmed === "unknown") {
+      return;
+    }
     // Cache outbound message to get short ID
     const cacheEntry = rememberBlueBubblesReplyCache({
       accountId: account.accountId,
@@ -2059,8 +2205,12 @@ async function processMessage(
             chunkMode === "newline"
               ? core.channel.text.chunkTextWithMode(text, textLimit, chunkMode)
               : core.channel.text.chunkMarkdownText(text, textLimit);
-          if (!chunks.length && text) chunks.push(text);
-          if (!chunks.length) return;
+          if (!chunks.length && text) {
+            chunks.push(text);
+          }
+          if (!chunks.length) {
+            return;
+          }
           for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const result = await sendMessageBlueBubbles(outboundTarget, chunk, {
@@ -2085,8 +2235,12 @@ async function processMessage(
           }
         },
         onReplyStart: async () => {
-          if (!chatGuidForActions) return;
-          if (!baseUrl || !password) return;
+          if (!chatGuidForActions) {
+            return;
+          }
+          if (!baseUrl || !password) {
+            return;
+          }
           logVerbose(core, runtime, `typing start chatGuid=${chatGuidForActions}`);
           try {
             await sendBlueBubblesTyping(chatGuidForActions, true, {
@@ -2098,8 +2252,12 @@ async function processMessage(
           }
         },
         onIdle: async () => {
-          if (!chatGuidForActions) return;
-          if (!baseUrl || !password) return;
+          if (!chatGuidForActions) {
+            return;
+          }
+          if (!baseUrl || !password) {
+            return;
+          }
           try {
             await sendBlueBubblesTyping(chatGuidForActions, false, {
               cfg: config,
@@ -2167,7 +2325,9 @@ async function processReaction(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core } = target;
-  if (reaction.fromMe) return;
+  if (reaction.fromMe) {
+    return;
+  }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
@@ -2187,9 +2347,13 @@ async function processReaction(
     .filter(Boolean);
 
   if (reaction.isGroup) {
-    if (groupPolicy === "disabled") return;
+    if (groupPolicy === "disabled") {
+      return;
+    }
     if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) return;
+      if (effectiveGroupAllowFrom.length === 0) {
+        return;
+      }
       const allowed = isAllowedBlueBubblesSender({
         allowFrom: effectiveGroupAllowFrom,
         sender: reaction.senderId,
@@ -2197,10 +2361,14 @@ async function processReaction(
         chatGuid: reaction.chatGuid ?? undefined,
         chatIdentifier: reaction.chatIdentifier ?? undefined,
       });
-      if (!allowed) return;
+      if (!allowed) {
+        return;
+      }
     }
   } else {
-    if (dmPolicy === "disabled") return;
+    if (dmPolicy === "disabled") {
+      return;
+    }
     if (dmPolicy !== "open") {
       const allowed = isAllowedBlueBubblesSender({
         allowFrom: effectiveAllowFrom,
@@ -2209,7 +2377,9 @@ async function processReaction(
         chatGuid: reaction.chatGuid ?? undefined,
         chatIdentifier: reaction.chatIdentifier ?? undefined,
       });
-      if (!allowed) return;
+      if (!allowed) {
+        return;
+      }
     }
   }
 
@@ -2293,6 +2463,8 @@ export async function monitorBlueBubblesProvider(
 
 export function resolveWebhookPathFromConfig(config?: BlueBubblesAccountConfig): string {
   const raw = config?.webhookPath?.trim();
-  if (raw) return normalizeWebhookPath(raw);
+  if (raw) {
+    return normalizeWebhookPath(raw);
+  }
   return DEFAULT_WEBHOOK_PATH;
 }

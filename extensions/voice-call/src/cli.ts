@@ -21,7 +21,9 @@ type Logger = {
 
 function resolveMode(input: string): "off" | "serve" | "funnel" {
   const raw = input.trim().toLowerCase();
-  if (raw === "serve" || raw === "off") return raw;
+  if (raw === "serve" || raw === "off") {
+    return raw;
+  }
   return "funnel";
 }
 

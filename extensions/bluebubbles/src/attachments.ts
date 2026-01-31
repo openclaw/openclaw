@@ -31,7 +31,9 @@ function sanitizeFilename(input: string | undefined, fallback: string): string {
 
 function ensureExtension(filename: string, extension: string, fallbackBase: string): string {
   const currentExt = path.extname(filename);
-  if (currentExt.toLowerCase() === extension) return filename;
+  if (currentExt.toLowerCase() === extension) {
+    return filename;
+  }
   const base = currentExt ? filename.slice(0, -currentExt.length) : filename;
   return `${base || fallbackBase}${extension}`;
 }
@@ -54,8 +56,12 @@ function resolveAccount(params: BlueBubblesAttachmentOpts) {
   });
   const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
   const password = params.password?.trim() || account.config.password?.trim();
-  if (!baseUrl) throw new Error("BlueBubbles serverUrl is required");
-  if (!password) throw new Error("BlueBubbles password is required");
+  if (!baseUrl) {
+    throw new Error("BlueBubbles serverUrl is required");
+  }
+  if (!password) {
+    throw new Error("BlueBubbles password is required");
+  }
   return { baseUrl, password };
 }
 
@@ -64,7 +70,9 @@ export async function downloadBlueBubblesAttachment(
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},
 ): Promise<{ buffer: Uint8Array; contentType?: string }> {
   const guid = attachment.guid?.trim();
-  if (!guid) throw new Error("BlueBubbles attachment guid is required");
+  if (!guid) {
+    throw new Error("BlueBubbles attachment guid is required");
+  }
   const { baseUrl, password } = resolveAccount(opts);
   const url = buildBlueBubblesApiUrl({
     baseUrl,
@@ -110,7 +118,9 @@ function resolveSendTarget(raw: string): BlueBubblesSendTarget {
 }
 
 function extractMessageId(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "unknown";
+  if (!payload || typeof payload !== "object") {
+    return "unknown";
+  }
   const record = payload as Record<string, unknown>;
   const data =
     record.data && typeof record.data === "object"
@@ -125,8 +135,12 @@ function extractMessageId(payload: unknown): string {
     data?.id,
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-    if (typeof candidate === "number" && Number.isFinite(candidate)) return String(candidate);
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return String(candidate);
+    }
   }
   return "unknown";
 }
@@ -274,7 +288,9 @@ export async function sendBlueBubblesAttachment(params: {
   }
 
   const responseBody = await res.text();
-  if (!responseBody) return { messageId: "ok" };
+  if (!responseBody) {
+    return { messageId: "ok" };
+  }
   try {
     const parsed = JSON.parse(responseBody) as unknown;
     return { messageId: extractMessageId(parsed) };

@@ -47,7 +47,9 @@ async function fetchGhMetadata(
 
   try {
     const result = await pi.exec("gh", args);
-    if (result.code !== 0 || !result.stdout) return undefined;
+    if (result.code !== 0 || !result.stdout) {
+      return undefined;
+    }
     return JSON.parse(result.stdout) as GhMetadata;
   } catch {
     return undefined;
@@ -55,12 +57,20 @@ async function fetchGhMetadata(
 }
 
 function formatAuthor(author?: GhMetadata["author"]): string | undefined {
-  if (!author) return undefined;
+  if (!author) {
+    return undefined;
+  }
   const name = author.name?.trim();
   const login = author.login?.trim();
-  if (name && login) return `${name} (@${login})`;
-  if (login) return `@${login}`;
-  if (name) return name;
+  if (name && login) {
+    return `${name} (@${login})`;
+  }
+  if (login) {
+    return `@${login}`;
+  }
+  if (name) {
+    return name;
+  }
   return undefined;
 }
 
@@ -77,7 +87,9 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
       const urlLine = thm.fg("dim", match.url);
 
       const lines = [titleText];
-      if (authorLine) lines.push(authorLine);
+      if (authorLine) {
+        lines.push(authorLine);
+      }
       lines.push(urlLine);
 
       const container = new Container();
@@ -103,7 +115,9 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
   };
 
   pi.on("before_agent_start", async (event, ctx) => {
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI) {
+      return;
+    }
     const match = extractPromptMatch(event.prompt);
     if (!match) {
       return;
@@ -124,8 +138,12 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
   });
 
   const getUserText = (content: string | { type: string; text?: string }[] | undefined): string => {
-    if (!content) return "";
-    if (typeof content === "string") return content;
+    if (!content) {
+      return "";
+    }
+    if (typeof content === "string") {
+      return content;
+    }
     return (
       content
         .filter((block): block is { type: "text"; text: string } => block.type === "text")
@@ -135,11 +153,15 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
   };
 
   const rebuildFromSession = (ctx: ExtensionContext) => {
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI) {
+      return;
+    }
 
     const entries = ctx.sessionManager.getEntries();
-    const lastMatch = [...entries].reverse().find((entry) => {
-      if (entry.type !== "message" || entry.message.role !== "user") return false;
+    const lastMatch = [...entries].toReversed().find((entry) => {
+      if (entry.type !== "message" || entry.message.role !== "user") {
+        return false;
+      }
       const text = getUserText(entry.message.content);
       return !!extractPromptMatch(text);
     });

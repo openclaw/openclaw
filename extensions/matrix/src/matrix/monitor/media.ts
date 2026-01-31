@@ -24,7 +24,9 @@ async function fetchMatrixMediaBuffer(params: {
 }): Promise<{ buffer: Buffer; headerType?: string } | null> {
   // @vector-im/matrix-bot-sdk provides mxcToHttp helper
   const url = params.client.mxcToHttp(params.mxcUrl);
-  if (!url) return null;
+  if (!url) {
+    return null;
+  }
 
   // Use the client's download method which handles auth
   try {
@@ -34,7 +36,7 @@ async function fetchMatrixMediaBuffer(params: {
     }
     return { buffer: Buffer.from(buffer) };
   } catch (err) {
-    throw new Error(`Matrix media download failed: ${String(err)}`);
+    throw new Error(`Matrix media download failed: ${String(err)}`, { cause: err });
   }
 }
 
@@ -94,7 +96,9 @@ export async function downloadMatrixMedia(params: {
     });
   }
 
-  if (!fetched) return null;
+  if (!fetched) {
+    return null;
+  }
   const headerType = fetched.headerType ?? params.contentType ?? undefined;
   const saved = await getMatrixRuntime().channel.media.saveMediaBuffer(
     fetched.buffer,

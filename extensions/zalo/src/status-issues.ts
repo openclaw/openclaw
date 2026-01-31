@@ -14,7 +14,9 @@ const asString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined;
 
 function readZaloAccountStatus(value: ChannelAccountSnapshot): ZaloAccountStatus | null {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value)) {
+    return null;
+  }
   return {
     accountId: value.accountId,
     enabled: value.enabled,
@@ -27,11 +29,15 @@ export function collectZaloStatusIssues(accounts: ChannelAccountSnapshot[]): Cha
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
     const account = readZaloAccountStatus(entry);
-    if (!account) continue;
+    if (!account) {
+      continue;
+    }
     const accountId = asString(account.accountId) ?? "default";
     const enabled = account.enabled !== false;
     const configured = account.configured === true;
-    if (!enabled || !configured) continue;
+    if (!enabled || !configured) {
+      continue;
+    }
 
     if (account.dmPolicy === "open") {
       issues.push({

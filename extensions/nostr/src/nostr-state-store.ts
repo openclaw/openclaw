@@ -39,7 +39,9 @@ export type NostrProfileState = {
 
 function normalizeAccountId(accountId?: string): string {
   const trimmed = accountId?.trim();
-  if (!trimmed) return "default";
+  if (!trimmed) {
+    return "default";
+  }
   return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
 }
 
@@ -101,7 +103,9 @@ export async function readNostrBusState(params: {
     return safeParseState(raw);
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return null;
+    if (code === "ENOENT") {
+      return null;
+    }
     return null;
   }
 }
@@ -139,14 +143,18 @@ export function computeSinceTimestamp(
   state: NostrBusState | null,
   nowSec: number = Math.floor(Date.now() / 1000),
 ): number {
-  if (!state) return nowSec;
+  if (!state) {
+    return nowSec;
+  }
 
   // Use the most recent timestamp we have
   const candidates = [state.lastProcessedAt, state.gatewayStartedAt].filter(
     (t): t is number => t !== null && t > 0,
   );
 
-  if (candidates.length === 0) return nowSec;
+  if (candidates.length === 0) {
+    return nowSec;
+  }
   return Math.max(...candidates);
 }
 
@@ -166,7 +174,7 @@ function safeParseProfileState(raw: string): NostrProfileState | null {
           typeof parsed.lastPublishedEventId === "string" ? parsed.lastPublishedEventId : null,
         lastPublishResults:
           parsed.lastPublishResults && typeof parsed.lastPublishResults === "object"
-            ? (parsed.lastPublishResults as Record<string, "ok" | "failed" | "timeout">)
+            ? parsed.lastPublishResults
             : null,
       };
     }
@@ -187,7 +195,9 @@ export async function readNostrProfileState(params: {
     return safeParseProfileState(raw);
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return null;
+    if (code === "ENOENT") {
+      return null;
+    }
     return null;
   }
 }

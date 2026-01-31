@@ -205,10 +205,14 @@ function linearToMulaw(sample: number): number {
 
   // Get sign bit
   const sign = sample < 0 ? 0x80 : 0;
-  if (sample < 0) sample = -sample;
+  if (sample < 0) {
+    sample = -sample;
+  }
 
   // Clip to prevent overflow
-  if (sample > CLIP) sample = CLIP;
+  if (sample > CLIP) {
+    sample = CLIP;
+  }
 
   // Add bias and find segment
   sample += BIAS;

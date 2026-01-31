@@ -13,7 +13,9 @@ const StateOrder: readonly CallState[] = [
 
 export function transitionState(call: CallRecord, newState: CallState): void {
   // No-op for same state or already terminal.
-  if (call.state === newState || TerminalStates.has(call.state)) return;
+  if (call.state === newState || TerminalStates.has(call.state)) {
+    return;
+  }
 
   // Terminal states can always be reached from non-terminal.
   if (TerminalStates.has(newState)) {

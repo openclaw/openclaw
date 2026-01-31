@@ -48,9 +48,13 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
  * Returns undefined if not found or expired.
  */
 export function getPendingUpload(id?: string): PendingUpload | undefined {
-  if (!id) return undefined;
+  if (!id) {
+    return undefined;
+  }
   const entry = pendingUploads.get(id);
-  if (!entry) return undefined;
+  if (!entry) {
+    return undefined;
+  }
 
   // Check if expired (in case timeout hasn't fired yet)
   if (Date.now() - entry.createdAt > PENDING_UPLOAD_TTL_MS) {

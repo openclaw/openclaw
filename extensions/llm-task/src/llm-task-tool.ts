@@ -18,24 +18,27 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // Source checkout (tests/dev)
   try {
     const mod = await import("../../../src/agents/pi-embedded-runner.js");
-    if (typeof (mod as any).runEmbeddedPiAgent === "function")
+    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
       return (mod as any).runEmbeddedPiAgent;
+    }
   } catch {
     // ignore
   }
 
   // Bundled install (built)
   const mod = await import("../../../agents/pi-embedded-runner.js");
-  if (typeof (mod as any).runEmbeddedPiAgent !== "function") {
+  if (typeof mod.runEmbeddedPiAgent !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }
-  return (mod as any).runEmbeddedPiAgent;
+  return mod.runEmbeddedPiAgent;
 }
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
   const m = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (m) return (m[1] ?? "").trim();
+  if (m) {
+    return (m[1] ?? "").trim();
+  }
   return trimmed;
 }
 
@@ -49,7 +52,9 @@ function collectText(payloads: Array<{ text?: string; isError?: boolean }> | und
 function toModelKey(provider?: string, model?: string): string | undefined {
   const p = provider?.trim();
   const m = model?.trim();
-  if (!p || !m) return undefined;
+  if (!p || !m) {
+    return undefined;
+  }
   return `${p}/${m}`;
 }
 
@@ -84,8 +89,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
     }),
 
     async execute(_id: string, params: Record<string, unknown>) {
-      const prompt = String(params.prompt ?? "");
-      if (!prompt.trim()) throw new Error("prompt required");
+      const prompt = typeof params.prompt === "string" ? params.prompt : "";
+      if (!prompt.trim()) {
+        throw new Error("prompt required");
+      }
 
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
 
@@ -189,7 +196,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         });
 
         const text = collectText((result as any).payloads);
-        if (!text) throw new Error("LLM returned empty output");
+        if (!text) {
+          throw new Error("LLM returned empty output");
+        }
 
         const raw = stripCodeFences(text);
         let parsed: unknown;

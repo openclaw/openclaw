@@ -24,7 +24,9 @@ type GraphChannel = {
 type GraphResponse<T> = { value?: T[] };
 
 function readAccessToken(value: unknown): string | null {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    return value;
+  }
   if (value && typeof value === "object") {
     const token =
       (value as { accessToken?: unknown }).accessToken ?? (value as { token?: unknown }).token;
@@ -49,7 +51,7 @@ async function fetchGraphJson<T>(params: {
   const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
     headers: {
       Authorization: `Bearer ${params.token}`,
-      ...(params.headers ?? {}),
+      ...params.headers,
     },
   });
   if (!res.ok) {
@@ -63,12 +65,16 @@ async function resolveGraphToken(cfg: unknown): Promise<string> {
   const creds = resolveMSTeamsCredentials(
     (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams,
   );
-  if (!creds) throw new Error("MS Teams credentials missing");
+  if (!creds) {
+    throw new Error("MS Teams credentials missing");
+  }
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const tokenProvider = new sdk.MsalTokenProvider(authConfig);
   const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(token);
-  if (!accessToken) throw new Error("MS Teams graph token unavailable");
+  if (!accessToken) {
+    throw new Error("MS Teams graph token unavailable");
+  }
   return accessToken;
 }
 
@@ -92,7 +98,9 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
   const query = normalizeQuery(params.query);
-  if (!query) return [];
+  if (!query) {
+    return [];
+  }
   const token = await resolveGraphToken(params.cfg);
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
 
@@ -116,7 +124,9 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   return users
     .map((user) => {
       const id = user.id?.trim();
-      if (!id) return null;
+      if (!id) {
+        return null;
+      }
       const name = user.displayName?.trim();
       const handle = user.userPrincipalName?.trim() || user.mail?.trim();
       return {
@@ -136,7 +146,9 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
   const rawQuery = normalizeQuery(params.query);
-  if (!rawQuery) return [];
+  if (!rawQuery) {
+    return [];
+  }
   const token = await resolveGraphToken(params.cfg);
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
@@ -151,7 +163,9 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
 
   for (const team of teams) {
     const teamId = team.id?.trim();
-    if (!teamId) continue;
+    if (!teamId) {
+      continue;
+    }
     const teamName = team.displayName?.trim() || teamQuery;
     if (!channelQuery) {
       results.push({
@@ -161,14 +175,20 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
         handle: teamName ? `#${teamName}` : undefined,
         raw: team,
       });
-      if (results.length >= limit) return results;
+      if (results.length >= limit) {
+        return results;
+      }
       continue;
     }
     const channels = await listChannelsForTeam(token, teamId);
     for (const channel of channels) {
       const name = channel.displayName?.trim();
-      if (!name) continue;
-      if (!name.toLowerCase().includes(channelQuery.toLowerCase())) continue;
+      if (!name) {
+        continue;
+      }
+      if (!name.toLowerCase().includes(channelQuery.toLowerCase())) {
+        continue;
+      }
       results.push({
         kind: "group",
         id: `conversation:${channel.id}`,
@@ -176,7 +196,9 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
         handle: `#${name}`,
         raw: channel,
       });
-      if (results.length >= limit) return results;
+      if (results.length >= limit) {
+        return results;
+      }
     }
   }
 

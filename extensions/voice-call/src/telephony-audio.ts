@@ -8,9 +8,13 @@ function clamp16(value: number): number {
  * Resample 16-bit PCM (little-endian mono) to 8kHz using linear interpolation.
  */
 export function resamplePcmTo8k(input: Buffer, inputSampleRate: number): Buffer {
-  if (inputSampleRate === TELEPHONY_SAMPLE_RATE) return input;
+  if (inputSampleRate === TELEPHONY_SAMPLE_RATE) {
+    return input;
+  }
   const inputSamples = Math.floor(input.length / 2);
-  if (inputSamples === 0) return Buffer.alloc(0);
+  if (inputSamples === 0) {
+    return Buffer.alloc(0);
+  }
 
   const ratio = inputSampleRate / TELEPHONY_SAMPLE_RATE;
   const outputSamples = Math.floor(inputSamples / ratio);
@@ -68,8 +72,12 @@ function linearToMulaw(sample: number): number {
   const CLIP = 32635;
 
   const sign = sample < 0 ? 0x80 : 0;
-  if (sample < 0) sample = -sample;
-  if (sample > CLIP) sample = CLIP;
+  if (sample < 0) {
+    sample = -sample;
+  }
+  if (sample > CLIP) {
+    sample = CLIP;
+  }
 
   sample += BIAS;
   let exponent = 7;
