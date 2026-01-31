@@ -115,10 +115,13 @@ if (!shouldBuild()) {
   runNode();
 } else {
   logRunner("Building TypeScript (dist is stale).");
-  const pnpmArgs = ["exec", compiler, ...projectArgs];
-  const buildCmd = process.platform === "win32" ? "cmd.exe" : "pnpm";
+  // Use npx to execute the compiler (tsc or tsgo) from local node_modules
+  const compilerArgs = [compiler, ...projectArgs];
+  const buildCmd = process.platform === "win32" ? "cmd.exe" : "npx";
   const buildArgs =
-    process.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...pnpmArgs] : pnpmArgs;
+    process.platform === "win32" 
+      ? ["/d", "/s", "/c", "npx", ...compilerArgs] 
+      : compilerArgs;
   const build = spawn(buildCmd, buildArgs, {
     cwd,
     env,
