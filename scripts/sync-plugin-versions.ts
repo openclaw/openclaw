@@ -16,7 +16,9 @@ if (!targetVersion) {
 }
 
 const extensionsDir = resolve("extensions");
-const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+  entry.isDirectory(),
+);
 
 const updated: string[] = [];
 const changelogged: string[] = [];
@@ -67,5 +69,5 @@ for (const dir of dirs) {
 }
 
 console.log(
-  `Synced plugin versions to ${targetVersion}. Updated: ${updated.length}. Changelogged: ${changelogged.length}. Skipped: ${skipped.length}.`
+  `Synced plugin versions to ${targetVersion}. Updated: ${updated.length}. Changelogged: ${changelogged.length}. Skipped: ${skipped.length}.`,
 );

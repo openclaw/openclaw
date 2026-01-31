@@ -2,7 +2,25 @@
 name: peekaboo
 description: Capture and automate macOS UI with the Peekaboo CLI.
 homepage: https://peekaboo.boo
-metadata: {"openclaw":{"emoji":"👀","os":["darwin"],"requires":{"bins":["peekaboo"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/peekaboo","bins":["peekaboo"],"label":"Install Peekaboo (brew)"}]}}
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "👀",
+        "os": ["darwin"],
+        "requires": { "bins": ["peekaboo"] },
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "steipete/tap/peekaboo",
+              "bins": ["peekaboo"],
+              "label": "Install Peekaboo (brew)",
+            },
+          ],
+      },
+  }
 ---
 
 # Peekaboo
@@ -16,6 +34,7 @@ Tip: run via `polter peekaboo` to ensure fresh builds.
 ## Features (all CLI capabilities, excluding agent/MCP)
 
 Core
+
 - `bridge`: inspect Peekaboo Bridge host connectivity
 - `capture`: live capture or video ingest + frame extraction
 - `clean`: prune snapshot cache and temp files
@@ -29,6 +48,7 @@ Core
 - `tools`: list available tools with filtering/display options
 
 Interaction
+
 - `click`: target by ID/query/coords with smart waits
 - `drag`: drag & drop across elements/coords/Dock
 - `hotkey`: modifier combos like `cmd,shift,t`
@@ -40,6 +60,7 @@ Interaction
 - `type`: text + control keys (`--clear`, delays)
 
 System
+
 - `app`: launch/quit/relaunch/hide/unhide/switch/list apps
 - `clipboard`: read/write clipboard (text/images/files)
 - `dialog`: click/input/file/dismiss/list system dialogs
@@ -52,13 +73,16 @@ System
 - `window`: close/minimize/maximize/move/resize/focus/list
 
 Vision
+
 - `see`: annotated UI maps, snapshot IDs, optional analysis
 
 Global runtime flags
+
 - `--json`/`-j`, `--verbose`/`-v`, `--log-level <level>`
 - `--no-remote`, `--bridge-socket <path>`
 
 ## Quickstart (happy path)
+
 ```bash
 peekaboo permissions
 peekaboo list apps --json
@@ -68,6 +92,7 @@ peekaboo type "Hello" --return
 ```
 
 ## Common targeting parameters (most interaction commands)
+
 - App/window: `--app`, `--pid`, `--window-title`, `--window-id`, `--window-index`
 - Snapshot targeting: `--snapshot` (ID from `see`; defaults to latest)
 - Element/coords: `--on`/`--id` (element ID), `--coords x,y`
@@ -75,6 +100,7 @@ peekaboo type "Hello" --return
   `--focus-timeout-seconds`, `--focus-retry-count`
 
 ## Common capture parameters
+
 - Output: `--path`, `--format png|jpg`, `--retina`
 - Targeting: `--mode screen|window|frontmost`, `--screen-index`,
   `--window-title`, `--window-id`
@@ -82,12 +108,15 @@ peekaboo type "Hello" --return
 - Capture engine: `--capture-engine auto|classic|cg|modern|sckit`
 
 ## Common motion/typing parameters
+
 - Timing: `--duration` (drag/swipe), `--steps`, `--delay` (type/scroll/press)
 - Human-ish movement: `--profile human|linear`, `--wpm` (typing)
 - Scroll: `--direction up|down|left|right`, `--amount <ticks>`, `--smooth`
 
 ## Examples
+
 ### See -> click -> type (most reliable flow)
+
 ```bash
 peekaboo see --app Safari --window-title "Login" --annotate --path /tmp/see.png
 peekaboo click --on B3 --app Safari
@@ -97,6 +126,7 @@ peekaboo type "supersecret" --app Safari --return
 ```
 
 ### Target by window id
+
 ```bash
 peekaboo list windows --app "Visual Studio Code" --json
 peekaboo click --window-id 12345 --coords 120,160
@@ -104,6 +134,7 @@ peekaboo type "Hello from Peekaboo" --window-id 12345
 ```
 
 ### Capture screenshots + analyze
+
 ```bash
 peekaboo image --mode screen --screen-index 0 --retina --path /tmp/screen.png
 peekaboo image --app Safari --window-title "Dashboard" --analyze "Summarize KPIs"
@@ -111,12 +142,14 @@ peekaboo see --mode screen --screen-index 0 --analyze "Summarize the dashboard"
 ```
 
 ### Live capture (motion-aware)
+
 ```bash
 peekaboo capture live --mode region --region 100,100,800,600 --duration 30 \
   --active-fps 8 --idle-fps 2 --highlight-changes --path /tmp/capture
 ```
 
 ### App + window management
+
 ```bash
 peekaboo app launch "Safari" --open https://example.com
 peekaboo window focus --app Safari --window-title "Example"
@@ -125,6 +158,7 @@ peekaboo app quit --app Safari
 ```
 
 ### Menus, menubar, dock
+
 ```bash
 peekaboo menu click --app Safari --item "New Window"
 peekaboo menu click --app TextEdit --path "Format > Font > Show Fonts"
@@ -134,6 +168,7 @@ peekaboo menubar list --json
 ```
 
 ### Mouse + gesture input
+
 ```bash
 peekaboo move 500,300 --smooth
 peekaboo drag --from B1 --to T2
@@ -142,6 +177,7 @@ peekaboo scroll --direction down --amount 6 --smooth
 ```
 
 ### Keyboard input
+
 ```bash
 peekaboo hotkey --keys "cmd,shift,t"
 peekaboo press escape
@@ -149,5 +185,6 @@ peekaboo type "Line 1\nLine 2" --delay 10
 ```
 
 Notes
+
 - Requires Screen Recording + Accessibility permissions.
 - Use `peekaboo see --annotate` to identify targets before clicking.

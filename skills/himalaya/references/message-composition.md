@@ -17,6 +17,7 @@ This is the message body.
 ## Headers
 
 Common headers:
+
 - `From`: Sender address
 - `To`: Primary recipient(s)
 - `Cc`: Carbon copy recipients
@@ -37,6 +38,7 @@ To: user1@example.com, user2@example.com, "Jane" <jane@example.com>
 ## Plain Text Body
 
 Simple plain text email:
+
 ```
 From: alice@localhost
 To: bob@localhost
@@ -54,6 +56,7 @@ Alice
 ### Multipart Messages
 
 Alternative text/html parts:
+
 ```
 From: alice@localhost
 To: bob@localhost
@@ -69,6 +72,7 @@ This is the plain text version.
 ### Attachments
 
 Attach a file:
+
 ```
 From: alice@localhost
 To: bob@localhost
@@ -80,11 +84,13 @@ Here is the document you requested.
 ```
 
 Attachment with custom name:
+
 ```
 <#part filename=/path/to/file.pdf name=report.pdf><#/part>
 ```
 
 Multiple attachments:
+
 ```
 <#part filename=/path/to/doc1.pdf><#/part>
 <#part filename=/path/to/doc2.pdf><#/part>
@@ -93,6 +99,7 @@ Multiple attachments:
 ### Inline Images
 
 Embed an image inline:
+
 ```
 From: alice@localhost
 To: bob@localhost
@@ -129,13 +136,17 @@ Alice
 ## MML Tag Reference
 
 ### `<#multipart>`
+
 Groups multiple parts together.
+
 - `type=alternative`: Different representations of same content
 - `type=mixed`: Independent parts (text + attachments)
 - `type=related`: Parts that reference each other (HTML + images)
 
 ### `<#part>`
+
 Defines a message part.
+
 - `type=<mime-type>`: Content type (e.g., `text/html`, `application/pdf`)
 - `filename=<path>`: File to attach
 - `name=<name>`: Display name for attachment
@@ -145,28 +156,34 @@ Defines a message part.
 ## Composing from CLI
 
 ### Interactive compose
+
 Opens your `$EDITOR`:
+
 ```bash
 himalaya message write
 ```
 
 ### Reply (opens editor with quoted message)
+
 ```bash
 himalaya message reply 42
 himalaya message reply 42 --all  # reply-all
 ```
 
 ### Forward
+
 ```bash
 himalaya message forward 42
 ```
 
 ### Send from stdin
+
 ```bash
 cat message.txt | himalaya template send
 ```
 
 ### Prefill headers from CLI
+
 ```bash
 himalaya message write \
   -H "To:recipient@example.com" \

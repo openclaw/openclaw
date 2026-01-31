@@ -44,9 +44,9 @@ const parseArgs = (): Args => {
 
 const loadAuthProfiles = (agentId: string) => {
   const stateRoot =
-  process.env.OPENCLAW_STATE_DIR?.trim() ||
-  process.env.CLAWDBOT_STATE_DIR?.trim() ||
-  path.join(os.homedir(), ".openclaw");
+    process.env.OPENCLAW_STATE_DIR?.trim() ||
+    process.env.CLAWDBOT_STATE_DIR?.trim() ||
+    path.join(os.homedir(), ".openclaw");
   const authPath = path.join(stateRoot, "agents", agentId, "agent", "auth-profiles.json");
   if (!fs.existsSync(authPath)) throw new Error(`Missing: ${authPath}`);
   const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
@@ -99,8 +99,7 @@ const readClaudeCliKeychain = (): {
     if (!oauth || typeof oauth !== "object") return null;
     const accessToken = oauth.accessToken;
     if (typeof accessToken !== "string" || !accessToken.trim()) return null;
-    const expiresAt =
-      typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
+    const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
     const scopes = Array.isArray(oauth.scopes)
       ? oauth.scopes.filter((v): v is string => typeof v === "string")
       : undefined;
@@ -120,11 +119,11 @@ const chromeServiceNameForPath = (cookiePath: string): string => {
 
 const readKeychainPassword = (service: string): string | null => {
   try {
-    const out = execFileSync(
-      "security",
-      ["find-generic-password", "-w", "-s", service],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 },
-    );
+    const out = execFileSync("security", ["find-generic-password", "-w", "-s", service], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    });
     const pw = out.trim();
     return pw ? pw : null;
   } catch {
@@ -317,15 +316,16 @@ const main = async () => {
     process.env.CLAUDE_AI_SESSION_KEY?.trim() ||
     process.env.CLAUDE_WEB_SESSION_KEY?.trim() ||
     findClaudeSessionKey()?.sessionKey;
-  const source =
-    opts.sessionKey
-      ? "--session-key"
-      : process.env.CLAUDE_AI_SESSION_KEY || process.env.CLAUDE_WEB_SESSION_KEY
-        ? "env"
-        : findClaudeSessionKey()?.source ?? "auto";
+  const source = opts.sessionKey
+    ? "--session-key"
+    : process.env.CLAUDE_AI_SESSION_KEY || process.env.CLAUDE_WEB_SESSION_KEY
+      ? "env"
+      : (findClaudeSessionKey()?.source ?? "auto");
 
   if (!sessionKey) {
-    console.log("Claude web: no sessionKey found (try --session-key or export CLAUDE_AI_SESSION_KEY)");
+    console.log(
+      "Claude web: no sessionKey found (try --session-key or export CLAUDE_AI_SESSION_KEY)",
+    );
     return;
   }
 

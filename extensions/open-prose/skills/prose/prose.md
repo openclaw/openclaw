@@ -28,14 +28,14 @@ This document defines how to execute OpenProse programs. You are the OpenProse V
 
 OpenProse is invoked via `prose` commands:
 
-| Command | Action |
-|---------|--------|
-| `prose run <file.prose>` | Execute a local `.prose` program |
-| `prose run handle/slug` | Fetch from registry and execute |
-| `prose compile <file>` | Validate syntax without executing |
-| `prose help` | Show help and examples |
-| `prose examples` | List or run bundled examples |
-| `prose update` | Migrate legacy workspace files |
+| Command                  | Action                            |
+| ------------------------ | --------------------------------- |
+| `prose run <file.prose>` | Execute a local `.prose` program  |
+| `prose run handle/slug`  | Fetch from registry and execute   |
+| `prose compile <file>`   | Validate syntax without executing |
+| `prose help`             | Show help and examples            |
+| `prose examples`         | List or run bundled examples      |
+| `prose update`           | Migrate legacy workspace files    |
 
 ### Remote Programs
 
@@ -51,11 +51,13 @@ prose run alice/code-review        # Fetches https://p.prose.md/alice/code-revie
 ```
 
 **Resolution rules:**
+
 - Starts with `http://` or `https://` → fetch directly
 - Contains `/` but no protocol → resolve to `https://p.prose.md/{path}`
 - Otherwise → treat as local file path
 
 This same resolution applies to `use` statements inside programs:
+
 ```prose
 use "https://example.com/my-program.prose"  # Direct URL
 use "alice/research" as research             # Registry shorthand
@@ -111,18 +113,18 @@ When you execute a `.prose` program, you ARE the virtual machine. This is not a 
 
 Traditional dependency injection containers wire up components from configuration. You do the same—but with understanding:
 
-| Declared Primitive           | Your Responsibility                                        |
-| ---------------------------- | ---------------------------------------------------------- |
+| Declared Primitive          | Your Responsibility                                        |
+| --------------------------- | ---------------------------------------------------------- |
 | `use "handle/slug" as name` | Fetch program from p.prose.md, register in Import Registry |
-| `input topic: "..."`         | Bind value from caller, make available as variable         |
-| `output findings = ...`      | Mark value as output, return to caller on completion       |
-| `agent researcher:`          | Register this agent template for later use                 |
-| `session: researcher`        | Resolve the agent, merge properties, spawn the session     |
-| `resume: captain`            | Load agent memory, spawn session with memory context       |
-| `context: { a, b }`          | Wire the outputs of `a` and `b` into this session's input  |
-| `parallel:` branches         | Coordinate concurrent execution, collect results           |
-| `block review(topic):`       | Store this reusable component, invoke when called          |
-| `name(input: value)`         | Invoke imported program with inputs, receive outputs       |
+| `input topic: "..."`        | Bind value from caller, make available as variable         |
+| `output findings = ...`     | Mark value as output, return to caller on completion       |
+| `agent researcher:`         | Register this agent template for later use                 |
+| `session: researcher`       | Resolve the agent, merge properties, spawn the session     |
+| `resume: captain`           | Load agent memory, spawn session with memory context       |
+| `context: { a, b }`         | Wire the outputs of `a` and `b` into this session's input  |
+| `parallel:` branches        | Coordinate concurrent execution, collect results           |
+| `block review(topic):`      | Store this reusable component, invoke when called          |
+| `name(input: value)`        | Invoke imported program with inputs, receive outputs       |
 
 You are the container that holds these declarations and wires them together at runtime. The program declares _what_; you determine _how_ to connect them.
 

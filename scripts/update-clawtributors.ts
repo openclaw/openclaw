@@ -329,7 +329,7 @@ function resolveLogin(
   email: string | null,
   apiByLogin: Map<string, User>,
   nameToLogin: Record<string, string>,
-  emailToLogin: Record<string, string>
+  emailToLogin: Record<string, string>,
 ): string | null {
   if (email && emailToLogin[email]) {
     return emailToLogin[email];
@@ -379,7 +379,7 @@ function resolveLogin(
 function guessLoginFromEmailName(
   name: string,
   email: string,
-  apiByLogin: Map<string, User>
+  apiByLogin: Map<string, User>,
 ): string | null {
   const local = email.split("@", 1)[0]?.trim();
   if (!local) {
@@ -410,7 +410,7 @@ function normalizeIdentifier(value: string): string {
 }
 
 function parseReadmeEntries(
-  content: string
+  content: string,
 ): Array<{ display: string; html_url: string; avatar_url: string }> {
   const start = content.indexOf('<p align="left">');
   const end = content.indexOf("</p>", start);
@@ -458,7 +458,11 @@ function fallbackHref(value: string): string {
   return encoded ? `https://github.com/search?q=${encoded}` : "https://github.com";
 }
 
-function pickDisplay(baseName: string | null | undefined, login: string, existing?: string): string {
+function pickDisplay(
+  baseName: string | null | undefined,
+  login: string,
+  existing?: string,
+): string {
   const key = login.toLowerCase();
   if (displayName[key]) {
     return displayName[key];

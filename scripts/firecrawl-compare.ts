@@ -88,9 +88,7 @@ async function run() {
       localError = error instanceof Error ? error.message : String(error);
     }
 
-    console.log(
-      `local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`
-    );
+    console.log(`local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`);
     if (localError) console.log(`local error: ${localError}`);
     if (localText) console.log(`local sample: ${truncate(localText)}`);
 
@@ -111,7 +109,7 @@ async function run() {
           `firecrawl: ok len=${firecrawl.text.length} title=${truncate(
             firecrawl.title ?? "",
             80,
-          )} status=${firecrawl.status ?? "n/a"}`
+          )} status=${firecrawl.status ?? "n/a"}`,
         );
         if (firecrawl.warning) console.log(`firecrawl warning: ${firecrawl.warning}`);
         if (firecrawl.text) console.log(`firecrawl sample: ${truncate(firecrawl.text)}`);
