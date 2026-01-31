@@ -102,6 +102,8 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
             #expect(commands.contains(OpenClawContactsCommand.add.rawValue))
             #expect(commands.contains(OpenClawCalendarCommand.add.rawValue))
             #expect(commands.contains(OpenClawRemindersCommand.add.rawValue))
+            #expect(commands.contains(OpenClawTalkCommand.pttStart.rawValue))
+            #expect(commands.contains(OpenClawTalkCommand.pttStop.rawValue))
         }
     }
 
