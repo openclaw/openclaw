@@ -254,6 +254,13 @@ export function normalizeProviders(params: {
       normalizedProvider = googleNormalized;
     }
 
+    // Ensure api field is set to prevent "Unhandled API in mapOptionsForApi: undefined" error.
+    // Default to openai-responses for providers with baseUrl but no explicit api field.
+    if (!normalizedProvider.api && normalizedProvider.baseUrl) {
+      mutated = true;
+      normalizedProvider = { ...normalizedProvider, api: "openai-responses" };
+    }
+
     next[key] = normalizedProvider;
   }
 
@@ -517,8 +524,10 @@ export async function resolveImplicitCopilotProvider(params: {
   // We intentionally do NOT define custom models for Copilot in models.json.
   // pi-coding-agent treats providers with models as replacements requiring apiKey.
   // We only override baseUrl; the model list comes from pi-ai built-ins.
+  // api: "openai-responses" is required to prevent "Unhandled API in mapOptionsForApi" error
   return {
     baseUrl,
+    api: "openai-responses",
     models: [],
   } satisfies ProviderConfig;
 }
