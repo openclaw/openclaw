@@ -225,11 +225,11 @@ function auditGatewayServicePath(
     .split(getPathModule(platform).delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean);
-  const normalizedParts = parts.map((entry) => normalizePathEntry(entry, platform));
+  const normalizedParts = new Set(parts.map((entry) => normalizePathEntry(entry, platform)));
   const normalizedExpected = new Set(expected.map((entry) => normalizePathEntry(entry, platform)));
   const missing = expected.filter((entry) => {
     const normalized = normalizePathEntry(entry, platform);
-    return !normalizedParts.includes(normalized);
+    return !normalizedParts.has(normalized);
   });
   if (missing.length > 0) {
     issues.push({

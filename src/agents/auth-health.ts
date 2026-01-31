@@ -226,10 +226,10 @@ export function buildAuthHealthSummary(params: {
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    const statuses = expirable.map((p) => p.status);
-    if (statuses.includes("expired") || statuses.includes("missing")) {
+    const statuses = new Set(expirable.map((p) => p.status));
+    if (statuses.has("expired") || statuses.has("missing")) {
       provider.status = "expired";
-    } else if (statuses.includes("expiring")) {
+    } else if (statuses.has("expiring")) {
       provider.status = "expiring";
     } else {
       provider.status = "ok";
