@@ -28,17 +28,22 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   opus: "claude-opus-4-5",
   "opus-4.5": "claude-opus-4-5",
   "opus-4": "claude-opus-4-5",
-
-  // Legacy Claude aliases (OpenCode Zen rotates model catalogs; keep old keys working).
-  sonnet: "claude-opus-4-5",
-  "sonnet-4": "claude-opus-4-5",
-  haiku: "claude-opus-4-5",
-  "haiku-3.5": "claude-opus-4-5",
+  "opus-4.1": "claude-opus-4-1",
+  sonnet: "claude-sonnet-4-5",
+  "sonnet-4.5": "claude-sonnet-4-5",
+  "sonnet-4": "claude-sonnet-4",
+  haiku: "claude-haiku-4-5",
+  "haiku-4.5": "claude-haiku-4-5",
+  "haiku-4": "claude-haiku-4-5",
+  "haiku-3.5": "claude-3-5-haiku",
 
   // GPT-5.x family
   gpt5: "gpt-5.2",
-  "gpt-5": "gpt-5.2",
+  "gpt-5": "gpt-5",
   "gpt-5.1": "gpt-5.1",
+  "gpt-5.2": "gpt-5.2",
+  nano: "gpt-5-nano",
+  "gpt-nano": "gpt-5-nano",
 
   // Legacy GPT aliases (keep old config/docs stable; map to closest current equivalents).
   gpt4: "gpt-5.1",
@@ -51,7 +56,10 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   "o3-mini": "gpt-5.1-codex-mini",
 
   // Codex family
-  codex: "gpt-5.1-codex",
+  codex: "gpt-5.2-codex",
+  "codex-5.2": "gpt-5.2-codex",
+  "codex-5.1": "gpt-5.1-codex",
+  "codex-5": "gpt-5-codex",
   "codex-mini": "gpt-5.1-codex-mini",
   "codex-max": "gpt-5.1-codex-max",
 
@@ -67,9 +75,36 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   "gemini-2.5-pro": "gemini-3-pro",
   "gemini-2.5-flash": "gemini-3-flash",
 
-  // GLM (free)
+  // GLM
   glm: "glm-4.7",
-  "glm-free": "glm-4.7",
+  "glm-4.6": "glm-4.6",
+  "glm-free": "glm-4.7-free",
+  "glm-4.7-free": "glm-4.7-free",
+
+  // Kimi
+  kimi: "kimi-k2.5",
+  "kimi-free": "kimi-k2.5-free",
+  "kimi-k2": "kimi-k2",
+  "kimi-k2.5": "kimi-k2.5",
+  "kimi-k2.5-free": "kimi-k2.5-free",
+  "kimi-thinking": "kimi-k2-thinking",
+  "kimi-k2-thinking": "kimi-k2-thinking",
+
+  // MiniMax
+  minimax: "minimax-m2.1",
+  "minimax-free": "minimax-m2.1-free",
+  "minimax-m2.1": "minimax-m2.1",
+  "minimax-m2.1-free": "minimax-m2.1-free",
+
+  // Other free models
+  trinity: "trinity-large-preview-free",
+  "big-pickle": "big-pickle",
+  pickle: "big-pickle",
+  
+  // Qwen
+  qwen: "qwen3-coder",
+  "qwen-coder": "qwen3-coder",
+  "qwen3": "qwen3-coder",
 };
 
 /**
@@ -95,6 +130,16 @@ export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
   if (lower.startsWith("gemini-")) {
     return "google-generative-ai";
   }
+  // GLM, Kimi, Qwen, Trinity, Big Pickle use OpenAI-compatible API
+  if (
+    lower.startsWith("glm-") ||
+    lower.startsWith("kimi-") ||
+    lower.startsWith("qwen") ||
+    lower.startsWith("trinity-") ||
+    lower.startsWith("big-pickle")
+  ) {
+    return "openai-completions";
+  }
   return "openai-completions";
 }
 
@@ -113,44 +158,87 @@ const MODEL_COSTS: Record<
   string,
   { input: number; output: number; cacheRead: number; cacheWrite: number }
 > = {
-  "gpt-5.1-codex": {
-    input: 1.07,
-    output: 8.5,
-    cacheRead: 0.107,
-    cacheWrite: 0,
-  },
+  // Free models (zero cost)
+  "glm-4.7-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "gpt-5-nano": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "kimi-k2.5-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "minimax-m2.1-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "trinity-large-preview-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "big-pickle": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  
+  // Claude models
   "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-  "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
-  "gpt-5.1-codex-mini": {
-    input: 0.25,
-    output: 2,
-    cacheRead: 0.025,
-    cacheWrite: 0,
-  },
-  "gpt-5.1": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
-  "glm-4.7": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
-  "gpt-5.1-codex-max": {
-    input: 1.25,
-    output: 10,
-    cacheRead: 0.125,
-    cacheWrite: 0,
-  },
+  "claude-opus-4-1": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-sonnet-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-sonnet-4": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-haiku-4-5": { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.3 },
+  "claude-3-5-haiku": { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.3 },
+
+  // GPT models
   "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.2-codex": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.1": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5.1-codex": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5.1-codex-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+  "gpt-5.1-codex-max": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+  "gpt-5": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+  "gpt-5-codex": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
+
+  // Gemini models
+  "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+
+  // Other models
+  "qwen3-coder": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "glm-4.7": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "glm-4.6": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "minimax-m2.1": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "kimi-k2.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "kimi-k2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "kimi-k2-thinking": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
 const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  "gpt-5.1-codex": 400000,
+  // Free models
+  "glm-4.7-free": 204800,
+  "gpt-5-nano": 128000,
+  "kimi-k2.5-free": 256000,
+  "minimax-m2.1-free": 200000,
+  "trinity-large-preview-free": 128000,
+  "big-pickle": 128000,
+  
+  // Claude models
   "claude-opus-4-5": 200000,
-  "gemini-3-pro": 1048576,
-  "gpt-5.1-codex-mini": 400000,
-  "gpt-5.1": 400000,
-  "glm-4.7": 204800,
-  "gemini-3-flash": 1048576,
-  "gpt-5.1-codex-max": 400000,
+  "claude-opus-4-1": 200000,
+  "claude-sonnet-4-5": 200000,
+  "claude-sonnet-4": 200000,
+  "claude-haiku-4-5": 200000,
+  "claude-3-5-haiku": 200000,
+
+  // GPT models
   "gpt-5.2": 400000,
+  "gpt-5.2-codex": 400000,
+  "gpt-5.1": 400000,
+  "gpt-5.1-codex": 400000,
+  "gpt-5.1-codex-mini": 400000,
+  "gpt-5.1-codex-max": 400000,
+  "gpt-5": 400000,
+  "gpt-5-codex": 400000,
+
+  // Gemini models
+  "gemini-3-pro": 1048576,
+  "gemini-3-flash": 1048576,
+
+  // Other models
+  "qwen3-coder": 128000,
+  "glm-4.7": 204800,
+  "glm-4.6": 200000,
+  "minimax-m2.1": 200000,
+  "kimi-k2.5": 256000,
+  "kimi-k2": 256000,
+  "kimi-k2-thinking": 256000,
 };
 
 function getDefaultContextWindow(modelId: string): number {
@@ -158,15 +246,44 @@ function getDefaultContextWindow(modelId: string): number {
 }
 
 const MODEL_MAX_TOKENS: Record<string, number> = {
-  "gpt-5.1-codex": 128000,
+  // Free models
+  "glm-4.7-free": 131072,
+  "gpt-5-nano": 16384,
+  "kimi-k2.5-free": 8192,
+  "minimax-m2.1-free": 16384,
+  "trinity-large-preview-free": 8192,
+  "big-pickle": 8192,
+  
+  // Claude models
   "claude-opus-4-5": 64000,
-  "gemini-3-pro": 65536,
-  "gpt-5.1-codex-mini": 128000,
-  "gpt-5.1": 128000,
-  "glm-4.7": 131072,
-  "gemini-3-flash": 65536,
-  "gpt-5.1-codex-max": 128000,
+  "claude-opus-4-1": 64000,
+  "claude-sonnet-4-5": 64000,
+  "claude-sonnet-4": 64000,
+  "claude-haiku-4-5": 64000,
+  "claude-3-5-haiku": 64000,
+
+  // GPT models
   "gpt-5.2": 128000,
+  "gpt-5.2-codex": 128000,
+  "gpt-5.1": 128000,
+  "gpt-5.1-codex": 128000,
+  "gpt-5.1-codex-mini": 128000,
+  "gpt-5.1-codex-max": 128000,
+  "gpt-5": 128000,
+  "gpt-5-codex": 128000,
+
+  // Gemini models
+  "gemini-3-pro": 65536,
+  "gemini-3-flash": 65536,
+
+  // Other models
+  "qwen3-coder": 8192,
+  "glm-4.7": 131072,
+  "glm-4.6": 16384,
+  "minimax-m2.1": 16384,
+  "kimi-k2.5": 8192,
+  "kimi-k2": 8192,
+  "kimi-k2-thinking": 16384,
 };
 
 function getDefaultMaxTokens(modelId: string): number {
@@ -194,15 +311,44 @@ function buildModelDefinition(modelId: string): ModelDefinitionConfig {
  * Format a model ID into a human-readable name.
  */
 const MODEL_NAMES: Record<string, string> = {
-  "gpt-5.1-codex": "GPT-5.1 Codex",
+  // Free models
+  "glm-4.7-free": "GLM-4.7 Free",
+  "gpt-5-nano": "GPT-5 Nano",
+  "kimi-k2.5-free": "Kimi K2.5 Free",
+  "minimax-m2.1-free": "MiniMax M2.1 Free",
+  "trinity-large-preview-free": "Trinity Large Preview Free",
+  "big-pickle": "Big Pickle",
+  
+  // Claude models
   "claude-opus-4-5": "Claude Opus 4.5",
-  "gemini-3-pro": "Gemini 3 Pro",
-  "gpt-5.1-codex-mini": "GPT-5.1 Codex Mini",
-  "gpt-5.1": "GPT-5.1",
-  "glm-4.7": "GLM-4.7",
-  "gemini-3-flash": "Gemini 3 Flash",
-  "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
+  "claude-opus-4-1": "Claude Opus 4.1",
+  "claude-sonnet-4-5": "Claude Sonnet 4.5",
+  "claude-sonnet-4": "Claude Sonnet 4",
+  "claude-haiku-4-5": "Claude Haiku 4.5",
+  "claude-3-5-haiku": "Claude 3.5 Haiku",
+
+  // GPT models
   "gpt-5.2": "GPT-5.2",
+  "gpt-5.2-codex": "GPT-5.2 Codex",
+  "gpt-5.1": "GPT-5.1",
+  "gpt-5.1-codex": "GPT-5.1 Codex",
+  "gpt-5.1-codex-mini": "GPT-5.1 Codex Mini",
+  "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
+  "gpt-5": "GPT-5",
+  "gpt-5-codex": "GPT-5 Codex",
+
+  // Gemini models
+  "gemini-3-pro": "Gemini 3 Pro",
+  "gemini-3-flash": "Gemini 3 Flash",
+
+  // Other models
+  "qwen3-coder": "Qwen3 Coder",
+  "glm-4.7": "GLM-4.7",
+  "glm-4.6": "GLM-4.6",
+  "minimax-m2.1": "MiniMax M2.1",
+  "kimi-k2.5": "Kimi K2.5",
+  "kimi-k2": "Kimi K2",
+  "kimi-k2-thinking": "Kimi K2 Thinking",
 };
 
 function formatModelName(modelId: string): string {
@@ -218,18 +364,48 @@ function formatModelName(modelId: string): string {
 
 /**
  * Static fallback models when API is unreachable.
+ * Includes both free and paid models available on OpenCode Zen.
  */
 export function getOpencodeZenStaticFallbackModels(): ModelDefinitionConfig[] {
   const modelIds = [
-    "gpt-5.1-codex",
+    // Free models
+    "glm-4.7-free",
+    "gpt-5-nano",
+    "kimi-k2.5-free",
+    "minimax-m2.1-free",
+    "trinity-large-preview-free",
+    "big-pickle",
+
+    // Claude models
     "claude-opus-4-5",
-    "gemini-3-pro",
-    "gpt-5.1-codex-mini",
-    "gpt-5.1",
-    "glm-4.7",
-    "gemini-3-flash",
-    "gpt-5.1-codex-max",
+    "claude-opus-4-1",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4",
+    "claude-haiku-4-5",
+    "claude-3-5-haiku",
+
+    // GPT models
     "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.1",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex-max",
+    "gpt-5",
+    "gpt-5-codex",
+
+    // Gemini models
+    "gemini-3-pro",
+    "gemini-3-flash",
+
+    // Other models
+    "qwen3-coder",
+    "glm-4.7",
+    "glm-4.6",
+    "minimax-m2.1",
+    "kimi-k2.5",
+    "kimi-k2",
+    "kimi-k2-thinking",
   ];
 
   return modelIds.map(buildModelDefinition);

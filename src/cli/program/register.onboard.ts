@@ -49,6 +49,9 @@ export function registerOnboardCommand(program: Command) {
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
     .option("--reset", "Reset config + credentials + sessions + workspace before running wizard")
     .option("--non-interactive", "Run without prompts", false)
+    .option("--web", "Launch web-based onboarding UI instead of CLI wizard")
+    .option("--web-port <port>", "Port for web-based onboarding UI (default: 9887)")
+    .option("--no-web-open", "Don't open browser automatically when using --web (browser opens by default)")
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -58,7 +61,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip",
+      "Auth: setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|nvidia-api-key|siliconflow-api-key|skip",
     )
     .option(
       "--token-provider <id>",
@@ -83,6 +86,8 @@ export function registerOnboardCommand(program: Command) {
     .option("--synthetic-api-key <key>", "Synthetic API key")
     .option("--venice-api-key <key>", "Venice API key")
     .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
+    .option("--nvidia-api-key <key>", "NVIDIA NIM API key")
+    .option("--siliconflow-api-key <key>", "SiliconFlow (硅基流动) API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -109,11 +114,16 @@ export function registerOnboardCommand(program: Command) {
         });
         const gatewayPort =
           typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+        const webPort =
+          typeof opts.webPort === "string" ? Number.parseInt(opts.webPort, 10) : undefined;
         await onboardCommand(
           {
             workspace: opts.workspace as string | undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             acceptRisk: Boolean(opts.acceptRisk),
+            web: Boolean(opts.web),
+            webPort: typeof webPort === "number" && Number.isFinite(webPort) ? webPort : undefined,
+            webOpen: opts.webOpen !== false,
             flow: opts.flow as "quickstart" | "advanced" | "manual" | undefined,
             mode: opts.mode as "local" | "remote" | undefined,
             authChoice: opts.authChoice as AuthChoice | undefined,
@@ -134,6 +144,8 @@ export function registerOnboardCommand(program: Command) {
             syntheticApiKey: opts.syntheticApiKey as string | undefined,
             veniceApiKey: opts.veniceApiKey as string | undefined,
             opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
+            nvidiaApiKey: opts.nvidiaApiKey as string | undefined,
+            siliconflowApiKey: opts.siliconflowApiKey as string | undefined,
             gatewayPort:
               typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
                 ? gatewayPort

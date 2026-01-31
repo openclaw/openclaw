@@ -1,48 +1,50 @@
 import {
-  getOpencodeZenStaticFallbackModels,
-  OPENCODE_ZEN_API_BASE_URL,
-  OPENCODE_ZEN_DEFAULT_MODEL_REF,
-} from "../agents/opencode-zen-models.js";
+  getSiliconFlowStaticFallbackModels,
+  SILICONFLOW_API_BASE_URL,
+  SILICONFLOW_DEFAULT_MODEL_REF,
+} from "../agents/siliconflow-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 
+export { SILICONFLOW_DEFAULT_MODEL_REF } from "../agents/siliconflow-models.js";
+
 /**
- * Apply OpenCode Zen provider configuration without changing the default model.
- * Registers OpenCode Zen models and sets up the provider, but preserves existing model selection.
+ * Apply SiliconFlow (硅基流动) provider configuration without changing the default model.
+ * Registers SiliconFlow models and sets up the provider, but preserves existing model selection.
  */
-export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applySiliconFlowProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
-  models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
-    ...models[OPENCODE_ZEN_DEFAULT_MODEL_REF],
-    alias: models[OPENCODE_ZEN_DEFAULT_MODEL_REF]?.alias ?? "Opus",
+  models[SILICONFLOW_DEFAULT_MODEL_REF] = {
+    ...models[SILICONFLOW_DEFAULT_MODEL_REF],
+    alias: models[SILICONFLOW_DEFAULT_MODEL_REF]?.alias ?? "DeepSeek",
   };
 
   const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.opencode;
+  const existingProvider = providers.siliconflow;
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-
+  
   // Use static fallback models for initial configuration
-  // The models will be dynamically fetched at runtime via fetchOpencodeZenModels
-  const opencodeModels = getOpencodeZenStaticFallbackModels();
+  // The models will be dynamically fetched at runtime via fetchSiliconFlowModels
+  const siliconflowModels = getSiliconFlowStaticFallbackModels();
   const mergedModels = [
     ...existingModels,
-    ...opencodeModels.filter(
+    ...siliconflowModels.filter(
       (model) => !existingModels.some((existing) => existing.id === model.id),
     ),
   ];
-
+  
   const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
     string,
     unknown
   > as { apiKey?: string };
   const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
   const normalizedApiKey = resolvedApiKey?.trim();
-
-  providers.opencode = {
+  
+  providers.siliconflow = {
     ...existingProviderRest,
-    baseUrl: OPENCODE_ZEN_API_BASE_URL,
+    baseUrl: SILICONFLOW_API_BASE_URL,
     api: "openai-completions",
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : opencodeModels,
+    models: mergedModels.length > 0 ? mergedModels : siliconflowModels,
   };
 
   return {
@@ -62,11 +64,11 @@ export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawCon
 }
 
 /**
- * Apply OpenCode Zen provider configuration AND set OpenCode Zen as the default model.
- * Use this when OpenCode Zen is the primary provider choice during onboarding.
+ * Apply SiliconFlow provider configuration AND set SiliconFlow as the default model.
+ * Use this when SiliconFlow is the primary provider choice during onboarding.
  */
-export function applyOpencodeZenConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyOpencodeZenProviderConfig(cfg);
+export function applySiliconFlowConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applySiliconFlowProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
     ...next,
@@ -80,7 +82,7 @@ export function applyOpencodeZenConfig(cfg: OpenClawConfig): OpenClawConfig {
                 fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
               }
             : undefined),
-          primary: OPENCODE_ZEN_DEFAULT_MODEL_REF,
+          primary: SILICONFLOW_DEFAULT_MODEL_REF,
         },
       },
     },

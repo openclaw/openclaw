@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- OpenClaw Lobster Icon -->
+  <defs>
+    <linearGradient id="clawGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e63946"/>
+      <stop offset="100%" style="stop-color:#c1121f"/>
+    </linearGradient>
+  </defs>
+  <!-- Main body -->
+  <ellipse cx="50" cy="55" rx="25" ry="30" fill="url(#clawGrad)"/>
+  <!-- Left claw -->
+  <path d="M20 35 Q5 25 15 15 Q25 10 30 20 Q35 30 25 40 Z" fill="url(#clawGrad)"/>
+  <!-- Right claw -->
+  <path d="M80 35 Q95 25 85 15 Q75 10 70 20 Q65 30 75 40 Z" fill="url(#clawGrad)"/>
+  <!-- Eyes -->
+  <circle cx="42" cy="42" r="5" fill="white"/>
+  <circle cx="58" cy="42" r="5" fill="white"/>
+  <circle cx="43" cy="43" r="2.5" fill="#1d3557"/>
+  <circle cx="59" cy="43" r="2.5" fill="#1d3557"/>
+  <!-- Antenna -->
+  <line x1="40" y1="30" x2="35" y2="15" stroke="#e63946" stroke-width="2" stroke-linecap="round"/>
+  <line x1="60" y1="30" x2="65" y2="15" stroke="#e63946" stroke-width="2" stroke-linecap="round"/>
+  <!-- Tail segments -->
+  <ellipse cx="50" cy="80" rx="15" ry="8" fill="url(#clawGrad)" opacity="0.9"/>
+  <ellipse cx="50" cy="90" rx="10" ry="5" fill="url(#clawGrad)" opacity="0.8"/>
+</svg>

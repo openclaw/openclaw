@@ -8,6 +8,7 @@ import { resolveUserPath } from "../utils.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
+import { runWebOnboarding } from "./onboard-web/index.js";
 
 export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
   assertSupportedRuntime(runtime);
@@ -68,6 +69,11 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
         "Guide: https://docs.openclaw.ai/windows",
       ].join("\n"),
     );
+  }
+
+  if (normalizedOpts.web) {
+    await runWebOnboarding(normalizedOpts, runtime);
+    return;
   }
 
   if (normalizedOpts.nonInteractive) {

@@ -18,6 +18,8 @@ export type AuthChoiceGroupId =
   | "zai"
   | "xiaomi"
   | "opencode-zen"
+  | "nvidia"
+  | "siliconflow"
   | "minimax"
   | "synthetic"
   | "venice"
@@ -99,7 +101,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "opencode-zen",
     label: "OpenCode Zen",
-    hint: "API key",
+    hint: "Free + paid models (GLM, GPT, Claude, Gemini)",
     choices: ["opencode-zen"],
   },
   {
@@ -119,6 +121,18 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
+  },
+  {
+    value: "nvidia",
+    label: "NVIDIA NIM",
+    hint: "Llama, DeepSeek, Qwen, Mistral",
+    choices: ["nvidia-api-key"],
+  },
+  {
+    value: "siliconflow",
+    label: "SiliconFlow 硅基流动",
+    hint: "DeepSeek, GLM, Qwen, Llama",
+    choices: ["siliconflow-api-key"],
   },
 ];
 
@@ -192,6 +206,16 @@ export function buildAuthChoiceOptions(params: {
     value: "opencode-zen",
     label: "OpenCode Zen (multi-model proxy)",
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
+  });
+  options.push({
+    value: "nvidia-api-key",
+    label: "NVIDIA NIM (multi-model)",
+    hint: "Llama, DeepSeek, Qwen, Mistral via build.nvidia.com",
+  });
+  options.push({
+    value: "siliconflow-api-key",
+    label: "SiliconFlow 硅基流动 (multi-model)",
+    hint: "DeepSeek, GLM, Qwen, Llama via siliconflow.cn",
   });
   options.push({ value: "minimax-api", label: "MiniMax M2.1" });
   options.push({
