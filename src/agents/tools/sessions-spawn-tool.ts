@@ -4,6 +4,7 @@ import { Type } from "@sinclair/typebox";
 
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { callGateway } from "../../gateway/call.js";
 import {
   isSubagentSessionKey,
@@ -24,6 +25,33 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "./sessions-helpers.js";
+
+/**
+ * Retry a gateway call on 401 auth errors.
+ * This provides a second layer of defense for auth race conditions,
+ * complementing the startup delay in the gateway agent handler.
+ */
+async function callGatewayWithAuthRetry<T>(
+  opts: Parameters<typeof callGateway>[0],
+  maxRetries = 2,
+  delayMs = 300,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await callGateway<T>(opts);
+    } catch (err) {
+      lastError = err;
+      const reason = resolveFailoverReasonFromError(err);
+      if (reason !== "auth" || attempt >= maxRetries) {
+        throw err;
+      }
+      // Wait before retrying on auth error
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -189,7 +217,7 @@ export function createSessionsSpawnTool(opts?: {
       }
       if (resolvedModel) {
         try {
-          await callGateway({
+          await callGatewayWithAuthRetry({
             method: "sessions.patch",
             params: { key: childSessionKey, model: resolvedModel },
             timeoutMs: 10_000,
@@ -221,7 +249,7 @@ export function createSessionsSpawnTool(opts?: {
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
       try {
-        const response = await callGateway<{ runId: string }>({
+        const response = await callGatewayWithAuthRetry<{ runId: string }>({
           method: "agent",
           params: {
             message: task,
