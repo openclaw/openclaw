@@ -52,7 +52,19 @@ export class CustomEditor extends Editor {
     if (matchesKey(data, Key.ctrl("d"))) {
       if (this.getText().length === 0 && this.onCtrlD) {
         this.onCtrlD();
+        return;
       }
+      // Emacs delete-char: forward to parent as Delete key
+      super.handleInput("\x1b[3~");
+      return;
+    }
+    // Emacs cursor movement: Ctrl+B → left, Ctrl+F → right
+    if (matchesKey(data, Key.ctrl("b"))) {
+      super.handleInput("\x1b[D");
+      return;
+    }
+    if (matchesKey(data, Key.ctrl("f"))) {
+      super.handleInput("\x1b[C");
       return;
     }
     super.handleInput(data);
