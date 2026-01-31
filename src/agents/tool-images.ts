@@ -145,7 +145,6 @@ async function resizeImageBase64IfNeeded(params: {
     }
   }
 
-  const bestBase64 = smallest?.base64 ?? params.base64;
   const bestSize = smallest?.size ?? base64Length;
   const maxMb = (params.maxBytes / (1024 * 1024)).toFixed(0);
   const gotMb = (bestSize / (1024 * 1024)).toFixed(2);
