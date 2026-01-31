@@ -992,7 +992,7 @@ export function createExecTool(
         let allowlistSatisfied = false;
         if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
           try {
-            const approvalsSnapshot = await callGatewayTool(
+            const approvalsSnapshot = await callGatewayTool<{ file: string }>(
               "exec.approvals.node.get",
               { timeoutMs: 10_000 },
               { nodeId },
@@ -1067,7 +1067,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = await callGatewayTool(
+              const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
@@ -1083,10 +1083,11 @@ export function createExecTool(
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
-              decision =
+              const decisionValue =
                 decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult.decision ?? null)
-                  : null;
+                  ? (decisionResult as { decision?: unknown }).decision
+                  : undefined;
+              decision = typeof decisionValue === "string" ? decisionValue : null;
             } catch {
               emitExecSystemEvent(
                 `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${commandText}`,
@@ -1182,19 +1183,27 @@ export function createExecTool(
           { timeoutMs: invokeTimeoutMs },
           buildInvokeParams(false, null),
         );
-        const payload = raw?.payload ?? {};
+        const payload =
+          raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;
+        const payloadObj =
+          payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+        const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
+        const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
+        const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
+        const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
+        const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
         return {
           content: [
             {
               type: "text",
-              text: payload.stdout || payload.stderr || payload.error || "",
+              text: stdout || stderr || errorText || "",
             },
           ],
           details: {
-            status: payload.success ? "completed" : "failed",
-            exitCode: payload.exitCode ?? null,
+            status: success ? "completed" : "failed",
+            exitCode,
             durationMs: Date.now() - startedAt,
-            aggregated: [payload.stdout, payload.stderr, payload.error].filter(Boolean).join("\n"),
+            aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
             cwd: workdir,
           } satisfies ExecToolDetails,
         };
@@ -1241,7 +1250,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = await callGatewayTool(
+              const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
@@ -1257,10 +1266,11 @@ export function createExecTool(
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
-              decision =
+              const decisionValue =
                 decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult.decision ?? null)
-                  : null;
+                  ? (decisionResult as { decision?: unknown }).decision
+                  : undefined;
+              decision = typeof decisionValue === "string" ? decisionValue : null;
             } catch {
               emitExecSystemEvent(
                 `Exec denied (gateway id=${approvalId}, approval-request-failed): ${commandText}`,

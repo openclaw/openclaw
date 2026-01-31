@@ -369,7 +369,12 @@ export async function runSubagentAnnounceFlow(params: {
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (!reply && params.waitForCompletion !== false) {
       const waitMs = Math.min(params.timeoutMs, 60_000);
-      const wait = await callGateway({
+      const wait = await callGateway<{
+        status?: string;
+        startedAt?: number;
+        endedAt?: number;
+        error?: string;
+      }>({
         method: "agent.wait",
         params: {
           runId: params.childRunId,
@@ -377,10 +382,11 @@ export async function runSubagentAnnounceFlow(params: {
         },
         timeoutMs: waitMs + 2000,
       });
+      const waitError = typeof wait?.error === "string" ? wait.error : undefined;
       if (wait?.status === "timeout") {
         outcome = { status: "timeout" };
       } else if (wait?.status === "error") {
-        outcome = { status: "error", error: wait.error };
+        outcome = { status: "error", error: waitError };
       } else if (wait?.status === "ok") {
         outcome = { status: "ok" };
       }

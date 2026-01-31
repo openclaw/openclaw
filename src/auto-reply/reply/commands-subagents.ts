@@ -338,7 +338,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         reply: { text: `⚠️ ${resolved.error ?? "Unknown subagent."}` },
       };
     }
-    const history = await callGateway({
+    const history = await callGateway<{ messages: Array<unknown> }>({
       method: "chat.history",
       params: { sessionKey: resolved.entry.childSessionKey, limit },
     });
@@ -371,7 +371,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const idempotencyKey = crypto.randomUUID();
     let runId: string = idempotencyKey;
     try {
-      const response = await callGateway({
+      const response = await callGateway<{ runId: string }>({
         method: "agent",
         params: {
           message,
@@ -383,8 +383,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         },
         timeoutMs: 10_000,
       });
-      if (response?.runId) {
-        runId = response.runId;
+      const responseRunId = typeof response?.runId === "string" ? response.runId : undefined;
+      if (responseRunId) {
+        runId = responseRunId;
       }
     } catch (err) {
       const messageText =
@@ -393,7 +394,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     }
 
     const waitMs = 30_000;
-    const wait = await callGateway({
+    const wait = await callGateway<{ status?: string; error?: string }>({
       method: "agent.wait",
       params: { runId, timeoutMs: waitMs },
       timeoutMs: waitMs + 2000,
@@ -405,15 +406,16 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       };
     }
     if (wait?.status === "error") {
+      const waitError = typeof wait.error === "string" ? wait.error : "unknown error";
       return {
         shouldContinue: false,
         reply: {
-          text: `⚠️ Subagent error: ${wait.error ?? "unknown error"} (run ${runId.slice(0, 8)}).`,
+          text: `⚠️ Subagent error: ${waitError} (run ${runId.slice(0, 8)}).`,
         },
       };
     }
 
-    const history = await callGateway({
+    const history = await callGateway<{ messages: Array<unknown> }>({
       method: "chat.history",
       params: { sessionKey: resolved.entry.childSessionKey, limit: 50 },
     });
