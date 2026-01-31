@@ -1,11 +1,4 @@
-import {
-  Editor,
-  type EditorOptions,
-  type EditorTheme,
-  type TUI,
-  Key,
-  matchesKey,
-} from "@mariozechner/pi-tui";
+import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
 
 export class CustomEditor extends Editor {
   onEscape?: () => void;

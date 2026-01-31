@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";

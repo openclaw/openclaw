@@ -1,5 +1,4 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { loadConfig } from "../../config/config.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -10,7 +9,6 @@ import {
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
 import {
