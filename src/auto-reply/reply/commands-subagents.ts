@@ -338,7 +338,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         reply: { text: `⚠️ ${resolved.error ?? "Unknown subagent."}` },
       };
     }
-    const history = await callGateway({
+    const history = await callGateway<{ messages: Array<unknown> }>({
       method: "chat.history",
       params: { sessionKey: resolved.entry.childSessionKey, limit },
     });
@@ -371,7 +371,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const idempotencyKey = crypto.randomUUID();
     let runId: string = idempotencyKey;
     try {
-      const response = await callGateway({
+      const response = await callGateway<{ runId: string }>({
         method: "agent",
         params: {
           message,
@@ -393,7 +393,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     }
 
     const waitMs = 30_000;
-    const wait = await callGateway({
+    const wait = await callGateway<{ status?: string; error?: string }>({
       method: "agent.wait",
       params: { runId, timeoutMs: waitMs },
       timeoutMs: waitMs + 2000,
@@ -413,7 +413,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       };
     }
 
-    const history = await callGateway({
+    const history = await callGateway<{ messages: Array<unknown> }>({
       method: "chat.history",
       params: { sessionKey: resolved.entry.childSessionKey, limit: 50 },
     });

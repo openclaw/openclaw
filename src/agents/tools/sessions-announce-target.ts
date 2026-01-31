@@ -2,6 +2,7 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import { callGateway } from "../../gateway/call.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+import { SessionListRow } from "./sessions-helpers.js";
 
 export async function resolveAnnounceTarget(params: {
   sessionKey: string;
@@ -20,7 +21,7 @@ export async function resolveAnnounceTarget(params: {
   }
 
   try {
-    const list = await callGateway({
+    const list = await callGateway<{ sessions: Array<SessionListRow> }>({
       method: "sessions.list",
       params: {
         includeGlobal: true,
