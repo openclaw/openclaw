@@ -21,8 +21,6 @@
     "unicorn/require-post-message-target-origin": "off",
     "typescript/no-extraneous-class": "off",
     "oxc/no-async-endpoint-handlers": "off",
-    "eslint/no-useless-concat": "off",
-    "eslint/no-unused-vars": "error",
     "eslint/no-new": "off",
     "eslint/preserve-caught-error": "off",
   },
