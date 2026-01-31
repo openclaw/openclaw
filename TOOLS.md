@@ -115,4 +115,33 @@ tail -n 120 /tmp/moltbot-gateway.log
 
 ---
 
+### MAIBEAUTY 개발 환경
+
+**프로젝트:** 베트남 화장품 사업 (BnF AI Sales Automation)
+```
+- 로컬: C:\TEST\MAIBEAUTY
+- GitHub: https://github.com/jini92/MAIBEAUTY
+- 개발 도구: Claude Code
+- 플로우: Claude Code (워크스페이스: C:\TEST\MAIBEAUTY) → 커밋 → git push
+```
+
+**Claude Code 실행:**
+```bash
+# 단발 작업
+claude 'task description' (workdir: C:\TEST\MAIBEAUTY)
+
+# 백그라운드 장기 작업
+claude 'task' (background + pty)
+```
+
+**개발 후 push:**
+```bash
+cd C:\TEST\MAIBEAUTY
+git add -A
+git commit -m "feat: description"
+git push origin main
+```
+
+---
+
 *Last updated: 2026-01-30*
