@@ -3,7 +3,9 @@ services:
   moltbot-gateway:
     image: localhost/moltbot:latest
     # Override CMD to run the gateway server (Dockerfile default just runs CLI)
-    command: ["node", "dist/index.js", "gateway", "run", "--bind", "0.0.0.0", "--port", "18789"]
+    # NOTE: easyrunner currently doesn't support command overrides yet. So for now this fix has been applied to the dockerfile directly.
+    # this is not ideal because updates from upstream will overwrite it.
+    command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789", "--allow-unconfigured"]
     environment:
       - NODE_ENV=production
       - HOME=/home/node
