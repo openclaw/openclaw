@@ -871,6 +871,33 @@ export async function runEmbeddedAttempt(
         .toReversed()
         .find((m) => m.role === "assistant");
 
+      // === HONESTY VALIDATION HOOK ===
+      // Validates that the assistant response doesn't contain impossible promises
+      // before returning to the user. Logs warnings for issues detected.
+      if (lastAssistant && assistantTexts.length > 0) {
+        try {
+          const { validateResponseCapabilities, logCapabilityValidation } =
+            await import("../capability-validator.js");
+          const fullResponseText = assistantTexts.join("\n");
+          const availableToolNames = new Set(tools.map((t) => t.name.toLowerCase()));
+          const validationResult = validateResponseCapabilities(
+            fullResponseText,
+            availableToolNames,
+          );
+
+          if (!validationResult.isValid) {
+            logCapabilityValidation(validationResult, {
+              warn: (msg: string) =>
+                log.warn(`[HONESTY] ${msg} | runId=${params.runId} sessionId=${params.sessionId}`),
+            });
+          }
+        } catch (validationErr) {
+          // Non-fatal: validation is advisory, don't block the response
+          log.debug(`capability validation skipped: ${String(validationErr)}`);
+        }
+      }
+      // === END HONESTY VALIDATION HOOK ===
+
       const toolMetasNormalized = toolMetas
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>

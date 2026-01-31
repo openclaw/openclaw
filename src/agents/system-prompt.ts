@@ -138,6 +138,60 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
+function buildSessionConstraintsSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  hasMessageTool: boolean;
+  hasExecTool: boolean;
+  hasCronTool: boolean;
+}) {
+  if (params.isMinimal) return [];
+
+  const constraints: string[] = [];
+
+  if (!params.hasCronTool) {
+    constraints.push(
+      "- ❌ **Background monitoring:** No cron tool available. Cannot schedule periodic checks without explicit cron job setup first.",
+    );
+  } else {
+    constraints.push(
+      "- ⚠️ **Background monitoring:** Available only via cron jobs. Must create job explicitly; no auto-triggers.",
+    );
+  }
+
+  if (!params.hasMessageTool) {
+    constraints.push("- ❌ **Messaging:** No message tool available.");
+  } else {
+    constraints.push(
+      "- ⚠️ **Proactive messaging:** Cannot do event-triggered sends. Message tool responds to incoming messages; cannot initiate on external events.",
+    );
+  }
+
+  if (!params.hasExecTool) {
+    constraints.push("- ❌ **Shell commands:** No exec tool available.");
+  } else {
+    constraints.push(
+      "- ⚠️ **Process execution:** Commands run synchronously. Cannot spawn persistent daemons or background services.",
+    );
+  }
+
+  constraints.push(
+    "- ⚠️ **Cross-session state:** Cannot directly affect other sessions' state. Use sessions_send for coordination.",
+  );
+  constraints.push(
+    "- ⚠️ **Proactive actions:** Nothing happens when you're not running. Only reactive to user input or scheduled cron jobs.",
+  );
+
+  if (constraints.length === 0) return [];
+
+  return [
+    "## Session-Specific Constraints",
+    "This session has these limitations (what you CANNOT promise):",
+    ...constraints,
+    "",
+  ];
+}
+
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -545,6 +599,44 @@ export function buildAgentSystemPrompt(params: {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
   }
+
+  // Session constraints section (applies to full mode only)
+  lines.push(
+    ...buildSessionConstraintsSection({
+      isMinimal: promptMode === "minimal",
+      availableTools,
+      hasMessageTool: availableTools.has("message"),
+      hasExecTool: availableTools.has("exec"),
+      hasCronTool: availableTools.has("cron"),
+    }),
+  );
+
+  // Honesty Protocol section (applies to all modes)
+  lines.push(
+    "## Honesty Protocol",
+    "",
+    "**Critical: Do not say 'Got it!' or 'I will do X' unless you can verify:**",
+    "1. You have the tool to do it (listed in Tooling above)",
+    "2. The tool can actually achieve what the user asked",
+    "3. You understand the tool's constraints and scope",
+    "",
+    "**Tool Scope Reference:**",
+    "- **message tool**: Reactive only. Responds when users contact you. CANNOT monitor external events or promise 'I'll message when X happens' without explicit cron job setup.",
+    "- **exec tool**: Runs during this session only. CANNOT spawn persistent background processes or daemons.",
+    "- **cron tool**: Requires explicit job creation. Does NOT auto-trigger on events; only on schedule.",
+    "- **browser tool**: Requires active session. CANNOT monitor websites continuously.",
+    "",
+    "**When you cannot do something, say so immediately.**",
+    "Examples:",
+    "- User: 'Message me the moment you come back online'",
+    "  Your response: 'I can't monitor for that (message tool is reactive-only), but I CAN: [alternatives]'",
+    "",
+    "- User: 'Monitor this file in the background'",
+    "  Your response: 'I can't monitor continuously, but I CAN: [alternatives]'",
+    "",
+    "**The Golden Rule:** Saying 'Got it!' when you can't is a broken promise. Honesty > appearing helpful.",
+    "",
+  );
 
   // Skip silent replies for subagent/none modes
   if (!isMinimal) {

@@ -427,8 +427,43 @@ export function createOpenClawCodingTools(options?: {
     ? normalized.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : normalized;
 
+  // === HONESTY EXECUTION GUARD ===
+  // Wraps tool execution to prevent misuse (e.g., trying to use exec for background monitoring).
+  // Non-fatal: logs warnings but does not block execution (advisory mode).
+  const withHonestyGuard = withAbort.map((tool) => {
+    const originalExecute = tool.execute;
+    if (!originalExecute) return tool;
+
+    // Wrap execute with guard check (preserving original signature)
+    const wrappedExecute: typeof originalExecute = async (toolCallId, args, signal, onUpdate) => {
+      try {
+        // Dynamic import to avoid bundling issues
+        const { guardToolExecution } = await import("./pi-embedded-runner/tool-execution-guard.js");
+        const guardResult = guardToolExecution({
+          toolName: tool.name,
+          toolArgs: args as Record<string, unknown>,
+        });
+
+        if (!guardResult.allowed) {
+          // Advisory mode: log warning but don't block
+          logWarn(`[HONESTY GUARD] Tool ${tool.name} execution flagged: ${guardResult.reason}`);
+        }
+      } catch {
+        // Silently continue if guard module not available
+      }
+
+      return originalExecute.call(tool, toolCallId, args, signal, onUpdate);
+    };
+
+    return {
+      ...tool,
+      execute: wrappedExecute,
+    } as typeof tool;
+  });
+  // === END HONESTY EXECUTION GUARD ===
+
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return withHonestyGuard;
 }
