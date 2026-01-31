@@ -130,6 +130,10 @@ struct VoiceWakeSettings: View {
                 self.loadTriggerEntries()
             }
         }
+        .onChange(of: self.state.swabbleEnabled) { _, _ in
+            guard !self.isPreview else { return }
+            Task { await self.restartMeter() }
+        }
         .onDisappear {
             guard !self.isPreview else { return }
             self.tester.stop()
@@ -619,6 +623,13 @@ struct VoiceWakeSettings: View {
     private func restartMeter() async {
         self.meterError = nil
         await self.meter.stop()
+        
+        // Fix: If Voice Wake is disabled, do not restart the meter (which keeps the mic open).
+        guard self.state.swabbleEnabled else {
+            self.meterLevel = 0
+            return
+        }
+
         do {
             try await self.meter.start { [weak state] level in
                 Task { @MainActor in

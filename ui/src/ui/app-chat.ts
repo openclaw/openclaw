@@ -186,7 +186,7 @@ export async function refreshChat(host: ChatHost) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      activeMinutes: 0,
     }),
     refreshChatAvatar(host),
   ]);

@@ -81,23 +81,42 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     const cached = getCachedMarkdown(input);
     if (cached !== null) return cached;
   }
+
+  // Auto-convert absolute workspace image paths to Markdown images
+  // Matches: /Some/Path/To/File.png (and other image extensions)
+  // We include : to handle ISO timestamps in filenames
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
+
+  // Auto-convert absolute workspace image paths to Markdown images
+  // Matches: /Some/Path/To/File.png (and other image extensions)
+  // We include : to handle ISO timestamps in filenames
+  // We apply this AFTER truncation to avoid regex on massive strings (which can freeze the browser)
+  const processedInput = truncated.text.replace(
+    /(\/(?:[^\s<>]+\/)+[^\s<>]+\.(?:png|jpg|jpeg|gif|webp|svg))/gi,
+    (match) => {
+      // Create a relative URL to the workspace file API
+      // We keep the path absolute, the backend handles it as long as it's within workspace
+      return `\n![Image](/api/workspace/files${match})\n`;
+    }
+  );
+
   const suffix = truncated.truncated
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
-  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+  if (processedInput.length > MARKDOWN_PARSE_LIMIT) {
+    const escaped = escapeHtml(`${processedInput}${suffix}`);
     const html = `<pre class="code-block">${escaped}</pre>`;
     const sanitized = DOMPurify.sanitize(html, {
       ALLOWED_TAGS: allowedTags,
       ALLOWED_ATTR: allowedAttrs,
     });
+    // Cache the original input key, not processed, to avoid re-processing costs on hit
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`) as string;
+  const rendered = marked.parse(`${processedInput}${suffix}`) as string;
   const sanitized = DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS: allowedTags,
     ALLOWED_ATTR: allowedAttrs,

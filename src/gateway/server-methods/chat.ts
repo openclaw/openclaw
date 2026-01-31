@@ -38,11 +38,15 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessages,
+  readSessionMessagesTail,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+
+const defaultLimit = 50;
+const hardMax = 500;
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -89,14 +93,66 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
 }
 
-function appendAssistantTranscriptMessage(params: {
+async function appendUserTranscriptMessage(params: {
+  content: any;
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  createIfMissing?: boolean;
+}): Promise<TranscriptAppendResult> {
+  const transcriptPath = resolveTranscriptPath({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+  });
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+
+  if (!fs.existsSync(transcriptPath)) {
+    if (!params.createIfMissing) {
+      return { ok: false, error: "transcript file not found" };
+    }
+    const ensured = ensureTranscriptFile({
+      transcriptPath,
+      sessionId: params.sessionId,
+    });
+    if (!ensured.ok) {
+      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+    }
+  }
+
+  const now = Date.now();
+  const messageId = randomUUID().slice(0, 8);
+  const messageBody: Record<string, unknown> = {
+    role: "user",
+    content: params.content,
+    timestamp: now,
+  };
+  const transcriptEntry = {
+    type: "message",
+    id: messageId,
+    timestamp: new Date(now).toISOString(),
+    message: messageBody,
+  };
+
+  try {
+    await fs.promises.appendFile(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return { ok: true, messageId, message: transcriptEntry.message };
+}
+
+async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
   createIfMissing?: boolean;
-}): TranscriptAppendResult {
+}): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
     storePath: params.storePath,
@@ -137,7 +193,7 @@ function appendAssistantTranscriptMessage(params: {
   };
 
   try {
-    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+    await fs.promises.appendFile(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -206,13 +262,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
-    const rawMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-    const hardMax = 1000;
-    const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const rawMessages =
+      sessionId && storePath
+        ? readSessionMessagesTail(sessionId, storePath, entry?.sessionFile, max)
+        : [];
+    const sliced = rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
     let thinkingLevel = entry?.thinkingLevel;
@@ -477,6 +533,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: p.sessionKey,
         config: cfg,
       });
+
+      // Persist user message to transcript immediately
+      const sessionId = entry?.sessionId ?? clientRunId;
+      const userMessageAppended = await appendUserTranscriptMessage({
+        content: parsedMessage, // parsedMessage is the text, parsedImages are the images
+        sessionId,
+        storePath,
+        sessionFile: entry?.sessionFile,
+        createIfMissing: true,
+      });
+      if (!userMessageAppended.ok) {
+        context.logGateway.warn(
+          `webchat user transcript append failed: ${userMessageAppended.error ?? "unknown error"}`,
+        );
+      }
+
       let prefixContext: ResponsePrefixContext = {
         identityName: resolveIdentityName(cfg, agentId),
       };
@@ -520,7 +592,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           },
         },
       })
-        .then(() => {
+        .then(async () => {
           if (!agentRunStarted) {
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
@@ -533,7 +605,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 p.sessionKey,
               );
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
+              const appended = await appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
                 storePath: latestStorePath,
@@ -670,7 +742,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Append to transcript file
     try {
-      fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+      await fs.promises.appendFile(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
       respond(

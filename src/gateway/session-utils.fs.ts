@@ -36,6 +36,95 @@ export function readSessionMessages(
   return messages;
 }
 
+export function readSessionMessagesTail(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  limit: number,
+): unknown[] {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) return [];
+
+  const chunkSize = 64 * 1024; // 64KB chunks
+  let fd: number | null = null;
+
+  try {
+    fd = fs.openSync(filePath, "r");
+    const stat = fs.fstatSync(fd);
+    let position = stat.size;
+    let buffer = Buffer.alloc(0);
+    const messages: unknown[] = [];
+
+    while (position > 0 && messages.length < limit) {
+      const readSize = Math.min(position, chunkSize);
+      position -= readSize;
+
+      const chunk = Buffer.alloc(readSize);
+      fs.readSync(fd, chunk, 0, readSize, position);
+
+      // Prepend mostly recent chunk to what we have left over
+      buffer = Buffer.concat([chunk, buffer]);
+
+      // Find valid lines
+      let newlineIdx = buffer.lastIndexOf(10); // \n
+      const lines: string[] = [];
+
+      while (newlineIdx !== -1) {
+        const lineBuffer = buffer.subarray(newlineIdx + 1);
+        buffer = buffer.subarray(0, newlineIdx);
+
+        const line = lineBuffer.toString("utf-8").trim();
+        if (line) lines.push(line);
+
+        newlineIdx = buffer.lastIndexOf(10);
+      }
+
+      // Process extracted lines in reverse order (newest first)
+      for (const line of lines) {
+        if (messages.length >= limit) break;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed?.message) {
+            messages.push(parsed.message);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    // Process remaining buffer if it's the start of file
+    if (position === 0 && buffer.length > 0 && messages.length < limit) {
+      const line = buffer.toString("utf-8").trim();
+      if (line) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed?.message) {
+            messages.push(parsed.message);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    // Reverse to return chronological order
+    return messages.reverse();
+  } catch (err) {
+    // Fallback to empty if read fails
+    return [];
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,

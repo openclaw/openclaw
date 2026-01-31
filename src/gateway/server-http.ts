@@ -14,6 +14,7 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
+import { handleWorkspaceFileRequest } from "./server-http/workspace-files.js";
 import {
   extractHookToken,
   getHookChannelError,
@@ -297,6 +298,13 @@ export function createGatewayHttpServer(opts: {
         ) {
           return;
         }
+        if (
+          handleWorkspaceFileRequest(req, res, {
+            config: configSnapshot,
+            urlPrefix: "/api/workspace/files/",
+          })
+        )
+          return;
         if (
           handleControlUiHttpRequest(req, res, {
             basePath: controlUiBasePath,
