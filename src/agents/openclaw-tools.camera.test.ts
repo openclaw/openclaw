@@ -133,3 +133,52 @@ describe("nodes run", () => {
     });
   });
 });
+
+describe("nodes invoke", () => {
+  beforeEach(() => {
+    callGateway.mockReset();
+  });
+
+  it("invokes arbitrary commands with params JSON", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return { nodes: [{ nodeId: "ios-1" }] };
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: "ios-1",
+          command: "device.info",
+          params: { includeBattery: true },
+          timeoutMs: 12_000,
+        });
+        return {
+          ok: true,
+          nodeId: "ios-1",
+          command: "device.info",
+          payload: { deviceName: "iPhone" },
+        };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
+    if (!tool) {
+      throw new Error("missing nodes tool");
+    }
+
+    const result = await tool.execute("call1", {
+      action: "invoke",
+      node: "ios-1",
+      invokeCommand: "device.info",
+      invokeParamsJson: JSON.stringify({ includeBattery: true }),
+      invokeTimeoutMs: 12_000,
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      nodeId: "ios-1",
+      command: "device.info",
+      payload: { deviceName: "iPhone" },
+    });
+  });
+});
