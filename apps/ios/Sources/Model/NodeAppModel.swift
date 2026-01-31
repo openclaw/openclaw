@@ -63,7 +63,7 @@ final class NodeAppModel {
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
-    let talkMode = TalkModeManager()
+    let talkMode: TalkModeManager
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
@@ -92,7 +92,8 @@ final class NodeAppModel {
         contactsService: any ContactsServicing = ContactsService(),
         calendarService: any CalendarServicing = CalendarService(),
         remindersService: any RemindersServicing = RemindersService(),
-        motionService: any MotionServicing = MotionService())
+        motionService: any MotionServicing = MotionService(),
+        talkMode: TalkModeManager = TalkModeManager())
     {
         self.screen = screen
         self.camera = camera
@@ -105,6 +106,7 @@ final class NodeAppModel {
         self.calendarService = calendarService
         self.remindersService = remindersService
         self.motionService = motionService
+        self.talkMode = talkMode
 
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
@@ -313,6 +315,7 @@ final class NodeAppModel {
                                 self.gatewayStatusText = "Connected"
                                 self.gatewayServerName = url.host ?? "gateway"
                                 self.gatewayConnected = true
+                                self.talkMode.updateGatewayConnected(true)
                             }
                             if let addr = await self.gateway.currentRemoteAddress() {
                                 await MainActor.run {
@@ -329,6 +332,7 @@ final class NodeAppModel {
                                 self.gatewayStatusText = "Disconnected"
                                 self.gatewayRemoteAddress = nil
                                 self.gatewayConnected = false
+                                self.talkMode.updateGatewayConnected(false)
                                 self.showLocalCanvasOnDisconnect()
                                 self.gatewayStatusText = "Disconnected: \(reason)"
                             }
@@ -356,6 +360,7 @@ final class NodeAppModel {
                         self.gatewayServerName = nil
                         self.gatewayRemoteAddress = nil
                         self.gatewayConnected = false
+                        self.talkMode.updateGatewayConnected(false)
                         self.showLocalCanvasOnDisconnect()
                     }
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
@@ -369,6 +374,7 @@ final class NodeAppModel {
                 self.gatewayRemoteAddress = nil
                 self.connectedGatewayID = nil
                 self.gatewayConnected = false
+                self.talkMode.updateGatewayConnected(false)
                 self.seamColorHex = nil
                 if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
                     self.mainSessionKey = "main"
@@ -390,6 +396,7 @@ final class NodeAppModel {
         self.gatewayRemoteAddress = nil
         self.connectedGatewayID = nil
         self.gatewayConnected = false
+        self.talkMode.updateGatewayConnected(false)
         self.seamColorHex = nil
         if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
             self.mainSessionKey = "main"
@@ -627,6 +634,9 @@ final class NodeAppModel {
             case OpenClawMotionCommand.activity.rawValue,
                  OpenClawMotionCommand.pedometer.rawValue:
                 return try await self.handleMotionInvoke(req)
+            case OpenClawTalkCommand.pttStart.rawValue,
+                 OpenClawTalkCommand.pttStop.rawValue:
+                return try await self.handleTalkInvoke(req)
             default:
                 return BridgeInvokeResponse(
                     id: req.id,
@@ -646,7 +656,8 @@ final class NodeAppModel {
     }
 
     private func isBackgroundRestricted(_ command: String) -> Bool {
-        command.hasPrefix("canvas.") || command.hasPrefix("camera.") || command.hasPrefix("screen.")
+        command.hasPrefix("canvas.") || command.hasPrefix("camera.") || command.hasPrefix("screen.") ||
+            command.hasPrefix("talk.")
     }
 
     private func handleLocationInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -1140,6 +1151,24 @@ final class NodeAppModel {
             let params = (try? Self.decodeParams(OpenClawPedometerParams.self, from: req.paramsJSON)) ??
                 OpenClawPedometerParams()
             let payload = try await self.motionService.pedometer(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        default:
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+        }
+    }
+
+    private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        switch req.command {
+        case OpenClawTalkCommand.pttStart.rawValue:
+            let payload = try await self.talkMode.beginPushToTalk()
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawTalkCommand.pttStop.rawValue:
+            let payload = await self.talkMode.endPushToTalk()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:

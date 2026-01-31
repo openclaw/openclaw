@@ -14,7 +14,20 @@ final class TalkModeManager: NSObject {
     var isEnabled: Bool = false
     var isListening: Bool = false
     var isSpeaking: Bool = false
+    var isPushToTalkActive: Bool = false
     var statusText: String = "Off"
+
+    private enum CaptureMode {
+        case idle
+        case continuous
+        case pushToTalk
+    }
+
+    private var captureMode: CaptureMode = .idle
+    private var resumeContinuousAfterPTT: Bool = false
+    private var activePTTCaptureId: String?
+
+    private let allowSimulatorCapture: Bool
 
     private let audioEngine = AVAudioEngine()
     private var inputTapInstalled = false
@@ -45,14 +58,24 @@ final class TalkModeManager: NSObject {
     var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
     private var gateway: GatewayNodeSession?
+    private var gatewayConnected = false
     private let silenceWindow: TimeInterval = 0.7
 
     private var chatSubscribedSessionKeys = Set<String>()
 
     private let logger = Logger(subsystem: "bot.molt", category: "TalkMode")
 
+    init(allowSimulatorCapture: Bool = false) {
+        self.allowSimulatorCapture = allowSimulatorCapture
+        super.init()
+    }
+
     func attachGateway(_ gateway: GatewayNodeSession) {
         self.gateway = gateway
+    }
+
+    func updateGatewayConnected(_ connected: Bool) {
+        self.gatewayConnected = connected
     }
 
     func updateMainSessionKey(_ sessionKey: String?) {
@@ -75,6 +98,7 @@ final class TalkModeManager: NSObject {
 
     func start() async {
         guard self.isEnabled else { return }
+        guard self.captureMode != .pushToTalk else { return }
         if self.isListening { return }
 
         self.logger.info("start")
@@ -97,6 +121,7 @@ final class TalkModeManager: NSObject {
             try Self.configureAudioSession()
             try self.startRecognition()
             self.isListening = true
+            self.captureMode = .continuous
             self.statusText = "Listening"
             self.startSilenceMonitor()
             await self.subscribeChatIfNeeded(sessionKey: self.mainSessionKey)
@@ -111,6 +136,8 @@ final class TalkModeManager: NSObject {
     func stop() {
         self.isEnabled = false
         self.isListening = false
+        self.isPushToTalkActive = false
+        self.captureMode = .idle
         self.statusText = "Off"
         self.lastTranscript = ""
         self.lastHeard = nil
@@ -119,6 +146,8 @@ final class TalkModeManager: NSObject {
         self.stopRecognition()
         self.stopSpeaking()
         self.lastInterruptedAtSeconds = nil
+        self.resumeContinuousAfterPTT = false
+        self.activePTTCaptureId = nil
         TalkSystemSpeechSynthesizer.shared.stop()
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
@@ -132,11 +161,127 @@ final class TalkModeManager: NSObject {
         self.stopSpeaking()
     }
 
+    func beginPushToTalk() async throws -> OpenClawTalkPTTStartPayload {
+        if self.isPushToTalkActive, let captureId = self.activePTTCaptureId {
+            return OpenClawTalkPTTStartPayload(captureId: captureId)
+        }
+
+        self.stopSpeaking(storeInterruption: false)
+
+        self.resumeContinuousAfterPTT = self.isEnabled && self.captureMode == .continuous
+        self.silenceTask?.cancel()
+        self.silenceTask = nil
+        self.stopRecognition()
+        self.isListening = false
+
+        let captureId = UUID().uuidString
+        self.activePTTCaptureId = captureId
+        self.lastTranscript = ""
+        self.lastHeard = nil
+
+        self.statusText = "Requesting permissions…"
+        if !self.allowSimulatorCapture {
+            let micOk = await Self.requestMicrophonePermission()
+            guard micOk else {
+                self.statusText = "Microphone permission denied"
+                throw NSError(domain: "TalkMode", code: 4, userInfo: [
+                    NSLocalizedDescriptionKey: "Microphone permission denied",
+                ])
+            }
+            let speechOk = await Self.requestSpeechPermission()
+            guard speechOk else {
+                self.statusText = "Speech recognition permission denied"
+                throw NSError(domain: "TalkMode", code: 5, userInfo: [
+                    NSLocalizedDescriptionKey: "Speech recognition permission denied",
+                ])
+            }
+        }
+
+        do {
+            try Self.configureAudioSession()
+            self.captureMode = .pushToTalk
+            try self.startRecognition()
+            self.isListening = true
+            self.isPushToTalkActive = true
+            self.statusText = "Listening (PTT)"
+        } catch {
+            self.isListening = false
+            self.isPushToTalkActive = false
+            self.captureMode = .idle
+            self.statusText = "Start failed: \(error.localizedDescription)"
+            throw error
+        }
+
+        return OpenClawTalkPTTStartPayload(captureId: captureId)
+    }
+
+    func endPushToTalk() async -> OpenClawTalkPTTStopPayload {
+        let captureId = self.activePTTCaptureId ?? UUID().uuidString
+        guard self.isPushToTalkActive else {
+            return OpenClawTalkPTTStopPayload(
+                captureId: captureId,
+                transcript: nil,
+                status: "idle")
+        }
+
+        self.isPushToTalkActive = false
+        self.isListening = false
+        self.captureMode = .idle
+        self.stopRecognition()
+
+        let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.lastTranscript = ""
+        self.lastHeard = nil
+
+        guard !transcript.isEmpty else {
+            self.statusText = "Ready"
+            if self.resumeContinuousAfterPTT {
+                await self.start()
+            }
+            self.resumeContinuousAfterPTT = false
+            self.activePTTCaptureId = nil
+            return OpenClawTalkPTTStopPayload(
+                captureId: captureId,
+                transcript: nil,
+                status: "empty")
+        }
+
+        guard self.gatewayConnected else {
+            self.statusText = "Gateway not connected"
+            if self.resumeContinuousAfterPTT {
+                await self.start()
+            }
+            self.resumeContinuousAfterPTT = false
+            self.activePTTCaptureId = nil
+            return OpenClawTalkPTTStopPayload(
+                captureId: captureId,
+                transcript: transcript,
+                status: "offline")
+        }
+
+        self.statusText = "Thinking…"
+        Task { @MainActor in
+            await self.processTranscript(transcript, restartAfter: self.resumeContinuousAfterPTT)
+        }
+        self.resumeContinuousAfterPTT = false
+        self.activePTTCaptureId = nil
+        return OpenClawTalkPTTStopPayload(
+            captureId: captureId,
+            transcript: transcript,
+            status: "queued")
+    }
+
     private func startRecognition() throws {
         #if targetEnvironment(simulator)
-            throw NSError(domain: "TalkMode", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
-            ])
+            if !self.allowSimulatorCapture {
+                throw NSError(domain: "TalkMode", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
+                ])
+            } else {
+                self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+                self.recognitionRequest?.shouldReportPartialResults = true
+                return
+            }
         #endif
 
         self.stopRecognition()
@@ -232,16 +377,18 @@ final class TalkModeManager: NSObject {
     }
 
     private func checkSilence() async {
+        guard self.captureMode == .continuous else { return }
         guard self.isListening, !self.isSpeaking else { return }
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else { return }
         guard let lastHeard else { return }
         if Date().timeIntervalSince(lastHeard) < self.silenceWindow { return }
-        await self.finalizeTranscript(transcript)
+        await self.processTranscript(transcript, restartAfter: true)
     }
 
-    private func finalizeTranscript(_ transcript: String) async {
+    private func processTranscript(_ transcript: String, restartAfter: Bool) async {
         self.isListening = false
+        self.captureMode = .idle
         self.statusText = "Thinking…"
         self.lastTranscript = ""
         self.lastHeard = nil
@@ -249,10 +396,12 @@ final class TalkModeManager: NSObject {
 
         await self.reloadConfig()
         let prompt = self.buildPrompt(transcript: transcript)
-        guard let gateway else {
+        guard self.gatewayConnected, let gateway else {
             self.statusText = "Gateway not connected"
             self.logger.warning("finalize: gateway not connected")
-            await self.start()
+            if restartAfter {
+                await self.start()
+            }
             return
         }
 
@@ -297,7 +446,9 @@ final class TalkModeManager: NSObject {
             self.logger.error("finalize failed: \(error.localizedDescription, privacy: .public)")
         }
 
-        await self.start()
+        if restartAfter {
+            await self.start()
+        }
     }
 
     private func subscribeChatIfNeeded(sessionKey: String) async {
@@ -732,3 +883,12 @@ final class TalkModeManager: NSObject {
         }
     }
 }
+
+#if DEBUG
+extension TalkModeManager {
+    func _test_seedTranscript(_ transcript: String) {
+        self.lastTranscript = transcript
+        self.lastHeard = Date()
+    }
+}
+#endif
