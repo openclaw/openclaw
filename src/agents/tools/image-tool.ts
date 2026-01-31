@@ -8,7 +8,7 @@ import {
   complete,
   type Model,
 } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import type { OpenClawConfig } from "../../config/config.js";
@@ -233,8 +233,8 @@ async function runImagePrompt(params: {
     : undefined;
 
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const authStorage = new AuthStorage(path.join(params.agentDir, "auth.json"));
+  const modelRegistry = new ModelRegistry(authStorage, path.join(params.agentDir, "models.json"));
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
