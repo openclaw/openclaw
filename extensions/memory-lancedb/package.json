@@ -5,7 +5,9 @@
   "type": "module",
   "dependencies": {
     "@lancedb/lancedb": "^0.23.0",
-    "@sinclair/typebox": "0.34.48",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "optionalDependencies": {
     "openai": "^6.17.0"
   },
   "devDependencies": {
