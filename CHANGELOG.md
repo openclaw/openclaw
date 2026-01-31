@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.1.31
+
+### Changes
+
+### Fixes
+
 ## 2026.1.30
 
 ### Changes
