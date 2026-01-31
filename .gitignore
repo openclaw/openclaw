@@ -71,3 +71,6 @@ USER.md
 
 # local tooling
 .serena/
+
+# Temporary files
+temp_pdf/
