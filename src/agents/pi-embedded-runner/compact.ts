@@ -36,6 +36,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   ensurePiCompactionReserveTokens,
   resolveCompactionReserveTokensFloor,
@@ -431,8 +432,19 @@ export async function compactEmbeddedPiSessionDirect(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+        // Fix: Repair tool_use/tool_result pairings AFTER truncation (issue #4650)
+        const repaired = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(limited)
+          : limited;
+        // Re-run turn validation after limiting (issue #4650) to merge consecutive assistant/user messages
+        const revalidatedGemini = transcriptPolicy.validateGeminiTurns
+          ? validateGeminiTurns(repaired)
+          : repaired;
+        const revalidatedAnthropic = transcriptPolicy.validateAnthropicTurns
+          ? validateAnthropicTurns(revalidatedGemini)
+          : revalidatedGemini;
+        if (revalidatedAnthropic.length > 0) {
+          session.agent.replaceMessages(revalidatedAnthropic);
         }
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
