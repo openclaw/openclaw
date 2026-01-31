@@ -992,7 +992,7 @@ export function createExecTool(
         let allowlistSatisfied = false;
         if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
           try {
-            const approvalsSnapshot = await callGatewayTool(
+            const approvalsSnapshot = await callGatewayTool<{ file: string }>(
               "exec.approvals.node.get",
               { timeoutMs: 10_000 },
               { nodeId },
@@ -1067,7 +1067,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = await callGatewayTool(
+              const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
@@ -1177,11 +1177,15 @@ export function createExecTool(
         }
 
         const startedAt = Date.now();
-        const raw = await callGatewayTool(
-          "node.invoke",
-          { timeoutMs: invokeTimeoutMs },
-          buildInvokeParams(false, null),
-        );
+        const raw = await callGatewayTool<{
+          payload: {
+            exitCode: number;
+            success?: string;
+            stdout?: string;
+            stderr?: string;
+            error?: string;
+          };
+        }>("node.invoke", { timeoutMs: invokeTimeoutMs }, buildInvokeParams(false, null));
         const payload = raw?.payload ?? {};
         return {
           content: [
@@ -1241,7 +1245,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = await callGatewayTool(
+              const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
