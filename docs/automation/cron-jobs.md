@@ -25,6 +25,79 @@ cron is the mechanism.
   - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, optionally deliver output.
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 
+## Quick start (actionable)
+
+Create a one-shot reminder, verify it exists, and run it immediately:
+
+```bash
+openclaw cron add \
+  --name "Reminder" \
+  --at "2026-02-01T16:00:00Z" \
+  --session main \
+  --system-event "Reminder: check the cron docs draft" \
+  --wake now \
+  --delete-after-run
+
+openclaw cron list
+openclaw cron run <job-id> --force
+openclaw cron runs --id <job-id>
+```
+
+Schedule a recurring isolated job with delivery:
+
+```bash
+openclaw cron add \
+  --name "Morning brief" \
+  --cron "0 7 * * *" \
+  --tz "America/Los_Angeles" \
+  --session isolated \
+  --message "Summarize overnight updates." \
+  --deliver \
+  --channel slack \
+  --to "channel:C1234567890"
+```
+
+## Tool-call equivalents (Gateway cron tool)
+
+One-shot, main session job (system event):
+
+```json
+{
+  "name": "Reminder",
+  "schedule": { "kind": "at", "atMs": 1769961600000 },
+  "sessionTarget": "main",
+  "wakeMode": "now",
+  "payload": { "kind": "systemEvent", "text": "Reminder: check the cron docs draft" },
+  "deleteAfterRun": true
+}
+```
+
+Recurring, isolated job with delivery:
+
+```json
+{
+  "name": "Morning brief",
+  "schedule": { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" },
+  "sessionTarget": "isolated",
+  "wakeMode": "next-heartbeat",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Summarize overnight updates.",
+    "deliver": true,
+    "channel": "slack",
+    "to": "channel:C1234567890"
+  },
+  "isolation": { "postToMainPrefix": "Cron", "postToMainMode": "summary" }
+}
+```
+
+## Where cron jobs are stored
+
+Cron jobs are persisted on the Gateway host at `~/.openclaw/cron/jobs.json` by default.
+The Gateway loads the file into memory and writes it back on changes, so manual edits
+are only safe when the Gateway is stopped. Prefer `openclaw cron add/edit` or the cron
+tool call API for changes.
+
 ## Beginner-friendly overview
 
 Think of a cron job as: **when** to run + **what** to do.
@@ -172,6 +245,82 @@ the topic/thread into the `to` field:
 Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
 
 - `telegram:group:-1001234567890:topic:123`
+
+## JSON schema for tool calls
+
+Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls or RPC).
+CLI flags accept human durations like `20m`, but tool calls use epoch milliseconds for
+`atMs` and `everyMs` (ISO timestamps are accepted for `at` times).
+
+### cron.add params
+
+One-shot, main session job (system event):
+
+```json
+{
+  "name": "Reminder",
+  "schedule": { "kind": "at", "atMs": 1738262400000 },
+  "sessionTarget": "main",
+  "wakeMode": "now",
+  "payload": { "kind": "systemEvent", "text": "Reminder text" },
+  "deleteAfterRun": true
+}
+```
+
+Recurring, isolated job with delivery:
+
+```json
+{
+  "name": "Morning brief",
+  "schedule": { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" },
+  "sessionTarget": "isolated",
+  "wakeMode": "next-heartbeat",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Summarize overnight updates.",
+    "deliver": true,
+    "channel": "slack",
+    "to": "channel:C1234567890",
+    "bestEffortDeliver": true
+  },
+  "isolation": { "postToMainPrefix": "Cron", "postToMainMode": "summary" }
+}
+```
+
+Notes:
+
+- `schedule.kind`: `at` (`atMs`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
+- `atMs` and `everyMs` are epoch milliseconds.
+- `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
+- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun`, `isolation`.
+- `wakeMode` defaults to `"next-heartbeat"` when omitted.
+
+### cron.update params
+
+```json
+{
+  "jobId": "job-123",
+  "patch": {
+    "enabled": false,
+    "schedule": { "kind": "every", "everyMs": 3600000 }
+  }
+}
+```
+
+Notes:
+
+- `jobId` is canonical; `id` is accepted for compatibility.
+- Use `agentId: null` in the patch to clear an agent binding.
+
+### cron.run and cron.remove params
+
+```json
+{ "jobId": "job-123", "mode": "force" }
+```
+
+```json
+{ "jobId": "job-123" }
+```
 
 ## Storage & history
 
