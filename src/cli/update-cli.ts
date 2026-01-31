@@ -747,7 +747,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     let afterVersion = beforeVersion;
     if (pkgRoot) {
       afterVersion = await readPackageVersion(pkgRoot);
-      const entryPath = path.join(pkgRoot, "dist", "entry.mjs");
+      const entryPath = path.join(pkgRoot, "dist", "entry.js");
       if (await pathExists(entryPath)) {
         const doctorStep = await runUpdateStep({
           name: `${CLI_NAME} doctor`,
@@ -969,7 +969,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         try {
           const { doctorCommand } = await import("../commands/doctor.js");
           const interactiveDoctor = Boolean(process.stdin.isTTY) && !opts.json && opts.yes !== true;
-          await doctorCommand(defaultRuntime, { nonInteractive: !interactiveDoctor });
+          await doctorCommand(defaultRuntime, {
+            nonInteractive: !interactiveDoctor,
+          });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
         } finally {
@@ -1220,7 +1222,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     )
     .action(async (opts) => {
       try {
-        await updateWizardCommand({ timeout: opts.timeout as string | undefined });
+        await updateWizardCommand({
+          timeout: opts.timeout as string | undefined,
+        });
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

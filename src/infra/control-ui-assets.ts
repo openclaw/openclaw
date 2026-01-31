@@ -47,7 +47,7 @@ export async function resolveControlUiDistIndexPath(
   }
   const normalized = path.resolve(argv1);
 
-  // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.mjs)
+  // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js)
   const distDir = path.dirname(normalized);
   if (path.basename(distDir) === "dist") {
     return path.join(distDir, "control-ui", "index.html");
