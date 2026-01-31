@@ -211,7 +211,7 @@ Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own li
 
 ```
 Here’s the screenshot.
-MEDIA:/tmp/screenshot.png
+MEDIA:https://example.com/screenshot.png
 ```
 
 OpenClaw extracts these and sends them as media alongside the text.
