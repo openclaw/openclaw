@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/google-antigravity-auth",
+  "version": "2026.1.29",
+  "type": "module",
+  "description": "OpenClaw Google Antigravity OAuth provider plugin",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

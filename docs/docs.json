@@ -1,0 +1,1161 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "OpenClaw",
+  "theme": "mint",
+  "logo": {
+    "light": "/assets/pixel-lobster.svg",
+    "dark": "/assets/pixel-lobster.svg"
+  },
+  "favicon": "/assets/pixel-lobster.svg",
+  "colors": {
+    "primary": "#FF5A36"
+  },
+  "topbarLinks": [
+    {
+      "name": "GitHub",
+      "url": "https://github.com/openclaw/openclaw"
+    },
+    {
+      "name": "Releases",
+      "url": "https://github.com/openclaw/openclaw/releases"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/cron",
+      "destination": "/cron-jobs"
+    },
+    {
+      "source": "/cron/",
+      "destination": "/cron-jobs"
+    },
+    {
+      "source": "/model",
+      "destination": "/models"
+    },
+    {
+      "source": "/model/",
+      "destination": "/models"
+    },
+    {
+      "source": "/messages",
+      "destination": "/concepts/messages"
+    },
+    {
+      "source": "/messages/",
+      "destination": "/concepts/messages"
+    },
+    {
+      "source": "/context",
+      "destination": "/concepts/context"
+    },
+    {
+      "source": "/context/",
+      "destination": "/concepts/context"
+    },
+    {
+      "source": "/compaction",
+      "destination": "/concepts/compaction"
+    },
+    {
+      "source": "/compaction/",
+      "destination": "/concepts/compaction"
+    },
+    {
+      "source": "/minimax",
+      "destination": "/providers/minimax"
+    },
+    {
+      "source": "/minimax/",
+      "destination": "/providers/minimax"
+    },
+    {
+      "source": "/xiaomi",
+      "destination": "/providers/xiaomi"
+    },
+    {
+      "source": "/xiaomi/",
+      "destination": "/providers/xiaomi"
+    },
+    {
+      "source": "/openai",
+      "destination": "/providers/openai"
+    },
+    {
+      "source": "/openai/",
+      "destination": "/providers/openai"
+    },
+    {
+      "source": "/anthropic",
+      "destination": "/providers/anthropic"
+    },
+    {
+      "source": "/anthropic/",
+      "destination": "/providers/anthropic"
+    },
+    {
+      "source": "/moonshot",
+      "destination": "/providers/moonshot"
+    },
+    {
+      "source": "/moonshot/",
+      "destination": "/providers/moonshot"
+    },
+    {
+      "source": "/openrouter",
+      "destination": "/providers/openrouter"
+    },
+    {
+      "source": "/openrouter/",
+      "destination": "/providers/openrouter"
+    },
+    {
+      "source": "/opencode",
+      "destination": "/providers/opencode"
+    },
+    {
+      "source": "/opencode/",
+      "destination": "/providers/opencode"
+    },
+    {
+      "source": "/mattermost",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/mattermost/",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/line",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/line/",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/glm",
+      "destination": "/providers/glm"
+    },
+    {
+      "source": "/glm/",
+      "destination": "/providers/glm"
+    },
+    {
+      "source": "/zai",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/zai/",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/message",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/message/",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/providers/discord",
+      "destination": "/channels/discord"
+    },
+    {
+      "source": "/providers/discord/",
+      "destination": "/channels/discord"
+    },
+    {
+      "source": "/providers/googlechat",
+      "destination": "/channels/googlechat"
+    },
+    {
+      "source": "/providers/googlechat/",
+      "destination": "/channels/googlechat"
+    },
+    {
+      "source": "/providers/grammy",
+      "destination": "/channels/grammy"
+    },
+    {
+      "source": "/providers/grammy/",
+      "destination": "/channels/grammy"
+    },
+    {
+      "source": "/providers/imessage",
+      "destination": "/channels/imessage"
+    },
+    {
+      "source": "/providers/imessage/",
+      "destination": "/channels/imessage"
+    },
+    {
+      "source": "/providers/location",
+      "destination": "/channels/location"
+    },
+    {
+      "source": "/providers/location/",
+      "destination": "/channels/location"
+    },
+    {
+      "source": "/providers/mattermost",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/providers/mattermost/",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/providers/msteams",
+      "destination": "/channels/msteams"
+    },
+    {
+      "source": "/providers/msteams/",
+      "destination": "/channels/msteams"
+    },
+    {
+      "source": "/providers/line",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/providers/line/",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/providers/signal",
+      "destination": "/channels/signal"
+    },
+    {
+      "source": "/providers/signal/",
+      "destination": "/channels/signal"
+    },
+    {
+      "source": "/providers/slack",
+      "destination": "/channels/slack"
+    },
+    {
+      "source": "/providers/slack/",
+      "destination": "/channels/slack"
+    },
+    {
+      "source": "/providers/telegram",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/providers/telegram/",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/providers/troubleshooting",
+      "destination": "/channels/troubleshooting"
+    },
+    {
+      "source": "/providers/troubleshooting/",
+      "destination": "/channels/troubleshooting"
+    },
+    {
+      "source": "/providers/zalo",
+      "destination": "/channels/zalo"
+    },
+    {
+      "source": "/providers/zalo/",
+      "destination": "/channels/zalo"
+    },
+    {
+      "source": "/providers/whatsapp",
+      "destination": "/channels/whatsapp"
+    },
+    {
+      "source": "/providers/whatsapp/",
+      "destination": "/channels/whatsapp"
+    },
+    {
+      "source": "/sandbox",
+      "destination": "/cli/sandbox"
+    },
+    {
+      "source": "/sandbox/",
+      "destination": "/cli/sandbox"
+    },
+    {
+      "source": "/sandboxing",
+      "destination": "/gateway/sandboxing"
+    },
+    {
+      "source": "/sandboxing/",
+      "destination": "/gateway/sandboxing"
+    },
+    {
+      "source": "/AGENTS.default",
+      "destination": "/reference/AGENTS.default"
+    },
+    {
+      "source": "/RELEASING",
+      "destination": "/reference/RELEASING"
+    },
+    {
+      "source": "/agent",
+      "destination": "/concepts/agent"
+    },
+    {
+      "source": "/agent-loop",
+      "destination": "/concepts/agent-loop"
+    },
+    {
+      "source": "/agent-send",
+      "destination": "/tools/agent-send"
+    },
+    {
+      "source": "/agent-workspace",
+      "destination": "/concepts/agent-workspace"
+    },
+    {
+      "source": "/android",
+      "destination": "/platforms/android"
+    },
+    {
+      "source": "/architecture",
+      "destination": "/concepts/architecture"
+    },
+    {
+      "source": "/audio",
+      "destination": "/nodes/audio"
+    },
+    {
+      "source": "/background-process",
+      "destination": "/gateway/background-process"
+    },
+    {
+      "source": "/bash",
+      "destination": "/tools/exec"
+    },
+    {
+      "source": "/tools/bash",
+      "destination": "/tools/exec"
+    },
+    {
+      "source": "/bonjour",
+      "destination": "/gateway/bonjour"
+    },
+    {
+      "source": "/browser",
+      "destination": "/tools/browser"
+    },
+    {
+      "source": "/browser-linux-troubleshooting",
+      "destination": "/tools/browser-linux-troubleshooting"
+    },
+    {
+      "source": "/bun",
+      "destination": "/install/bun"
+    },
+    {
+      "source": "/auth-monitoring",
+      "destination": "/automation/auth-monitoring"
+    },
+    {
+      "source": "/camera",
+      "destination": "/nodes/camera"
+    },
+    {
+      "source": "/clawd",
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/start/clawd",
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/start/clawd/",
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/clawhub",
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/clawdhub",
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/tools/clawdhub",
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/configuration",
+      "destination": "/gateway/configuration"
+    },
+    {
+      "source": "/control-ui",
+      "destination": "/web/control-ui"
+    },
+    {
+      "source": "/cron-jobs",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/cron-vs-heartbeat",
+      "destination": "/automation/cron-vs-heartbeat"
+    },
+    {
+      "source": "/cron-vs-heartbeat/",
+      "destination": "/automation/cron-vs-heartbeat"
+    },
+    {
+      "source": "/dashboard",
+      "destination": "/web/dashboard"
+    },
+    {
+      "source": "/device-models",
+      "destination": "/reference/device-models"
+    },
+    {
+      "source": "/discord",
+      "destination": "/channels/discord"
+    },
+    {
+      "source": "/discovery",
+      "destination": "/gateway/discovery"
+    },
+    {
+      "source": "/docker",
+      "destination": "/install/docker"
+    },
+    {
+      "source": "/doctor",
+      "destination": "/gateway/doctor"
+    },
+    {
+      "source": "/elevated",
+      "destination": "/tools/elevated"
+    },
+    {
+      "source": "/faq",
+      "destination": "/help/faq"
+    },
+    {
+      "source": "/gateway-lock",
+      "destination": "/gateway/gateway-lock"
+    },
+    {
+      "source": "/getting-started",
+      "destination": "/start/getting-started"
+    },
+    {
+      "source": "/gmail-pubsub",
+      "destination": "/automation/gmail-pubsub"
+    },
+    {
+      "source": "/grammy",
+      "destination": "/channels/grammy"
+    },
+    {
+      "source": "/group-messages",
+      "destination": "/concepts/group-messages"
+    },
+    {
+      "source": "/groups",
+      "destination": "/concepts/groups"
+    },
+    {
+      "source": "/health",
+      "destination": "/gateway/health"
+    },
+    {
+      "source": "/heartbeat",
+      "destination": "/gateway/heartbeat"
+    },
+    {
+      "source": "/hubs",
+      "destination": "/start/hubs"
+    },
+    {
+      "source": "/images",
+      "destination": "/nodes/images"
+    },
+    {
+      "source": "/imessage",
+      "destination": "/channels/imessage"
+    },
+    {
+      "source": "/ios",
+      "destination": "/platforms/ios"
+    },
+    {
+      "source": "/linux",
+      "destination": "/platforms/linux"
+    },
+    {
+      "source": "/location",
+      "destination": "/channels/location"
+    },
+    {
+      "source": "/location-command",
+      "destination": "/nodes/location-command"
+    },
+    {
+      "source": "/lore",
+      "destination": "/start/lore"
+    },
+    {
+      "source": "/mac/bun",
+      "destination": "/platforms/mac/bundled-gateway"
+    },
+    {
+      "source": "/platforms/mac/bun",
+      "destination": "/platforms/mac/bundled-gateway"
+    },
+    {
+      "source": "/mac/canvas",
+      "destination": "/platforms/mac/canvas"
+    },
+    {
+      "source": "/mac/child-process",
+      "destination": "/platforms/mac/child-process"
+    },
+    {
+      "source": "/mac/dev-setup",
+      "destination": "/platforms/mac/dev-setup"
+    },
+    {
+      "source": "/mac/health",
+      "destination": "/platforms/mac/health"
+    },
+    {
+      "source": "/mac/icon",
+      "destination": "/platforms/mac/icon"
+    },
+    {
+      "source": "/mac/logging",
+      "destination": "/platforms/mac/logging"
+    },
+    {
+      "source": "/mac/menu-bar",
+      "destination": "/platforms/mac/menu-bar"
+    },
+    {
+      "source": "/mac/peekaboo",
+      "destination": "/platforms/mac/peekaboo"
+    },
+    {
+      "source": "/mac/permissions",
+      "destination": "/platforms/mac/permissions"
+    },
+    {
+      "source": "/mac/release",
+      "destination": "/platforms/mac/release"
+    },
+    {
+      "source": "/mac/remote",
+      "destination": "/platforms/mac/remote"
+    },
+    {
+      "source": "/mac/signing",
+      "destination": "/platforms/mac/signing"
+    },
+    {
+      "source": "/mac/skills",
+      "destination": "/platforms/mac/skills"
+    },
+    {
+      "source": "/mac/voice-overlay",
+      "destination": "/platforms/mac/voice-overlay"
+    },
+    {
+      "source": "/mac/voicewake",
+      "destination": "/platforms/mac/voicewake"
+    },
+    {
+      "source": "/mac/webchat",
+      "destination": "/platforms/mac/webchat"
+    },
+    {
+      "source": "/mac/xpc",
+      "destination": "/platforms/mac/xpc"
+    },
+    {
+      "source": "/macos",
+      "destination": "/platforms/macos"
+    },
+    {
+      "source": "/model-failover",
+      "destination": "/concepts/model-failover"
+    },
+    {
+      "source": "/models",
+      "destination": "/concepts/models"
+    },
+    {
+      "source": "/multi-agent",
+      "destination": "/concepts/multi-agent"
+    },
+    {
+      "source": "/nix",
+      "destination": "/install/nix"
+    },
+    {
+      "source": "/onboarding",
+      "destination": "/start/onboarding"
+    },
+    {
+      "source": "/onboarding-config-protocol",
+      "destination": "/experiments/onboarding-config-protocol"
+    },
+    {
+      "source": "/pairing",
+      "destination": "/start/pairing"
+    },
+    {
+      "source": "/plans/cron-add-hardening",
+      "destination": "/experiments/plans/cron-add-hardening"
+    },
+    {
+      "source": "/plans/group-policy-hardening",
+      "destination": "/experiments/plans/group-policy-hardening"
+    },
+    {
+      "source": "/poll",
+      "destination": "/automation/poll"
+    },
+    {
+      "source": "/presence",
+      "destination": "/concepts/presence"
+    },
+    {
+      "source": "/proposals/model-config",
+      "destination": "/experiments/proposals/model-config"
+    },
+    {
+      "source": "/provider-routing",
+      "destination": "/concepts/channel-routing"
+    },
+    {
+      "source": "/concepts/provider-routing",
+      "destination": "/concepts/channel-routing"
+    },
+    {
+      "source": "/concepts/provider-routing/",
+      "destination": "/concepts/channel-routing"
+    },
+    {
+      "source": "/queue",
+      "destination": "/concepts/queue"
+    },
+    {
+      "source": "/remote",
+      "destination": "/gateway/remote"
+    },
+    {
+      "source": "/remote-gateway-readme",
+      "destination": "/gateway/remote-gateway-readme"
+    },
+    {
+      "source": "/research/memory",
+      "destination": "/experiments/research/memory"
+    },
+    {
+      "source": "/rpc",
+      "destination": "/reference/rpc"
+    },
+    {
+      "source": "/security",
+      "destination": "/gateway/security"
+    },
+    {
+      "source": "/session",
+      "destination": "/concepts/session"
+    },
+    {
+      "source": "/session-tool",
+      "destination": "/concepts/session-tool"
+    },
+    {
+      "source": "/sessions",
+      "destination": "/concepts/sessions"
+    },
+    {
+      "source": "/setup",
+      "destination": "/start/setup"
+    },
+    {
+      "source": "/showcase",
+      "destination": "/start/showcase"
+    },
+    {
+      "source": "/signal",
+      "destination": "/channels/signal"
+    },
+    {
+      "source": "/skills",
+      "destination": "/tools/skills"
+    },
+    {
+      "source": "/skills-config",
+      "destination": "/tools/skills-config"
+    },
+    {
+      "source": "/slack",
+      "destination": "/channels/slack"
+    },
+    {
+      "source": "/slash-commands",
+      "destination": "/tools/slash-commands"
+    },
+    {
+      "source": "/subagents",
+      "destination": "/tools/subagents"
+    },
+    {
+      "source": "/tailscale",
+      "destination": "/gateway/tailscale"
+    },
+    {
+      "source": "/talk",
+      "destination": "/nodes/talk"
+    },
+    {
+      "source": "/telegram",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/templates/AGENTS",
+      "destination": "/reference/templates/AGENTS"
+    },
+    {
+      "source": "/templates/BOOT",
+      "destination": "/reference/templates/BOOT"
+    },
+    {
+      "source": "/templates/BOOTSTRAP",
+      "destination": "/reference/templates/BOOTSTRAP"
+    },
+    {
+      "source": "/templates/HEARTBEAT",
+      "destination": "/reference/templates/HEARTBEAT"
+    },
+    {
+      "source": "/templates/IDENTITY",
+      "destination": "/reference/templates/IDENTITY"
+    },
+    {
+      "source": "/templates/SOUL",
+      "destination": "/reference/templates/SOUL"
+    },
+    {
+      "source": "/templates/TOOLS",
+      "destination": "/reference/templates/TOOLS"
+    },
+    {
+      "source": "/templates/USER",
+      "destination": "/reference/templates/USER"
+    },
+    {
+      "source": "/test",
+      "destination": "/reference/test"
+    },
+    {
+      "source": "/thinking",
+      "destination": "/tools/thinking"
+    },
+    {
+      "source": "/timezone",
+      "destination": "/concepts/timezone"
+    },
+    {
+      "source": "/troubleshooting",
+      "destination": "/gateway/troubleshooting"
+    },
+    {
+      "source": "/web/tui",
+      "destination": "/tui"
+    },
+    {
+      "source": "/typebox",
+      "destination": "/concepts/typebox"
+    },
+    {
+      "source": "/updating",
+      "destination": "/install/updating"
+    },
+    {
+      "source": "/voicewake",
+      "destination": "/nodes/voicewake"
+    },
+    {
+      "source": "/webchat",
+      "destination": "/web/webchat"
+    },
+    {
+      "source": "/webhook",
+      "destination": "/automation/webhook"
+    },
+    {
+      "source": "/whatsapp",
+      "destination": "/channels/whatsapp"
+    },
+    {
+      "source": "/windows",
+      "destination": "/platforms/windows"
+    },
+    {
+      "source": "/wizard",
+      "destination": "/start/wizard"
+    },
+    {
+      "source": "/start/faq",
+      "destination": "/help/faq"
+    },
+    {
+      "source": "/start/faq/",
+      "destination": "/help/faq"
+    },
+    {
+      "source": "/oauth",
+      "destination": "/concepts/oauth"
+    },
+    {
+      "source": "/plugins",
+      "destination": "/plugin"
+    },
+    {
+      "source": "/install/railway",
+      "destination": "/railway"
+    },
+    {
+      "source": "/install/railway/",
+      "destination": "/railway"
+    },
+    {
+      "source": "/install/northflank/",
+      "destination": "/northflank"
+    },
+    {
+      "source": "/gcp",
+      "destination": "/platforms/gcp"
+    },
+    {
+      "source": "/gcp/",
+      "destination": "/platforms/gcp"
+    }
+  ],
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start Here",
+        "pages": [
+          "index",
+          "start/getting-started",
+          "start/wizard",
+          "start/setup",
+          "start/pairing",
+          "start/openclaw",
+          "start/showcase",
+          "start/hubs",
+          "start/onboarding",
+          "start/lore"
+        ]
+      },
+      {
+        "group": "Help",
+        "pages": [
+          "help/index",
+          "help/troubleshooting",
+          "help/faq"
+        ]
+      },
+      {
+        "group": "Install & Updates",
+        "pages": [
+          "install/index",
+          "install/installer",
+          "install/updating",
+          "install/development-channels",
+          "install/uninstall",
+          "install/ansible",
+          "install/nix",
+          "install/docker",
+          "railway",
+          "render",
+          "northflank",
+          "install/bun"
+        ]
+      },
+      {
+        "group": "CLI",
+        "pages": [
+          "cli/index",
+          "cli/setup",
+          "cli/onboard",
+          "cli/configure",
+          "cli/doctor",
+          "cli/dashboard",
+          "cli/reset",
+          "cli/uninstall",
+          "cli/browser",
+          "cli/message",
+          "cli/agent",
+          "cli/agents",
+          "cli/status",
+          "cli/health",
+          "cli/sessions",
+          "cli/channels",
+          "cli/directory",
+          "cli/skills",
+          "cli/plugins",
+          "cli/memory",
+          "cli/models",
+          "cli/logs",
+          "cli/system",
+          "cli/nodes",
+          "cli/approvals",
+          "cli/gateway",
+          "cli/tui",
+          "cli/voicecall",
+          "cli/cron",
+          "cli/dns",
+          "cli/docs",
+          "cli/hooks",
+          "cli/pairing",
+          "cli/security",
+          "cli/update",
+          "cli/sandbox"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "concepts/architecture",
+          "concepts/agent",
+          "concepts/agent-loop",
+          "concepts/system-prompt",
+          "concepts/context",
+          "token-use",
+          "concepts/oauth",
+          "concepts/agent-workspace",
+          "concepts/memory",
+          "concepts/multi-agent",
+          "concepts/compaction",
+          "concepts/session",
+          "concepts/session-pruning",
+          "concepts/sessions",
+          "concepts/session-tool",
+          "concepts/presence",
+          "concepts/channel-routing",
+          "concepts/messages",
+          "concepts/streaming",
+          "concepts/markdown-formatting",
+          "concepts/groups",
+          "concepts/group-messages",
+          "concepts/typing-indicators",
+          "concepts/queue",
+          "concepts/retry",
+          "concepts/model-providers",
+          "concepts/models",
+          "concepts/model-failover",
+          "concepts/usage-tracking",
+          "concepts/timezone",
+          "concepts/typebox"
+        ]
+      },
+      {
+        "group": "Gateway & Ops",
+        "pages": [
+          "gateway",
+          "gateway/protocol",
+          "gateway/bridge-protocol",
+          "gateway/pairing",
+          "gateway/gateway-lock",
+          "environment",
+          "gateway/configuration",
+          "gateway/multiple-gateways",
+          "gateway/configuration-examples",
+          "gateway/authentication",
+          "gateway/openai-http-api",
+          "gateway/tools-invoke-http-api",
+          "gateway/cli-backends",
+          "gateway/local-models",
+          "gateway/background-process",
+          "gateway/health",
+          "gateway/heartbeat",
+          "gateway/doctor",
+          "gateway/logging",
+          "gateway/security",
+          "security/formal-verification",
+          "gateway/sandbox-vs-tool-policy-vs-elevated",
+          "gateway/sandboxing",
+          "gateway/troubleshooting",
+          "debugging",
+          "gateway/remote",
+          "gateway/remote-gateway-readme",
+          "gateway/discovery",
+          "gateway/bonjour",
+          "gateway/tailscale"
+        ]
+      },
+      {
+        "group": "Web & Interfaces",
+        "pages": [
+          "web",
+          "web/control-ui",
+          "web/dashboard",
+          "web/webchat",
+          "tui"
+        ]
+      },
+      {
+        "group": "Channels",
+        "pages": [
+          "channels/index",
+          "channels/whatsapp",
+          "channels/telegram",
+          "channels/grammy",
+          "channels/discord",
+          "channels/slack",
+          "channels/googlechat",
+          "channels/mattermost",
+          "channels/signal",
+          "channels/imessage",
+          "channels/msteams",
+          "channels/line",
+          "channels/matrix",
+          "channels/zalo",
+          "channels/zalouser",
+          "broadcast-groups",
+          "channels/troubleshooting",
+          "channels/location"
+        ]
+      },
+      {
+        "group": "Providers",
+        "pages": [
+          "providers/index",
+          "providers/models",
+          "providers/openai",
+          "providers/anthropic",
+          "bedrock",
+          "providers/moonshot",
+          "providers/minimax",
+          "providers/vercel-ai-gateway",
+          "providers/openrouter",
+          "providers/synthetic",
+          "providers/opencode",
+          "providers/glm",
+          "providers/zai"
+        ]
+      },
+      {
+        "group": "Automation & Hooks",
+        "pages": [
+          "hooks",
+          "hooks/soul-evil",
+          "automation/auth-monitoring",
+          "automation/webhook",
+          "automation/gmail-pubsub",
+          "automation/cron-jobs",
+          "automation/cron-vs-heartbeat",
+          "automation/poll"
+        ]
+      },
+      {
+        "group": "Tools & Skills",
+        "pages": [
+          "tools",
+          "tools/lobster",
+          "tools/llm-task",
+          "plugin",
+          "plugins/voice-call",
+          "plugins/zalouser",
+          "tools/exec",
+          "tools/web",
+          "tools/apply-patch",
+          "tools/elevated",
+          "tools/browser",
+          "tools/browser-login",
+          "tools/chrome-extension",
+          "tools/browser-linux-troubleshooting",
+          "tools/slash-commands",
+          "tools/thinking",
+          "tools/agent-send",
+          "tools/subagents",
+          "multi-agent-sandbox-tools",
+          "tools/reactions",
+          "tools/skills",
+          "tools/skills-config",
+          "tools/clawhub"
+        ]
+      },
+      {
+        "group": "Nodes & Media",
+        "pages": [
+          "nodes",
+          "nodes/camera",
+          "nodes/images",
+          "nodes/audio",
+          "nodes/location-command",
+          "nodes/voicewake",
+          "nodes/talk"
+        ]
+      },
+      {
+        "group": "Platforms",
+        "pages": [
+          "platforms",
+          "platforms/macos",
+          "platforms/macos-vm",
+          "platforms/ios",
+          "platforms/android",
+          "platforms/windows",
+          "platforms/linux",
+          "platforms/fly",
+          "platforms/hetzner",
+          "platforms/gcp",
+          "platforms/exe-dev"
+        ]
+      },
+      {
+        "group": "macOS Companion App",
+        "pages": [
+          "platforms/mac/dev-setup",
+          "platforms/mac/menu-bar",
+          "platforms/mac/voicewake",
+          "platforms/mac/voice-overlay",
+          "platforms/mac/webchat",
+          "platforms/mac/canvas",
+          "platforms/mac/child-process",
+          "platforms/mac/health",
+          "platforms/mac/icon",
+          "platforms/mac/logging",
+          "platforms/mac/permissions",
+          "platforms/mac/remote",
+          "platforms/mac/signing",
+          "platforms/mac/release",
+          "platforms/mac/bundled-gateway",
+          "platforms/mac/xpc",
+          "platforms/mac/skills",
+          "platforms/mac/peekaboo"
+        ]
+      },
+      {
+        "group": "Reference & Templates",
+        "pages": [
+          "testing",
+          "scripts",
+          "reference/session-management-compaction",
+          "reference/rpc",
+          "reference/device-models",
+          "reference/test",
+          "reference/RELEASING",
+          "reference/AGENTS.default",
+          "reference/templates/AGENTS",
+          "reference/templates/BOOT",
+          "reference/templates/BOOTSTRAP",
+          "reference/templates/HEARTBEAT",
+          "reference/templates/IDENTITY",
+          "reference/templates/SOUL",
+          "reference/templates/TOOLS",
+          "reference/templates/USER"
+        ]
+      }
+    ]
+  }
+}

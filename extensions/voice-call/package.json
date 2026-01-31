@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/voice-call",
+  "version": "2026.1.29",
+  "type": "module",
+  "description": "OpenClaw voice-call plugin",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

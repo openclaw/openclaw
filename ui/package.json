@@ -1,0 +1,24 @@
+{
+  "name": "openclaw-control-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@noble/ed25519": "3.0.0",
+    "dompurify": "^3.3.1",
+    "lit": "^3.3.2",
+    "marked": "^17.0.1",
+    "vite": "7.3.1"
+  },
+  "devDependencies": {
+    "@vitest/browser-playwright": "4.0.18",
+    "playwright": "^1.58.0",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.18"
+  }
+}
