@@ -7,6 +7,7 @@ import {
   DEFAULT_SANDBOX_IMAGE,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
+import { execDocker } from "../agents/sandbox/docker.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -61,6 +62,19 @@ async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise
 
   runtime.log(`Completed ${scriptRel}.`);
   return true;
+}
+
+async function buildDefaultSandboxImage(runtime: RuntimeEnv): Promise<boolean> {
+  runtime.log("Building default sandbox image (docker pull + tag)...");
+  try {
+    await execDocker(["pull", "debian:bookworm-slim"]);
+    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
+    runtime.log(`Built ${DEFAULT_SANDBOX_IMAGE}.`);
+    return true;
+  } catch (error: any) {
+    runtime.error(`Failed to build sandbox image: ${error?.message || "unknown error"}`);
+    return false;
+  }
 }
 
 async function isDockerAvailable(): Promise<boolean> {
@@ -139,6 +153,7 @@ type SandboxImageCheck = {
   kind: string;
   image: string;
   buildScript?: string;
+  inlineBuild?: () => Promise<boolean>;
   updateConfig: (image: string) => void;
 };
 
@@ -152,19 +167,26 @@ async function handleMissingSandboxImage(
     return;
   }
 
-  const buildHint = params.buildScript
-    ? `Build it with ${params.buildScript}.`
+  const canBuild = params.inlineBuild || params.buildScript;
+  const buildHint = canBuild
+    ? params.buildScript
+      ? `Build it with ${params.buildScript}.`
+      : "Build it now."
     : "Build or pull it first.";
   note(`Sandbox ${params.kind} image missing: ${params.image}. ${buildHint}`, "Sandbox");
 
   let built = false;
-  if (params.buildScript) {
+  if (canBuild) {
     const build = await prompter.confirmSkipInNonInteractive({
       message: `Build ${params.kind} sandbox image now?`,
       initialValue: true,
     });
     if (build) {
-      built = await runSandboxScript(params.buildScript, runtime);
+      if (params.inlineBuild) {
+        built = await params.inlineBuild();
+      } else if (params.buildScript) {
+        built = await runSandboxScript(params.buildScript, runtime);
+      }
     }
   }
 
@@ -198,12 +220,14 @@ export async function maybeRepairSandboxImages(
     {
       kind: "base",
       image: dockerImage,
+      // For DEFAULT_SANDBOX_IMAGE, use inline docker pull/tag (works without repo scripts).
+      // For other default images, fall back to the repo script if available.
+      inlineBuild:
+        dockerImage === DEFAULT_SANDBOX_IMAGE ? () => buildDefaultSandboxImage(runtime) : undefined,
       buildScript:
         dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
           ? "scripts/sandbox-common-setup.sh"
-          : dockerImage === DEFAULT_SANDBOX_IMAGE
-            ? "scripts/sandbox-setup.sh"
-            : undefined,
+          : undefined,
       updateConfig: (image) => {
         next = updateSandboxDockerImage(next, image);
         changes.push(`Updated agents.defaults.sandbox.docker.image → ${image}`);
