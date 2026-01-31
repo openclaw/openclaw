@@ -150,7 +150,7 @@ This document defines all sub-agents available for DBH Ventures incubation proje
 - **Location:** `/agents/thinker/AGENT.md`
 - **Spawnable:** Yes
 - **Label:** `thinker`
-- **Model:** `anthropic/claude-opus-4-5` with `thinking: "high"`
+- **Model:** `openai/codex` with `thinking: "medium"`
 - **Outputs:** Strategic analysis, architecture decisions, risk assessments
 - **Used for:**
   - Complex architectural decisions

@@ -4,7 +4,7 @@
 > **Emoji:** 🧠
 > **Label:** `thinker`
 > **Spawnable:** Yes
-> **Recommended Model:** `anthropic/claude-opus-4-5` with `thinking: "high"`
+> **Model:** `openai/codex` with `thinking: "medium"`
 
 ---
 
@@ -26,14 +26,14 @@ Use Thinker for:
 
 ## Spawn Configuration
 
-Always spawn with extended thinking enabled:
+Always spawn with reasoning enabled:
 
 ```typescript
 sessions_spawn({
   task: "...",
   label: "thinker-<context>",
-  model: "anthropic/claude-opus-4-5",
-  thinking: "high",
+  model: "openai/codex",
+  thinking: "medium",
   runTimeoutSeconds: 300  // Allow more time for deep thinking
 })
 ```
