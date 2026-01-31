@@ -113,7 +113,7 @@ describe("monitorSlackProvider tool results", () => {
     expect(reactMock).toHaveBeenCalledWith({
       channel: "C1",
       timestamp: "456",
-      name: "👀",
+      name: "eyes",
     });
   });
 

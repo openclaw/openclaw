@@ -1,4 +1,5 @@
 import type { WebClient } from "@slack/web-api";
+import { which as emojiWhich } from "node-emoji";
 
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
@@ -47,11 +48,24 @@ function resolveToken(explicit?: string, accountId?: string) {
   return token;
 }
 
+/**
+ * Normalize emoji for Slack reactions.
+ * Converts Unicode emojis to Slack shortcodes (👀 → eyes).
+ * Strips colons from already-formatted shortcodes (:eyes: → eyes).
+ */
 function normalizeEmoji(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Emoji is required for Slack reactions");
   }
+
+  // Try Unicode → shortcode conversion first
+  const shortcode = emojiWhich(trimmed);
+  if (shortcode) {
+    return shortcode;
+  }
+
+  // Fall back to stripping colons (for already-formatted shortcodes)
   return trimmed.replace(/^:+|:+$/g, "");
 }
 
