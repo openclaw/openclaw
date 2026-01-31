@@ -181,9 +181,9 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
+        // oxlint-disable-next-line preserve-caught-error
         throw new Error(
           `${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`,
-          { cause: primaryErr },
           { cause: fallbackErr },
         );
       }

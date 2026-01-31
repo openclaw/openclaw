@@ -419,8 +419,10 @@ export async function autoMigrateLegacyStateDir(params: {
       }
     } catch (fallbackErr) {
       try {
-        if (!legacyDir)
-          throw new Error("Legacy state dir not found", { cause: err }, { cause: fallbackErr });
+        if (!legacyDir) {
+          // oxlint-disable-next-line preserve-caught-error
+          throw new Error("Legacy state dir not found", { cause: fallbackErr });
+        }
         fs.renameSync(targetDir, legacyDir);
         warnings.push(
           `State dir migration rolled back (failed to link legacy path): ${String(fallbackErr)}`,
