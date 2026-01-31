@@ -22,10 +22,23 @@ export function resolveTelegramToken(
 ): TelegramTokenResolution {
   const accountId = normalizeAccountId(opts.accountId);
   const telegramCfg = cfg?.channels?.telegram;
-  const accountCfg =
-    accountId !== DEFAULT_ACCOUNT_ID
-      ? telegramCfg?.accounts?.[accountId]
-      : telegramCfg?.accounts?.[DEFAULT_ACCOUNT_ID];
+
+  // Account IDs are normalized for routing (e.g. lowercased). Config keys may not
+  // be normalized, so resolve per-account config by matching normalized IDs.
+  const resolveAccountCfg = (id: string) => {
+    const accounts = telegramCfg?.accounts;
+    if (!accounts || typeof accounts !== "object") return undefined;
+    // Direct hit (already normalized key)
+    const direct = (accounts as any)[id];
+    if (direct) return direct as any;
+    // Fallback: match by normalized key
+    const matchKey = Object.keys(accounts).find((k) => normalizeAccountId(k) === id);
+    return matchKey ? ((accounts as any)[matchKey] as any) : undefined;
+  };
+
+  const accountCfg = resolveAccountCfg(
+    accountId !== DEFAULT_ACCOUNT_ID ? accountId : DEFAULT_ACCOUNT_ID,
+  );
   const accountTokenFile = accountCfg?.tokenFile?.trim();
   if (accountTokenFile) {
     if (!fs.existsSync(accountTokenFile)) {
