@@ -41,6 +41,11 @@ EXPOSE 18789
 # Create the .clawdbot config directory before switching to node user
 RUN mkdir -p /home/node/.clawdbot && chown -R node:node /home/node/.clawdbot
 
+# Create default config for container deployment with reverse proxy support
+# Trust common Docker/Podman network ranges for X-Forwarded-For headers
+RUN echo 'gateway:\n  trustedProxies:\n    - "10.0.0.0/8"\n    - "172.16.0.0/12"\n    - "192.168.0.0/16"' > /home/node/.clawdbot/config.yaml \
+    && chown node:node /home/node/.clawdbot/config.yaml
+
 USER node
 
 # Default: run the gateway server (most common container use case)
