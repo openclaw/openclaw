@@ -140,6 +140,10 @@
         "screen_record": {
           "label": "screen record",
           "detailKeys": ["node", "nodeId", "duration", "durationMs", "fps", "screenIndex"]
+        },
+        "invoke": {
+          "label": "invoke",
+          "detailKeys": ["node", "nodeId", "invokeCommand"]
         }
       }
     },

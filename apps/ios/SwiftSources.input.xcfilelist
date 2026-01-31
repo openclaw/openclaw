@@ -8,6 +8,7 @@ Sources/Chat/ChatSheet.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/Contacts/ContactsService.swift
 Sources/Device/DeviceStatusService.swift
+Sources/Device/NodeDisplayName.swift
 Sources/Device/NetworkStatusService.swift
 Sources/OpenClawApp.swift
 Sources/Location/LocationService.swift
