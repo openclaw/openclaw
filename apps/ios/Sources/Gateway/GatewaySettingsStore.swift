@@ -11,6 +11,7 @@ enum GatewaySettingsStore {
     private static let manualHostDefaultsKey = "gateway.manual.host"
     private static let manualPortDefaultsKey = "gateway.manual.port"
     private static let manualTlsDefaultsKey = "gateway.manual.tls"
+    private static let manualPasswordDefaultsKey = "gateway.manual.password"
     private static let discoveryDebugLogsDefaultsKey = "gateway.discovery.debugLogs"
 
     private static let instanceIdAccount = "instanceId"
@@ -21,6 +22,7 @@ enum GatewaySettingsStore {
         self.ensureStableInstanceID()
         self.ensurePreferredGatewayStableID()
         self.ensureLastDiscoveredGatewayStableID()
+        self.ensureManualGatewayPassword()
     }
 
     static func loadStableInstanceID() -> String? {
@@ -171,6 +173,25 @@ enum GatewaySettingsStore {
 
         if let stored = self.loadLastDiscoveredGatewayStableID(), !stored.isEmpty {
             defaults.set(stored, forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+        }
+    }
+
+    private static func ensureManualGatewayPassword() {
+        let defaults = UserDefaults.standard
+        let instanceId = defaults.string(forKey: self.instanceIdDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !instanceId.isEmpty else { return }
+
+        let manualPassword = defaults.string(forKey: self.manualPasswordDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !manualPassword.isEmpty else { return }
+
+        if self.loadGatewayPassword(instanceId: instanceId) == nil {
+            self.saveGatewayPassword(manualPassword, instanceId: instanceId)
+        }
+
+        if self.loadGatewayPassword(instanceId: instanceId) == manualPassword {
+            defaults.removeObject(forKey: self.manualPasswordDefaultsKey)
         }
     }
 
