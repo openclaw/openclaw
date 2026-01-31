@@ -2429,48 +2429,25 @@ Notes:
 - Model ref: `moonshot/kimi-k2.5`.
 - Use `https://api.moonshot.cn/v1` if you need the China endpoint.
 
-### Kimi Code
+### Kimi Coding
 
-Use Kimi Code's dedicated OpenAI-compatible endpoint (separate from Moonshot):
+Use Moonshot AI's Kimi Coding endpoint (Anthropic-compatible, built-in provider):
 
 ```json5
 {
-  env: { KIMICODE_API_KEY: "sk-..." },
+  env: { KIMI_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kimi-code/kimi-for-coding" },
-      models: { "kimi-code/kimi-for-coding": { alias: "Kimi Code" } }
-    }
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      "kimi-code": {
-        baseUrl: "https://api.kimi.com/coding/v1",
-        apiKey: "${KIMICODE_API_KEY}",
-        api: "openai-completions",
-        models: [
-          {
-            id: "kimi-for-coding",
-            name: "Kimi For Coding",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 262144,
-            maxTokens: 32768,
-            headers: { "User-Agent": "KimiCLI/0.77" },
-            compat: { supportsDeveloperRole: false }
-          }
-        ]
-      }
+      model: { primary: "kimi-coding/k2p5" },
+      models: { "kimi-coding/k2p5": { alias: "Kimi K2.5" } }
     }
   }
 }
 ```
 
 Notes:
-- Set `KIMICODE_API_KEY` in the environment or use `openclaw onboard --auth-choice kimi-code-api-key`.
-- Model ref: `kimi-code/kimi-for-coding`.
+- Set `KIMI_API_KEY` in the environment or use `openclaw onboard --auth-choice kimi-code-api-key`.
+- Model ref: `kimi-coding/k2p5`.
 
 ### Synthetic (Anthropic-compatible)
 

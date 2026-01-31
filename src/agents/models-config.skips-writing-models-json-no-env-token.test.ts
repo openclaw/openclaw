@@ -48,7 +48,7 @@ describe("models-config", () => {
       const previous = process.env.COPILOT_GITHUB_TOKEN;
       const previousGh = process.env.GH_TOKEN;
       const previousGithub = process.env.GITHUB_TOKEN;
-      const previousKimiCode = process.env.KIMICODE_API_KEY;
+      const previousKimiCode = process.env.KIMI_API_KEY;
       const previousMinimax = process.env.MINIMAX_API_KEY;
       const previousMoonshot = process.env.MOONSHOT_API_KEY;
       const previousSynthetic = process.env.SYNTHETIC_API_KEY;
@@ -57,7 +57,7 @@ describe("models-config", () => {
       delete process.env.COPILOT_GITHUB_TOKEN;
       delete process.env.GH_TOKEN;
       delete process.env.GITHUB_TOKEN;
-      delete process.env.KIMICODE_API_KEY;
+      delete process.env.KIMI_API_KEY;
       delete process.env.MINIMAX_API_KEY;
       delete process.env.MOONSHOT_API_KEY;
       delete process.env.SYNTHETIC_API_KEY;
@@ -85,8 +85,8 @@ describe("models-config", () => {
         else process.env.GH_TOKEN = previousGh;
         if (previousGithub === undefined) delete process.env.GITHUB_TOKEN;
         else process.env.GITHUB_TOKEN = previousGithub;
-        if (previousKimiCode === undefined) delete process.env.KIMICODE_API_KEY;
-        else process.env.KIMICODE_API_KEY = previousKimiCode;
+        if (previousKimiCode === undefined) delete process.env.KIMI_API_KEY;
+        else process.env.KIMI_API_KEY = previousKimiCode;
         if (previousMinimax === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = previousMinimax;
         if (previousMoonshot === undefined) delete process.env.MOONSHOT_API_KEY;
