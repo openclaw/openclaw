@@ -137,6 +137,39 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(r1.toolCallId).toBe(a.id);
       expect(r2.toolCallId).toBe(b.id);
     });
+
+    it("enforces 40-char limit for very long IDs (issue #4718)", () => {
+      // Simulate a very long tool call ID (like 438 chars reported in issue)
+      const veryLongId = `call_${"x".repeat(434)}`;
+      expect(veryLongId.length).toBe(439); // Verify we're testing a long ID
+
+      const input = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: veryLongId, name: "gitlab", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: veryLongId,
+          toolName: "gitlab",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input);
+      expect(out).not.toBe(input);
+
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      expect(toolCall.id).toBeDefined();
+      expect(toolCall.id?.length).toBeLessThanOrEqual(40);
+      expect(toolCall.id?.length).toBeGreaterThan(0);
+      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "strict")).toBe(true);
+
+      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(result.toolCallId).toBe(toolCall.id);
+      expect(result.toolCallId?.length).toBeLessThanOrEqual(40);
+    });
   });
 
   describe("strict mode (alphanumeric only)", () => {

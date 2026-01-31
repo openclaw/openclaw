@@ -156,11 +156,94 @@ export async function createWaSocket(
   );
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
+  // and implement ping/pong keepalive to prevent code 1006 disconnects (issue #4142)
+  let pingInterval: NodeJS.Timeout | null = null;
+
   if (sock.ws && typeof (sock.ws as unknown as { on?: unknown }).on === "function") {
-    sock.ws.on("error", (err: Error) => {
-      sessionLogger.error({ error: String(err) }, "WebSocket error");
+    const ws = sock.ws as unknown as {
+      on: (event: string, handler: (...args: unknown[]) => void) => void;
+      ping: () => void;
+      readyState: number;
+    };
+
+    // Enhanced error logging with WebSocket state
+    ws.on("error", (err: Error) => {
+      sessionLogger.error(
+        {
+          error: String(err),
+          code: (err as { code?: string }).code,
+          readyState: ws.readyState,
+          timestamp: new Date().toISOString(),
+        },
+        "WebSocket error",
+      );
+    });
+
+    // Enhanced close event logging for debugging disconnect issues
+    ws.on("close", (code: number, reason: Buffer) => {
+      sessionLogger.warn(
+        {
+          code,
+          reason: reason?.toString() || "(no reason)",
+          wasClean: code !== 1006,
+          timestamp: new Date().toISOString(),
+        },
+        "WebSocket closed",
+      );
+
+      // Clean up ping interval on close
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+    });
+
+    // Implement ping/pong keepalive to prevent network intermediaries
+    // from timing out idle connections (standard fix for code 1006)
+    ws.on("pong", () => {
+      sessionLogger.debug("Received pong from WhatsApp server");
     });
   }
+
+  // Set up keepalive when connection opens, clean up when it closes
+  sock.ev.on(
+    "connection.update",
+    (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+      if (update.connection === "open" && sock.ws) {
+        const ws = sock.ws as unknown as {
+          ping: () => void;
+          readyState: number;
+        };
+
+        // Clear any existing interval
+        if (pingInterval) {
+          clearInterval(pingInterval);
+        }
+
+        // Start keepalive: ping every 20 seconds when connection is OPEN
+        pingInterval = setInterval(() => {
+          if (ws.readyState === 1) {
+            // 1 = OPEN state
+            try {
+              ws.ping();
+              sessionLogger.debug("Sent WebSocket ping keepalive");
+            } catch (err) {
+              sessionLogger.warn({ error: String(err) }, "Failed to send WebSocket ping");
+            }
+          }
+        }, 20000); // 20 seconds - industry standard for preventing idle timeouts
+
+        sessionLogger.info("WebSocket keepalive started (20s interval)");
+      } else if (update.connection === "close") {
+        // Clean up keepalive when connection closes
+        if (pingInterval) {
+          clearInterval(pingInterval);
+          pingInterval = null;
+          sessionLogger.debug("WebSocket keepalive stopped");
+        }
+      }
+    },
+  );
 
   return sock;
 }

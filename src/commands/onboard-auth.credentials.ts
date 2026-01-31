@@ -9,10 +9,10 @@ export async function writeOAuthCredentials(
   creds: OAuthCredentials,
   agentDir?: string,
 ): Promise<void> {
-  const email =
-    typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  const emailStr = typeof creds.email === "string" ? creds.email : "default";
   upsertAuthProfile({
-    profileId: `${provider}:${email}`,
+    profileId: `${provider}:${emailStr}`,
     credential: {
       type: "oauth",
       provider,
@@ -74,13 +74,13 @@ export async function setMoonshotApiKey(key: string, agentDir?: string) {
   });
 }
 
-export async function setKimiCodingApiKey(key: string, agentDir?: string) {
+export async function setKimiCodeApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
-    profileId: "kimi-coding:default",
+    profileId: "kimi-code:default",
     credential: {
       type: "api_key",
-      provider: "kimi-coding",
+      provider: "kimi-code",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),
