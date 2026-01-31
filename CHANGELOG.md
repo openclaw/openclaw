@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
+
 ## 2026.1.30
 
 ### Changes
