@@ -24,7 +24,9 @@ describe("resolvePreferredNodePath", () => {
 
   it("uses system node when it meets the minimum version", async () => {
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) return;
+      if (target === darwinNode) {
+        return;
+      }
       throw new Error("missing");
     });
 
@@ -43,7 +45,9 @@ describe("resolvePreferredNodePath", () => {
 
   it("skips system node when it is too old", async () => {
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) return;
+      if (target === darwinNode) {
+        return;
+      }
       throw new Error("missing");
     });
 
@@ -82,7 +86,9 @@ describe("resolveSystemNodeInfo", () => {
 
   it("returns supported info when version is new enough", async () => {
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) return;
+      if (target === darwinNode) {
+        return;
+      }
       throw new Error("missing");
     });
 

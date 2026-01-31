@@ -12,7 +12,9 @@ const RAW_STREAM_PATH =
 let rawStreamReady = false;
 
 export function appendRawStream(payload: Record<string, unknown>) {
-  if (!RAW_STREAM_ENABLED) return;
+  if (!RAW_STREAM_ENABLED) {
+    return;
+  }
   if (!rawStreamReady) {
     rawStreamReady = true;
     try {

@@ -77,7 +77,9 @@ export async function promptChannelAccessConfig(params: {
       : `Configure ${params.label} access?`,
     initialValue: shouldPrompt,
   });
-  if (!wants) return null;
+  if (!wants) {
+    return null;
+  }
   const policy = await promptChannelAccessPolicy({
     prompter: params.prompter,
     label: params.label,
@@ -85,7 +87,9 @@ export async function promptChannelAccessConfig(params: {
     allowOpen: params.allowOpen,
     allowDisabled: params.allowDisabled,
   });
-  if (policy !== "allowlist") return { policy, entries: [] };
+  if (policy !== "allowlist") {
+    return { policy, entries: [] };
+  }
   const entries = await promptChannelAllowlist({
     prompter: params.prompter,
     label: params.label,

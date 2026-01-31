@@ -852,8 +852,12 @@ export function createAgendaCard(params: {
 
     // Secondary info line
     const secondaryParts: string[] = [];
-    if (event.location) secondaryParts.push(event.location);
-    if (event.calendar) secondaryParts.push(event.calendar);
+    if (event.location) {
+      secondaryParts.push(event.location);
+    }
+    if (event.calendar) {
+      secondaryParts.push(event.calendar);
+    }
 
     if (secondaryParts.length > 0) {
       detailContents.push({

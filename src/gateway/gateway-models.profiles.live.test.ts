@@ -44,7 +44,9 @@ const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
 
 function parseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") return null;
+  if (!trimmed || trimmed === "all") {
+    return null;
+  }
   const ids = trimmed
     .split(",")
     .map((s) => s.trim())
@@ -62,7 +64,9 @@ function assertNoReasoningTags(params: {
   phase: string;
   label: string;
 }): void {
-  if (!params.text) return;
+  if (!params.text) {
+    return;
+  }
   if (THINKING_TAG_RE.test(params.text) || FINAL_TAG_RE.test(params.text)) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
@@ -81,22 +85,40 @@ function extractPayloadText(result: unknown): string {
 }
 
 function isMeaningful(text: string): boolean {
-  if (!text) return false;
+  if (!text) {
+    return false;
+  }
   const trimmed = text.trim();
-  if (trimmed.toLowerCase() === "ok") return false;
-  if (trimmed.length < 60) return false;
+  if (trimmed.toLowerCase() === "ok") {
+    return false;
+  }
+  if (trimmed.length < 60) {
+    return false;
+  }
   const words = trimmed.split(/\s+/g).filter(Boolean);
-  if (words.length < 12) return false;
+  if (words.length < 12) {
+    return false;
+  }
   return true;
 }
 
 function isGoogleModelNotFoundText(text: string): boolean {
   const trimmed = text.trim();
-  if (!trimmed) return false;
-  if (!/not found/i.test(trimmed)) return false;
-  if (/models\/.+ is not found for api version/i.test(trimmed)) return true;
-  if (/"status"\s*:\s*"NOT_FOUND"/.test(trimmed)) return true;
-  if (/"code"\s*:\s*404/.test(trimmed)) return true;
+  if (!trimmed) {
+    return false;
+  }
+  if (!/not found/i.test(trimmed)) {
+    return false;
+  }
+  if (/models\/.+ is not found for api version/i.test(trimmed)) {
+    return true;
+  }
+  if (/"status"\s*:\s*"NOT_FOUND"/.test(trimmed)) {
+    return true;
+  }
+  if (/"code"\s*:\s*404/.test(trimmed)) {
+    return true;
+  }
   return false;
 }
 
@@ -124,7 +146,9 @@ function isOpenAIReasoningSequenceError(error: string): boolean {
 
 function isToolNonceRefusal(error: string): boolean {
   const msg = error.toLowerCase();
-  if (!msg.includes("nonce")) return false;
+  if (!msg.includes("nonce")) {
+    return false;
+  }
   return (
     msg.includes("token") ||
     msg.includes("secret") ||
@@ -226,11 +250,17 @@ function randomImageProbeCode(len = 6): string {
 }
 
 function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
+  if (a === b) {
+    return 0;
+  }
   const aLen = a.length;
   const bLen = b.length;
-  if (aLen === 0) return bLen;
-  if (bLen === 0) return aLen;
+  if (aLen === 0) {
+    return bLen;
+  }
+  if (bLen === 0) {
+    return aLen;
+  }
 
   let prev = Array.from({ length: bLen + 1 }, (_v, idx) => idx);
   let curr = Array.from({ length: bLen + 1 }, () => 0);
@@ -264,15 +294,20 @@ async function getFreePort(): Promise<number> {
       }
       const port = addr.port;
       srv.close((err) => {
-        if (err) reject(err);
-        else resolve(port);
+        if (err) {
+          reject(err);
+        } else {
+          resolve(port);
+        }
       });
     });
   });
 }
 
 async function isPortFree(port: number): Promise<boolean> {
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    return false;
+  }
   return await new Promise((resolve) => {
     const srv = createServer();
     srv.once("error", () => resolve(false));
@@ -291,7 +326,9 @@ async function getFreeGatewayPort(): Promise<number> {
     const ok = (await Promise.all(candidates.map((candidate) => isPortFree(candidate)))).every(
       Boolean,
     );
-    if (ok) return port;
+    if (ok) {
+      return port;
+    }
   }
   throw new Error("failed to acquire a free gateway port block");
 }
@@ -305,11 +342,16 @@ async function connectClient(params: { url: string; token: string }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
     const stop = (err?: Error, client?: GatewayClient) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(client as GatewayClient);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(client as GatewayClient);
+      }
     };
     const client = new GatewayClient({
       url: params.url,
@@ -386,7 +428,9 @@ function sanitizeAuthConfig(params: {
   agentDir: string;
 }): OpenClawConfig["auth"] | undefined {
   const auth = params.cfg.auth;
-  if (!auth) return auth;
+  if (!auth) {
+    return auth;
+  }
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -395,10 +439,14 @@ function sanitizeAuthConfig(params: {
   if (auth.profiles) {
     profiles = {};
     for (const [profileId, profile] of Object.entries(auth.profiles)) {
-      if (!store.profiles[profileId]) continue;
+      if (!store.profiles[profileId]) {
+        continue;
+      }
       profiles[profileId] = profile;
     }
-    if (Object.keys(profiles).length === 0) profiles = undefined;
+    if (Object.keys(profiles).length === 0) {
+      profiles = undefined;
+    }
   }
 
   let order: Record<string, string[]> | undefined;
@@ -406,13 +454,19 @@ function sanitizeAuthConfig(params: {
     order = {};
     for (const [provider, ids] of Object.entries(auth.order)) {
       const filtered = ids.filter((id) => Boolean(store.profiles[id]));
-      if (filtered.length === 0) continue;
+      if (filtered.length === 0) {
+        continue;
+      }
       order[provider] = filtered;
     }
-    if (Object.keys(order).length === 0) order = undefined;
+    if (Object.keys(order).length === 0) {
+      order = undefined;
+    }
   }
 
-  if (!profiles && !order && !auth.cooldowns) return undefined;
+  if (!profiles && !order && !auth.cooldowns) {
+    return undefined;
+  }
   return {
     ...auth,
     profiles,
@@ -426,7 +480,9 @@ function buildMinimaxProviderOverride(params: {
   baseUrl: string;
 }): ModelProviderConfig | null {
   const existing = params.cfg.models?.providers?.minimax;
-  if (!existing || !Array.isArray(existing.models) || existing.models.length === 0) return null;
+  if (!existing || !Array.isArray(existing.models) || existing.models.length === 0) {
+    return null;
+  }
   return {
     ...existing,
     api: params.api,
@@ -761,7 +817,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 } else {
                   const candidates = imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
                   const bestDistance = candidates.reduce((best, cand) => {
-                    if (Math.abs(cand.length - imageCode.length) > 2) return best;
+                    if (Math.abs(cand.length - imageCode.length) > 2) {
+                      return best;
+                    }
                     return Math.min(best, editDistance(cand, imageCode));
                   }, Number.POSITIVE_INFINITY);
                   // OCR / image-read flake: allow a small edit distance, but still require the "cat" token above.
@@ -977,7 +1035,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
       const candidates: Array<Model<Api>> = [];
       for (const model of wanted) {
-        if (PROVIDERS && !PROVIDERS.has(model.provider)) continue;
+        if (PROVIDERS && !PROVIDERS.has(model.provider)) {
+          continue;
+        }
         try {
           // eslint-disable-next-line no-await-in-loop
           const apiKeyInfo = await getApiKeyForModel({
@@ -1042,7 +1102,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
   );
 
   it("z.ai fallback handles anthropic tool history", async () => {
-    if (!ZAI_FALLBACK) return;
+    if (!ZAI_FALLBACK) {
+      return;
+    }
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,
       token: process.env.OPENCLAW_GATEWAY_TOKEN,
@@ -1069,7 +1131,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const anthropic = modelRegistry.find("anthropic", "claude-opus-4-5") as Model<Api> | null;
     const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
 
-    if (!anthropic || !zai) return;
+    if (!anthropic || !zai) {
+      return;
+    }
     try {
       await getApiKeyForModel({ model: anthropic, cfg });
       await getApiKeyForModel({ model: zai, cfg });

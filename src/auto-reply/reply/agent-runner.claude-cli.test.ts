@@ -106,10 +106,16 @@ describe("runReplyAgent claude-cli routing", () => {
     const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue("run-1");
     const lifecyclePhases: string[] = [];
     const unsubscribe = onAgentEvent((evt) => {
-      if (evt.runId !== "run-1") return;
-      if (evt.stream !== "lifecycle") return;
+      if (evt.runId !== "run-1") {
+        return;
+      }
+      if (evt.stream !== "lifecycle") {
+        return;
+      }
       const phase = evt.data?.phase;
-      if (typeof phase === "string") lifecyclePhases.push(phase);
+      if (typeof phase === "string") {
+        lifecyclePhases.push(phase);
+      }
     });
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],

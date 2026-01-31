@@ -89,7 +89,9 @@ export async function startTelegramWebhook(opts: {
             });
           }
           runtime.log?.(`webhook handler failed: ${errMsg}`);
-          if (!res.headersSent) res.writeHead(500);
+          if (!res.headersSent) {
+            res.writeHead(500);
+          }
           res.end();
         });
     }

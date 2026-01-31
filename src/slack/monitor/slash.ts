@@ -45,7 +45,9 @@ const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
 
 function chunkItems<T>(items: T[], size: number): T[][] {
-  if (size <= 0) return [items];
+  if (size <= 0) {
+    return [items];
+  }
   const rows: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
     rows.push(items.slice(i, i + size));
@@ -74,11 +76,17 @@ function parseSlackCommandArgValue(raw?: string | null): {
   value: string;
   userId: string;
 } | null {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const parts = raw.split("|");
-  if (parts.length !== 5 || parts[0] !== SLACK_COMMAND_ARG_VALUE_PREFIX) return null;
+  if (parts.length !== 5 || parts[0] !== SLACK_COMMAND_ARG_VALUE_PREFIX) {
+    return null;
+  }
   const [, command, arg, value, userId] = parts;
-  if (!command || !arg || !value || !userId) return null;
+  if (!command || !arg || !value || !userId) {
+    return null;
+  }
   const decode = (text: string) => {
     try {
       return decodeURIComponent(text);
@@ -90,7 +98,9 @@ function parseSlackCommandArgValue(raw?: string | null): {
   const decodedArg = decode(arg);
   const decodedValue = decode(value);
   const decodedUserId = decode(userId);
-  if (!decodedCommand || !decodedArg || !decodedValue || !decodedUserId) return null;
+  if (!decodedCommand || !decodedArg || !decodedValue || !decodedUserId) {
+    return null;
+  }
   return {
     command: decodedCommand,
     arg: decodedArg,
@@ -163,7 +173,9 @@ export function registerSlackMonitorSlashCommands(params: {
       }
       await ack();
 
-      if (ctx.botUserId && command.user_id === ctx.botUserId) return;
+      if (ctx.botUserId && command.user_id === ctx.botUserId) {
+        return;
+      }
 
       const channelInfo = await ctx.resolveChannelName(command.channel_id);
       const channelType =
@@ -526,7 +538,9 @@ export function registerSlackMonitorSlashCommands(params: {
     logVerbose("slack: slash commands disabled");
   }
 
-  if (nativeCommands.length === 0 || !supportsInteractiveArgMenus) return;
+  if (nativeCommands.length === 0 || !supportsInteractiveArgMenus) {
+    return;
+  }
 
   const registerArgAction = (actionId: string) => {
     (
@@ -540,7 +554,9 @@ export function registerSlackMonitorSlashCommands(params: {
       const respondFn =
         respond ??
         (async (payload: { text: string; blocks?: SlackBlock[]; response_type?: string }) => {
-          if (!body.channel?.id || !body.user?.id) return;
+          if (!body.channel?.id || !body.user?.id) {
+            return;
+          }
           await ctx.app.client.chat.postEphemeral({
             token: ctx.botToken,
             channel: body.channel.id,

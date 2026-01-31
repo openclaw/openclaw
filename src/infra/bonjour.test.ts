@@ -65,7 +65,9 @@ describe("gateway bonjour advertiser", () => {
 
   afterEach(() => {
     for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) delete process.env[key];
+      if (!(key in prevEnv)) {
+        delete process.env[key];
+      }
     }
     for (const [key, value] of Object.entries(prevEnv)) {
       process.env[key] = value;

@@ -197,7 +197,9 @@ export async function statusAllCommand(
     progress.tick();
 
     const connectionDetailsForReport = (() => {
-      if (!remoteUrlMissing) return connection.message;
+      if (!remoteUrlMissing) {
+        return connection.message;
+      }
       const bindMode = cfg.gateway?.bind ?? "loopback";
       const configPath = snap?.path?.trim() ? snap.path.trim() : "(unknown config path)";
       return [
@@ -277,31 +279,50 @@ export async function statusAllCommand(
       if (update.installKind === "git" && update.git) {
         const parts: string[] = [];
         parts.push(update.git.branch ? `git ${update.git.branch}` : "git");
-        if (update.git.upstream) parts.push(`↔ ${update.git.upstream}`);
-        if (update.git.dirty) parts.push("dirty");
-        if (update.git.behind != null && update.git.ahead != null) {
-          if (update.git.behind === 0 && update.git.ahead === 0) parts.push("up to date");
-          else if (update.git.behind > 0 && update.git.ahead === 0)
-            parts.push(`behind ${update.git.behind}`);
-          else if (update.git.behind === 0 && update.git.ahead > 0)
-            parts.push(`ahead ${update.git.ahead}`);
-          else parts.push(`diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`);
+        if (update.git.upstream) {
+          parts.push(`↔ ${update.git.upstream}`);
         }
-        if (update.git.fetchOk === false) parts.push("fetch failed");
+        if (update.git.dirty) {
+          parts.push("dirty");
+        }
+        if (update.git.behind != null && update.git.ahead != null) {
+          if (update.git.behind === 0 && update.git.ahead === 0) {
+            parts.push("up to date");
+          } else if (update.git.behind > 0 && update.git.ahead === 0) {
+            parts.push(`behind ${update.git.behind}`);
+          } else if (update.git.behind === 0 && update.git.ahead > 0) {
+            parts.push(`ahead ${update.git.ahead}`);
+          } else {
+            parts.push(`diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`);
+          }
+        }
+        if (update.git.fetchOk === false) {
+          parts.push("fetch failed");
+        }
 
         const latest = update.registry?.latestVersion;
         if (latest) {
           const cmp = compareSemverStrings(VERSION, latest);
-          if (cmp === 0) parts.push(`npm latest ${latest}`);
-          else if (cmp != null && cmp < 0) parts.push(`npm update ${latest}`);
-          else parts.push(`npm latest ${latest} (local newer)`);
+          if (cmp === 0) {
+            parts.push(`npm latest ${latest}`);
+          } else if (cmp != null && cmp < 0) {
+            parts.push(`npm update ${latest}`);
+          } else {
+            parts.push(`npm latest ${latest} (local newer)`);
+          }
         } else if (update.registry?.error) {
           parts.push("npm latest unknown");
         }
 
-        if (update.deps?.status === "ok") parts.push("deps ok");
-        if (update.deps?.status === "stale") parts.push("deps stale");
-        if (update.deps?.status === "missing") parts.push("deps missing");
+        if (update.deps?.status === "ok") {
+          parts.push("deps ok");
+        }
+        if (update.deps?.status === "stale") {
+          parts.push("deps stale");
+        }
+        if (update.deps?.status === "missing") {
+          parts.push("deps missing");
+        }
         return parts.join(" · ");
       }
       const parts: string[] = [];
@@ -309,15 +330,25 @@ export async function statusAllCommand(
       const latest = update.registry?.latestVersion;
       if (latest) {
         const cmp = compareSemverStrings(VERSION, latest);
-        if (cmp === 0) parts.push(`npm latest ${latest}`);
-        else if (cmp != null && cmp < 0) parts.push(`npm update ${latest}`);
-        else parts.push(`npm latest ${latest} (local newer)`);
+        if (cmp === 0) {
+          parts.push(`npm latest ${latest}`);
+        } else if (cmp != null && cmp < 0) {
+          parts.push(`npm update ${latest}`);
+        } else {
+          parts.push(`npm latest ${latest} (local newer)`);
+        }
       } else if (update.registry?.error) {
         parts.push("npm latest unknown");
       }
-      if (update.deps?.status === "ok") parts.push("deps ok");
-      if (update.deps?.status === "stale") parts.push("deps stale");
-      if (update.deps?.status === "missing") parts.push("deps missing");
+      if (update.deps?.status === "ok") {
+        parts.push("deps ok");
+      }
+      if (update.deps?.status === "stale") {
+        parts.push("deps stale");
+      }
+      if (update.deps?.status === "missing") {
+        parts.push("deps missing");
+      }
       return parts.join(" · ");
     })();
 

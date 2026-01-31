@@ -118,10 +118,16 @@ const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
 const DEFAULT_GIT_DIR = path.join(os.homedir(), ".openclaw");
 
 function normalizeTag(value?: string | null): string | null {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith("openclaw@")) return trimmed.slice("openclaw@".length);
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("openclaw@")) {
+    return trimmed.slice("openclaw@".length);
+  }
   if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
     return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
   }
@@ -134,7 +140,9 @@ function pickUpdateQuip(): string {
 
 function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
   return parseSemver(cleaned) ? cleaned : null;
 }
@@ -151,7 +159,9 @@ async function readPackageVersion(root: string): Promise<string | null> {
 
 async function resolveTargetVersion(tag: string, timeoutMs?: number): Promise<string | null> {
   const direct = normalizeVersionTag(tag);
-  if (direct) return direct;
+  if (direct) {
+    return direct;
+  }
   const res = await fetchNpmTagVersion({ tag, timeoutMs });
   return res.version ?? null;
 }
@@ -201,7 +211,9 @@ async function isEmptyDir(targetPath: string): Promise<boolean> {
 
 function resolveGitInstallDir(): string {
   const override = process.env.OPENCLAW_GIT_DIR?.trim();
-  if (override) return path.resolve(override);
+  if (override) {
+    return path.resolve(override);
+  }
   return resolveDefaultGitDir();
 }
 
@@ -211,7 +223,9 @@ function resolveDefaultGitDir(): string {
 
 function resolveNodeRunner(): string {
   const base = path.basename(process.execPath).toLowerCase();
-  if (base === "node" || base === "node.exe") return process.execPath;
+  if (base === "node" || base === "node.exe") {
+    return process.execPath;
+  }
   return "node";
 }
 
@@ -309,7 +323,9 @@ async function resolveGlobalManager(params: {
       params.root,
       params.timeoutMs,
     );
-    if (detected) return detected;
+    if (detected) {
+      return detected;
+    }
   }
   const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
   return byPresence ?? "npm";
@@ -459,7 +475,9 @@ function createUpdateProgress(enabled: boolean): ProgressController {
       currentSpinner.start(theme.accent(getStepLabel(step)));
     },
     onStepComplete: (step) => {
-      if (!currentSpinner) return;
+      if (!currentSpinner) {
+        return;
+      }
 
       const label = getStepLabel(step);
       const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
@@ -491,14 +509,20 @@ function createUpdateProgress(enabled: boolean): ProgressController {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
   const seconds = (ms / 1000).toFixed(1);
   return `${seconds}s`;
 }
 
 function formatStepStatus(exitCode: number | null): string {
-  if (exitCode === 0) return theme.success("\u2713");
-  if (exitCode === null) return theme.warn("?");
+  if (exitCode === 0) {
+    return theme.success("\u2713");
+  }
+  if (exitCode === null) {
+    return theme.warn("?");
+  }
   return theme.error("\u2717");
 }
 
@@ -875,7 +899,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
     if (!opts.json) {
       const summarizeList = (list: string[]) => {
-        if (list.length <= 6) return list.join(", ");
+        if (list.length <= 6) {
+          return list.join(", ");
+        }
         return `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
       };
 
@@ -907,13 +933,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         defaultRuntime.log(theme.muted("No plugin updates needed."));
       } else {
         const parts = [`${updated} updated`, `${unchanged} unchanged`];
-        if (failed > 0) parts.push(`${failed} failed`);
-        if (skipped > 0) parts.push(`${skipped} skipped`);
+        if (failed > 0) {
+          parts.push(`${failed} failed`);
+        }
+        if (skipped > 0) {
+          parts.push(`${skipped} skipped`);
+        }
         defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
       }
 
       for (const outcome of npmResult.outcomes) {
-        if (outcome.status !== "error") continue;
+        if (outcome.status !== "error") {
+          continue;
+        }
         defaultRuntime.log(theme.error(outcome.message));
       }
     }

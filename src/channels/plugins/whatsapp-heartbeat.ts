@@ -9,7 +9,9 @@ type HeartbeatRecipientsOpts = { to?: string; all?: boolean };
 function getSessionRecipients(cfg: OpenClawConfig) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  if (scope === "global") return [];
+  if (scope === "global") {
+    return [];
+  }
   const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const isGroupKey = (key: string) =>
@@ -32,7 +34,9 @@ function getSessionRecipients(cfg: OpenClawConfig) {
   // Dedupe while preserving recency ordering.
   const seen = new Set<string>();
   return recipients.filter((r) => {
-    if (seen.has(r.to)) return false;
+    if (seen.has(r.to)) {
+      return false;
+    }
     seen.add(r.to);
     return true;
   });

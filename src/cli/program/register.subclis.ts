@@ -13,8 +13,12 @@ type SubCliEntry = {
 };
 
 const shouldRegisterPrimaryOnly = (argv: string[]) => {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS)) return false;
-  if (hasHelpOrVersion(argv)) return false;
+  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS)) {
+    return false;
+  }
+  if (hasHelpOrVersion(argv)) {
+    return false;
+  }
   return true;
 };
 
@@ -251,9 +255,13 @@ function removeCommand(program: Command, command: Command) {
 
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
   const entry = entries.find((candidate) => candidate.name === name);
-  if (!entry) return false;
+  if (!entry) {
+    return false;
+  }
   const existing = program.commands.find((cmd) => cmd.name() === entry.name);
-  if (existing) removeCommand(program, existing);
+  if (existing) {
+    removeCommand(program, existing);
+  }
   await entry.register(program);
   return true;
 }

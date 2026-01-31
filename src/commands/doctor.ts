@@ -83,7 +83,9 @@ export async function doctorCommand(
     confirm: (p) => prompter.confirm(p),
     outro,
   });
-  if (updateResult.handled) return;
+  if (updateResult.handled) {
+    return;
+  }
 
   await maybeRepairUiProtocolFreshness(runtime, prompter);
   noteSourceInstallIssues(root);

@@ -228,12 +228,20 @@ export async function runCliAgent(params: {
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
       if (logOutputText) {
-        if (stdout) log.info(`cli stdout:\n${stdout}`);
-        if (stderr) log.info(`cli stderr:\n${stderr}`);
+        if (stdout) {
+          log.info(`cli stdout:\n${stdout}`);
+        }
+        if (stderr) {
+          log.info(`cli stderr:\n${stderr}`);
+        }
       }
       if (shouldLogVerbose()) {
-        if (stdout) log.debug(`cli stdout:\n${stdout}`);
-        if (stderr) log.debug(`cli stderr:\n${stderr}`);
+        if (stdout) {
+          log.debug(`cli stdout:\n${stdout}`);
+        }
+        if (stderr) {
+          log.debug(`cli stderr:\n${stderr}`);
+        }
       }
 
       if (result.code !== 0) {
@@ -278,7 +286,9 @@ export async function runCliAgent(params: {
       },
     };
   } catch (err) {
-    if (err instanceof FailoverError) throw err;
+    if (err instanceof FailoverError) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     if (isFailoverErrorMessage(message)) {
       const reason = classifyFailoverReason(message) ?? "unknown";

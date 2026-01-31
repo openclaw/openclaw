@@ -22,7 +22,9 @@ function normalizeAvatarValue(value: string | undefined | null): string | null {
 
 function resolveAvatarSource(cfg: OpenClawConfig, agentId: string): string | null {
   const fromConfig = normalizeAvatarValue(resolveAgentIdentity(cfg, agentId)?.avatar);
-  if (fromConfig) return fromConfig;
+  if (fromConfig) {
+    return fromConfig;
+  }
   const workspace = resolveAgentWorkspaceDir(cfg, agentId);
   const fromIdentity = normalizeAvatarValue(loadAgentIdentityFromWorkspace(workspace)?.avatar);
   return fromIdentity;
@@ -47,7 +49,9 @@ function resolveExistingPath(value: string): string {
 
 function isPathWithin(root: string, target: string): boolean {
   const relative = path.relative(root, target);
-  if (!relative) return true;
+  if (!relative) {
+    return true;
+  }
   return !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 

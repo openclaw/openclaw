@@ -8,7 +8,9 @@ const DEFAULT_GOOGLE_VIDEO_PROMPT = "Describe the video.";
 
 function resolveModel(model?: string): string {
   const trimmed = model?.trim();
-  if (!trimmed) return DEFAULT_GOOGLE_VIDEO_MODEL;
+  if (!trimmed) {
+    return DEFAULT_GOOGLE_VIDEO_MODEL;
+  }
   return normalizeGoogleModelId(trimmed);
 }
 

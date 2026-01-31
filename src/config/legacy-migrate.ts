@@ -7,7 +7,9 @@ export function migrateLegacyConfig(raw: unknown): {
   changes: string[];
 } {
   const { next, changes } = applyLegacyMigrations(raw);
-  if (!next) return { config: null, changes: [] };
+  if (!next) {
+    return { config: null, changes: [] };
+  }
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
     changes.push("Migration applied, but config still invalid; fix remaining issues manually.");

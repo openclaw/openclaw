@@ -8,7 +8,9 @@ const log = createSubsystemLogger("plugins");
 let pluginRegistryLoaded = false;
 
 export function ensurePluginRegistryLoaded(): void {
-  if (pluginRegistryLoaded) return;
+  if (pluginRegistryLoaded) {
+    return;
+  }
   const config = loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
