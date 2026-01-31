@@ -12,7 +12,7 @@
     "rootDir": "src",
     "skipLibCheck": true,
     "strict": true,
-    "target": "ES2022"
+    "target": "es2023"
   },
   "include": ["src/**/*"],
   "exclude": [
