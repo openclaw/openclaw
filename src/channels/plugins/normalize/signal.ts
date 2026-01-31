@@ -8,8 +8,9 @@ export function normalizeSignalMessagingTarget(raw: string): string | undefined 
   if (!normalized) return undefined;
   const lower = normalized.toLowerCase();
   if (lower.startsWith("group:")) {
+    // Preserve case for group ID - base64 is case-sensitive
     const id = normalized.slice("group:".length).trim();
-    return id ? `group:${id}`.toLowerCase() : undefined;
+    return id ? `group:${id}` : undefined;
   }
   if (lower.startsWith("username:")) {
     const id = normalized.slice("username:".length).trim();

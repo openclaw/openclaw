@@ -51,7 +51,15 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
 
 function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) return [];
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: params.userTimezone,
+  });
+  return ["## Current Date & Time", dateStr, `Time zone: ${params.userTimezone}`, ""];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
