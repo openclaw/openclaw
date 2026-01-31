@@ -106,4 +106,19 @@ describe("buildInboundMediaNote", () => {
     });
     expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
   });
+
+  it("truncates long file paths to prevent TUI rendering issues", () => {
+    const longPath =
+      "/home/moltbot/.openclaw/media/inbound/file_6---1c8d3cc5-a4bb-423a-8c7b-6327d7783bf7.ogg";
+    const note = buildInboundMediaNote({
+      MediaPath: longPath,
+      MediaType: "audio/ogg",
+      MediaUrl: longPath,
+    });
+    // Verify the note is created and paths are truncated
+    expect(note).toBeDefined();
+    expect(note!.length).toBeLessThan(longPath.length * 2 + 50);
+    expect(note).toContain("file_6---1c8d3cc5-a4bb-423a-8c7b-6327d7783bf7.ogg");
+    expect(note).toContain("(audio/ogg)");
+  });
 });

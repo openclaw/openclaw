@@ -1,4 +1,22 @@
+import path from "node:path";
 import type { MsgContext } from "./templating.js";
+
+const MAX_DISPLAY_PATH_LEN = 80;
+
+function truncatePath(filePath: string, maxLen: number = MAX_DISPLAY_PATH_LEN): string {
+  if (filePath.length <= maxLen) return filePath;
+  const basename = path.basename(filePath);
+  if (basename.length >= maxLen - 3) {
+    // If basename alone is too long, truncate from the middle
+    const half = Math.floor((maxLen - 3) / 2);
+    return `${basename.slice(0, half)}...${basename.slice(-half)}`;
+  }
+  // Keep basename and truncate directory portion
+  const remaining = maxLen - basename.length - 4; // 4 for ".../"
+  if (remaining <= 0) return `.../${basename}`;
+  const dir = path.dirname(filePath);
+  return `${dir.slice(0, remaining)}.../${basename}`;
+}
 
 function formatMediaAttachedLine(params: {
   path: string;
@@ -13,8 +31,11 @@ function formatMediaAttachedLine(params: {
       : "[media attached: ";
   const typePart = params.type?.trim() ? ` (${params.type.trim()})` : "";
   const urlRaw = params.url?.trim();
-  const urlPart = urlRaw ? ` | ${urlRaw}` : "";
-  return `${prefix}${params.path}${typePart}${urlPart}]`;
+  // Truncate long paths to prevent TUI rendering issues
+  const displayPath = truncatePath(params.path);
+  const displayUrl = urlRaw ? truncatePath(urlRaw) : undefined;
+  const urlPart = displayUrl ? ` | ${displayUrl}` : "";
+  return `${prefix}${displayPath}${typePart}${urlPart}]`;
 }
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
