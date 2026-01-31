@@ -10,8 +10,9 @@ export async function writeOAuthCredentials(
   agentDir?: string,
 ): Promise<void> {
   // Write to resolved agent dir so gateway finds credentials on startup.
+  const email = typeof creds.email === "string" ? creds.email.trim() : "";
   upsertAuthProfile({
-    profileId: `${provider}:${creds.email ?? "default"}`,
+    profileId: `${provider}:${email || "default"}`,
     credential: {
       type: "oauth",
       provider,
