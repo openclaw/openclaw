@@ -217,25 +217,29 @@ async function serveFile(filePath: string, res: ServerResponse): Promise<void> {
 
 function openBrowser(url: string, runtime: RuntimeEnv): void {
   const { platform } = process;
-  let command: string;
 
-  if (platform === "darwin") {
-    command = `open "${url}"`;
-  } else if (platform === "win32") {
-    command = `start "" "${url}"`;
-  } else {
-    command = `xdg-open "${url}"`;
-  }
+  // Use dynamic import to avoid bundling issues
+  void (async () => {
+    try {
+      const { exec } = await import("node:child_process");
+      
+      let command: string;
+      if (platform === "win32") {
+        // On Windows, use rundll32 which is the most reliable way to open URLs
+        command = `rundll32 url.dll,FileProtocolHandler ${url}`;
+      } else if (platform === "darwin") {
+        command = `open "${url}"`;
+      } else {
+        command = `xdg-open "${url}"`;
+      }
 
-  import("node:child_process")
-    .then(({ exec }) => {
       exec(command, (error) => {
         if (error) {
           runtime.log(`[onboard-web] Could not open browser automatically. Please visit: ${url}`);
         }
       });
-    })
-    .catch(() => {
+    } catch {
       runtime.log(`[onboard-web] Could not open browser automatically. Please visit: ${url}`);
-    });
+    }
+  })();
 }
