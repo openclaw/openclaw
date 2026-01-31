@@ -306,7 +306,7 @@ function buildKimiCodeProvider(): ProviderConfig {
         id: KIMI_CODE_MODEL_ID,
         name: "Kimi-K2.5",
         reasoning: true,
-        input: ["text","image"],
+        input: ["text", "image"],
         cost: KIMI_CODE_DEFAULT_COST,
         contextWindow: KIMI_CODE_CONTEXT_WINDOW,
         maxTokens: KIMI_CODE_MAX_TOKENS,
