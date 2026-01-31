@@ -29,7 +29,7 @@ export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): str
     if (!accountId || accountId === "*") continue;
     ids.add(normalizeAccountId(accountId));
   }
-  return Array.from(ids).sort((a, b) => a.localeCompare(b));
+  return Array.from(ids).toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultAgentBoundAccountId(

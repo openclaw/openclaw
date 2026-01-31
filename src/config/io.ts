@@ -178,7 +178,7 @@ export function parseConfigJson5(
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: json5.parse(raw) as unknown };
+    return { ok: true, parsed: json5.parse(raw) };
   } catch (err) {
     return { ok: false, error: String(err) };
   }

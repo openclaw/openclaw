@@ -315,7 +315,7 @@ export async function fetchMinimaxUsage(
     };
   }
 
-  const baseResp = isRecord(data.base_resp) ? (data.base_resp as MinimaxBaseResp) : undefined;
+  const baseResp = isRecord(data.base_resp) ? data.base_resp : undefined;
   if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     return {
       provider: "minimax",

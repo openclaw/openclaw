@@ -74,11 +74,11 @@ async function promptConfiguredAction(params: {
     ...(supportsDelete ? [deleteOption] : []),
     skipOption,
   ];
-  return (await prompter.select({
+  return await prompter.select({
     message: `${label} already configured. What do you want to do?`,
     options,
     initialValue: "update",
-  })) as ConfiguredChannelAction;
+  });
 }
 
 async function promptRemovalAccountId(params: {
@@ -93,14 +93,14 @@ async function promptRemovalAccountId(params: {
   const accountIds = plugin.config.listAccountIds(cfg).filter(Boolean);
   const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg, accountIds });
   if (accountIds.length <= 1) return defaultAccountId;
-  const selected = (await prompter.select({
+  const selected = await prompter.select({
     message: `${label} account`,
     options: accountIds.map((accountId) => ({
       value: accountId,
       label: formatAccountLabel(accountId),
     })),
     initialValue: defaultAccountId,
-  })) as string;
+  });
   return normalizeAccountId(selected) ?? defaultAccountId;
 }
 
@@ -304,7 +304,7 @@ export async function setupChannels(
   if (!shouldConfigure) return cfg;
 
   const corePrimer = listChatChannels().map((meta) => ({
-    id: meta.id as ChannelChoice,
+    id: meta.id,
     label: meta.label,
     blurb: meta.blurb,
   }));
@@ -312,9 +312,9 @@ export async function setupChannels(
   const primerChannels = [
     ...corePrimer,
     ...installedPlugins
-      .filter((plugin) => !coreIds.has(plugin.id as ChannelChoice))
+      .filter((plugin) => !coreIds.has(plugin.id))
       .map((plugin) => ({
-        id: plugin.id as ChannelChoice,
+        id: plugin.id,
         label: plugin.meta.label,
         blurb: plugin.meta.blurb,
       })),

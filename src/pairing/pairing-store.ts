@@ -166,7 +166,7 @@ function pruneExcessRequests(reqs: PairingRequest[], maxPending: number) {
   if (maxPending <= 0 || reqs.length <= maxPending) {
     return { requests: reqs, removed: false };
   }
-  const sorted = reqs.slice().sort((a, b) => resolveLastSeenAt(a) - resolveLastSeenAt(b));
+  const sorted = reqs.slice().toSorted((a, b) => resolveLastSeenAt(a) - resolveLastSeenAt(b));
   return { requests: sorted.slice(-maxPending), removed: true };
 }
 
@@ -314,7 +314,7 @@ export async function listChannelPairingRequests(
             typeof r.createdAt === "string",
         )
         .slice()
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
     },
   );
 }

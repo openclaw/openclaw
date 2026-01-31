@@ -74,7 +74,7 @@ function stripUnknownConfigKeys(config: OpenClawConfig): {
     return { config, removed: [] };
   }
 
-  const next = structuredClone(config) as OpenClawConfig;
+  const next = structuredClone(config);
   const removed: string[] = [];
   for (const issue of parsed.error.issues) {
     if (!isUnrecognizedKeysIssue(issue)) continue;
@@ -186,7 +186,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let snapshot = await readConfigFileSnapshot();
   const baseCfg = snapshot.config ?? {};
   let cfg: OpenClawConfig = baseCfg;
-  let candidate = structuredClone(baseCfg) as OpenClawConfig;
+  let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
   let shouldWriteConfig = false;
   const fixHints: string[] = [];

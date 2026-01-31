@@ -91,7 +91,7 @@ async function resizeImageBase64IfNeeded(params: {
   const sideGrid = [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
     .map((v) => Math.min(params.maxDimensionPx, v))
     .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
-    .sort((a, b) => b - a);
+    .toSorted((a, b) => b - a);
 
   let smallest: { buffer: Buffer; size: number } | null = null;
   for (const side of sideGrid) {
@@ -191,7 +191,7 @@ export async function sanitizeImageBlocks(
 ): Promise<{ images: ImageContent[]; dropped: number }> {
   if (images.length === 0) return { images, dropped: 0 };
   const sanitized = await sanitizeContentBlocksImages(images as ToolContentBlock[], label, opts);
-  const next = sanitized.filter(isImageBlock) as ImageContent[];
+  const next = sanitized.filter(isImageBlock);
   return { images: next, dropped: Math.max(0, images.length - next.length) };
 }
 

@@ -247,7 +247,7 @@ export function createOpenClawCodingTools(options?: {
       // Wrap with param normalization for Claude Code compatibility
       return [wrapToolParamNormalization(createEditTool(workspaceRoot), CLAUDE_PARAM_GROUPS.edit)];
     }
-    return [tool as AnyAgentTool];
+    return [tool];
   });
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const execTool = createExecTool({
@@ -338,13 +338,13 @@ export function createOpenClawCodingTools(options?: {
   ];
   const coreToolNames = new Set(
     tools
-      .filter((tool) => !getPluginToolMeta(tool as AnyAgentTool))
+      .filter((tool) => !getPluginToolMeta(tool))
       .map((tool) => normalizeToolName(tool.name))
       .filter(Boolean),
   );
   const pluginGroups = buildPluginToolGroups({
     tools,
-    toolMeta: (tool) => getPluginToolMeta(tool as AnyAgentTool),
+    toolMeta: (tool) => getPluginToolMeta(tool),
   });
   const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
     const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);

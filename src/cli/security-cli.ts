@@ -77,7 +77,7 @@ export function registerSecurityCli(program: Command) {
         } else if (
           fixResult.errors.length === 0 &&
           fixResult.changes.length === 0 &&
-          fixResult.actions.every((a) => a.ok === false)
+          fixResult.actions.every((a) => !a.ok)
         ) {
           lines.push(muted("Fixes: no changes applied"));
         } else {

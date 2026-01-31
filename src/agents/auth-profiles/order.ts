@@ -112,7 +112,7 @@ export function resolveAuthProfileOrder(params: {
     }
 
     const cooldownSorted = inCooldown
-      .sort((a, b) => a.cooldownUntil - b.cooldownUntil)
+      .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
       .map((entry) => entry.profileId);
 
     const ordered = [...available, ...cooldownSorted];
@@ -163,7 +163,7 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
   // Primary sort: type preference (oauth > token > api_key).
   // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       // First by type (oauth > token > api_key)
       if (a.typeScore !== b.typeScore) return a.typeScore - b.typeScore;
       // Then by lastUsed (oldest first)
@@ -177,7 +177,7 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
       profileId,
       cooldownUntil: resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now,
     }))
-    .sort((a, b) => a.cooldownUntil - b.cooldownUntil)
+    .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
     .map((entry) => entry.profileId);
 
   return [...sorted, ...cooldownSorted];

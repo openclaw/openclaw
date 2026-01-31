@@ -225,6 +225,7 @@ const runCliJson = async (args: string[], env: NodeJS.ProcessEnv): Promise<unkno
     throw new Error(
       `cli returned non-json output: ${String(err)}\n` +
         `--- stdout ---\n${out}\n--- stderr ---\n${stderr.join("")}`,
+      { cause: err },
     );
   }
 };

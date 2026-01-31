@@ -22,7 +22,7 @@ function guardCancel<T>(value: T | symbol): T {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     throw new WizardCancelledError();
   }
-  return value as T;
+  return value;
 }
 
 export function createClackPrompter(): WizardPrompter {

@@ -268,7 +268,7 @@ export function listChannelPluginCatalogEntries(
 
   return Array.from(resolved.values())
     .map(({ entry }) => entry)
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const orderA = a.meta.order ?? 999;
       const orderB = b.meta.order ?? 999;
       if (orderA !== orderB) return orderA - orderB;

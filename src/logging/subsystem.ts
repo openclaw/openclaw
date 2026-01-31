@@ -187,8 +187,8 @@ function logToFile(
   meta?: Record<string, unknown>,
 ) {
   if (level === "silent") return;
-  const safeLevel = level as Exclude<LogLevel, "silent">;
-  const method = (fileLogger as unknown as Record<string, unknown>)[safeLevel] as unknown as
+  const safeLevel = level;
+  const method = (fileLogger as unknown as Record<string, unknown>)[safeLevel] as
     | ((...args: unknown[]) => void)
     | undefined;
   if (typeof method !== "function") return;

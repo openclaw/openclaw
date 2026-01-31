@@ -279,7 +279,7 @@ export class GatewayClient {
     try {
       const parsed = JSON.parse(raw);
       if (validateEventFrame(parsed)) {
-        const evt = parsed as EventFrame;
+        const evt = parsed;
         if (evt.event === "connect.challenge") {
           const payload = evt.payload as { nonce?: unknown } | undefined;
           const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;

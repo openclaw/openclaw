@@ -132,7 +132,7 @@ describe("security fix", () => {
 
     const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     const channels = parsed.channels as Record<string, Record<string, unknown>>;
-    const whatsapp = channels.whatsapp as Record<string, unknown>;
+    const whatsapp = channels.whatsapp;
     const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
 
     expect(accounts.a1.groupPolicy).toBe("allowlist");

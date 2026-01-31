@@ -569,10 +569,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   });
 
   const skillBins = new SkillBinsCache(async () => {
-    const res = (await client.request("skills.bins", {})) as
-      | { bins?: unknown[] }
-      | null
-      | undefined;
+    const res = await client.request("skills.bins", {});
     const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
     return bins;
   });
@@ -735,7 +732,7 @@ async function handleInvoke(
             : `HTTP ${response.status}`;
         throw new Error(message);
       }
-      const result = response.body as unknown;
+      const result = response.body;
       if (allowedProfiles.length > 0 && path === "/profiles") {
         const obj =
           typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
@@ -758,7 +755,9 @@ async function handleInvoke(
               }
               return file;
             } catch (err) {
-              throw new Error(`browser proxy file read failed for ${p}: ${String(err)}`);
+              throw new Error(`browser proxy file read failed for ${p}: ${String(err)}`, {
+                cause: err,
+              });
             }
           }),
         );

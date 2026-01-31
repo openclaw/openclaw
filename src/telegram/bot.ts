@@ -182,7 +182,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const MAX_RAW_UPDATE_STRING = 500;
   const MAX_RAW_UPDATE_ARRAY = 20;
   const stringifyUpdate = (update: unknown) => {
-    const seen = new WeakSet<object>();
+    const seen = new WeakSet();
     return JSON.stringify(update ?? null, (key, value) => {
       if (typeof value === "string" && value.length > MAX_RAW_UPDATE_STRING) {
         return `${value.slice(0, MAX_RAW_UPDATE_STRING)}...`;

@@ -29,7 +29,7 @@ export function validateJsonSchemaValue(params: {
 }): { ok: true } | { ok: false; errors: string[] } {
   let cached = schemaCache.get(params.cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = ajv.compile(params.schema) as ValidateFunction;
+    const validate = ajv.compile(params.schema);
     cached = { validate, schema: params.schema };
     schemaCache.set(params.cacheKey, cached);
   }

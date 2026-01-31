@@ -33,7 +33,7 @@ function normalizeScopes(scopes: string[] | undefined): string[] {
     const trimmed = scope.trim();
     if (trimmed) out.add(trimmed);
   }
-  return [...out].sort();
+  return [...out].toSorted();
 }
 
 function readStore(filePath: string): DeviceAuthStore | null {

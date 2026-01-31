@@ -107,13 +107,13 @@ async function promptWhatsAppAllowFrom(
     "WhatsApp DM access",
   );
 
-  const phoneMode = (await prompter.select({
+  const phoneMode = await prompter.select({
     message: "WhatsApp phone setup",
     options: [
       { value: "personal", label: "This is my personal phone number" },
       { value: "separate", label: "Separate phone just for OpenClaw" },
     ],
-  })) as "personal" | "separate";
+  });
 
   if (phoneMode === "personal") {
     await prompter.note(
@@ -187,13 +187,13 @@ async function promptWhatsAppAllowFrom(
           { value: "list", label: "Set allowFrom to specific numbers" },
         ] as const);
 
-  const mode = (await prompter.select({
+  const mode = await prompter.select({
     message: "WhatsApp allowFrom (optional pre-allowlist)",
     options: allowOptions.map((opt) => ({
       value: opt.value,
       label: opt.label,
     })),
-  })) as (typeof allowOptions)[number]["value"];
+  });
 
   if (mode === "keep") {
     // Keep allowFrom as-is.

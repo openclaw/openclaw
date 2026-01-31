@@ -46,7 +46,7 @@ export async function listConfiguredMessageChannels(
   for (const plugin of listChannelPlugins()) {
     if (!isKnownChannel(plugin.id)) continue;
     if (await isPluginConfigured(plugin, cfg)) {
-      channels.push(plugin.id as MessageChannelId);
+      channels.push(plugin.id);
     }
   }
   return channels;

@@ -43,7 +43,7 @@ async function resolveLogFile(file: string): Promise<string> {
   );
   const sorted = candidates
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
   return sorted[0]?.path ?? file;
 }
 

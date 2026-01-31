@@ -49,7 +49,7 @@ function listConfiguredGuildChannelKeys(
       ids.add(channelId);
     }
   }
-  return [...ids].sort((a, b) => a.localeCompare(b));
+  return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
 export function collectDiscordAuditChannelIds(params: {

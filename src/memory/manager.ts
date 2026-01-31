@@ -1730,7 +1730,7 @@ export class MemoryIndexManager {
     if (this.provider.id === "openai" && this.openAi) {
       const entries = Object.entries(this.openAi.headers)
         .filter(([key]) => key.toLowerCase() !== "authorization")
-        .sort(([a], [b]) => a.localeCompare(b))
+        .toSorted(([a], [b]) => a.localeCompare(b))
         .map(([key, value]) => [key, value]);
       return hashText(
         JSON.stringify({
@@ -1747,7 +1747,7 @@ export class MemoryIndexManager {
           const lower = key.toLowerCase();
           return lower !== "authorization" && lower !== "x-goog-api-key";
         })
-        .sort(([a], [b]) => a.localeCompare(b))
+        .toSorted(([a], [b]) => a.localeCompare(b))
         .map(([key, value]) => [key, value]);
       return hashText(
         JSON.stringify({

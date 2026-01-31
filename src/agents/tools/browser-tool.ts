@@ -93,7 +93,7 @@ async function resolveBrowserNodeTarget(params: {
 
   if (params.target === "node") {
     if (browserNodes.length === 1) {
-      const node = browserNodes[0]!;
+      const node = browserNodes[0];
       return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
     }
     throw new Error(
@@ -104,7 +104,7 @@ async function resolveBrowserNodeTarget(params: {
   if (mode === "manual") return null;
 
   if (browserNodes.length === 1) {
-    const node = browserNodes[0]!;
+    const node = browserNodes[0];
     return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
   }
   return null;
@@ -123,7 +123,7 @@ async function callBrowserProxy(params: {
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
-  const payload = (await callGatewayTool(
+  const payload = await callGatewayTool(
     "node.invoke",
     { timeoutMs: gatewayTimeoutMs },
     {
@@ -139,11 +139,7 @@ async function callBrowserProxy(params: {
       },
       idempotencyKey: crypto.randomUUID(),
     },
-  )) as {
-    ok?: boolean;
-    payload?: BrowserProxyResult;
-    payloadJSON?: string | null;
-  };
+  );
   const parsed =
     payload?.payload ??
     (typeof payload?.payloadJSON === "string" && payload.payloadJSON
@@ -414,7 +410,7 @@ export function createBrowserTool(opts?: {
           const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
           const format =
             params.snapshotFormat === "ai" || params.snapshotFormat === "aria"
-              ? (params.snapshotFormat as "ai" | "aria")
+              ? params.snapshotFormat
               : "ai";
           const mode =
             params.mode === "efficient"
@@ -697,10 +693,12 @@ export function createBrowserTool(opts?: {
               if (!tabs.length) {
                 throw new Error(
                   "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+                  { cause: err },
                 );
               }
               throw new Error(
                 `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+                { cause: err },
               );
             }
             throw err;

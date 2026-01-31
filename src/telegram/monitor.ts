@@ -105,8 +105,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   }
 
   const proxyFetch =
-    opts.proxyFetch ??
-    (account.config.proxy ? makeProxyFetch(account.config.proxy as string) : undefined);
+    opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
   let lastUpdateId = await readTelegramUpdateOffset({
     accountId: account.accountId,

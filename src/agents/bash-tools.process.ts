@@ -116,7 +116,7 @@ export function createProcessTool(
             exitSignal: s.exitSignal ?? undefined,
           }));
         const lines = [...running, ...finished]
-          .sort((a, b) => b.startedAt - a.startedAt)
+          .toSorted((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
             return `${s.sessionId} ${pad(s.status, 9)} ${formatDuration(s.runtimeMs)} :: ${label}`;

@@ -51,6 +51,6 @@ export function resolveGroupActivationFor(params: {
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
   const requireMention = resolveGroupRequireMentionFor(params.cfg, params.conversationId);
-  const defaultActivation = requireMention === false ? "always" : "mention";
+  const defaultActivation = !requireMention ? "always" : "mention";
   return normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation;
 }

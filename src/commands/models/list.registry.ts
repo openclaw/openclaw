@@ -43,8 +43,8 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const models = registry.getAll() as Model<Api>[];
-  const availableModels = registry.getAvailable() as Model<Api>[];
+  const models = registry.getAll();
+  const availableModels = registry.getAvailable();
   const availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
   return { registry, models, availableKeys };
 }

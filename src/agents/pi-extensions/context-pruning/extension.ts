@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { pruneContextMessages } from "./pruner.js";
@@ -21,7 +20,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
     }
 
     const next = pruneContextMessages({
-      messages: event.messages as AgentMessage[],
+      messages: event.messages,
       settings: runtime.settings,
       ctx,
       isToolPrunable: runtime.isToolPrunable,

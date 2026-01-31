@@ -316,10 +316,10 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         reply: { text: `⚠️ ${resolved.error ?? "Unknown subagent."}` },
       };
     }
-    const history = (await callGateway({
+    const history = await callGateway({
       method: "chat.history",
       params: { sessionKey: resolved.entry.childSessionKey, limit },
-    })) as { messages?: unknown[] };
+    });
     const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
     const filtered = includeTools ? rawMessages : stripToolMessages(rawMessages);
     const lines = formatLogLines(filtered as ChatMessage[]);
@@ -349,7 +349,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const idempotencyKey = crypto.randomUUID();
     let runId: string = idempotencyKey;
     try {
-      const response = (await callGateway({
+      const response = await callGateway({
         method: "agent",
         params: {
           message,
@@ -360,7 +360,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
           lane: AGENT_LANE_SUBAGENT,
         },
         timeoutMs: 10_000,
-      })) as { runId?: string };
+      });
       if (response?.runId) runId = response.runId;
     } catch (err) {
       const messageText =
@@ -369,11 +369,11 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     }
 
     const waitMs = 30_000;
-    const wait = (await callGateway({
+    const wait = await callGateway({
       method: "agent.wait",
       params: { runId, timeoutMs: waitMs },
       timeoutMs: waitMs + 2000,
-    })) as { status?: string; error?: string };
+    });
     if (wait?.status === "timeout") {
       return {
         shouldContinue: false,
@@ -389,10 +389,10 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       };
     }
 
-    const history = (await callGateway({
+    const history = await callGateway({
       method: "chat.history",
       params: { sessionKey: resolved.entry.childSessionKey, limit: 50 },
-    })) as { messages?: unknown[] };
+    });
     const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
     const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
     const replyText = last ? extractAssistantText(last) : undefined;

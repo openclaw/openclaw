@@ -264,7 +264,7 @@ function collectGatewayConfigFindings(
   const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
   const hasSharedSecret =
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
-  const hasTailscaleAuth = auth.allowTailscale === true && tailscaleMode === "serve";
+  const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
 
   if (bind !== "loopback" && !hasSharedSecret) {
@@ -918,7 +918,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         })
       : undefined;
 
-  if (deep?.gateway?.attempted && deep.gateway.ok === false) {
+  if (deep?.gateway?.attempted && !deep.gateway.ok) {
     findings.push({
       checkId: "gateway.probe_failed",
       severity: "warn",

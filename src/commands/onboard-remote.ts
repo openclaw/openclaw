@@ -118,13 +118,13 @@ export async function promptRemoteGatewayConfig(
   });
   const url = ensureWsUrl(String(urlInput));
 
-  const authChoice = (await prompter.select({
+  const authChoice = await prompter.select({
     message: "Gateway auth",
     options: [
       { value: "token", label: "Token (recommended)" },
       { value: "off", label: "No auth" },
     ],
-  })) as "token" | "off";
+  });
 
   let token = cfg.gateway?.remote?.token ?? "";
   if (authChoice === "token") {

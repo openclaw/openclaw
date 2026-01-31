@@ -414,7 +414,7 @@ vi.mock("../config/config.js", async () => {
           : {};
       const overrideChannels =
         testState.channelsConfig && typeof testState.channelsConfig === "object"
-          ? { ...(testState.channelsConfig as Record<string, unknown>) }
+          ? { ...testState.channelsConfig }
           : {};
       const mergedChannels = { ...fileChannels, ...overrideChannels };
       if (testState.allowFrom !== undefined) {

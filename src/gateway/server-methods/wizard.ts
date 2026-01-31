@@ -33,7 +33,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const sessionId = randomUUID();
     const opts = {
-      mode: params.mode as "local" | "remote" | undefined,
+      mode: params.mode,
       workspace: typeof params.workspace === "string" ? params.workspace : undefined,
     };
     const session = new WizardSession((prompter) =>
@@ -58,7 +58,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const sessionId = params.sessionId as string;
+    const sessionId = params.sessionId;
     const session = context.wizardSessions.get(sessionId);
     if (!session) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
@@ -95,7 +95,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const sessionId = params.sessionId as string;
+    const sessionId = params.sessionId;
     const session = context.wizardSessions.get(sessionId);
     if (!session) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
@@ -121,7 +121,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const sessionId = params.sessionId as string;
+    const sessionId = params.sessionId;
     const session = context.wizardSessions.get(sessionId);
     if (!session) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));

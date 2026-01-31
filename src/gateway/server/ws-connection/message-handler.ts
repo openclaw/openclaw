@@ -263,11 +263,11 @@ export function attachGatewayWsMessageHandler(params: {
         const isRequestFrame = validateRequestFrame(parsed);
         if (
           !isRequestFrame ||
-          (parsed as RequestFrame).method !== "connect" ||
-          !validateConnectParams((parsed as RequestFrame).params)
+          parsed.method !== "connect" ||
+          !validateConnectParams(parsed.params)
         ) {
           const handshakeError = isRequestFrame
-            ? (parsed as RequestFrame).method === "connect"
+            ? parsed.method === "connect"
               ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
               : "invalid handshake: first request must be connect"
             : "invalid request frame";
@@ -279,7 +279,7 @@ export function attachGatewayWsMessageHandler(params: {
             handshakeError,
           });
           if (isRequestFrame) {
-            const req = parsed as RequestFrame;
+            const req = parsed;
             send({
               type: "res",
               id: req.id,
@@ -300,7 +300,7 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        const frame = parsed as RequestFrame;
+        const frame = parsed;
         const connectParams = frame.params as ConnectParams;
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
 
@@ -897,7 +897,7 @@ export function attachGatewayWsMessageHandler(params: {
         });
         return;
       }
-      const req = parsed as RequestFrame;
+      const req = parsed;
       logWs("in", "req", { connId, id: req.id, method: req.method });
       const respond = (
         ok: boolean,

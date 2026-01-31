@@ -78,7 +78,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - v.ts > DEDUPE_TTL_MS) params.dedupe.delete(k);
     }
     if (params.dedupe.size > DEDUPE_MAX) {
-      const entries = [...params.dedupe.entries()].sort((a, b) => a[1].ts - b[1].ts);
+      const entries = [...params.dedupe.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
       for (let i = 0; i < params.dedupe.size - DEDUPE_MAX; i++) {
         params.dedupe.delete(entries[i][0]);
       }

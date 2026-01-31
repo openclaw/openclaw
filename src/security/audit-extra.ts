@@ -661,7 +661,7 @@ async function collectIncludePathsRecursive(params: {
       if (!rawText) continue;
       const nestedParsed = (() => {
         try {
-          return JSON5.parse(rawText) as unknown;
+          return JSON5.parse(rawText);
         } catch {
           return null;
         }

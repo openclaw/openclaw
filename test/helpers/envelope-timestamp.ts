@@ -28,7 +28,7 @@ function formatZonedTimestamp(date: Date, timeZone?: string): string {
   const hh = pick("hour");
   const min = pick("minute");
   const tz = [...parts]
-    .reverse()
+    .toReversed()
     .find((part) => part.type === "timeZoneName")
     ?.value?.trim();
 

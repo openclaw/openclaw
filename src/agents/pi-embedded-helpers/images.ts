@@ -60,7 +60,7 @@ export async function sanitizeSessionMessagesImages(
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
       const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
       const nextContent = (await sanitizeContentBlocksImages(
-        content as ContentBlock[],
+        content,
         label,
       )) as unknown as typeof toolMsg.content;
       out.push({ ...toolMsg, content: nextContent });

@@ -55,7 +55,7 @@ export async function openFileWithinRoot(params: {
   }
 
   const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? (fsConstants.O_NOFOLLOW as number) : 0);
+  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
 
   let handle: FileHandle;
   try {

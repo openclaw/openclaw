@@ -327,19 +327,14 @@ export async function runSubagentAnnounceFlow(params: {
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (!reply && params.waitForCompletion !== false) {
       const waitMs = Math.min(params.timeoutMs, 60_000);
-      const wait = (await callGateway({
+      const wait = await callGateway({
         method: "agent.wait",
         params: {
           runId: params.childRunId,
           timeoutMs: waitMs,
         },
         timeoutMs: waitMs + 2000,
-      })) as {
-        status?: string;
-        error?: string;
-        startedAt?: number;
-        endedAt?: number;
-      };
+      });
       if (wait?.status === "timeout") {
         outcome = { status: "timeout" };
       } else if (wait?.status === "error") {

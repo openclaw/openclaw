@@ -7,7 +7,6 @@ import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
 import type { SessionScope } from "../../config/sessions.js";
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import { warn } from "../../globals.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -91,13 +90,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const dmConfig = slackCfg.dm;
 
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = (dmConfig?.policy ?? "pairing") as DmPolicy;
+  const dmPolicy = dmConfig?.policy ?? "pairing";
   let allowFrom = dmConfig?.allowFrom;
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = (slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open") as GroupPolicy;
+  const groupPolicy = slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
   if (
     slackCfg.groupPolicy === undefined &&
     slackCfg.channels === undefined &&

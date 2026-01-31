@@ -61,10 +61,10 @@ export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
 
   let nodes: NodeListNode[] = [];
   try {
-    const res = (await callGatewayCli("node.list", opts, {})) as unknown;
+    const res = await callGatewayCli("node.list", opts, {});
     nodes = parseNodeList(res);
   } catch {
-    const res = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
+    const res = await callGatewayCli("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({
       nodeId: n.nodeId,

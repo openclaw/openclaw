@@ -295,7 +295,7 @@ export function registerExecApprovalsCli(program: Command) {
         const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
         let file: ExecApprovalsFile;
         try {
-          file = JSON5.parse(raw) as ExecApprovalsFile;
+          file = JSON5.parse(raw);
         } catch (err) {
           defaultRuntime.error(`Failed to parse approvals JSON: ${String(err)}`);
           defaultRuntime.exit(1);

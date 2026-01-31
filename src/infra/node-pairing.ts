@@ -149,8 +149,8 @@ function newToken() {
 
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
   const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById).sort((a, b) => b.ts - a.ts);
-  const paired = Object.values(state.pairedByNodeId).sort(
+  const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
+  const paired = Object.values(state.pairedByNodeId).toSorted(
     (a, b) => b.approvedAtMs - a.approvedAtMs,
   );
   return { pending, paired };

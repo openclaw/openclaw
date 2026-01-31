@@ -140,7 +140,7 @@ export async function promptDefaultModel(
     });
   }
 
-  const providers = Array.from(new Set(models.map((entry) => entry.provider))).sort((a, b) =>
+  const providers = Array.from(new Set(models.map((entry) => entry.provider))).toSorted((a, b) =>
     a.localeCompare(b),
   );
 
@@ -183,7 +183,7 @@ export async function promptDefaultModel(
     return value;
   };
 
-  const options: WizardSelectOption<string>[] = [];
+  const options: WizardSelectOption[] = [];
   if (allowKeep) {
     options.push({
       value: KEEP_VALUE,
@@ -325,7 +325,7 @@ export async function promptModelAllowlist(params: {
     return value;
   };
 
-  const options: WizardSelectOption<string>[] = [];
+  const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
   const addModelOption = (entry: {
     provider: string;

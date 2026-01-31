@@ -45,10 +45,10 @@ export async function configureGatewayForOnboarding(
           10,
         );
 
-  let bind = (
+  let bind =
     flow === "quickstart"
       ? quickstartGateway.bind
-      : ((await prompter.select({
+      : await prompter.select({
           message: "Gateway bind",
           options: [
             { value: "loopback", label: "Loopback (127.0.0.1)" },
@@ -57,8 +57,7 @@ export async function configureGatewayForOnboarding(
             { value: "auto", label: "Auto (Loopback → LAN)" },
             { value: "custom", label: "Custom IP" },
           ],
-        })) as "loopback" | "lan" | "auto" | "custom" | "tailnet")
-  ) as "loopback" | "lan" | "auto" | "custom" | "tailnet";
+        });
 
   let customBindHost = quickstartGateway.customBindHost;
   if (bind === "custom") {
@@ -87,7 +86,7 @@ export async function configureGatewayForOnboarding(
     }
   }
 
-  let authMode = (
+  let authMode =
     flow === "quickstart"
       ? quickstartGateway.authMode
       : ((await prompter.select({
@@ -101,13 +100,12 @@ export async function configureGatewayForOnboarding(
             { value: "password", label: "Password" },
           ],
           initialValue: "token",
-        })) as GatewayAuthChoice)
-  ) as GatewayAuthChoice;
+        })) as GatewayAuthChoice);
 
-  const tailscaleMode = (
+  const tailscaleMode =
     flow === "quickstart"
       ? quickstartGateway.tailscaleMode
-      : ((await prompter.select({
+      : await prompter.select({
           message: "Tailscale exposure",
           options: [
             { value: "off", label: "Off", hint: "No Tailscale exposure" },
@@ -122,8 +120,7 @@ export async function configureGatewayForOnboarding(
               hint: "Public HTTPS via Tailscale Funnel (internet)",
             },
           ],
-        })) as "off" | "serve" | "funnel")
-  ) as "off" | "serve" | "funnel";
+        });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
   if (tailscaleMode !== "off") {

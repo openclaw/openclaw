@@ -42,7 +42,7 @@ export function formatRunStatus(entry: SubagentRunRecord) {
 }
 
 export function sortSubagentRuns(runs: SubagentRunRecord[]) {
-  return [...runs].sort((a, b) => {
+  return [...runs].toSorted((a, b) => {
     const aTime = a.startedAt ?? a.createdAt ?? 0;
     const bTime = b.startedAt ?? b.createdAt ?? 0;
     return bTime - aTime;

@@ -77,7 +77,7 @@ export async function agentsListCommand(
   for (const binding of cfg.bindings ?? []) {
     const agentId = normalizeAgentId(binding.agentId);
     const list = bindingMap.get(agentId) ?? [];
-    list.push(binding as AgentBinding);
+    list.push(binding);
     bindingMap.set(agentId, list);
   }
 

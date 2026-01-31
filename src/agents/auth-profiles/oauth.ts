@@ -62,7 +62,7 @@ async function refreshOAuthTokenWithLock(params: {
               const newCredentials = await refreshQwenPortalCredentials(cred);
               return { apiKey: newCredentials.access, newCredentials };
             })()
-          : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
+          : await getOAuthApiKey(cred.provider, oauthCreds);
     if (!result) return null;
     store.profiles[params.profileId] = {
       ...cred,
@@ -233,6 +233,7 @@ export async function resolveApiKeyForProfile(params: {
       `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +
         (hint ? `\n\n${hint}` : ""),
+      { cause: error },
     );
   }
 }

@@ -145,7 +145,7 @@ function orderAttachments(
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
   if (!prefer || prefer === "first") return attachments;
-  if (prefer === "last") return [...attachments].reverse();
+  if (prefer === "last") return [...attachments].toReversed();
   if (prefer === "path") {
     const withPath = attachments.filter((item) => item.path);
     const withoutPath = attachments.filter((item) => !item.path);

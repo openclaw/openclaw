@@ -50,7 +50,7 @@ export function resolveGroupRequireMention(params: {
 }
 
 export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
-  return requireMention === false ? "always" : "mention";
+  return !requireMention ? "always" : "mention";
 }
 
 export function buildGroupIntro(params: {

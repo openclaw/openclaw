@@ -32,7 +32,7 @@ function normalizeProviderFilter(filter?: string[]): string[] {
   const normalized = new Set(
     filter.map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0),
   );
-  return Array.from(normalized).sort();
+  return Array.from(normalized).toSorted();
 }
 
 function buildCacheKey(params: {
@@ -168,7 +168,7 @@ export async function discoverBedrockModels(params: {
         }),
       );
     }
-    return discovered.sort((a, b) => a.name.localeCompare(b.name));
+    return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
   })();
 
   if (refreshIntervalSeconds > 0) {

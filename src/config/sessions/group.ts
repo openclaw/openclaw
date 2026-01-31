@@ -79,7 +79,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const second = parts[1]?.trim().toLowerCase();
   const secondIsKind = second === "group" || second === "channel";
   const kind = secondIsKind
-    ? (second as "group" | "channel")
+    ? second
     : from.includes(":channel:") || normalizedChatType === "channel"
       ? "channel"
       : "group";

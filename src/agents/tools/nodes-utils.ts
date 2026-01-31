@@ -71,10 +71,10 @@ function normalizeNodeKey(value: string) {
 
 async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
   try {
-    const res = (await callGatewayTool("node.list", opts, {})) as unknown;
+    const res = await callGatewayTool("node.list", opts, {});
     return parseNodeList(res);
   } catch {
-    const res = (await callGatewayTool("node.pair.list", opts, {})) as unknown;
+    const res = await callGatewayTool("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     return paired.map((n) => ({
       nodeId: n.nodeId,

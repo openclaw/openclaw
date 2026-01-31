@@ -207,7 +207,7 @@ export function registerBrowserAgentActRoutes(
             loadStateRaw === "load" ||
             loadStateRaw === "domcontentloaded" ||
             loadStateRaw === "networkidle"
-              ? (loadStateRaw as "load" | "domcontentloaded" | "networkidle")
+              ? loadStateRaw
               : undefined;
           const fn = toStringOrEmpty(body.fn) || undefined;
           const timeoutMs = toNumber(body.timeoutMs) ?? undefined;

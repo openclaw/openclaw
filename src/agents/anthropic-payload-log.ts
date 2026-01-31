@@ -161,7 +161,7 @@ export function createAnthropicPayloadLogger(params: {
 
   const wrapStreamFn: AnthropicPayloadLogger["wrapStreamFn"] = (streamFn) => {
     const wrapped: StreamFn = (model, context, options) => {
-      if (!isAnthropicModel(model as Model<Api>)) {
+      if (!isAnthropicModel(model)) {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {

@@ -33,7 +33,7 @@ const truncate = (value: string, max: number) => {
 };
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().sort((a, b) => {
+  return results.slice().toSorted((a, b) => {
     const aImage = a.image.ok ? 1 : 0;
     const bImage = b.image.ok ? 1 : 0;
     if (aImage !== bImage) return bImage - aImage;
@@ -55,7 +55,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
 }
 
 function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().sort((a, b) => {
+  return results.slice().toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
     if (aLatency !== bLatency) return aLatency - bLatency;
@@ -255,7 +255,7 @@ export async function modelsScanCommand(
       runtime.exit(0);
     }
 
-    selected = selection as string[];
+    selected = selection;
     if (imageSorted.length > 0) {
       const imageSelection = await multiselect({
         message: "Select image fallback models (ordered)",
@@ -272,7 +272,7 @@ export async function modelsScanCommand(
         runtime.exit(0);
       }
 
-      selectedImages = imageSelection as string[];
+      selectedImages = imageSelection;
     }
   } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");

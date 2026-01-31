@@ -127,7 +127,7 @@ export function loadSessionStore(
     const raw = fs.readFileSync(storePath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (isSessionStoreRecord(parsed)) {
-      store = parsed as Record<string, SessionEntry>;
+      store = parsed;
     }
     mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
   } catch {
@@ -317,7 +317,7 @@ async function withSessionStoreLock<T>(
 
       const now = Date.now();
       if (now - startedAt > timeoutMs) {
-        throw new Error(`timeout acquiring session store lock: ${lockPath}`);
+        throw new Error(`timeout acquiring session store lock: ${lockPath}`, { cause: err });
       }
 
       // Best-effort stale lock eviction (e.g. crashed process).

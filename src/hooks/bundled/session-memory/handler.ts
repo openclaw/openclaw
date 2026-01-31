@@ -129,7 +129,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1]!.split(".")[0]!.replace(/:/g, "");
+      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
       console.log("[session-memory] Using fallback timestamp slug:", slug);
     }
@@ -141,7 +141,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     console.log("[session-memory] Full path:", memoryFilePath);
 
     // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1]!.split(".")[0];
+    const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";

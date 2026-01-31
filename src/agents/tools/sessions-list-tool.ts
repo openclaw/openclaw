@@ -79,7 +79,7 @@ export function createSessionsListTool(opts?: {
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
 
-      const list = (await callGateway({
+      const list = await callGateway({
         method: "sessions.list",
         params: {
           limit,
@@ -88,10 +88,7 @@ export function createSessionsListTool(opts?: {
           includeUnknown: !restrictToSpawned,
           spawnedBy: restrictToSpawned ? requesterInternalKey : undefined,
         },
-      })) as {
-        path?: string;
-        sessions?: Array<Record<string, unknown>>;
-      };
+      });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
@@ -187,10 +184,10 @@ export function createSessionsListTool(opts?: {
             alias,
             mainKey,
           });
-          const history = (await callGateway({
+          const history = await callGateway({
             method: "chat.history",
             params: { sessionKey: resolvedKey, limit: messageLimit },
-          })) as { messages?: unknown[] };
+          });
           const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
           const filtered = stripToolMessages(rawMessages);
           row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;

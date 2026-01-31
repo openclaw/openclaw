@@ -184,7 +184,7 @@ export async function startSshPortForward(opts: {
   } catch (err) {
     await stop();
     const suffix = stderr.length > 0 ? `\n${stderr.join("\n")}` : "";
-    throw new Error(`${err instanceof Error ? err.message : String(err)}${suffix}`);
+    throw new Error(`${err instanceof Error ? err.message : String(err)}${suffix}`, { cause: err });
   }
 
   return {

@@ -40,7 +40,7 @@ export function listPortListeners(port: number): PortProcess[] {
     const status = (err as { status?: number }).status;
     const code = (err as { code?: string }).code;
     if (code === "ENOENT") {
-      throw new Error("lsof not found; required for --force");
+      throw new Error("lsof not found; required for --force", { cause: err });
     }
     if (status === 1) return []; // no listeners
     throw err instanceof Error ? err : new Error(String(err));
@@ -55,6 +55,7 @@ export function forceFreePort(port: number): PortProcess[] {
     } catch (err) {
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
+        { cause: err },
       );
     }
   }
@@ -68,6 +69,7 @@ function killPids(listeners: PortProcess[], signal: NodeJS.Signals) {
     } catch (err) {
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
+        { cause: err },
       );
     }
   }

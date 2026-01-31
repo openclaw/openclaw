@@ -135,14 +135,14 @@ export async function runOnboardingWizard(
       : undefined;
   let flow: WizardFlow =
     explicitFlow ??
-    ((await prompter.select({
+    (await prompter.select({
       message: "Onboarding mode",
       options: [
         { value: "quickstart", label: "QuickStart", hint: quickstartHint },
         { value: "advanced", label: "Manual", hint: manualHint },
       ],
       initialValue: "quickstart",
-    })) as "quickstart" | "advanced");
+    }));
 
   if (opts.mode === "remote" && flow === "quickstart") {
     await prompter.note(
@@ -155,14 +155,14 @@ export async function runOnboardingWizard(
   if (snapshot.exists) {
     await prompter.note(summarizeExistingConfig(baseConfig), "Existing config detected");
 
-    const action = (await prompter.select({
+    const action = await prompter.select({
       message: "Config handling",
       options: [
         { value: "keep", label: "Use existing values" },
         { value: "modify", label: "Update values" },
         { value: "reset", label: "Reset" },
       ],
-    })) as "keep" | "modify" | "reset";
+    });
 
     if (action === "reset") {
       const workspaceDefault = baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;

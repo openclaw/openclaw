@@ -54,8 +54,7 @@ function resolveExecDefaults(params: {
       (agentExec?.ask as ExecAsk | undefined) ??
       (globalExec?.ask as ExecAsk | undefined) ??
       "on-miss",
-    node:
-      (params.sessionEntry?.execNode as string | undefined) ?? agentExec?.node ?? globalExec?.node,
+    node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
   };
 }
 

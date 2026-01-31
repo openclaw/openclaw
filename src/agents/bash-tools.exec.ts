@@ -912,6 +912,7 @@ export function createExecTool(
           if (!nodeQuery && String(err).includes("node required")) {
             throw new Error(
               "exec host=node requires a node id when multiple nodes are available (set tools.exec.node or exec.node).",
+              { cause: err },
             );
           }
           throw err;
@@ -941,11 +942,11 @@ export function createExecTool(
         let allowlistSatisfied = false;
         if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
           try {
-            const approvalsSnapshot = (await callGatewayTool(
+            const approvalsSnapshot = await callGatewayTool(
               "exec.approvals.node.get",
               { timeoutMs: 10_000 },
               { nodeId },
-            )) as { file?: unknown } | null;
+            );
             const approvalsFile =
               approvalsSnapshot && typeof approvalsSnapshot === "object"
                 ? approvalsSnapshot.file
@@ -1016,7 +1017,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = (await callGatewayTool(
+              const decisionResult = await callGatewayTool(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
@@ -1031,7 +1032,7 @@ export function createExecTool(
                   sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
-              )) as { decision?: string } | null;
+              );
               decision =
                 decisionResult && typeof decisionResult === "object"
                   ? (decisionResult.decision ?? null)
@@ -1124,20 +1125,11 @@ export function createExecTool(
         }
 
         const startedAt = Date.now();
-        const raw = (await callGatewayTool(
+        const raw = await callGatewayTool(
           "node.invoke",
           { timeoutMs: invokeTimeoutMs },
           buildInvokeParams(false, null),
-        )) as {
-          payload?: {
-            exitCode?: number;
-            timedOut?: boolean;
-            success?: boolean;
-            stdout?: string;
-            stderr?: string;
-            error?: string | null;
-          };
-        };
+        );
         const payload = raw?.payload ?? {};
         return {
           content: [
@@ -1197,7 +1189,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = (await callGatewayTool(
+              const decisionResult = await callGatewayTool(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
@@ -1212,7 +1204,7 @@ export function createExecTool(
                   sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
-              )) as { decision?: string } | null;
+              );
               decision =
                 decisionResult && typeof decisionResult === "object"
                   ? (decisionResult.decision ?? null)

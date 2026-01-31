@@ -28,7 +28,7 @@ export function formatPermissions(raw: unknown) {
   const entries = Object.entries(raw as Record<string, unknown>)
     .map(([key, value]) => [String(key).trim(), value === true] as const)
     .filter(([key]) => key.length > 0)
-    .sort((a, b) => a[0].localeCompare(b[0]));
+    .toSorted((a, b) => a[0].localeCompare(b[0]));
   if (entries.length === 0) return null;
   const parts = entries.map(([key, granted]) => `${key}=${granted ? "yes" : "no"}`);
   return `[${parts.join(", ")}]`;

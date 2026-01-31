@@ -169,7 +169,7 @@ export function buildAuthHealthSummary(params: {
         warnAfterMs,
       }),
     )
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       if (a.provider !== b.provider) {
         return a.provider.localeCompare(b.provider);
       }
@@ -236,7 +236,7 @@ export function buildAuthHealthSummary(params: {
     }
   }
 
-  const providers = Array.from(providersMap.values()).sort((a, b) =>
+  const providers = Array.from(providersMap.values()).toSorted((a, b) =>
     a.provider.localeCompare(b.provider),
   );
 

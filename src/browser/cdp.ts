@@ -296,7 +296,7 @@ export async function snapshotDom(opts: {
     awaitPromise: true,
     returnByValue: true,
   });
-  const value = evaluated.result?.value as unknown;
+  const value = evaluated.result?.value;
   if (!value || typeof value !== "object") return { nodes: [] };
   const nodes = (value as { nodes?: unknown }).nodes;
   return { nodes: Array.isArray(nodes) ? (nodes as DomSnapshotNode[]) : [] };

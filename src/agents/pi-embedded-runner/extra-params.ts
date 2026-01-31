@@ -65,7 +65,7 @@ function createStreamFnWithExtraParams(
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) =>
-    underlying(model as Model<Api>, context, {
+    underlying(model, context, {
       ...streamParams,
       ...options,
     });

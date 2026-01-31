@@ -130,7 +130,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   for (const plugin of plugins) {
     const accounts = accountPayloads[plugin.id];
     if (accounts && accounts.length > 0) {
-      lines.push(...accountLines(plugin.id as ChatChannel, accounts));
+      lines.push(...accountLines(plugin.id, accounts));
     }
   }
 
@@ -217,7 +217,7 @@ async function formatConfigChannelsStatusLines(
       snapshots.push(snapshot);
     }
     if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin.id as ChatChannel, snapshots));
+      lines.push(...accountLines(plugin.id, snapshots));
     }
   }
 

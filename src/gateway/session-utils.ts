@@ -590,7 +590,7 @@ export function listSessionsFromStore(params: {
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
       };
     })
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
   if (search) {
     sessions = sessions.filter((s) => {

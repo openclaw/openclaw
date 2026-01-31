@@ -45,7 +45,7 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
     const byEmail = oauthProfiles.find((id) => {
       const cred = params.store.profiles[id];
       if (!cred || cred.type !== "oauth") return false;
-      const email = (cred.email as string | undefined)?.trim();
+      const email = cred.email?.trim();
       return email === configuredEmail || id === `${providerKey}:${configuredEmail}`;
     });
     if (byEmail) return byEmail;
@@ -93,11 +93,10 @@ export function repairOAuthProfileIdMismatch(params: {
   }
 
   const toCred = params.store.profiles[toProfileId];
-  const toEmail =
-    toCred?.type === "oauth" ? (toCred.email as string | undefined)?.trim() : undefined;
+  const toEmail = toCred?.type === "oauth" ? toCred.email?.trim() : undefined;
 
   const nextProfiles = {
-    ...(params.cfg.auth?.profiles as Record<string, AuthProfileConfig> | undefined),
+    ...params.cfg.auth?.profiles,
   } as Record<string, AuthProfileConfig>;
   delete nextProfiles[legacyProfileId];
   nextProfiles[toProfileId] = {

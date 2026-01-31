@@ -84,7 +84,7 @@ function getHooksForName<K extends PluginHookName>(
 ): PluginHookRegistration<K>[] {
   return (registry.typedHooks as PluginHookRegistration<K>[])
     .filter((h) => h.hookName === hookName)
-    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
 /**
@@ -116,7 +116,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         if (catchErrors) {
           logger?.error(msg);
         } else {
-          throw new Error(msg);
+          throw new Error(msg, { cause: err });
         }
       }
     });
@@ -159,7 +159,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         if (catchErrors) {
           logger?.error(msg);
         } else {
-          throw new Error(msg);
+          throw new Error(msg, { cause: err });
         }
       }
     }
@@ -353,7 +353,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         if (catchErrors) {
           logger?.error(msg);
         } else {
-          throw new Error(msg);
+          throw new Error(msg, { cause: err });
         }
       }
     }

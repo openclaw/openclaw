@@ -132,7 +132,7 @@ export async function setupSkills(
       ],
     });
 
-    const selected = (toInstall as string[]).filter((name) => name !== "__skip__");
+    const selected = toInstall.filter((name) => name !== "__skip__");
     for (const name of selected) {
       const target = installable.find((s) => s.name === name);
       if (!target || target.install.length === 0) continue;

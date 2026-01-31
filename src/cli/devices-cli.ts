@@ -101,7 +101,7 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   if (!tokens || tokens.length === 0) return "none";
   const parts = tokens
     .map((t) => `${t.role}${t.revokedAtMs ? " (revoked)" : ""}`)
-    .sort((a, b) => a.localeCompare(b));
+    .toSorted((a, b) => a.localeCompare(b));
   return parts.join(", ");
 }
 

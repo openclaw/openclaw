@@ -127,7 +127,7 @@ export async function resolveSlackUserAllowlist(params: {
       if (matches.length > 0) {
         const scored = matches
           .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
-          .sort((a, b) => b.score - a.score);
+          .toSorted((a, b) => b.score - a.score);
         const best = scored[0]?.user ?? matches[0];
         results.push({
           input,
@@ -153,7 +153,7 @@ export async function resolveSlackUserAllowlist(params: {
       if (matches.length > 0) {
         const scored = matches
           .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
-          .sort((a, b) => b.score - a.score);
+          .toSorted((a, b) => b.score - a.score);
         const best = scored[0]?.user ?? matches[0];
         results.push({
           input,

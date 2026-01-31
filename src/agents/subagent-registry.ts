@@ -170,8 +170,7 @@ function ensureListener() {
     }
     const phase = evt.data?.phase;
     if (phase === "start") {
-      const startedAt =
-        typeof evt.data?.startedAt === "number" ? (evt.data.startedAt as number) : undefined;
+      const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
       if (startedAt) {
         entry.startedAt = startedAt;
         persistSubagentRuns();
@@ -179,11 +178,10 @@ function ensureListener() {
       return;
     }
     if (phase !== "end" && phase !== "error") return;
-    const endedAt =
-      typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : Date.now();
+    const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
     entry.endedAt = endedAt;
     if (phase === "error") {
-      const error = typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
       entry.outcome = { status: "error", error };
     } else {
       entry.outcome = { status: "ok" };
@@ -284,14 +282,14 @@ export function registerSubagentRun(params: {
 async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
   try {
     const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-    const wait = (await callGateway({
+    const wait = await callGateway({
       method: "agent.wait",
       params: {
         runId,
         timeoutMs,
       },
       timeoutMs: timeoutMs + 10_000,
-    })) as { status?: string; startedAt?: number; endedAt?: number; error?: string };
+    });
     if (wait?.status !== "ok" && wait?.status !== "error") return;
     const entry = subagentRuns.get(runId);
     if (!entry) return;

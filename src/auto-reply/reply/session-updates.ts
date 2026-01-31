@@ -87,7 +87,7 @@ export async function prependSystemEvents(params: {
     const min = pick("minute");
     const sec = pick("second");
     const tz = [...parts]
-      .reverse()
+      .toReversed()
       .find((part) => part.type === "timeZoneName")
       ?.value?.trim();
     if (!yyyy || !mm || !dd || !hh || !min || !sec) return undefined;

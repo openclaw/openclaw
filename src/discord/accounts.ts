@@ -21,7 +21,7 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
 export function listDiscordAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultDiscordAccountId(cfg: OpenClawConfig): string {

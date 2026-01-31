@@ -41,7 +41,7 @@ function collectScopes(value: unknown, into: string[]) {
 }
 
 function normalizeScopes(scopes: string[]) {
-  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).sort();
+  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).toSorted();
 }
 
 function extractScopes(payload: unknown): string[] {

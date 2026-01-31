@@ -96,7 +96,7 @@ describe("cli program (nodes media)", () => {
     const facings = invokeCalls
       .map((call) => (call.params?.params as { facing?: string } | undefined)?.facing)
       .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b));
+      .toSorted((a, b) => a.localeCompare(b));
     expect(facings).toEqual(["back", "front"]);
 
     const out = String(runtime.log.mock.calls[0]?.[0] ?? "");

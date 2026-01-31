@@ -445,7 +445,7 @@ export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthP
 }
 
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
-  return results.slice().sort((a, b) => {
+  return results.slice().toSorted((a, b) => {
     const provider = a.provider.localeCompare(b.provider);
     if (provider !== 0) return provider;
     const aLabel = a.label || a.profileId || "";
