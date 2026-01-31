@@ -152,7 +152,7 @@ async function callBrowserProxy(params: {
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
-  return parsed as BrowserProxyResult;
+  return parsed;
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {

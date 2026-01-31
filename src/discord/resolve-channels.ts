@@ -116,7 +116,9 @@ async function fetchChannel(
   channelId: string,
 ): Promise<DiscordChannelSummary | null> {
   const raw = await fetchDiscord<DiscordChannelPayload>(`/channels/${channelId}`, token, fetcher);
-  if (!raw || typeof raw.guild_id !== "string" || typeof raw.id !== "string") return null;
+  if (!raw || typeof raw.guild_id !== "string" || typeof raw.id !== "string") {
+    return null;
+  }
   return {
     id: raw.id,
     name: typeof raw.name === "string" ? raw.name : "",

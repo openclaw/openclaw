@@ -384,7 +384,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         timeoutMs: 10_000,
       });
       const responseRunId = typeof response?.runId === "string" ? response.runId : undefined;
-      if (responseRunId) runId = responseRunId;
+      if (responseRunId) {
+        runId = responseRunId;
+      }
     } catch (err) {
       const messageText =
         err instanceof Error ? err.message : typeof err === "string" ? err : "error";
