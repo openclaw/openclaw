@@ -1,4 +1,4 @@
-import { getOAuthApiKey, type OAuthCredentials } from "@mariozechner/pi-ai";
+import { getOAuthApiKey, type OAuthCredentials, type OAuthProvider } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 
 import type { OpenClawConfig } from "../../config/config.js";
@@ -64,7 +64,7 @@ async function refreshOAuthTokenWithLock(params: {
               const newCredentials = await refreshQwenPortalCredentials(cred);
               return { apiKey: newCredentials.access, newCredentials };
             })()
-          : await getOAuthApiKey(cred.provider, oauthCreds);
+          : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
     if (!result) {
       return null;
     }
