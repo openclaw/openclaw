@@ -60,6 +60,30 @@ describe("web session", () => {
     await expect(promise).rejects.toBeInstanceOf(Error);
   });
 
+  it("rejects with timeout when connection stalls", async () => {
+    vi.useFakeTimers();
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      1000,
+    );
+    vi.advanceTimersByTime(1000);
+    await expect(promise).rejects.toThrow("WhatsApp connection timeout");
+  });
+
+  it("clears timeout when connection opens", async () => {
+    vi.useFakeTimers();
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      1000,
+    );
+    ev.emit("connection.update", { connection: "open" });
+    await expect(promise).resolves.toBeUndefined();
+    // Advance timers to ensure no timeout fires after resolution
+    vi.advanceTimersByTime(2000);
+  });
+
   it("logWebSelfId prints cached E.164 when creds exist", () => {
     const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
       if (typeof p !== "string") {
