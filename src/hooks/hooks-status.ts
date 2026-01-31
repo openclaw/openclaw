@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveConfigPath, resolveHookConfig } from "./config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
@@ -65,7 +65,9 @@ function resolveHookKey(entry: HookEntry): string {
 
 function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
   const install = entry.metadata?.install ?? [];
-  if (install.length === 0) return [];
+  if (install.length === 0) {
+    return [];
+  }
 
   // For hooks, we just list all install options
   return install.map((spec, index) => {
@@ -75,7 +77,7 @@ function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
 
     if (!label) {
       if (spec.kind === "bundled") {
-        label = "Bundled with Moltbot";
+        label = "Bundled with OpenClaw";
       } else if (spec.kind === "npm" && spec.package) {
         label = `Install ${spec.package} (npm)`;
       } else if (spec.kind === "git" && spec.repository) {
@@ -91,12 +93,12 @@ function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
 
 function buildHookStatus(
   entry: HookEntry,
-  config?: MoltbotConfig,
+  config?: OpenClawConfig,
   eligibility?: HookEligibilityContext,
 ): HookStatusEntry {
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
-  const managedByPlugin = entry.hook.source === "moltbot-plugin";
+  const managedByPlugin = entry.hook.source === "openclaw-plugin";
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
   const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
@@ -115,8 +117,12 @@ function buildHookStatus(
   const requiredOs = entry.metadata?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) return false;
-    if (eligibility?.remote?.hasBin?.(bin)) return false;
+    if (hasBinary(bin)) {
+      return false;
+    }
+    if (eligibility?.remote?.hasBin?.(bin)) {
+      return false;
+    }
     return true;
   });
 
@@ -138,8 +144,12 @@ function buildHookStatus(
 
   const missingEnv: string[] = [];
   for (const envName of requiredEnv) {
-    if (process.env[envName]) continue;
-    if (hookConfig?.env?.[envName]) continue;
+    if (process.env[envName]) {
+      continue;
+    }
+    if (hookConfig?.env?.[envName]) {
+      continue;
+    }
     missingEnv.push(envName);
   }
 
@@ -202,7 +212,7 @@ function buildHookStatus(
 export function buildWorkspaceHookStatus(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: OpenClawConfig;
     managedHooksDir?: string;
     entries?: HookEntry[];
     eligibility?: HookEligibilityContext;

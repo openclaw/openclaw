@@ -4,6 +4,7 @@ read_when:
   - Looking for Linux companion app status
   - Planning platform coverage or contributions
 ---
+
 # Linux App
 
 The Gateway is fully supported on Linux. **Node is the recommended runtime**.
@@ -13,20 +14,22 @@ Native Linux companion apps are planned. Contributions are welcome if you want t
 
 ## Beginner quick path (VPS)
 
-1) Install Node 22+  
-2) `npm i -g moltbot@latest`  
-3) `moltbot onboard --install-daemon`  
-4) From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`  
-5) Open `http://127.0.0.1:18789/` and paste your token
+1. Install Node 22+
+2. `npm i -g openclaw@latest`
+3. `openclaw onboard --install-daemon`
+4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
+5. Open `http://127.0.0.1:18789/` and paste your token
 
 Step-by-step VPS guide: [exe.dev](/platforms/exe-dev)
 
 ## Install
+
 - [Getting Started](/start/getting-started)
 - [Install & updates](/install/updating)
 - Optional flows: [Bun (experimental)](/install/bun), [Nix](/install/nix), [Docker](/install/docker)
 
 ## Gateway
+
 - [Gateway runbook](/gateway)
 - [Configuration](/gateway/configuration)
 
@@ -35,19 +38,19 @@ Step-by-step VPS guide: [exe.dev](/platforms/exe-dev)
 Use one of these:
 
 ```
-moltbot onboard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 Or:
 
 ```
-moltbot gateway install
+openclaw gateway install
 ```
 
 Or:
 
 ```
-moltbot configure
+openclaw configure
 ```
 
 Select **Gateway service** when prompted.
@@ -55,26 +58,27 @@ Select **Gateway service** when prompted.
 Repair/migrate:
 
 ```
-moltbot doctor
+openclaw doctor
 ```
 
 ## System control (systemd user unit)
-Moltbot installs a systemd **user** service by default. Use a **system**
+
+OpenClaw installs a systemd **user** service by default. Use a **system**
 service for shared or always-on servers. The full unit example and guidance
 live in the [Gateway runbook](/gateway).
 
 Minimal setup:
 
-Create `~/.config/systemd/user/moltbot-gateway[-<profile>].service`:
+Create `~/.config/systemd/user/openclaw-gateway[-<profile>].service`:
 
 ```
 [Unit]
-Description=Moltbot Gateway (profile: <profile>, v<version>)
+Description=OpenClaw Gateway (profile: <profile>, v<version>)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/moltbot gateway --port 18789
+ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
 
@@ -85,5 +89,5 @@ WantedBy=default.target
 Enable it:
 
 ```
-systemctl --user enable --now moltbot-gateway[-<profile>].service
+systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```

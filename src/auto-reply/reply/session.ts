@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -60,14 +60,18 @@ function forkSessionFromParent(params: {
     params.parentEntry.sessionId,
     params.parentEntry,
   );
-  if (!parentSessionFile || !fs.existsSync(parentSessionFile)) return null;
+  if (!parentSessionFile || !fs.existsSync(parentSessionFile)) {
+    return null;
+  }
   try {
     const manager = SessionManager.open(parentSessionFile);
     const leafId = manager.getLeafId();
     if (leafId) {
       const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
-      if (sessionFile && sessionId) return { sessionId, sessionFile };
+      if (sessionFile && sessionId) {
+        return { sessionId, sessionFile };
+      }
     }
     const sessionId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
@@ -90,7 +94,7 @@ function forkSessionFromParent(params: {
 
 export async function initSessionState(params: {
   ctx: MsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
@@ -165,8 +169,12 @@ export async function initSessionState(params: {
   const strippedForResetLower = strippedForReset.toLowerCase();
 
   for (const trigger of resetTriggers) {
-    if (!trigger) continue;
-    if (!resetAuthorized) break;
+    if (!trigger) {
+      continue;
+    }
+    if (!resetAuthorized) {
+      break;
+    }
     const triggerLower = trigger.toLowerCase();
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
       isNewSession = true;
@@ -235,10 +243,9 @@ export async function initSessionState(params: {
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
-  const lastToRaw = (ctx.OriginatingTo as string | undefined) || ctx.To || baseEntry?.lastTo;
-  const lastAccountIdRaw = (ctx.AccountId as string | undefined) || baseEntry?.lastAccountId;
-  const lastThreadIdRaw =
-    (ctx.MessageThreadId as string | number | undefined) || baseEntry?.lastThreadId;
+  const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
+  const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
+  const lastThreadIdRaw = ctx.MessageThreadId || baseEntry?.lastThreadId;
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,

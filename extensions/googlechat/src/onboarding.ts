@@ -1,4 +1,4 @@
-import type { MoltbotConfig, DmPolicy } from "clawdbot/plugin-sdk";
+import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -9,7 +9,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   migrateBaseNameToDefaultAccount,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
 
 import {
   listGoogleChatAccountIds,
@@ -22,7 +22,7 @@ const channel = "googlechat" as const;
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 
-function setGoogleChatDmPolicy(cfg: MoltbotConfig, policy: DmPolicy) {
+function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
   const allowFrom =
     policy === "open"
       ? addWildcardAllowFrom(cfg.channels?.["googlechat"]?.dm?.allowFrom)
@@ -31,10 +31,10 @@ function setGoogleChatDmPolicy(cfg: MoltbotConfig, policy: DmPolicy) {
     ...cfg,
     channels: {
       ...cfg.channels,
-      "googlechat": {
-        ...(cfg.channels?.["googlechat"] ?? {}),
+      googlechat: {
+        ...cfg.channels?.["googlechat"],
         dm: {
-          ...(cfg.channels?.["googlechat"]?.dm ?? {}),
+          ...cfg.channels?.["googlechat"]?.dm,
           policy,
           ...(allowFrom ? { allowFrom } : {}),
         },
@@ -51,9 +51,9 @@ function parseAllowFromInput(raw: string): string[] {
 }
 
 async function promptAllowFrom(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
-}): Promise<MoltbotConfig> {
+}): Promise<OpenClawConfig> {
   const current = params.cfg.channels?.["googlechat"]?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
     message: "Google Chat allowFrom (user id or email)",
@@ -67,11 +67,11 @@ async function promptAllowFrom(params: {
     ...params.cfg,
     channels: {
       ...params.cfg.channels,
-      "googlechat": {
-        ...(params.cfg.channels?.["googlechat"] ?? {}),
+      googlechat: {
+        ...params.cfg.channels?.["googlechat"],
         enabled: true,
         dm: {
-          ...(params.cfg.channels?.["googlechat"]?.dm ?? {}),
+          ...params.cfg.channels?.["googlechat"]?.dm,
           policy: "allowlist",
           allowFrom: unique,
         },
@@ -91,18 +91,18 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 };
 
 function applyAccountConfig(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId: string;
   patch: Record<string, unknown>;
-}): MoltbotConfig {
+}): OpenClawConfig {
   const { cfg, accountId, patch } = params;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
       ...cfg,
       channels: {
         ...cfg.channels,
-        "googlechat": {
-          ...(cfg.channels?.["googlechat"] ?? {}),
+        googlechat: {
+          ...cfg.channels?.["googlechat"],
           enabled: true,
           ...patch,
         },
@@ -113,13 +113,13 @@ function applyAccountConfig(params: {
     ...cfg,
     channels: {
       ...cfg.channels,
-      "googlechat": {
-        ...(cfg.channels?.["googlechat"] ?? {}),
+      googlechat: {
+        ...cfg.channels?.["googlechat"],
         enabled: true,
         accounts: {
-          ...(cfg.channels?.["googlechat"]?.accounts ?? {}),
+          ...cfg.channels?.["googlechat"]?.accounts,
           [accountId]: {
-            ...(cfg.channels?.["googlechat"]?.accounts?.[accountId] ?? {}),
+            ...cfg.channels?.["googlechat"]?.accounts?.[accountId],
             enabled: true,
             ...patch,
           },
@@ -130,15 +130,14 @@ function applyAccountConfig(params: {
 }
 
 async function promptCredentials(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId: string;
-}): Promise<MoltbotConfig> {
+}): Promise<OpenClawConfig> {
   const { cfg, prompter, accountId } = params;
   const envReady =
     accountId === DEFAULT_ACCOUNT_ID &&
-    (Boolean(process.env[ENV_SERVICE_ACCOUNT]) ||
-      Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
+    (Boolean(process.env[ENV_SERVICE_ACCOUNT]) || Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
   if (envReady) {
     const useEnv = await prompter.confirm({
       message: "Use GOOGLE_CHAT_SERVICE_ACCOUNT env vars?",
@@ -173,7 +172,7 @@ async function promptCredentials(params: {
 
   const json = await prompter.text({
     message: "Service account JSON (single line)",
-    placeholder: "{\"type\":\"service_account\", ... }",
+    placeholder: '{"type":"service_account", ... }',
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
   return applyAccountConfig({
@@ -184,24 +183,24 @@ async function promptCredentials(params: {
 }
 
 async function promptAudience(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId: string;
-}): Promise<MoltbotConfig> {
+}): Promise<OpenClawConfig> {
   const account = resolveGoogleChatAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   });
   const currentType = account.config.audienceType ?? "app-url";
   const currentAudience = account.config.audience ?? "";
-  const audienceType = (await params.prompter.select({
+  const audienceType = await params.prompter.select({
     message: "Webhook audience type",
     options: [
       { value: "app-url", label: "App URL (recommended)" },
       { value: "project-number", label: "Project number" },
     ],
     initialValue: currentType === "project-number" ? "project-number" : "app-url",
-  })) as "app-url" | "project-number";
+  });
   const audience = await params.prompter.text({
     message: audienceType === "project-number" ? "Project number" : "App URL",
     placeholder: audienceType === "project-number" ? "1234567890" : "https://your.host/googlechat",
@@ -237,18 +236,11 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel,
       configured,
-      statusLines: [
-        `Google Chat: ${configured ? "configured" : "needs service account"}`,
-      ],
+      statusLines: [`Google Chat: ${configured ? "configured" : "needs service account"}`],
       selectionHint: configured ? "configured" : "needs auth",
     };
   },
-  configure: async ({
-    cfg,
-    prompter,
-    accountOverrides,
-    shouldPromptAccountIds,
-  }) => {
+  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
     const override = accountOverrides["googlechat"]?.trim();
     const defaultAccountId = resolveDefaultGoogleChatAccountId(cfg);
     let accountId = override ? normalizeAccountId(override) : defaultAccountId;

@@ -1,5 +1,5 @@
 import { detectBinary } from "../../../commands/onboard-helpers.js";
-import type { MoltbotConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
 import {
   listIMessageAccountIds,
@@ -15,7 +15,7 @@ import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "imessage" as const;
 
-function setIMessageDmPolicy(cfg: MoltbotConfig, dmPolicy: DmPolicy) {
+function setIMessageDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.imessage?.allowFrom) : undefined;
   return {
@@ -32,10 +32,10 @@ function setIMessageDmPolicy(cfg: MoltbotConfig, dmPolicy: DmPolicy) {
 }
 
 function setIMessageAllowFrom(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId: string,
   allowFrom: string[],
-): MoltbotConfig {
+): OpenClawConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
       ...cfg,
@@ -74,10 +74,10 @@ function parseIMessageAllowFromInput(raw: string): string[] {
 }
 
 async function promptIMessageAllowFrom(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
-}): Promise<MoltbotConfig> {
+}): Promise<OpenClawConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
       ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
@@ -103,24 +103,36 @@ async function promptIMessageAllowFrom(params: {
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
       const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
+      if (!raw) {
+        return "Required";
+      }
       const parts = parseIMessageAllowFromInput(raw);
       for (const part of parts) {
-        if (part === "*") continue;
+        if (part === "*") {
+          continue;
+        }
         if (part.toLowerCase().startsWith("chat_id:")) {
           const id = part.slice("chat_id:".length).trim();
-          if (!/^\d+$/.test(id)) return `Invalid chat_id: ${part}`;
+          if (!/^\d+$/.test(id)) {
+            return `Invalid chat_id: ${part}`;
+          }
           continue;
         }
         if (part.toLowerCase().startsWith("chat_guid:")) {
-          if (!part.slice("chat_guid:".length).trim()) return "Invalid chat_guid entry";
+          if (!part.slice("chat_guid:".length).trim()) {
+            return "Invalid chat_guid entry";
+          }
           continue;
         }
         if (part.toLowerCase().startsWith("chat_identifier:")) {
-          if (!part.slice("chat_identifier:".length).trim()) return "Invalid chat_identifier entry";
+          if (!part.slice("chat_identifier:".length).trim()) {
+            return "Invalid chat_identifier entry";
+          }
           continue;
         }
-        if (!normalizeIMessageHandle(part)) return `Invalid handle: ${part}`;
+        if (!normalizeIMessageHandle(part)) {
+          return `Invalid handle: ${part}`;
+        }
       }
       return undefined;
     },
@@ -240,7 +252,7 @@ export const imessageOnboardingAdapter: ChannelOnboardingAdapter = {
     await prompter.note(
       [
         "This is still a work in progress.",
-        "Ensure Moltbot has Full Disk Access to Messages DB.",
+        "Ensure OpenClaw has Full Disk Access to Messages DB.",
         "Grant Automation permission for Messages when prompted.",
         "List chats with: imsg chats --limit 20",
         `Docs: ${formatDocsLink("/imessage", "imessage")}`,

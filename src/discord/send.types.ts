@@ -10,7 +10,9 @@ export class DiscordSendError extends Error {
   constructor(message: string, opts?: Partial<DiscordSendError>) {
     super(message);
     this.name = "DiscordSendError";
-    if (opts) Object.assign(this, opts);
+    if (opts) {
+      Object.assign(this, opts);
+    }
   }
 
   override toString() {

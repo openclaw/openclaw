@@ -9,12 +9,18 @@ export type DebugCommand =
 
 export function parseDebugCommand(raw: string): DebugCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("/debug")) return null;
+  if (!trimmed.toLowerCase().startsWith("/debug")) {
+    return null;
+  }
   const rest = trimmed.slice("/debug".length).trim();
-  if (!rest) return { action: "show" };
+  if (!rest) {
+    return { action: "show" };
+  }
 
   const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  if (!match) return { action: "error", message: "Invalid /debug syntax." };
+  if (!match) {
+    return { action: "error", message: "Invalid /debug syntax." };
+  }
   const action = match[1].toLowerCase();
   const args = (match[2] ?? "").trim();
 
@@ -24,7 +30,9 @@ export function parseDebugCommand(raw: string): DebugCommand | null {
     case "reset":
       return { action: "reset" };
     case "unset": {
-      if (!args) return { action: "error", message: "Usage: /debug unset path" };
+      if (!args) {
+        return { action: "error", message: "Usage: /debug unset path" };
+      }
       return { action: "unset", path: args };
     }
     case "set": {

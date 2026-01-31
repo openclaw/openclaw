@@ -47,8 +47,12 @@ function normalizeQuery(value?: string | null): string {
 
 function buildUserRank(user: SlackUser): number {
   let rank = 0;
-  if (!user.deleted) rank += 2;
-  if (!user.is_bot && !user.is_app_user) rank += 1;
+  if (!user.deleted) {
+    rank += 2;
+  }
+  if (!user.is_bot && !user.is_app_user) {
+    rank += 1;
+  }
   return rank;
 }
 
@@ -60,7 +64,9 @@ export async function listSlackDirectoryPeersLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const token = resolveReadToken(params);
-  if (!token) return [];
+  if (!token) {
+    return [];
+  }
   const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const members: SlackUser[] = [];
@@ -71,7 +77,9 @@ export async function listSlackDirectoryPeersLive(
       limit: 200,
       cursor,
     })) as SlackListUsersResponse;
-    if (Array.isArray(res.members)) members.push(...res.members);
+    if (Array.isArray(res.members)) {
+      members.push(...res.members);
+    }
     const next = res.response_metadata?.next_cursor?.trim();
     cursor = next ? next : undefined;
   } while (cursor);
@@ -83,14 +91,18 @@ export async function listSlackDirectoryPeersLive(
     const candidates = [name, handle, email]
       .map((item) => item?.trim().toLowerCase())
       .filter(Boolean);
-    if (!query) return true;
+    if (!query) {
+      return true;
+    }
     return candidates.some((candidate) => candidate?.includes(query));
   });
 
   const rows = filtered
     .map((member) => {
       const id = member.id?.trim();
-      if (!id) return null;
+      if (!id) {
+        return null;
+      }
       const handle = member.name?.trim();
       const display =
         member.profile?.display_name?.trim() ||
@@ -118,7 +130,9 @@ export async function listSlackDirectoryGroupsLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const token = resolveReadToken(params);
-  if (!token) return [];
+  if (!token) {
+    return [];
+  }
   const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const channels: SlackChannel[] = [];
@@ -131,14 +145,18 @@ export async function listSlackDirectoryGroupsLive(
       limit: 1000,
       cursor,
     })) as SlackListChannelsResponse;
-    if (Array.isArray(res.channels)) channels.push(...res.channels);
+    if (Array.isArray(res.channels)) {
+      channels.push(...res.channels);
+    }
     const next = res.response_metadata?.next_cursor?.trim();
     cursor = next ? next : undefined;
   } while (cursor);
 
   const filtered = channels.filter((channel) => {
     const name = channel.name?.trim().toLowerCase();
-    if (!query) return true;
+    if (!query) {
+      return true;
+    }
     return Boolean(name && name.includes(query));
   });
 
@@ -146,7 +164,9 @@ export async function listSlackDirectoryGroupsLive(
     .map((channel) => {
       const id = channel.id?.trim();
       const name = channel.name?.trim();
-      if (!id || !name) return null;
+      if (!id || !name) {
+        return null;
+      }
       return {
         kind: "group",
         id: `channel:${id}`,

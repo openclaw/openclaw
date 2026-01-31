@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-import type { MoltbotPluginApi } from "../../../src/plugins/types.js";
+import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
 type LobsterEnvelope =
   | {
@@ -30,7 +30,9 @@ function resolveExecutablePath(lobsterPathRaw: string | undefined) {
 }
 
 function isWindowsSpawnEINVAL(err: unknown) {
-  if (!err || typeof err !== "object") return false;
+  if (!err || typeof err !== "object") {
+    return false;
+  }
   const code = (err as { code?: unknown }).code;
   return code === "EINVAL";
 }
@@ -168,7 +170,7 @@ function parseEnvelope(stdout: string): LobsterEnvelope {
   throw new Error("lobster returned invalid JSON envelope");
 }
 
-export function createLobsterTool(api: MoltbotPluginApi) {
+export function createLobsterTool(api: OpenClawPluginApi) {
   return {
     name: "lobster",
     description:
@@ -186,20 +188,26 @@ export function createLobsterTool(api: MoltbotPluginApi) {
       maxStdoutBytes: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
-      const action = String(params.action || "").trim();
-      if (!action) throw new Error("action required");
+      const action = typeof params.action === "string" ? params.action.trim() : "";
+      if (!action) {
+        throw new Error("action required");
+      }
 
       const execPath = resolveExecutablePath(
         typeof params.lobsterPath === "string" ? params.lobsterPath : undefined,
       );
-      const cwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : process.cwd();
+      const cwd =
+        typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : process.cwd();
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
-      const maxStdoutBytes = typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
+      const maxStdoutBytes =
+        typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
 
       const argv = (() => {
         if (action === "run") {
           const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
-          if (!pipeline.trim()) throw new Error("pipeline required");
+          if (!pipeline.trim()) {
+            throw new Error("pipeline required");
+          }
           const argv = ["run", "--mode", "tool", pipeline];
           const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
           if (argsJson.trim()) {
@@ -209,9 +217,13 @@ export function createLobsterTool(api: MoltbotPluginApi) {
         }
         if (action === "resume") {
           const token = typeof params.token === "string" ? params.token : "";
-          if (!token.trim()) throw new Error("token required");
+          if (!token.trim()) {
+            throw new Error("token required");
+          }
           const approve = params.approve;
-          if (typeof approve !== "boolean") throw new Error("approve required");
+          if (typeof approve !== "boolean") {
+            throw new Error("approve required");
+          }
           return ["resume", "--token", token, "--approve", approve ? "yes" : "no"];
         }
         throw new Error(`Unknown action: ${action}`);

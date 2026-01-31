@@ -11,10 +11,12 @@ export function loadDotEnv(opts?: { quiet?: boolean }) {
   // Load from process CWD first (dotenv default).
   dotenv.config({ quiet });
 
-  // Then load global fallback: ~/.clawdbot/.env (or CLAWDBOT_STATE_DIR/.env),
+  // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
   const globalEnvPath = path.join(resolveConfigDir(process.env), ".env");
-  if (!fs.existsSync(globalEnvPath)) return;
+  if (!fs.existsSync(globalEnvPath)) {
+    return;
+  }
 
   dotenv.config({ quiet, path: globalEnvPath, override: false });
 }

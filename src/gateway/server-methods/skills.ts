@@ -2,7 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import {
@@ -16,7 +16,7 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-function listWorkspaceDirs(cfg: MoltbotConfig): string[] {
+function listWorkspaceDirs(cfg: OpenClawConfig): string[] {
   const dirs = new Set<string>();
   const list = cfg.agents?.list;
   if (Array.isArray(list)) {
@@ -38,21 +38,27 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
     const install = entry.metadata?.install ?? [];
     for (const bin of required) {
       const trimmed = bin.trim();
-      if (trimmed) bins.add(trimmed);
+      if (trimmed) {
+        bins.add(trimmed);
+      }
     }
     for (const bin of anyBins) {
       const trimmed = bin.trim();
-      if (trimmed) bins.add(trimmed);
+      if (trimmed) {
+        bins.add(trimmed);
+      }
     }
     for (const spec of install) {
       const specBins = spec?.bins ?? [];
       for (const bin of specBins) {
         const trimmed = String(bin).trim();
-        if (trimmed) bins.add(trimmed);
+        if (trimmed) {
+          bins.add(trimmed);
+        }
       }
     }
   }
-  return [...bins].sort();
+  return [...bins].toSorted();
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
@@ -93,9 +99,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const bins = new Set<string>();
     for (const workspaceDir of workspaceDirs) {
       const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
-      for (const bin of collectSkillBins(entries)) bins.add(bin);
+      for (const bin of collectSkillBins(entries)) {
+        bins.add(bin);
+      }
     }
-    respond(true, { bins: [...bins].sort() }, undefined);
+    respond(true, { bins: [...bins].toSorted() }, undefined);
   },
   "skills.install": async ({ params, respond }) => {
     if (!validateSkillsInstallParams(params)) {
@@ -156,23 +164,31 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     if (typeof p.apiKey === "string") {
       const trimmed = p.apiKey.trim();
-      if (trimmed) current.apiKey = trimmed;
-      else delete current.apiKey;
+      if (trimmed) {
+        current.apiKey = trimmed;
+      } else {
+        delete current.apiKey;
+      }
     }
     if (p.env && typeof p.env === "object") {
       const nextEnv = current.env ? { ...current.env } : {};
       for (const [key, value] of Object.entries(p.env)) {
         const trimmedKey = key.trim();
-        if (!trimmedKey) continue;
+        if (!trimmedKey) {
+          continue;
+        }
         const trimmedVal = value.trim();
-        if (!trimmedVal) delete nextEnv[trimmedKey];
-        else nextEnv[trimmedKey] = trimmedVal;
+        if (!trimmedVal) {
+          delete nextEnv[trimmedKey];
+        } else {
+          nextEnv[trimmedKey] = trimmedVal;
+        }
       }
       current.env = nextEnv;
     }
     entries[p.skillKey] = current;
     skills.entries = entries;
-    const nextConfig: MoltbotConfig = {
+    const nextConfig: OpenClawConfig = {
       ...cfg,
       skills,
     };

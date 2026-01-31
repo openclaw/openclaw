@@ -33,11 +33,16 @@ export async function connectGatewayClient(params: {
   return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
     let settled = false;
     const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(client as InstanceType<typeof GatewayClient>);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(client as InstanceType<typeof GatewayClient>);
+      }
     };
     const client = new GatewayClient({
       url: params.url,
@@ -112,7 +117,9 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
     };
     const handler = (data: WebSocket.RawData) => {
       const obj = JSON.parse(rawDataToString(data)) as { type?: unknown; id?: unknown };
-      if (obj?.type !== "res" || obj?.id !== "c1") return;
+      if (obj?.type !== "res" || obj?.id !== "c1") {
+        return;
+      }
       clearTimeout(timer);
       ws.off("message", handler);
       ws.off("close", closeHandler);

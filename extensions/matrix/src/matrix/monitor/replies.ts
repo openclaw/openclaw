@@ -1,6 +1,6 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 
-import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "clawdbot/plugin-sdk";
+import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import { sendMessageMatrix } from "../send.js";
 import { getMatrixRuntime } from "../../runtime.js";
 
@@ -62,7 +62,9 @@ export async function deliverMatrixReplies(params: {
         chunkMode,
       )) {
         const trimmed = chunk.trim();
-        if (!trimmed) continue;
+        if (!trimmed) {
+          continue;
+        }
         await sendMessageMatrix(params.roomId, trimmed, {
           client: params.client,
           replyToId: shouldIncludeReply(replyToId) ? replyToId : undefined,

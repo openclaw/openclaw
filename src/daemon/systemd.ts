@@ -39,11 +39,11 @@ function resolveSystemdUnitPathForName(
 }
 
 function resolveSystemdServiceName(env: Record<string, string | undefined>): string {
-  const override = env.CLAWDBOT_SYSTEMD_UNIT?.trim();
+  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
   if (override) {
     return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
   }
-  return resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
+  return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
 }
 
 function resolveSystemdUnitPath(env: Record<string, string | undefined>): string {
@@ -75,7 +75,9 @@ export async function readSystemdServiceExecStart(
     const environment: Record<string, string> = {};
     for (const rawLine of content.split("\n")) {
       const line = rawLine.trim();
-      if (!line || line.startsWith("#")) continue;
+      if (!line || line.startsWith("#")) {
+        continue;
+      }
       if (line.startsWith("ExecStart=")) {
         execStart = line.slice("ExecStart=".length).trim();
       } else if (line.startsWith("WorkingDirectory=")) {
@@ -83,10 +85,14 @@ export async function readSystemdServiceExecStart(
       } else if (line.startsWith("Environment=")) {
         const raw = line.slice("Environment=".length).trim();
         const parsed = parseSystemdEnvAssignment(raw);
-        if (parsed) environment[parsed.key] = parsed.value;
+        if (parsed) {
+          environment[parsed.key] = parsed.value;
+        }
       }
     }
-    if (!execStart) return null;
+    if (!execStart) {
+      return null;
+    }
     const programArguments = parseSystemdExecStart(execStart);
     return {
       programArguments,
@@ -111,21 +117,31 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   const entries = parseKeyValueOutput(output, "=");
   const info: SystemdServiceInfo = {};
   const activeState = entries.activestate;
-  if (activeState) info.activeState = activeState;
+  if (activeState) {
+    info.activeState = activeState;
+  }
   const subState = entries.substate;
-  if (subState) info.subState = subState;
+  if (subState) {
+    info.subState = subState;
+  }
   const mainPidValue = entries.mainpid;
   if (mainPidValue) {
     const pid = Number.parseInt(mainPidValue, 10);
-    if (Number.isFinite(pid) && pid > 0) info.mainPid = pid;
+    if (Number.isFinite(pid) && pid > 0) {
+      info.mainPid = pid;
+    }
   }
   const execMainStatusValue = entries.execmainstatus;
   if (execMainStatusValue) {
     const status = Number.parseInt(execMainStatusValue, 10);
-    if (Number.isFinite(status)) info.execMainStatus = status;
+    if (Number.isFinite(status)) {
+      info.execMainStatus = status;
+    }
   }
   const execMainCode = entries.execmaincode;
-  if (execMainCode) info.execMainCode = execMainCode;
+  if (execMainCode) {
+    info.execMainCode = execMainCode;
+  }
   return info;
 }
 
@@ -159,20 +175,36 @@ async function execSystemctl(
 
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
   const res = await execSystemctl(["--user", "status"]);
-  if (res.code === 0) return true;
+  if (res.code === 0) {
+    return true;
+  }
   const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
-  if (!detail) return false;
-  if (detail.includes("not found")) return false;
-  if (detail.includes("failed to connect")) return false;
-  if (detail.includes("not been booted")) return false;
-  if (detail.includes("no such file or directory")) return false;
-  if (detail.includes("not supported")) return false;
+  if (!detail) {
+    return false;
+  }
+  if (detail.includes("not found")) {
+    return false;
+  }
+  if (detail.includes("failed to connect")) {
+    return false;
+  }
+  if (detail.includes("not been booted")) {
+    return false;
+  }
+  if (detail.includes("no such file or directory")) {
+    return false;
+  }
+  if (detail.includes("not supported")) {
+    return false;
+  }
   return false;
 }
 
 async function assertSystemdAvailable() {
   const res = await execSystemctl(["--user", "status"]);
-  if (res.code === 0) return;
+  if (res.code === 0) {
+    return;
+  }
   const detail = res.stderr || res.stdout;
   if (detail.toLowerCase().includes("not found")) {
     throw new Error("systemctl not available; systemd user services are required on Linux.");
@@ -202,8 +234,8 @@ export async function installSystemdService({
   const serviceDescription =
     description ??
     formatGatewayServiceDescription({
-      profile: env.CLAWDBOT_PROFILE,
-      version: environment?.CLAWDBOT_SERVICE_VERSION ?? env.CLAWDBOT_SERVICE_VERSION,
+      profile: env.OPENCLAW_PROFILE,
+      version: environment?.OPENCLAW_SERVICE_VERSION ?? env.OPENCLAW_SERVICE_VERSION,
     });
   const unit = buildSystemdUnit({
     description: serviceDescription,
@@ -213,7 +245,7 @@ export async function installSystemdService({
   });
   await fs.writeFile(unitPath, unit, "utf8");
 
-  const serviceName = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
+  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
   const reload = await execSystemctl(["--user", "daemon-reload"]);
   if (reload.code !== 0) {
@@ -244,7 +276,7 @@ export async function uninstallSystemdService({
   stdout: NodeJS.WritableStream;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
+  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
   await execSystemctl(["--user", "disable", "--now", unitName]);
 
@@ -352,7 +384,9 @@ export type LegacySystemdUnit = {
 
 async function isSystemctlAvailable(): Promise<boolean> {
   const res = await execSystemctl(["--user", "status"]);
-  if (res.code === 0) return true;
+  if (res.code === 0) {
+    return true;
+  }
   const detail = `${res.stderr || res.stdout}`.toLowerCase();
   return !detail.includes("not found");
 }
@@ -391,7 +425,9 @@ export async function uninstallLegacySystemdUnits({
   stdout: NodeJS.WritableStream;
 }): Promise<LegacySystemdUnit[]> {
   const units = await findLegacySystemdUnits(env);
-  if (units.length === 0) return units;
+  if (units.length === 0) {
+    return units;
+  }
 
   const systemctlAvailable = await isSystemctlAvailable();
   for (const unit of units) {

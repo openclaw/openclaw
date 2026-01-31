@@ -3,7 +3,7 @@ import { getFinishedSession, getSession, markExited } from "../../agents/bash-pr
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { killProcessTree } from "../../agents/shell-utils.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logVerbose } from "../../globals.js";
 import { clampInt } from "../../utils.js";
@@ -33,21 +33,27 @@ type ActiveBashJob =
 
 let activeJob: ActiveBashJob | null = null;
 
-function resolveForegroundMs(cfg: MoltbotConfig): number {
+function resolveForegroundMs(cfg: OpenClawConfig): number {
   const raw = cfg.commands?.bashForegroundMs;
-  if (typeof raw !== "number" || Number.isNaN(raw)) return DEFAULT_FOREGROUND_MS;
+  if (typeof raw !== "number" || Number.isNaN(raw)) {
+    return DEFAULT_FOREGROUND_MS;
+  }
   return clampInt(raw, 0, MAX_FOREGROUND_MS);
 }
 
 function formatSessionSnippet(sessionId: string) {
   const trimmed = sessionId.trim();
-  if (trimmed.length <= 12) return trimmed;
+  if (trimmed.length <= 12) {
+    return trimmed;
+  }
   return `${trimmed.slice(0, 8)}…`;
 }
 
 function formatOutputBlock(text: string) {
   const trimmed = text.trim();
-  if (!trimmed) return "(no output)";
+  if (!trimmed) {
+    return "(no output)";
+  }
   return `\`\`\`txt\n${trimmed}\n\`\`\``;
 }
 
@@ -56,7 +62,9 @@ function parseBashRequest(raw: string): BashRequest | null {
   let restSource = "";
   if (trimmed.toLowerCase().startsWith("/bash")) {
     const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
-    if (!match) return null;
+    if (!match) {
+      return null;
+    }
     restSource = match[1] ?? "";
   } else if (trimmed.startsWith("!")) {
     restSource = trimmed.slice(1);
@@ -68,7 +76,9 @@ function parseBashRequest(raw: string): BashRequest | null {
   }
 
   const rest = restSource.trimStart();
-  if (!rest) return { action: "help" };
+  if (!rest) {
+    return { action: "help" };
+  }
   const tokenMatch = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
   const token = tokenMatch?.[1]?.trim() ?? "";
   const remainder = tokenMatch?.[2]?.trim() ?? "";
@@ -87,7 +97,7 @@ function parseBashRequest(raw: string): BashRequest | null {
 
 function resolveRawCommandBody(params: {
   ctx: MsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId?: string;
   isGroup: boolean;
 }) {
@@ -100,17 +110,27 @@ function resolveRawCommandBody(params: {
 
 function getScopedSession(sessionId: string) {
   const running = getSession(sessionId);
-  if (running && running.scopeKey === CHAT_BASH_SCOPE_KEY) return { running };
+  if (running && running.scopeKey === CHAT_BASH_SCOPE_KEY) {
+    return { running };
+  }
   const finished = getFinishedSession(sessionId);
-  if (finished && finished.scopeKey === CHAT_BASH_SCOPE_KEY) return { finished };
+  if (finished && finished.scopeKey === CHAT_BASH_SCOPE_KEY) {
+    return { finished };
+  }
   return {};
 }
 
 function ensureActiveJobState() {
-  if (!activeJob) return null;
-  if (activeJob.state === "starting") return activeJob;
+  if (!activeJob) {
+    return null;
+  }
+  if (activeJob.state === "starting") {
+    return activeJob;
+  }
   const { running, finished } = getScopedSession(activeJob.sessionId);
-  if (running) return activeJob;
+  if (running) {
+    return activeJob;
+  }
   if (finished) {
     activeJob = null;
     return null;
@@ -120,12 +140,20 @@ function ensureActiveJobState() {
 }
 
 function attachActiveWatcher(sessionId: string) {
-  if (!activeJob || activeJob.state !== "running") return;
-  if (activeJob.sessionId !== sessionId) return;
-  if (activeJob.watcherAttached) return;
+  if (!activeJob || activeJob.state !== "running") {
+    return;
+  }
+  if (activeJob.sessionId !== sessionId) {
+    return;
+  }
+  if (activeJob.watcherAttached) {
+    return;
+  }
   const { running } = getScopedSession(sessionId);
   const child = running?.child;
-  if (!child) return;
+  if (!child) {
+    return;
+  }
   activeJob.watcherAttached = true;
   child.once("close", () => {
     if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
@@ -169,7 +197,7 @@ function formatElevatedUnavailableMessage(params: {
   lines.push("- agents.list[].tools.elevated.allowFrom.<provider>");
   if (params.sessionKey) {
     lines.push(
-      `See: ${formatCliCommand(`moltbot sandbox explain --session ${params.sessionKey}`)}`,
+      `See: ${formatCliCommand(`openclaw sandbox explain --session ${params.sessionKey}`)}`,
     );
   }
   return lines.join("\n");
@@ -177,7 +205,7 @@ function formatElevatedUnavailableMessage(params: {
 
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId?: string;
   sessionKey: string;
   isGroup: boolean;
@@ -189,7 +217,7 @@ export async function handleBashChatCommand(params: {
 }): Promise<ReplyPayload> {
   if (params.cfg.commands?.bash !== true) {
     return {
-      text: "⚠️ bash is disabled. Set commands.bash=true to enable. Docs: https://docs.molt.bot/tools/slash-commands#config",
+      text: "⚠️ bash is disabled. Set commands.bash=true to enable. Docs: https://docs.openclaw.ai/tools/slash-commands#config",
     };
   }
 
@@ -317,7 +345,9 @@ export async function handleBashChatCommand(params: {
   }
 
   const commandText = request.command.trim();
-  if (!commandText) return buildUsageReply();
+  if (!commandText) {
+    return buildUsageReply();
+  }
 
   activeJob = {
     state: "starting",

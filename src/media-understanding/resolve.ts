@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type {
   MediaUnderstandingConfig,
@@ -27,39 +27,45 @@ export function resolvePrompt(
   maxChars?: number,
 ): string {
   const base = prompt?.trim() || DEFAULT_PROMPT[capability];
-  if (!maxChars || capability === "audio") return base;
+  if (!maxChars || capability === "audio") {
+    return base;
+  }
   return `${base} Respond in at most ${maxChars} characters.`;
 }
 
 export function resolveMaxChars(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
 }): number | undefined {
   const { capability, entry, cfg } = params;
   const configured =
     entry.maxChars ?? params.config?.maxChars ?? cfg.tools?.media?.[capability]?.maxChars;
-  if (typeof configured === "number") return configured;
+  if (typeof configured === "number") {
+    return configured;
+  }
   return DEFAULT_MAX_CHARS_BY_CAPABILITY[capability];
 }
 
 export function resolveMaxBytes(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
 }): number {
   const configured =
     params.entry.maxBytes ??
     params.config?.maxBytes ??
     params.cfg.tools?.media?.[params.capability]?.maxBytes;
-  if (typeof configured === "number") return configured;
+  if (typeof configured === "number") {
+    return configured;
+  }
   return DEFAULT_MAX_BYTES[params.capability];
 }
 
 export function resolveCapabilityConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   capability: MediaUnderstandingCapability,
 ): MediaUnderstandingConfig | undefined {
   return cfg.tools?.media?.[capability];
@@ -82,14 +88,18 @@ function resolveEntryCapabilities(params: {
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
 }): MediaUnderstandingCapability[] | undefined {
   const entryType = params.entry.type ?? (params.entry.command ? "cli" : "provider");
-  if (entryType === "cli") return undefined;
+  if (entryType === "cli") {
+    return undefined;
+  }
   const providerId = normalizeMediaProviderId(params.entry.provider ?? "");
-  if (!providerId) return undefined;
+  if (!providerId) {
+    return undefined;
+  }
   return params.providerRegistry.get(providerId)?.capabilities;
 }
 
 export function resolveModelEntries(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
@@ -100,7 +110,9 @@ export function resolveModelEntries(params: {
     ...(config?.models ?? []).map((entry) => ({ entry, source: "capability" as const })),
     ...sharedModels.map((entry) => ({ entry, source: "shared" as const })),
   ];
-  if (entries.length === 0) return [];
+  if (entries.length === 0) {
+    return [];
+  }
 
   return entries
     .filter(({ entry, source }) => {
@@ -126,7 +138,7 @@ export function resolveModelEntries(params: {
     .map(({ entry }) => entry);
 }
 
-export function resolveConcurrency(cfg: MoltbotConfig): number {
+export function resolveConcurrency(cfg: OpenClawConfig): number {
   const configured = cfg.tools?.media?.concurrency;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
     return Math.floor(configured);
@@ -135,7 +147,7 @@ export function resolveConcurrency(cfg: MoltbotConfig): number {
 }
 
 export function resolveEntriesWithActiveFallback(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
@@ -147,14 +159,24 @@ export function resolveEntriesWithActiveFallback(params: {
     config: params.config,
     providerRegistry: params.providerRegistry,
   });
-  if (entries.length > 0) return entries;
-  if (params.config?.enabled !== true) return entries;
+  if (entries.length > 0) {
+    return entries;
+  }
+  if (params.config?.enabled !== true) {
+    return entries;
+  }
   const activeProviderRaw = params.activeModel?.provider?.trim();
-  if (!activeProviderRaw) return entries;
+  if (!activeProviderRaw) {
+    return entries;
+  }
   const activeProvider = normalizeMediaProviderId(activeProviderRaw);
-  if (!activeProvider) return entries;
+  if (!activeProvider) {
+    return entries;
+  }
   const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
-  if (!capabilities || !capabilities.includes(params.capability)) return entries;
+  if (!capabilities || !capabilities.includes(params.capability)) {
+    return entries;
+  }
   return [
     {
       type: "provider",

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import handler from "./handler.js";
 import { createHookEvent } from "../../hooks.js";
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 
 /**
@@ -33,7 +33,7 @@ function createMockSessionContent(
 
 describe("session-memory hook", () => {
   it("skips non-command events", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
       workspaceDir: tempDir,
@@ -47,7 +47,7 @@ describe("session-memory hook", () => {
   });
 
   it("skips commands other than new", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
 
     const event = createHookEvent("command", "help", "agent:main:main", {
       workspaceDir: tempDir,
@@ -61,7 +61,7 @@ describe("session-memory hook", () => {
   });
 
   it("creates memory file with session content on /new command", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -78,7 +78,7 @@ describe("session-memory hook", () => {
       content: sessionContent,
     });
 
-    const cfg: ClawdbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tempDir } },
     };
 
@@ -98,7 +98,7 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
 
     // Read the memory file and verify content
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
     expect(memoryContent).toContain("user: Hello there");
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
@@ -106,7 +106,7 @@ describe("session-memory hook", () => {
   });
 
   it("filters out non-message entries (tool calls, system)", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -124,7 +124,7 @@ describe("session-memory hook", () => {
       content: sessionContent,
     });
 
-    const cfg: ClawdbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tempDir } },
     };
 
@@ -140,7 +140,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Only user/assistant messages should be present
     expect(memoryContent).toContain("user: Hello");
@@ -153,7 +153,7 @@ describe("session-memory hook", () => {
   });
 
   it("filters out command messages starting with /", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -169,7 +169,7 @@ describe("session-memory hook", () => {
       content: sessionContent,
     });
 
-    const cfg: ClawdbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tempDir } },
     };
 
@@ -185,7 +185,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Command messages should be filtered out
     expect(memoryContent).not.toContain("/help");
@@ -196,7 +196,7 @@ describe("session-memory hook", () => {
   });
 
   it("respects custom messages config (limits to N messages)", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -213,7 +213,7 @@ describe("session-memory hook", () => {
     });
 
     // Configure to only include last 3 messages
-    const cfg: ClawdbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tempDir } },
       hooks: {
         internal: {
@@ -236,7 +236,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Only last 3 messages should be present
     expect(memoryContent).not.toContain("user: Message 1\n");
@@ -247,7 +247,7 @@ describe("session-memory hook", () => {
   });
 
   it("filters messages before slicing (fix for #2681)", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -274,7 +274,7 @@ describe("session-memory hook", () => {
 
     // Request 3 messages - if we sliced first, we'd only get 1-2 messages
     // because the last 3 lines include tool entries
-    const cfg: ClawdbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tempDir } },
       hooks: {
         internal: {
@@ -297,7 +297,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Should have exactly 3 user/assistant messages (the last 3)
     expect(memoryContent).not.toContain("First message");
@@ -307,7 +307,7 @@ describe("session-memory hook", () => {
   });
 
   it("handles empty session files gracefully", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -317,7 +317,7 @@ describe("session-memory hook", () => {
       content: "",
     });
 
-    const cfg: ClawdbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tempDir } },
     };
 
@@ -339,7 +339,7 @@ describe("session-memory hook", () => {
   });
 
   it("handles session files with fewer messages than requested", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -354,7 +354,7 @@ describe("session-memory hook", () => {
       content: sessionContent,
     });
 
-    const cfg: ClawdbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tempDir } },
     };
 
@@ -370,7 +370,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Both messages should be included
     expect(memoryContent).toContain("user: Only message 1");

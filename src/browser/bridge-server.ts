@@ -35,7 +35,9 @@ export async function startBrowserBridgeServer(params: {
   if (authToken) {
     app.use((req, res, next) => {
       const auth = String(req.headers.authorization ?? "").trim();
-      if (auth === `Bearer ${authToken}`) return next();
+      if (auth === `Bearer ${authToken}`) {
+        return next();
+      }
       res.status(401).send("Unauthorized");
     });
   }

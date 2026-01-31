@@ -7,11 +7,15 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
   const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) return model;
+  if (!isZai || !isOpenAiCompletionsModel(model)) {
+    return model;
+  }
 
-  const openaiModel = model as Model<"openai-completions">;
+  const openaiModel = model;
   const compat = openaiModel.compat ?? undefined;
-  if (compat?.supportsDeveloperRole === false) return model;
+  if (compat?.supportsDeveloperRole === false) {
+    return model;
+  }
 
   openaiModel.compat = compat
     ? { ...compat, supportsDeveloperRole: false }

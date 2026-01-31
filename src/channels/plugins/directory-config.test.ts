@@ -30,7 +30,7 @@ describe("directory (config-backed)", () => {
       query: null,
       limit: null,
     });
-    expect(peers?.map((e) => e.id).sort()).toEqual([
+    expect(peers?.map((e) => e.id).toSorted()).toEqual([
       "user:u123",
       "user:u234",
       "user:u777",
@@ -73,7 +73,7 @@ describe("directory (config-backed)", () => {
       query: null,
       limit: null,
     });
-    expect(peers?.map((e) => e.id).sort()).toEqual(["user:111", "user:12345", "user:222"]);
+    expect(peers?.map((e) => e.id).toSorted()).toEqual(["user:111", "user:12345", "user:222"]);
 
     const groups = await listDiscordDirectoryGroupsFromConfig({
       cfg,
@@ -81,7 +81,7 @@ describe("directory (config-backed)", () => {
       query: null,
       limit: null,
     });
-    expect(groups?.map((e) => e.id).sort()).toEqual(["channel:555", "channel:666"]);
+    expect(groups?.map((e) => e.id).toSorted()).toEqual(["channel:555", "channel:666"]);
   });
 
   it("lists Telegram peers/groups from config", async () => {
@@ -102,7 +102,7 @@ describe("directory (config-backed)", () => {
       query: null,
       limit: null,
     });
-    expect(peers?.map((e) => e.id).sort()).toEqual(["123", "456", "@alice", "@bob"]);
+    expect(peers?.map((e) => e.id).toSorted()).toEqual(["123", "456", "@alice", "@bob"]);
 
     const groups = await listTelegramDirectoryGroupsFromConfig({
       cfg,

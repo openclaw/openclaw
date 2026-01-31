@@ -57,8 +57,12 @@ function resolveTranscriptPath(params: {
   sessionFile?: string;
 }): string | null {
   const { sessionId, storePath, sessionFile } = params;
-  if (sessionFile) return sessionFile;
-  if (!storePath) return null;
+  if (sessionFile) {
+    return sessionFile;
+  }
+  if (!storePath) {
+    return null;
+  }
   return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 }
 
@@ -66,7 +70,9 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   ok: boolean;
   error?: string;
 } {
-  if (fs.existsSync(params.transcriptPath)) return { ok: true };
+  if (fs.existsSync(params.transcriptPath)) {
+    return { ok: true };
+  }
   try {
     fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
     const header = {
@@ -482,9 +488,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "final") return;
+          if (info.kind !== "final") {
+            return;
+          }
           const text = payload.text?.trim() ?? "";
-          if (!text) return;
+          if (!text) {
+            return;
+          }
           finalReplyParts.push(text);
         },
       });

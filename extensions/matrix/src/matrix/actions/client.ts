@@ -19,10 +19,14 @@ export async function resolveActionClient(
   opts: MatrixActionClientOpts = {},
 ): Promise<MatrixActionClient> {
   ensureNodeRuntime();
-  if (opts.client) return { client: opts.client, stopOnDone: false };
+  if (opts.client) {
+    return { client: opts.client, stopOnDone: false };
+  }
   const active = getActiveMatrixClient();
-  if (active) return { client: active, stopOnDone: false };
-  const shouldShareClient = Boolean(process.env.CLAWDBOT_GATEWAY_PORT);
+  if (active) {
+    return { client: active, stopOnDone: false };
+  }
+  const shouldShareClient = Boolean(process.env.OPENCLAW_GATEWAY_PORT);
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({
       cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,

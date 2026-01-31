@@ -21,12 +21,16 @@ import { createTelegramDraftStream } from "./draft-stream.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 
+const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+
 async function resolveStickerVisionSupport(cfg, agentId) {
   try {
     const catalog = await loadModelCatalog({ config: cfg });
     const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    if (!entry) return false;
+    if (!entry) {
+      return false;
+    }
     return modelSupportsVision(entry);
   } catch {
     return false;
@@ -90,8 +94,12 @@ export const dispatchTelegramMessage = async ({
   let lastPartialText = "";
   let draftText = "";
   const updateDraftFromPartial = (text?: string) => {
-    if (!draftStream || !text) return;
-    if (text === lastPartialText) return;
+    if (!draftStream || !text) {
+      return;
+    }
+    if (text === lastPartialText) {
+      return;
+    }
     if (streamMode === "partial") {
       lastPartialText = text;
       draftStream.update(text);
@@ -106,7 +114,9 @@ export const dispatchTelegramMessage = async ({
       draftText = "";
     }
     lastPartialText = text;
-    if (!delta) return;
+    if (!delta) {
+      return;
+    }
     if (!draftChunker) {
       draftText = text;
       draftStream.update(draftText);
@@ -122,7 +132,9 @@ export const dispatchTelegramMessage = async ({
     });
   };
   const flushDraft = async () => {
-    if (!draftStream) return;
+    if (!draftStream) {
+      return;
+    }
     if (draftChunker?.hasBuffered()) {
       draftChunker.drain({
         force: true,
@@ -131,7 +143,9 @@ export const dispatchTelegramMessage = async ({
         },
       });
       draftChunker.reset();
-      if (draftText) draftStream.update(draftText);
+      if (draftText) {
+        draftStream.update(draftText);
+      }
     }
     await draftStream.flush();
   };
@@ -198,6 +212,15 @@ export const dispatchTelegramMessage = async ({
     }
   }
 
+  const replyQuoteText =
+    ctxPayload.ReplyToIsQuote && ctxPayload.ReplyToBody
+      ? ctxPayload.ReplyToBody.trim() || undefined
+      : undefined;
+  const deliveryState = {
+    delivered: false,
+    skippedNonSilent: 0,
+  };
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
@@ -209,12 +232,7 @@ export const dispatchTelegramMessage = async ({
           await flushDraft();
           draftStream?.stop();
         }
-
-        const replyQuoteText =
-          ctxPayload.ReplyToIsQuote && ctxPayload.ReplyToBody
-            ? ctxPayload.ReplyToBody.trim() || undefined
-            : undefined;
-        await deliverReplies({
+        const result = await deliverReplies({
           replies: [payload],
           chatId: String(chatId),
           token: opts.token,
@@ -228,8 +246,15 @@ export const dispatchTelegramMessage = async ({
           onVoiceRecording: sendRecordVoice,
           linkPreview: telegramCfg.linkPreview,
           replyQuoteText,
-          notifyEmptyResponse: info.kind === "final",
         });
+        if (result.delivered) {
+          deliveryState.delivered = true;
+        }
+      },
+      onSkip: (_payload, info) => {
+        if (info.reason !== "silent") {
+          deliveryState.skippedNonSilent += 1;
+        }
       },
       onError: (err, info) => {
         runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
@@ -251,7 +276,9 @@ export const dispatchTelegramMessage = async ({
       onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
       onReasoningStream: draftStream
         ? (payload) => {
-            if (payload.text) draftStream.update(payload.text);
+            if (payload.text) {
+              draftStream.update(payload.text);
+            }
           }
         : undefined,
       disableBlockStreaming,
@@ -261,7 +288,27 @@ export const dispatchTelegramMessage = async ({
     },
   });
   draftStream?.stop();
-  if (!queuedFinal) {
+  let sentFallback = false;
+  if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
+    const result = await deliverReplies({
+      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+      chatId: String(chatId),
+      token: opts.token,
+      runtime,
+      bot,
+      replyToMode,
+      textLimit,
+      messageThreadId: resolvedThreadId,
+      tableMode,
+      chunkMode,
+      linkPreview: telegramCfg.linkPreview,
+      replyQuoteText,
+    });
+    sentFallback = result.delivered;
+  }
+
+  const hasFinalResponse = queuedFinal || sentFallback;
+  if (!hasFinalResponse) {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
     }
@@ -273,7 +320,9 @@ export const dispatchTelegramMessage = async ({
     ackReactionValue: ackReactionPromise ? "ack" : null,
     remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
     onError: (err) => {
-      if (!msg.message_id) return;
+      if (!msg.message_id) {
+        return;
+      }
       logAckFailure({
         log: logVerbose,
         channel: "telegram",

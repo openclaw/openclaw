@@ -11,8 +11,12 @@ type SystemEventOpts = GatewayRpcOpts & { text?: string; mode?: string; json?: b
 
 const normalizeWakeMode = (raw: unknown) => {
   const mode = typeof raw === "string" ? raw.trim() : "";
-  if (!mode) return "next-heartbeat" as const;
-  if (mode === "now" || mode === "next-heartbeat") return mode;
+  if (!mode) {
+    return "next-heartbeat" as const;
+  }
+  if (mode === "now" || mode === "next-heartbeat") {
+    return mode;
+  }
   throw new Error("--mode must be now or next-heartbeat");
 };
 
@@ -23,7 +27,7 @@ export function registerSystemCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/system", "docs.molt.bot/cli/system")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/system", "docs.openclaw.ai/cli/system")}\n`,
     );
 
   addGatewayClientOptions(
@@ -36,11 +40,16 @@ export function registerSystemCli(program: Command) {
   ).action(async (opts: SystemEventOpts) => {
     try {
       const text = typeof opts.text === "string" ? opts.text.trim() : "";
-      if (!text) throw new Error("--text is required");
+      if (!text) {
+        throw new Error("--text is required");
+      }
       const mode = normalizeWakeMode(opts.mode);
       const result = await callGatewayFromCli("wake", opts, { mode, text }, { expectFinal: false });
-      if (opts.json) defaultRuntime.log(JSON.stringify(result, null, 2));
-      else defaultRuntime.log("ok");
+      if (opts.json) {
+        defaultRuntime.log(JSON.stringify(result, null, 2));
+      } else {
+        defaultRuntime.log("ok");
+      }
     } catch (err) {
       defaultRuntime.error(danger(String(err)));
       defaultRuntime.exit(1);

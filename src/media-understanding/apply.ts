@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
@@ -90,7 +90,7 @@ function xmlEscapeAttr(value: string): string {
   return value.replace(/[<>&"']/g, (char) => XML_ESCAPE_MAP[char] ?? char);
 }
 
-function resolveFileLimits(cfg: MoltbotConfig) {
+function resolveFileLimits(cfg: OpenClawConfig) {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
   return {
     allowUrl: files?.allowUrl ?? true,
@@ -120,7 +120,9 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
 }
 
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
-  if (!buffer || buffer.length < 2) return undefined;
+  if (!buffer || buffer.length < 2) {
+    return undefined;
+  }
   const b0 = buffer[0];
   const b1 = buffer[1];
   if (b0 === 0xff && b1 === 0xfe) {
@@ -132,7 +134,9 @@ function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefin
   const sampleLen = Math.min(buffer.length, 2048);
   let zeroCount = 0;
   for (let i = 0; i < sampleLen; i += 1) {
-    if (buffer[i] === 0) zeroCount += 1;
+    if (buffer[i] === 0) {
+      zeroCount += 1;
+    }
   }
   if (zeroCount / sampleLen > 0.2) {
     return "utf-16le";
@@ -141,7 +145,9 @@ function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefin
 }
 
 function looksLikeUtf8Text(buffer?: Buffer): boolean {
-  if (!buffer || buffer.length === 0) return false;
+  if (!buffer || buffer.length === 0) {
+    return false;
+  }
   const sampleLen = Math.min(buffer.length, 4096);
   let printable = 0;
   let other = 0;
@@ -158,12 +164,16 @@ function looksLikeUtf8Text(buffer?: Buffer): boolean {
     }
   }
   const total = printable + other;
-  if (total === 0) return false;
+  if (total === 0) {
+    return false;
+  }
   return printable / total > 0.85;
 }
 
 function decodeTextSample(buffer?: Buffer): string {
-  if (!buffer || buffer.length === 0) return "";
+  if (!buffer || buffer.length === 0) {
+    return "";
+  }
   const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
   const utf16Charset = resolveUtf16Charset(sample);
   if (utf16Charset === "utf-16be") {
@@ -181,7 +191,9 @@ function decodeTextSample(buffer?: Buffer): string {
 }
 
 function guessDelimitedMime(text: string): string | undefined {
-  if (!text) return undefined;
+  if (!text) {
+    return undefined;
+  }
   const line = text.split(/\r?\n/)[0] ?? "";
   const tabs = (line.match(/\t/g) ?? []).length;
   const commas = (line.match(/,/g) ?? []).length;
@@ -195,7 +207,9 @@ function guessDelimitedMime(text: string): string | undefined {
 }
 
 function resolveTextMimeFromName(name?: string): string | undefined {
-  if (!name) return undefined;
+  if (!name) {
+    return undefined;
+  }
   const ext = path.extname(name).toLowerCase();
   return TEXT_EXT_MIME.get(ext);
 }
@@ -321,7 +335,7 @@ async function extractFileBlocks(params: {
 
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
@@ -363,7 +377,9 @@ export async function applyMediaUnderstanding(params: {
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     for (const entry of results) {
-      if (!entry) continue;
+      if (!entry) {
+        continue;
+      }
       for (const output of entry.outputs) {
         outputs.push(output);
       }

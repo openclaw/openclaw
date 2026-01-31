@@ -21,7 +21,9 @@ function sanitizePathSegment(value: string): string {
 function resolveHomeserverKey(homeserver: string): string {
   try {
     const url = new URL(homeserver);
-    if (url.host) return sanitizePathSegment(url.host);
+    if (url.host) {
+      return sanitizePathSegment(url.host);
+    }
   } catch {
     // fall through
   }
@@ -82,11 +84,14 @@ export function maybeMigrateLegacyStorage(params: {
   const hasLegacyStorage = fs.existsSync(legacy.storagePath);
   const hasLegacyCrypto = fs.existsSync(legacy.cryptoPath);
   const hasNewStorage =
-    fs.existsSync(params.storagePaths.storagePath) ||
-    fs.existsSync(params.storagePaths.cryptoPath);
+    fs.existsSync(params.storagePaths.storagePath) || fs.existsSync(params.storagePaths.cryptoPath);
 
-  if (!hasLegacyStorage && !hasLegacyCrypto) return;
-  if (hasNewStorage) return;
+  if (!hasLegacyStorage && !hasLegacyCrypto) {
+    return;
+  }
+  if (hasNewStorage) {
+    return;
+  }
 
   fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
   if (hasLegacyStorage) {
@@ -120,11 +125,7 @@ export function writeStorageMeta(params: {
       createdAt: new Date().toISOString(),
     };
     fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
-    fs.writeFileSync(
-      params.storagePaths.metaPath,
-      JSON.stringify(payload, null, 2),
-      "utf-8",
-    );
+    fs.writeFileSync(params.storagePaths.metaPath, JSON.stringify(payload, null, 2), "utf-8");
   } catch {
     // ignore meta write failures
   }

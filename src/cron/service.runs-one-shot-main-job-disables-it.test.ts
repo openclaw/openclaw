@@ -15,7 +15,7 @@ const noopLogger = {
 };
 
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-cron-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
@@ -163,7 +163,9 @@ describe("CronService", () => {
 
     const runPromise = cron.run(job.id, "force");
     for (let i = 0; i < 10; i++) {
-      if (runHeartbeatOnce.mock.calls.length > 0) break;
+      if (runHeartbeatOnce.mock.calls.length > 0) {
+        break;
+      }
       // Let the locked() chain progress.
       await Promise.resolve();
     }

@@ -47,7 +47,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
       expect(exitCalls).toEqual([1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "[moltbot] FATAL unhandled rejection:",
+        "[openclaw] FATAL unhandled rejection:",
         expect.stringContaining("Out of memory"),
       );
     });
@@ -83,7 +83,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
       expect(exitCalls).toEqual([1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "[moltbot] CONFIGURATION ERROR - requires fix:",
+        "[openclaw] CONFIGURATION ERROR - requires fix:",
         expect.stringContaining("Invalid config"),
       );
     });
@@ -109,7 +109,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
       expect(exitCalls).toEqual([]);
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        "[moltbot] Non-fatal unhandled rejection (continuing):",
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
         expect.stringContaining("fetch failed"),
       );
     });
@@ -132,7 +132,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
       expect(exitCalls).toEqual([1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "[moltbot] Unhandled promise rejection:",
+        "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
       );
     });

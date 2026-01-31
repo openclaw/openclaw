@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { describe, it } from "vitest";
-import { resolveMoltbotAgentDir } from "../agents/agent-paths.js";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   type AuthProfileStore,
@@ -21,9 +21,9 @@ import {
 } from "../agents/live-auth-keys.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
-import { ensureMoltbotModelsJson } from "../agents/models-config.js";
+import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { loadConfig } from "../config/config.js";
-import type { MoltbotConfig, ModelProviderConfig } from "../config/types.js";
+import type { OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -31,10 +31,10 @@ import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
-const GATEWAY_LIVE = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_GATEWAY);
-const ZAI_FALLBACK = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_GATEWAY_ZAI_FALLBACK);
-const PROVIDERS = parseFilter(process.env.CLAWDBOT_LIVE_GATEWAY_PROVIDERS);
+const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const GATEWAY_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY);
+const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
+const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
@@ -44,7 +44,9 @@ const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
 
 function parseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") return null;
+  if (!trimmed || trimmed === "all") {
+    return null;
+  }
   const ids = trimmed
     .split(",")
     .map((s) => s.trim())
@@ -62,7 +64,9 @@ function assertNoReasoningTags(params: {
   phase: string;
   label: string;
 }): void {
-  if (!params.text) return;
+  if (!params.text) {
+    return;
+  }
   if (THINKING_TAG_RE.test(params.text) || FINAL_TAG_RE.test(params.text)) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
@@ -81,22 +85,40 @@ function extractPayloadText(result: unknown): string {
 }
 
 function isMeaningful(text: string): boolean {
-  if (!text) return false;
+  if (!text) {
+    return false;
+  }
   const trimmed = text.trim();
-  if (trimmed.toLowerCase() === "ok") return false;
-  if (trimmed.length < 60) return false;
+  if (trimmed.toLowerCase() === "ok") {
+    return false;
+  }
+  if (trimmed.length < 60) {
+    return false;
+  }
   const words = trimmed.split(/\s+/g).filter(Boolean);
-  if (words.length < 12) return false;
+  if (words.length < 12) {
+    return false;
+  }
   return true;
 }
 
 function isGoogleModelNotFoundText(text: string): boolean {
   const trimmed = text.trim();
-  if (!trimmed) return false;
-  if (!/not found/i.test(trimmed)) return false;
-  if (/models\/.+ is not found for api version/i.test(trimmed)) return true;
-  if (/"status"\s*:\s*"NOT_FOUND"/.test(trimmed)) return true;
-  if (/"code"\s*:\s*404/.test(trimmed)) return true;
+  if (!trimmed) {
+    return false;
+  }
+  if (!/not found/i.test(trimmed)) {
+    return false;
+  }
+  if (/models\/.+ is not found for api version/i.test(trimmed)) {
+    return true;
+  }
+  if (/"status"\s*:\s*"NOT_FOUND"/.test(trimmed)) {
+    return true;
+  }
+  if (/"code"\s*:\s*404/.test(trimmed)) {
+    return true;
+  }
   return false;
 }
 
@@ -124,7 +146,9 @@ function isOpenAIReasoningSequenceError(error: string): boolean {
 
 function isToolNonceRefusal(error: string): boolean {
   const msg = error.toLowerCase();
-  if (!msg.includes("nonce")) return false;
+  if (!msg.includes("nonce")) {
+    return false;
+  }
   return (
     msg.includes("token") ||
     msg.includes("secret") ||
@@ -226,11 +250,17 @@ function randomImageProbeCode(len = 6): string {
 }
 
 function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
+  if (a === b) {
+    return 0;
+  }
   const aLen = a.length;
   const bLen = b.length;
-  if (aLen === 0) return bLen;
-  if (bLen === 0) return aLen;
+  if (aLen === 0) {
+    return bLen;
+  }
+  if (bLen === 0) {
+    return aLen;
+  }
 
   let prev = Array.from({ length: bLen + 1 }, (_v, idx) => idx);
   let curr = Array.from({ length: bLen + 1 }, () => 0);
@@ -264,15 +294,20 @@ async function getFreePort(): Promise<number> {
       }
       const port = addr.port;
       srv.close((err) => {
-        if (err) reject(err);
-        else resolve(port);
+        if (err) {
+          reject(err);
+        } else {
+          resolve(port);
+        }
       });
     });
   });
 }
 
 async function isPortFree(port: number): Promise<boolean> {
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    return false;
+  }
   return await new Promise((resolve) => {
     const srv = createServer();
     srv.once("error", () => resolve(false));
@@ -291,7 +326,9 @@ async function getFreeGatewayPort(): Promise<number> {
     const ok = (await Promise.all(candidates.map((candidate) => isPortFree(candidate)))).every(
       Boolean,
     );
-    if (ok) return port;
+    if (ok) {
+      return port;
+    }
   }
   throw new Error("failed to acquire a free gateway port block");
 }
@@ -305,11 +342,16 @@ async function connectClient(params: { url: string; token: string }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
     const stop = (err?: Error, client?: GatewayClient) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(client as GatewayClient);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(client as GatewayClient);
+      }
     };
     const client = new GatewayClient({
       url: params.url,
@@ -331,7 +373,7 @@ async function connectClient(params: { url: string; token: string }) {
 
 type GatewayModelSuiteParams = {
   label: string;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   candidates: Array<Model<Api>>;
   extraToolProbes: boolean;
   extraImageProbes: boolean;
@@ -340,10 +382,10 @@ type GatewayModelSuiteParams = {
 };
 
 function buildLiveGatewayConfig(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   candidates: Array<Model<Api>>;
   providerOverrides?: Record<string, ModelProviderConfig>;
-}): MoltbotConfig {
+}): OpenClawConfig {
   const providerOverrides = params.providerOverrides ?? {};
   const lmstudioProvider = params.cfg.models?.providers?.lmstudio;
   const baseProviders = params.cfg.models?.providers ?? {};
@@ -382,23 +424,29 @@ function buildLiveGatewayConfig(params: {
 }
 
 function sanitizeAuthConfig(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentDir: string;
-}): MoltbotConfig["auth"] | undefined {
+}): OpenClawConfig["auth"] | undefined {
   const auth = params.cfg.auth;
-  if (!auth) return auth;
+  if (!auth) {
+    return auth;
+  }
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
 
-  let profiles: NonNullable<MoltbotConfig["auth"]>["profiles"] | undefined;
+  let profiles: NonNullable<OpenClawConfig["auth"]>["profiles"] | undefined;
   if (auth.profiles) {
     profiles = {};
     for (const [profileId, profile] of Object.entries(auth.profiles)) {
-      if (!store.profiles[profileId]) continue;
+      if (!store.profiles[profileId]) {
+        continue;
+      }
       profiles[profileId] = profile;
     }
-    if (Object.keys(profiles).length === 0) profiles = undefined;
+    if (Object.keys(profiles).length === 0) {
+      profiles = undefined;
+    }
   }
 
   let order: Record<string, string[]> | undefined;
@@ -406,13 +454,19 @@ function sanitizeAuthConfig(params: {
     order = {};
     for (const [provider, ids] of Object.entries(auth.order)) {
       const filtered = ids.filter((id) => Boolean(store.profiles[id]));
-      if (filtered.length === 0) continue;
+      if (filtered.length === 0) {
+        continue;
+      }
       order[provider] = filtered;
     }
-    if (Object.keys(order).length === 0) order = undefined;
+    if (Object.keys(order).length === 0) {
+      order = undefined;
+    }
   }
 
-  if (!profiles && !order && !auth.cooldowns) return undefined;
+  if (!profiles && !order && !auth.cooldowns) {
+    return undefined;
+  }
   return {
     ...auth,
     profiles,
@@ -421,12 +475,14 @@ function sanitizeAuthConfig(params: {
 }
 
 function buildMinimaxProviderOverride(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   api: "openai-completions" | "anthropic-messages";
   baseUrl: string;
 }): ModelProviderConfig | null {
   const existing = params.cfg.models?.providers?.minimax;
-  if (!existing || !Array.isArray(existing.models) || existing.models.length === 0) return null;
+  if (!existing || !Array.isArray(existing.models) || existing.models.length === 0) {
+    return null;
+  }
   return {
     ...existing,
     api: params.api,
@@ -436,29 +492,29 @@ function buildMinimaxProviderOverride(params: {
 
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const previous = {
-    configPath: process.env.CLAWDBOT_CONFIG_PATH,
-    token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-    skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
-    skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.CLAWDBOT_SKIP_CRON,
-    skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
-    agentDir: process.env.CLAWDBOT_AGENT_DIR,
+    configPath: process.env.OPENCLAW_CONFIG_PATH,
+    token: process.env.OPENCLAW_GATEWAY_TOKEN,
+    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
+    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
+    skipCron: process.env.OPENCLAW_SKIP_CRON,
+    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+    agentDir: process.env.OPENCLAW_AGENT_DIR,
     piAgentDir: process.env.PI_CODING_AGENT_DIR,
-    stateDir: process.env.CLAWDBOT_STATE_DIR,
+    stateDir: process.env.OPENCLAW_STATE_DIR,
   };
   let tempAgentDir: string | undefined;
   let tempStateDir: string | undefined;
 
-  process.env.CLAWDBOT_SKIP_CHANNELS = "1";
-  process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-  process.env.CLAWDBOT_SKIP_CRON = "1";
-  process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+  process.env.OPENCLAW_SKIP_CHANNELS = "1";
+  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+  process.env.OPENCLAW_SKIP_CRON = "1";
+  process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
 
   const token = `test-${randomUUID()}`;
-  process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+  process.env.OPENCLAW_GATEWAY_TOKEN = token;
   const agentId = "dev";
 
-  const hostAgentDir = resolveMoltbotAgentDir();
+  const hostAgentDir = resolveOpenClawAgentDir();
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
     allowKeychainPrompt: false,
   });
@@ -471,26 +527,26 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   };
-  tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-live-state-"));
-  process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+  tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  process.env.OPENCLAW_STATE_DIR = tempStateDir;
   tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
   saveAuthProfileStore(sanitizedStore, tempAgentDir);
   const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
   if (tempSessionAgentDir !== tempAgentDir) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
-  process.env.CLAWDBOT_AGENT_DIR = tempAgentDir;
+  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
   const nonceA = randomUUID();
   const nonceB = randomUUID();
-  const toolProbePath = path.join(workspaceDir, `.clawdbot-live-tool-probe.${nonceA}.txt`);
+  const toolProbePath = path.join(workspaceDir, `.openclaw-live-tool-probe.${nonceA}.txt`);
   await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-  const agentDir = resolveMoltbotAgentDir();
-  const sanitizedCfg: MoltbotConfig = {
+  const agentDir = resolveOpenClawAgentDir();
+  const sanitizedCfg: OpenClawConfig = {
     ...params.cfg,
     auth: sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
   };
@@ -499,12 +555,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     candidates: params.candidates,
     providerOverrides: params.providerOverrides,
   });
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-live-"));
-  const tempConfigPath = path.join(tempDir, "moltbot.json");
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
+  const tempConfigPath = path.join(tempDir, "openclaw.json");
   await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-  process.env.CLAWDBOT_CONFIG_PATH = tempConfigPath;
+  process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
 
-  await ensureMoltbotModelsJson(nextCfg);
+  await ensureOpenClawModelsJson(nextCfg);
 
   const port = await getFreeGatewayPort();
   const server = await startGatewayServer(port, {
@@ -547,10 +603,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           // Ensure session exists + override model for this run.
           // Reset between models: avoids cross-provider transcript incompatibilities
           // (notably OpenAI Responses requiring reasoning replay for function_call items).
-          await client.request<Record<string, unknown>>("sessions.reset", {
+          await client.request("sessions.reset", {
             key: sessionKey,
           });
-          await client.request<Record<string, unknown>>("sessions.patch", {
+          await client.request("sessions.patch", {
             key: sessionKey,
             model: modelKey,
           });
@@ -636,7 +692,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               sessionKey,
               idempotencyKey: `idem-${runIdTool}-tool`,
               message:
-                "Moltbot live tool probe (local, safe): " +
+                "OpenClaw live tool probe (local, safe): " +
                 `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
                 "Then reply with the two nonce values you read (include both).",
               thinking: params.thinkingLevel,
@@ -676,7 +732,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 sessionKey,
                 idempotencyKey: `idem-${runIdTool}-exec-read`,
                 message:
-                  "Moltbot live tool probe (local, safe): " +
+                  "OpenClaw live tool probe (local, safe): " +
                   "use the tool named `exec` (or `Exec`) to run this command: " +
                   `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
                   `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
@@ -761,7 +817,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 } else {
                   const candidates = imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
                   const bestDistance = candidates.reduce((best, cand) => {
-                    if (Math.abs(cand.length - imageCode.length) > 2) return best;
+                    if (Math.abs(cand.length - imageCode.length) > 2) {
+                      return best;
+                    }
                     return Math.min(best, editDistance(cand, imageCode));
                   }, Number.POSITIVE_INFINITY);
                   // OCR / image-read flake: allow a small edit distance, but still require the "cat" token above.
@@ -940,15 +998,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       await fs.rm(tempStateDir, { recursive: true, force: true });
     }
 
-    process.env.CLAWDBOT_CONFIG_PATH = previous.configPath;
-    process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
-    process.env.CLAWDBOT_SKIP_CHANNELS = previous.skipChannels;
-    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;
-    process.env.CLAWDBOT_SKIP_CRON = previous.skipCron;
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST = previous.skipCanvas;
-    process.env.CLAWDBOT_AGENT_DIR = previous.agentDir;
+    process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
+    process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
+    process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
+    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
+    process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
+    process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
+    process.env.OPENCLAW_AGENT_DIR = previous.agentDir;
     process.env.PI_CODING_AGENT_DIR = previous.piAgentDir;
-    process.env.CLAWDBOT_STATE_DIR = previous.stateDir;
+    process.env.OPENCLAW_STATE_DIR = previous.stateDir;
   }
 }
 
@@ -957,17 +1015,17 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     "runs meaningful prompts across models with available keys",
     async () => {
       const cfg = loadConfig();
-      await ensureMoltbotModelsJson(cfg);
+      await ensureOpenClawModelsJson(cfg);
 
-      const agentDir = resolveMoltbotAgentDir();
+      const agentDir = resolveOpenClawAgentDir();
       const authStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const all = modelRegistry.getAll() as Array<Model<Api>>;
+      const all = modelRegistry.getAll();
 
-      const rawModels = process.env.CLAWDBOT_LIVE_GATEWAY_MODELS?.trim();
+      const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
       const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseFilter(rawModels) : null;
@@ -977,7 +1035,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
       const candidates: Array<Model<Api>> = [];
       for (const model of wanted) {
-        if (PROVIDERS && !PROVIDERS.has(model.provider)) continue;
+        if (PROVIDERS && !PROVIDERS.has(model.provider)) {
+          continue;
+        }
         try {
           // eslint-disable-next-line no-await-in-loop
           const apiKeyInfo = await getApiKeyForModel({
@@ -1042,34 +1102,38 @@ describeLive("gateway live (dev agent, profile keys)", () => {
   );
 
   it("z.ai fallback handles anthropic tool history", async () => {
-    if (!ZAI_FALLBACK) return;
+    if (!ZAI_FALLBACK) {
+      return;
+    }
     const previous = {
-      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
-      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+      configPath: process.env.OPENCLAW_CONFIG_PATH,
+      token: process.env.OPENCLAW_GATEWAY_TOKEN,
+      skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
+      skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
+      skipCron: process.env.OPENCLAW_SKIP_CRON,
+      skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
     };
 
-    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
-    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-    process.env.CLAWDBOT_SKIP_CRON = "1";
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+    process.env.OPENCLAW_SKIP_CRON = "1";
+    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
 
     const token = `test-${randomUUID()}`;
-    process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+    process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
     const cfg = loadConfig();
-    await ensureMoltbotModelsJson(cfg);
+    await ensureOpenClawModelsJson(cfg);
 
-    const agentDir = resolveMoltbotAgentDir();
+    const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
     const anthropic = modelRegistry.find("anthropic", "claude-opus-4-5") as Model<Api> | null;
     const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
 
-    if (!anthropic || !zai) return;
+    if (!anthropic || !zai) {
+      return;
+    }
     try {
       await getApiKeyForModel({ model: anthropic, cfg });
       await getApiKeyForModel({ model: zai, cfg });
@@ -1082,7 +1146,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     const nonceA = randomUUID();
     const nonceB = randomUUID();
-    const toolProbePath = path.join(workspaceDir, `.clawdbot-live-zai-fallback.${nonceA}.txt`);
+    const toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
     const port = await getFreeGatewayPort();
@@ -1100,11 +1164,11 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     try {
       const sessionKey = `agent:${agentId}:live-zai-fallback`;
 
-      await client.request<Record<string, unknown>>("sessions.patch", {
+      await client.request("sessions.patch", {
         key: sessionKey,
         model: "anthropic/claude-opus-4-5",
       });
-      await client.request<Record<string, unknown>>("sessions.reset", {
+      await client.request("sessions.reset", {
         key: sessionKey,
       });
 
@@ -1136,7 +1200,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         throw new Error(`anthropic tool probe missing nonce: ${toolText}`);
       }
 
-      await client.request<Record<string, unknown>>("sessions.patch", {
+      await client.request("sessions.patch", {
         key: sessionKey,
         model: "zai/glm-4.7",
       });
@@ -1173,12 +1237,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await server.close({ reason: "live test complete" });
       await fs.rm(toolProbePath, { force: true });
 
-      process.env.CLAWDBOT_CONFIG_PATH = previous.configPath;
-      process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
-      process.env.CLAWDBOT_SKIP_CHANNELS = previous.skipChannels;
-      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;
-      process.env.CLAWDBOT_SKIP_CRON = previous.skipCron;
-      process.env.CLAWDBOT_SKIP_CANVAS_HOST = previous.skipCanvas;
+      process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
+      process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
+      process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
+      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
+      process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
+      process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
     }
   }, 180_000);
 });

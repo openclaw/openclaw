@@ -74,7 +74,9 @@ export async function applyAuthChoiceOpenAI(
     let nextConfig = params.config;
     let agentModelOverride: string | undefined;
     const noteAgentModel = async (model: string) => {
-      if (!params.agentId) return;
+      if (!params.agentId) {
+        return;
+      }
       await params.prompter.note(
         `Default model set to ${model} for agent "${params.agentId}".`,
         "Model configured",
@@ -138,7 +140,7 @@ export async function applyAuthChoiceOpenAI(
       spin.stop("OpenAI OAuth failed");
       params.runtime.error(String(err));
       await params.prompter.note(
-        "Trouble with OAuth? See https://docs.molt.bot/start/faq",
+        "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
         "OAuth help",
       );
     }

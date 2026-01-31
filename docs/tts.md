@@ -8,8 +8,8 @@ read_when:
 
 # Text-to-speech (TTS)
 
-Moltbot can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
-It works anywhere Moltbot can send audio; Telegram gets a round voice-note bubble.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
@@ -32,10 +32,11 @@ does not publish limits, so assume similar or lower limits. citeturn0searc
 ## Optional keys
 
 If you want OpenAI or ElevenLabs:
+
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS does **not** require an API key. If no API keys are found, Moltbot defaults
+Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
@@ -61,7 +62,7 @@ when no OpenAI or ElevenLabs API keys are available.
 
 ## Config
 
-TTS config lives under `messages.tts` in `moltbot.json`.
+TTS config lives under `messages.tts` in `openclaw.json`.
 Full schema is in [Gateway configuration](/gateway/configuration).
 
 ### Minimal config (enable + provider)
@@ -71,9 +72,9 @@ Full schema is in [Gateway configuration](/gateway/configuration).
   messages: {
     tts: {
       auto: "always",
-      provider: "elevenlabs"
-    }
-  }
+      provider: "elevenlabs",
+    },
+  },
 }
 ```
 
@@ -87,12 +88,12 @@ Full schema is in [Gateway configuration](/gateway/configuration).
       provider: "openai",
       summaryModel: "openai/gpt-4.1-mini",
       modelOverrides: {
-        enabled: true
+        enabled: true,
       },
       openai: {
         apiKey: "openai_api_key",
         model: "gpt-4o-mini-tts",
-        voice: "alloy"
+        voice: "alloy",
       },
       elevenlabs: {
         apiKey: "elevenlabs_api_key",
@@ -107,11 +108,11 @@ Full schema is in [Gateway configuration](/gateway/configuration).
           similarityBoost: 0.75,
           style: 0.0,
           useSpeakerBoost: true,
-          speed: 1.0
-        }
-      }
-    }
-  }
+          speed: 1.0,
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -129,10 +130,10 @@ Full schema is in [Gateway configuration](/gateway/configuration).
         lang: "en-US",
         outputFormat: "audio-24khz-48kbitrate-mono-mp3",
         rate: "+10%",
-        pitch: "-5%"
-      }
-    }
-  }
+        pitch: "-5%",
+      },
+    },
+  },
 }
 ```
 
@@ -143,10 +144,10 @@ Full schema is in [Gateway configuration](/gateway/configuration).
   messages: {
     tts: {
       edge: {
-        enabled: false
-      }
-    }
-  }
+        enabled: false,
+      },
+    },
+  },
 }
 ```
 
@@ -159,9 +160,9 @@ Full schema is in [Gateway configuration](/gateway/configuration).
       auto: "always",
       maxTextLength: 4000,
       timeoutMs: 30000,
-      prefsPath: "~/.clawdbot/settings/tts.json"
-    }
-  }
+      prefsPath: "~/.openclaw/settings/tts.json",
+    },
+  },
 }
 ```
 
@@ -171,9 +172,9 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      auto: "inbound"
-    }
-  }
+      auto: "inbound",
+    },
+  },
 }
 ```
 
@@ -183,9 +184,9 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      auto: "always"
-    }
-  }
+      auto: "always",
+    },
+  },
 }
 ```
 
@@ -203,7 +204,7 @@ Then run:
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
-- If `provider` is **unset**, Moltbot prefers `openai` (if key), then `elevenlabs` (if key),
+- If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
   otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
@@ -250,6 +251,7 @@ Here you go.
 ```
 
 Available directive keys (when enabled):
+
 - `provider` (`openai` | `elevenlabs` | `edge`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
@@ -265,10 +267,10 @@ Disable all model overrides:
   messages: {
     tts: {
       modelOverrides: {
-        enabled: false
-      }
-    }
-  }
+        enabled: false,
+      },
+    },
+  },
 }
 ```
 
@@ -281,20 +283,21 @@ Optional allowlist (disable specific overrides while keeping tags enabled):
       modelOverrides: {
         enabled: true,
         allowProvider: false,
-        allowSeed: false
-      }
-    }
-  }
+        allowSeed: false,
+      },
+    },
+  },
 }
 ```
 
 ## Per-user preferences
 
 Slash commands write local overrides to `prefsPath` (default:
-`~/.clawdbot/settings/tts.json`, override with `CLAWDBOT_TTS_PREFS` or
+`~/.openclaw/settings/tts.json`, override with `OPENCLAW_TTS_PREFS` or
 `messages.tts.prefsPath`).
 
 Stored fields:
+
 - `enabled`
 - `provider`
 - `maxLength` (summary threshold; default 1500 chars)
@@ -314,13 +317,14 @@ These override `messages.tts.*` for that host.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus). citeturn1search0
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
     guaranteed Opus voice notes. citeturn1search1
-  - If the configured Edge output format fails, Moltbot retries with MP3.
+  - If the configured Edge output format fails, OpenClaw retries with MP3.
 
 OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
 
 ## Auto-TTS behavior
 
-When enabled, Moltbot:
+When enabled, OpenClaw:
+
 - skips TTS if the reply already contains media or a `MEDIA:` directive.
 - skips very short replies (< 10 chars).
 - summarizes long replies when enabled using `agents.defaults.model.primary` (or `summaryModel`).
@@ -350,7 +354,7 @@ Reply -> TTS enabled?
 There is a single command: `/tts`.
 See [Slash commands](/tools/slash-commands) for enablement details.
 
-Discord note: `/tts` is a built-in Discord command, so Moltbot registers
+Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
 `/voice` as the native command there. Text `/tts ...` still works.
 
 ```
@@ -362,10 +366,11 @@ Discord note: `/tts` is a built-in Discord command, so Moltbot registers
 /tts provider openai
 /tts limit 2000
 /tts summary off
-/tts audio Hello from Moltbot
+/tts audio Hello from OpenClaw
 ```
 
 Notes:
+
 - Commands require an authorized sender (allowlist/owner rules still apply).
 - `commands.text` or native command registration must be enabled.
 - `off|always|inbound|tagged` are per‑session toggles (`/tts on` is an alias for `/tts always`).
@@ -381,6 +386,7 @@ Telegram sends a voice bubble.
 ## Gateway RPC
 
 Gateway methods:
+
 - `tts.status`
 - `tts.enable`
 - `tts.disable`

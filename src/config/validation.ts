@@ -12,8 +12,8 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
-import type { MoltbotConfig, ConfigValidationIssue } from "./types.js";
-import { MoltbotSchema } from "./zod-schema.js";
+import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const AVATAR_DATA_RE = /^data:/i;
@@ -24,22 +24,36 @@ function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
   const relative = path.relative(workspaceRoot, resolved);
-  if (relative === "") return true;
-  if (relative.startsWith("..")) return false;
+  if (relative === "") {
+    return true;
+  }
+  if (relative.startsWith("..")) {
+    return false;
+  }
   return !path.isAbsolute(relative);
 }
 
-function validateIdentityAvatar(config: MoltbotConfig): ConfigValidationIssue[] {
+function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
   const agents = config.agents?.list;
-  if (!Array.isArray(agents) || agents.length === 0) return [];
+  if (!Array.isArray(agents) || agents.length === 0) {
+    return [];
+  }
   const issues: ConfigValidationIssue[] = [];
   for (const [index, entry] of agents.entries()) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
     const avatarRaw = entry.identity?.avatar;
-    if (typeof avatarRaw !== "string") continue;
+    if (typeof avatarRaw !== "string") {
+      continue;
+    }
     const avatar = avatarRaw.trim();
-    if (!avatar) continue;
-    if (AVATAR_DATA_RE.test(avatar) || AVATAR_HTTP_RE.test(avatar)) continue;
+    if (!avatar) {
+      continue;
+    }
+    if (AVATAR_DATA_RE.test(avatar) || AVATAR_HTTP_RE.test(avatar)) {
+      continue;
+    }
     if (avatar.startsWith("~")) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
@@ -71,7 +85,7 @@ function validateIdentityAvatar(config: MoltbotConfig): ConfigValidationIssue[] 
 
 export function validateConfigObject(
   raw: unknown,
-): { ok: true; config: MoltbotConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
     return {
@@ -82,7 +96,7 @@ export function validateConfigObject(
       })),
     };
   }
-  const validated = MoltbotSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(raw);
   if (!validated.success) {
     return {
       ok: false,
@@ -92,7 +106,7 @@ export function validateConfigObject(
       })),
     };
   }
-  const duplicates = findDuplicateAgentDirs(validated.data as MoltbotConfig);
+  const duplicates = findDuplicateAgentDirs(validated.data as OpenClawConfig);
   if (duplicates.length > 0) {
     return {
       ok: false,
@@ -104,14 +118,14 @@ export function validateConfigObject(
       ],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validated.data as MoltbotConfig);
+  const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
   }
   return {
     ok: true,
     config: applyModelDefaults(
-      applyAgentDefaults(applySessionDefaults(validated.data as MoltbotConfig)),
+      applyAgentDefaults(applySessionDefaults(validated.data as OpenClawConfig)),
     ),
   };
 }
@@ -123,7 +137,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function validateConfigObjectWithPlugins(raw: unknown):
   | {
       ok: true;
-      config: MoltbotConfig;
+      config: OpenClawConfig;
       warnings: ConfigValidationIssue[];
     }
   | {
@@ -178,7 +192,9 @@ export function validateConfigObjectWithPlugins(raw: unknown):
 
   const allow = pluginsConfig?.allow ?? [];
   for (const pluginId of allow) {
-    if (typeof pluginId !== "string" || !pluginId.trim()) continue;
+    if (typeof pluginId !== "string" || !pluginId.trim()) {
+      continue;
+    }
     if (!knownIds.has(pluginId)) {
       issues.push({
         path: "plugins.allow",
@@ -189,7 +205,9 @@ export function validateConfigObjectWithPlugins(raw: unknown):
 
   const deny = pluginsConfig?.deny ?? [];
   for (const pluginId of deny) {
-    if (typeof pluginId !== "string" || !pluginId.trim()) continue;
+    if (typeof pluginId !== "string" || !pluginId.trim()) {
+      continue;
+    }
     if (!knownIds.has(pluginId)) {
       issues.push({
         path: "plugins.deny",
@@ -216,7 +234,9 @@ export function validateConfigObjectWithPlugins(raw: unknown):
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {
+        continue;
+      }
       if (!allowedChannels.has(trimmed)) {
         issues.push({
           path: `channels.${trimmed}`,
@@ -233,21 +253,31 @@ export function validateConfigObjectWithPlugins(raw: unknown):
   for (const record of registry.plugins) {
     for (const channelId of record.channels) {
       const trimmed = channelId.trim();
-      if (trimmed) heartbeatChannelIds.add(trimmed.toLowerCase());
+      if (trimmed) {
+        heartbeatChannelIds.add(trimmed.toLowerCase());
+      }
     }
   }
 
   const validateHeartbeatTarget = (target: string | undefined, path: string) => {
-    if (typeof target !== "string") return;
+    if (typeof target !== "string") {
+      return;
+    }
     const trimmed = target.trim();
     if (!trimmed) {
       issues.push({ path, message: "heartbeat target must not be empty" });
       return;
     }
     const normalized = trimmed.toLowerCase();
-    if (normalized === "last" || normalized === "none") return;
-    if (normalizeChatChannelId(trimmed)) return;
-    if (heartbeatChannelIds.has(normalized)) return;
+    if (normalized === "last" || normalized === "none") {
+      return;
+    }
+    if (normalizeChatChannelId(trimmed)) {
+      return;
+    }
+    if (heartbeatChannelIds.has(normalized)) {
+      return;
+    }
     issues.push({ path, message: `unknown heartbeat target: ${target}` });
   };
 

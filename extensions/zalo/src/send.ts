@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
@@ -9,7 +9,7 @@ import { resolveZaloToken } from "./token.js";
 export type ZaloSendOptions = {
   token?: string;
   accountId?: string;
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   mediaUrl?: string;
   caption?: string;
   verbose?: boolean;
@@ -65,10 +65,14 @@ export async function sendMessageZalo(
   }
 
   try {
-    const response = await sendMessage(token, {
-      chat_id: chatId.trim(),
-      text: text.slice(0, 2000),
-    }, fetcher);
+    const response = await sendMessage(
+      token,
+      {
+        chat_id: chatId.trim(),
+        text: text.slice(0, 2000),
+      },
+      fetcher,
+    );
 
     if (response.ok && response.result) {
       return { ok: true, messageId: response.result.message_id };
@@ -100,11 +104,15 @@ export async function sendPhotoZalo(
   }
 
   try {
-    const response = await sendPhoto(token, {
-      chat_id: chatId.trim(),
-      photo: photoUrl.trim(),
-      caption: options.caption?.slice(0, 2000),
-    }, fetcher);
+    const response = await sendPhoto(
+      token,
+      {
+        chat_id: chatId.trim(),
+        photo: photoUrl.trim(),
+        caption: options.caption?.slice(0, 2000),
+      },
+      fetcher,
+    );
 
     if (response.ok && response.result) {
       return { ok: true, messageId: response.result.message_id };

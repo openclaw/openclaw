@@ -31,11 +31,7 @@ export function renderDebug(props: DebugProps) {
   const info = securitySummary?.info ?? 0;
   const securityTone = critical > 0 ? "danger" : warn > 0 ? "warn" : "success";
   const securityLabel =
-    critical > 0
-      ? `${critical} critical`
-      : warn > 0
-        ? `${warn} warnings`
-        : "No critical issues";
+    critical > 0 ? `${critical} critical` : warn > 0 ? `${warn} warnings` : "No critical issues";
 
   return html`
     <section class="grid grid-cols-2">
@@ -52,12 +48,14 @@ export function renderDebug(props: DebugProps) {
         <div class="stack" style="margin-top: 12px;">
           <div>
             <div class="muted">Status</div>
-            ${securitySummary
-              ? html`<div class="callout ${securityTone}" style="margin-top: 8px;">
+            ${
+              securitySummary
+                ? html`<div class="callout ${securityTone}" style="margin-top: 8px;">
                   Security audit: ${securityLabel}${info > 0 ? ` · ${info} info` : ""}. Run
-                  <span class="mono">moltbot security audit --deep</span> for details.
+                  <span class="mono">openclaw security audit --deep</span> for details.
                 </div>`
-              : nothing}
+                : nothing
+            }
             <pre class="code-block">${JSON.stringify(props.status ?? {}, null, 2)}</pre>
           </div>
           <div>
@@ -79,8 +77,7 @@ export function renderDebug(props: DebugProps) {
             <span>Method</span>
             <input
               .value=${props.callMethod}
-              @input=${(e: Event) =>
-                props.onCallMethodChange((e.target as HTMLInputElement).value)}
+              @input=${(e: Event) => props.onCallMethodChange((e.target as HTMLInputElement).value)}
               placeholder="system-presence"
             />
           </label>
@@ -97,14 +94,18 @@ export function renderDebug(props: DebugProps) {
         <div class="row" style="margin-top: 12px;">
           <button class="btn primary" @click=${props.onCall}>Call</button>
         </div>
-        ${props.callError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
+        ${
+          props.callError
+            ? html`<div class="callout danger" style="margin-top: 12px;">
               ${props.callError}
             </div>`
-          : nothing}
-        ${props.callResult
-          ? html`<pre class="code-block" style="margin-top: 12px;">${props.callResult}</pre>`
-          : nothing}
+            : nothing
+        }
+        ${
+          props.callResult
+            ? html`<pre class="code-block" style="margin-top: 12px;">${props.callResult}</pre>`
+            : nothing
+        }
       </div>
     </section>
 
@@ -121,9 +122,12 @@ export function renderDebug(props: DebugProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Event Log</div>
       <div class="card-sub">Latest gateway events.</div>
-      ${props.eventLog.length === 0
-        ? html`<div class="muted" style="margin-top: 12px;">No events yet.</div>`
-        : html`
+      ${
+        props.eventLog.length === 0
+          ? html`
+              <div class="muted" style="margin-top: 12px">No events yet.</div>
+            `
+          : html`
             <div class="list" style="margin-top: 12px;">
               ${props.eventLog.map(
                 (evt) => html`
@@ -139,7 +143,8 @@ export function renderDebug(props: DebugProps) {
                 `,
               )}
             </div>
-          `}
+          `
+      }
     </section>
   `;
 }

@@ -3,6 +3,7 @@ summary: "How the mac app embeds the gateway WebChat and how to debug it"
 read_when:
   - Debugging mac WebChat view or loopback port
 ---
+
 # WebChat (macOS app)
 
 The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It
@@ -18,7 +19,7 @@ agent (with a session switcher for other sessions).
 - Manual: Lobster menu → “Open Chat”.
 - Auto‑open for testing:
   ```bash
-  dist/Moltbot.app/Contents/MacOS/Moltbot --webchat
+  dist/OpenClaw.app/Contents/MacOS/OpenClaw --webchat
   ```
 - Logs: `./scripts/clawlog.sh` (subsystem `bot.molt`, category `WebChatSwiftUI`).
 

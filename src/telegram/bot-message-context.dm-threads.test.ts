@@ -4,7 +4,7 @@ import { buildTelegramMessageContext } from "./bot-message-context.js";
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
   const baseConfig = {
-    agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/clawd" } },
+    agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
     channels: { telegram: {} },
     messages: { groupChat: { mentionPatterns: [] } },
   } as never;
@@ -73,7 +73,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
 describe("buildTelegramMessageContext group sessions without forum", () => {
   const baseConfig = {
-    agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/clawd" } },
+    agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
     channels: { telegram: {} },
     messages: { groupChat: { mentionPatterns: [] } },
   } as never;

@@ -124,7 +124,9 @@ export async function resolveSystemNodeInfo(params: {
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
   const systemNode = await resolveSystemNodePath(env, platform);
-  if (!systemNode) return null;
+  if (!systemNode) {
+    return null;
+  }
 
   const version = await resolveNodeVersion(systemNode, params.execFile ?? execFileAsync);
   return {
@@ -138,7 +140,9 @@ export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
   selectedNodePath?: string,
 ): string | null {
-  if (!systemNode || systemNode.supported) return null;
+  if (!systemNode || systemNode.supported) {
+    return null;
+  }
   const versionLabel = systemNode.version ?? "unknown";
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
@@ -150,8 +154,12 @@ export async function resolvePreferredNodePath(params: {
   platform?: NodeJS.Platform;
   execFile?: ExecFileAsync;
 }): Promise<string | undefined> {
-  if (params.runtime !== "node") return undefined;
+  if (params.runtime !== "node") {
+    return undefined;
+  }
   const systemNode = await resolveSystemNodeInfo(params);
-  if (!systemNode?.supported) return undefined;
+  if (!systemNode?.supported) {
+    return undefined;
+  }
   return systemNode.path;
 }

@@ -3,6 +3,7 @@ summary: "Reaction semantics shared across channels"
 read_when:
   - Working on reactions in any channel
 ---
+
 # Reaction tooling
 
 Shared reaction semantics across channels:

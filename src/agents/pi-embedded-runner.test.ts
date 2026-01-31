@@ -4,8 +4,8 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
-import type { MoltbotConfig } from "../config/config.js";
-import { ensureMoltbotModelsJson } from "./models-config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -62,11 +62,15 @@ vi.mock("@mariozechner/pi-ai", async () => {
   return {
     ...actual,
     complete: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+      if (model.id === "mock-error") {
+        return buildAssistantErrorMessage(model);
+      }
       return buildAssistantMessage(model);
     },
     completeSimple: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+      if (model.id === "mock-error") {
+        return buildAssistantErrorMessage(model);
+      }
       return buildAssistantMessage(model);
     },
     streamSimple: (model: { api: string; provider: string; id: string }) => {
@@ -96,7 +100,7 @@ let sessionCounter = 0;
 beforeAll(async () => {
   vi.useRealTimers();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-embedded-agent-"));
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-agent-"));
   agentDir = path.join(tempRoot, "agent");
   workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
@@ -104,7 +108,9 @@ beforeAll(async () => {
 }, 20_000);
 
 afterAll(async () => {
-  if (!tempRoot) return;
+  if (!tempRoot) {
+    return;
+  }
   await fs.rm(tempRoot, { recursive: true, force: true });
   tempRoot = undefined;
 });
@@ -129,9 +135,9 @@ const makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies MoltbotConfig;
+  }) satisfies OpenClawConfig;
 
-const ensureModels = (cfg: MoltbotConfig) => ensureMoltbotModelsJson(cfg, agentDir) as unknown;
+const ensureModels = (cfg: OpenClawConfig) => ensureOpenClawModelsJson(cfg, agentDir) as unknown;
 
 const nextSessionFile = () => {
   sessionCounter += 1;
@@ -142,7 +148,9 @@ const testSessionKey = "agent:test:embedded";
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const textFromContent = (content: unknown) => {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   if (Array.isArray(content) && content[0]?.type === "text") {
     return (content[0] as { text?: string }).text;
   }
@@ -191,7 +199,7 @@ describe("runEmbeddedPiAgent", () => {
           },
         },
       },
-    } satisfies MoltbotConfig;
+    } satisfies OpenClawConfig;
 
     await expect(
       runEmbeddedPiAgent({

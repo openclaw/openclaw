@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { LEGACY_MANIFEST_KEY } from "../../compat/legacy-names.js";
-import { discoverMoltbotPlugins } from "../../plugins/discovery.js";
+import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
 import type { PluginOrigin } from "../../plugins/types.js";
-import type { MoltbotPackageManifest } from "../../plugins/manifest.js";
+import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import type { ChannelMeta } from "./types.js";
 
@@ -50,9 +50,7 @@ type ExternalCatalogEntry = {
   name?: string;
   version?: string;
   description?: string;
-  moltbot?: MoltbotPackageManifest;
-  [LEGACY_MANIFEST_KEY]?: MoltbotPackageManifest;
-};
+} & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
 
 const DEFAULT_CATALOG_PATHS = [
   path.join(CONFIG_DIR, "mpm", "plugins.json"),
@@ -60,7 +58,9 @@ const DEFAULT_CATALOG_PATHS = [
   path.join(CONFIG_DIR, "plugins", "catalog.json"),
 ];
 
-const ENV_CATALOG_PATHS = ["CLAWDBOT_PLUGIN_CATALOG_PATHS", "CLAWDBOT_MPM_CATALOG_PATHS"];
+const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
+
+type ManifestKey = typeof MANIFEST_KEY;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -70,15 +70,21 @@ function parseCatalogEntries(raw: unknown): ExternalCatalogEntry[] {
   if (Array.isArray(raw)) {
     return raw.filter((entry): entry is ExternalCatalogEntry => isRecord(entry));
   }
-  if (!isRecord(raw)) return [];
+  if (!isRecord(raw)) {
+    return [];
+  }
   const list = raw.entries ?? raw.packages ?? raw.plugins;
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(list)) {
+    return [];
+  }
   return list.filter((entry): entry is ExternalCatalogEntry => isRecord(entry));
 }
 
 function splitEnvPaths(value: string): string[] {
   const trimmed = value.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    return [];
+  }
   return trimmed
     .split(/[;,]/g)
     .flatMap((chunk) => chunk.split(path.delimiter))
@@ -104,7 +110,9 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
   const entries: ExternalCatalogEntry[] = [];
   for (const rawPath of paths) {
     const resolved = resolveUserPath(rawPath);
-    if (!fs.existsSync(resolved)) continue;
+    if (!fs.existsSync(resolved)) {
+      continue;
+    }
     try {
       const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
       entries.push(...parseCatalogEntries(payload));
@@ -116,11 +124,13 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
 }
 
 function toChannelMeta(params: {
-  channel: NonNullable<MoltbotPackageManifest["channel"]>;
+  channel: NonNullable<OpenClawPackageManifest["channel"]>;
   id: string;
 }): ChannelMeta | null {
   const label = params.channel.label?.trim();
-  if (!label) return null;
+  if (!label) {
+    return null;
+  }
   const selectionLabel = params.channel.selectionLabel?.trim() || label;
   const detailLabel = params.channel.detailLabel?.trim();
   const docsPath = params.channel.docsPath?.trim() || `/channels/${params.id}`;
@@ -164,13 +174,15 @@ function toChannelMeta(params: {
 }
 
 function resolveInstallInfo(params: {
-  manifest: MoltbotPackageManifest;
+  manifest: OpenClawPackageManifest;
   packageName?: string;
   packageDir?: string;
   workspaceDir?: string;
 }): ChannelPluginCatalogEntry["install"] | null {
   const npmSpec = params.manifest.install?.npmSpec?.trim() ?? params.packageName?.trim();
-  if (!npmSpec) return null;
+  if (!npmSpec) {
+    return null;
+  }
   let localPath = params.manifest.install?.localPath?.trim() || undefined;
   if (!localPath && params.workspaceDir && params.packageDir) {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
@@ -187,29 +199,37 @@ function buildCatalogEntry(candidate: {
   packageName?: string;
   packageDir?: string;
   workspaceDir?: string;
-  packageMoltbot?: MoltbotPackageManifest;
+  packageManifest?: OpenClawPackageManifest;
 }): ChannelPluginCatalogEntry | null {
-  const manifest = candidate.packageMoltbot;
-  if (!manifest?.channel) return null;
+  const manifest = candidate.packageManifest;
+  if (!manifest?.channel) {
+    return null;
+  }
   const id = manifest.channel.id?.trim();
-  if (!id) return null;
+  if (!id) {
+    return null;
+  }
   const meta = toChannelMeta({ channel: manifest.channel, id });
-  if (!meta) return null;
+  if (!meta) {
+    return null;
+  }
   const install = resolveInstallInfo({
     manifest,
     packageName: candidate.packageName,
     packageDir: candidate.packageDir,
     workspaceDir: candidate.workspaceDir,
   });
-  if (!install) return null;
+  if (!install) {
+    return null;
+  }
   return { id, meta, install };
 }
 
 function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCatalogEntry | null {
-  const manifest = entry.moltbot ?? entry[LEGACY_MANIFEST_KEY];
+  const manifest = entry[MANIFEST_KEY];
   return buildCatalogEntry({
     packageName: entry.name,
-    packageMoltbot: manifest,
+    packageManifest: manifest,
   });
 }
 
@@ -244,12 +264,14 @@ export function buildChannelUiCatalog(
 export function listChannelPluginCatalogEntries(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry[] {
-  const discovery = discoverMoltbotPlugins({ workspaceDir: options.workspaceDir });
+  const discovery = discoverOpenClawPlugins({ workspaceDir: options.workspaceDir });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
 
   for (const candidate of discovery.candidates) {
     const entry = buildCatalogEntry(candidate);
-    if (!entry) continue;
+    if (!entry) {
+      continue;
+    }
     const priority = ORIGIN_PRIORITY[candidate.origin] ?? 99;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
@@ -268,10 +290,12 @@ export function listChannelPluginCatalogEntries(
 
   return Array.from(resolved.values())
     .map(({ entry }) => entry)
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const orderA = a.meta.order ?? 999;
       const orderB = b.meta.order ?? 999;
-      if (orderA !== orderB) return orderA - orderB;
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
       return a.meta.label.localeCompare(b.meta.label);
     });
 }
@@ -281,6 +305,8 @@ export function getChannelPluginCatalogEntry(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry | undefined {
   const trimmed = id.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   return listChannelPluginCatalogEntries(options).find((entry) => entry.id === trimmed);
 }

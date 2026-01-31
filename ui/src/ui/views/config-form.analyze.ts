@@ -47,8 +47,7 @@ function normalizeSchemaNode(
 
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
   const type =
-    schemaType(schema) ??
-    (schema.properties || schema.additionalProperties ? "object" : undefined);
+    schemaType(schema) ?? (schema.properties || schema.additionalProperties ? "object" : undefined);
   normalized.type = type ?? schema.type;
   normalized.nullable = nullable || schema.nullable;
 
@@ -73,24 +72,15 @@ function normalizeSchemaNode(
       unsupported.add(pathLabel);
     } else if (schema.additionalProperties === false) {
       normalized.additionalProperties = false;
-    } else if (
-      schema.additionalProperties &&
-      typeof schema.additionalProperties === "object"
-    ) {
+    } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
       if (!isAnySchema(schema.additionalProperties as JsonSchema)) {
-        const res = normalizeSchemaNode(
-          schema.additionalProperties as JsonSchema,
-          [...path, "*"],
-        );
-        normalized.additionalProperties =
-          res.schema ?? (schema.additionalProperties as JsonSchema);
+        const res = normalizeSchemaNode(schema.additionalProperties as JsonSchema, [...path, "*"]);
+        normalized.additionalProperties = res.schema ?? (schema.additionalProperties as JsonSchema);
         if (res.unsupportedPaths.length > 0) unsupported.add(pathLabel);
       }
     }
   } else if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items)
-      ? schema.items[0]
-      : schema.items;
+    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
     if (!itemsSchema) {
       unsupported.add(pathLabel);
     } else {

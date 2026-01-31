@@ -252,7 +252,7 @@ export function createImageCard(
   };
 
   if (body && bubble.body) {
-    (bubble.body as FlexBox).contents.push({
+    bubble.body.contents.push({
       type: "text",
       text: body,
       size: "md",
@@ -852,8 +852,12 @@ export function createAgendaCard(params: {
 
     // Secondary info line
     const secondaryParts: string[] = [];
-    if (event.location) secondaryParts.push(event.location);
-    if (event.calendar) secondaryParts.push(event.calendar);
+    if (event.location) {
+      secondaryParts.push(event.location);
+    }
+    if (event.calendar) {
+      secondaryParts.push(event.calendar);
+    }
 
     if (secondaryParts.length > 0) {
       detailContents.push({

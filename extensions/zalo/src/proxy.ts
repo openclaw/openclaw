@@ -7,12 +7,16 @@ const proxyCache = new Map<string, ZaloFetch>();
 
 export function resolveZaloProxyFetch(proxyUrl?: string | null): ZaloFetch | undefined {
   const trimmed = proxyUrl?.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const cached = proxyCache.get(trimmed);
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   const agent = new ProxyAgent(trimmed);
   const fetcher: ZaloFetch = (input, init) =>
-    undiciFetch(input, { ...(init ?? {}), dispatcher: agent as Dispatcher });
+    undiciFetch(input, { ...init, dispatcher: agent as Dispatcher });
   proxyCache.set(trimmed, fetcher);
   return fetcher;
 }

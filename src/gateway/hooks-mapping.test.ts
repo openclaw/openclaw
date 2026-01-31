@@ -63,9 +63,9 @@ describe("hooks mapping", () => {
   });
 
   it("runs transform module", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-hooks-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-"));
     const modPath = path.join(dir, "transform.mjs");
-    const placeholder = "${" + "payload.name}";
+    const placeholder = "${payload.name}";
     fs.writeFileSync(
       modPath,
       `export default ({ payload }) => ({ kind: "wake", text: \`Ping ${placeholder}\` });`,
@@ -99,7 +99,7 @@ describe("hooks mapping", () => {
   });
 
   it("treats null transform as a handled skip", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-hooks-skip-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-skip-"));
     const modPath = path.join(dir, "transform.mjs");
     fs.writeFileSync(modPath, "export default () => null;");
 

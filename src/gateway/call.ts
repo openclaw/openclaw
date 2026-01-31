@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
   resolveConfigPath,
@@ -23,7 +23,7 @@ export type CallGatewayOptions = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   method: string;
   params?: unknown;
   expectFinal?: boolean;
@@ -52,7 +52,7 @@ export type GatewayConnectionDetails = {
 };
 
 export function buildGatewayConnectionDetails(
-  options: { config?: MoltbotConfig; url?: string; configPath?: string } = {},
+  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -109,7 +109,9 @@ export function buildGatewayConnectionDetails(
   };
 }
 
-export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promise<T> {
+export async function callGateway<T = Record<string, unknown>>(
+  opts: CallGatewayOptions,
+): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const config = opts.config ?? loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
@@ -158,7 +160,8 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
       ? typeof remote?.token === "string" && remote.token.trim().length > 0
         ? remote.token.trim()
         : undefined
-      : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+      : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+        process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
         (typeof authToken === "string" && authToken.trim().length > 0
           ? authToken.trim()
           : undefined));
@@ -166,6 +169,7 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
     (typeof opts.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()
       : undefined) ||
+    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
     process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode
       ? typeof remote?.password === "string" && remote.password.trim().length > 0
@@ -188,11 +192,16 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
     let settled = false;
     let ignoreClose = false;
     const stop = (err?: Error, value?: T) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(value as T);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(value as T);
+      }
     };
 
     const client = new GatewayClient({
@@ -226,7 +235,9 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
         }
       },
       onClose: (code, reason) => {
-        if (settled || ignoreClose) return;
+        if (settled || ignoreClose) {
+          return;
+        }
         ignoreClose = true;
         client.stop();
         stop(new Error(formatCloseError(code, reason)));

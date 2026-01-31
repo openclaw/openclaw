@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
@@ -48,11 +48,11 @@ export type ChannelDock = {
   elevated?: ChannelElevatedAdapter;
   config?: {
     resolveAllowFrom?: (params: {
-      cfg: MoltbotConfig;
+      cfg: OpenClawConfig;
       accountId?: string | null;
     }) => Array<string | number> | undefined;
     formatAllowFrom?: (params: {
-      cfg: MoltbotConfig;
+      cfg: OpenClawConfig;
       accountId?: string | null;
       allowFrom: Array<string | number>;
     }) => string[];
@@ -157,7 +157,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     mentions: {
       stripPatterns: ({ ctx }) => {
         const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
-        if (!selfE164) return [];
+        if (!selfE164) {
+          return [];
+        }
         const escaped = escapeRegExp(selfE164);
         return [escaped, `@${escaped}`];
       },
@@ -403,9 +405,13 @@ function listPluginDockEntries(): Array<{ id: ChannelId; dock: ChannelDock; orde
   for (const entry of registry.channels) {
     const plugin = entry.plugin;
     const id = String(plugin.id).trim();
-    if (!id || seen.has(id)) continue;
+    if (!id || seen.has(id)) {
+      continue;
+    }
     seen.add(id);
-    if (CHAT_CHANNEL_ORDER.includes(plugin.id as ChatChannelId)) continue;
+    if (CHAT_CHANNEL_ORDER.includes(plugin.id as ChatChannelId)) {
+      continue;
+    }
     const dock = entry.dock ?? buildDockFromPlugin(plugin);
     entries.push({ id: plugin.id, dock, order: plugin.meta.order });
   }
@@ -425,7 +431,9 @@ export function listChannelDocks(): ChannelDock[] {
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.order ?? (indexA === -1 ? 999 : indexA);
     const orderB = b.order ?? (indexB === -1 ? 999 : indexB);
-    if (orderA !== orderB) return orderA - orderB;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
     return String(a.id).localeCompare(String(b.id));
   });
   return combined.map((entry) => entry.dock);
@@ -433,9 +441,13 @@ export function listChannelDocks(): ChannelDock[] {
 
 export function getChannelDock(id: ChannelId): ChannelDock | undefined {
   const core = DOCKS[id as ChatChannelId];
-  if (core) return core;
+  if (core) {
+    return core;
+  }
   const registry = requireActivePluginRegistry();
   const pluginEntry = registry.channels.find((entry) => entry.plugin.id === id);
-  if (!pluginEntry) return undefined;
+  if (!pluginEntry) {
+    return undefined;
+  }
   return pluginEntry.dock ?? buildDockFromPlugin(pluginEntry.plugin);
 }

@@ -57,14 +57,14 @@ export async function loginWeb(
       });
       console.error(
         danger(
-          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("moltbot channels login")} and scan the QR again.`,
+          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
         ),
       );
-      throw new Error("Session logged out; cache cleared. Re-run login.");
+      throw new Error("Session logged out; cache cleared. Re-run login.", { cause: err });
     }
     const formatted = formatError(err);
     console.error(danger(`WhatsApp Web connection ended before fully opening. ${formatted}`));
-    throw new Error(formatted);
+    throw new Error(formatted, { cause: err });
   } finally {
     // Let Baileys flush any final events before closing the socket.
     setTimeout(() => {

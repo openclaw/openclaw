@@ -7,6 +7,13 @@ import type { GoogleChatReaction } from "./types.js";
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
+const headersToObject = (headers?: HeadersInit): Record<string, string> =>
+  headers instanceof Headers
+    ? Object.fromEntries(headers.entries())
+    : Array.isArray(headers)
+      ? Object.fromEntries(headers)
+      : headers || {};
+
 async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
   url: string,
@@ -16,9 +23,9 @@ async function fetchJson<T>(
   const res = await fetch(url, {
     ...init,
     headers: {
+      ...headersToObject(init.headers),
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
-      ...(init.headers ?? {}),
     },
   });
   if (!res.ok) {
@@ -37,8 +44,8 @@ async function fetchOk(
   const res = await fetch(url, {
     ...init,
     headers: {
+      ...headersToObject(init.headers),
       Authorization: `Bearer ${token}`,
-      ...(init.headers ?? {}),
     },
   });
   if (!res.ok) {
@@ -57,8 +64,8 @@ async function fetchBuffer(
   const res = await fetch(url, {
     ...init,
     headers: {
+      ...headersToObject(init?.headers),
       Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
     },
   });
   if (!res.ok) {
@@ -83,8 +90,12 @@ async function fetchBuffer(
   let total = 0;
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
+    if (done) {
+      break;
+    }
+    if (!value) {
+      continue;
+    }
     total += value.length;
     if (total > maxBytes) {
       await reader.cancel();
@@ -106,8 +117,12 @@ export async function sendGoogleChatMessage(params: {
 }): Promise<{ messageName?: string } | null> {
   const { account, space, text, thread, attachments } = params;
   const body: Record<string, unknown> = {};
-  if (text) body.text = text;
-  if (thread) body.thread = { name: thread };
+  if (text) {
+    body.text = text;
+  }
+  if (thread) {
+    body.thread = { name: thread };
+  }
   if (attachments && attachments.length > 0) {
     body.attachment = attachments.map((item) => ({
       attachmentDataRef: { attachmentUploadToken: item.attachmentUploadToken },
@@ -153,7 +168,7 @@ export async function uploadGoogleChatAttachment(params: {
   contentType?: string;
 }): Promise<{ attachmentUploadToken?: string }> {
   const { account, space, filename, buffer, contentType } = params;
-  const boundary = `moltbot-${crypto.randomUUID()}`;
+  const boundary = `openclaw-${crypto.randomUUID()}`;
   const metadata = JSON.stringify({ filename });
   const header = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`;
   const mediaHeader = `--${boundary}\r\nContent-Type: ${contentType ?? "application/octet-stream"}\r\n\r\n`;
@@ -182,7 +197,9 @@ export async function uploadGoogleChatAttachment(params: {
   const payload = (await res.json()) as {
     attachmentDataRef?: { attachmentUploadToken?: string };
   };
-  return { attachmentUploadToken: payload.attachmentDataRef?.attachmentUploadToken };
+  return {
+    attachmentUploadToken: payload.attachmentDataRef?.attachmentUploadToken,
+  };
 }
 
 export async function downloadGoogleChatMedia(params: {
@@ -215,7 +232,9 @@ export async function listGoogleChatReactions(params: {
 }): Promise<GoogleChatReaction[]> {
   const { account, messageName, limit } = params;
   const url = new URL(`${CHAT_API_BASE}/${messageName}/reactions`);
-  if (limit && limit > 0) url.searchParams.set("pageSize", String(limit));
+  if (limit && limit > 0) {
+    url.searchParams.set("pageSize", String(limit));
+  }
   const result = await fetchJson<{ reactions?: GoogleChatReaction[] }>(account, url.toString(), {
     method: "GET",
   });
@@ -251,9 +270,14 @@ export async function probeGoogleChat(account: ResolvedGoogleChatAccount): Promi
   try {
     const url = new URL(`${CHAT_API_BASE}/spaces`);
     url.searchParams.set("pageSize", "1");
-    await fetchJson<Record<string, unknown>>(account, url.toString(), { method: "GET" });
+    await fetchJson<Record<string, unknown>>(account, url.toString(), {
+      method: "GET",
+    });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }

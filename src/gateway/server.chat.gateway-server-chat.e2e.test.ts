@@ -38,7 +38,9 @@ afterAll(async () => {
 async function waitFor(condition: () => boolean, timeoutMs = 1500) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (condition()) return;
+    if (condition()) {
+      return;
+    }
     await new Promise((r) => setTimeout(r, 5));
   }
   throw new Error("timeout waiting for condition");
@@ -100,7 +102,7 @@ describe("gateway server chat", () => {
       const sessionCall = spy.mock.calls.at(-1)?.[0] as { SessionKey?: string } | undefined;
       expect(sessionCall?.SessionKey).toBe("agent:main:subagent:abc");
 
-      const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
+      const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(sendPolicyDir);
       testState.sessionStorePath = path.join(sendPolicyDir, "sessions.json");
       testState.sessionConfig = {
@@ -139,7 +141,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
 
-      const agentBlockedDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
+      const agentBlockedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(agentBlockedDir);
       testState.sessionStorePath = path.join(agentBlockedDir, "sessions.json");
       testState.sessionConfig = {
@@ -241,7 +243,7 @@ describe("gateway server chat", () => {
         | undefined;
       expect(imgOnlyOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
 
-      const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
+      const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
       testState.sessionStorePath = path.join(historyDir, "sessions.json");
       await writeSessionStore({
@@ -273,11 +275,17 @@ describe("gateway server chat", () => {
       expect(defaultRes.ok).toBe(true);
       const defaultMsgs = defaultRes.payload?.messages ?? [];
       const firstContentText = (msg: unknown): string | undefined => {
-        if (!msg || typeof msg !== "object") return undefined;
+        if (!msg || typeof msg !== "object") {
+          return undefined;
+        }
         const content = (msg as { content?: unknown }).content;
-        if (!Array.isArray(content) || content.length === 0) return undefined;
+        if (!Array.isArray(content) || content.length === 0) {
+          return undefined;
+        }
         const first = content[0];
-        if (!first || typeof first !== "object") return undefined;
+        if (!first || typeof first !== "object") {
+          return undefined;
+        }
         const text = (first as { text?: unknown }).text;
         return typeof text === "string" ? text : undefined;
       };
@@ -287,13 +295,15 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
-      if (webchatWs) webchatWs.close();
+      if (webchatWs) {
+        webchatWs.close();
+      }
       await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     }
   });
 
   test("routes chat.send slash commands without agent runs", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
       testState.sessionStorePath = path.join(dir, "sessions.json");
       await writeSessionStore({
@@ -332,7 +342,7 @@ describe("gateway server chat", () => {
   });
 
   test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {

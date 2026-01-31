@@ -14,7 +14,7 @@ import {
   resolveSessionDeliveryTarget,
   type SessionDeliveryTarget,
 } from "./targets.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { OutboundTargetResolution } from "./targets.js";
 
 export type AgentDeliveryPlan = {
@@ -52,7 +52,9 @@ export function resolveAgentDeliveryPlan(params: {
   });
 
   const resolvedChannel = (() => {
-    if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
+    if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) {
+      return INTERNAL_MESSAGE_CHANNEL;
+    }
     if (requestedChannel === "last") {
       if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
         return baseDelivery.channel;
@@ -60,7 +62,9 @@ export function resolveAgentDeliveryPlan(params: {
       return params.wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
     }
 
-    if (isGatewayMessageChannel(requestedChannel)) return requestedChannel;
+    if (isGatewayMessageChannel(requestedChannel)) {
+      return requestedChannel;
+    }
 
     if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
       return baseDelivery.channel;
@@ -98,7 +102,7 @@ export function resolveAgentDeliveryPlan(params: {
 }
 
 export function resolveAgentOutboundTarget(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   plan: AgentDeliveryPlan;
   targetMode?: ChannelOutboundTargetMode;
   validateExplicitTarget?: boolean;

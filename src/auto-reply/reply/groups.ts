@@ -1,6 +1,6 @@
 import { getChannelDock } from "../../channels/dock.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
@@ -8,7 +8,9 @@ import type { TemplateContext } from "../templating.js";
 
 function extractGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = (raw ?? "").trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const parts = trimmed.split(":").filter(Boolean);
   if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
     return parts.slice(2).join(":") || undefined;
@@ -27,14 +29,16 @@ function extractGroupId(raw: string | undefined | null): string | undefined {
 }
 
 export function resolveGroupRequireMention(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   ctx: TemplateContext;
   groupResolution?: GroupKeyResolution;
 }): boolean {
   const { cfg, ctx, groupResolution } = params;
   const rawChannel = groupResolution?.channel ?? ctx.Provider?.trim();
   const channel = normalizeChannelId(rawChannel);
-  if (!channel) return true;
+  if (!channel) {
+    return true;
+  }
   const groupId = groupResolution?.id ?? extractGroupId(ctx.From);
   const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
@@ -45,16 +49,18 @@ export function resolveGroupRequireMention(params: {
     groupSpace,
     accountId: ctx.AccountId,
   });
-  if (typeof requireMention === "boolean") return requireMention;
+  if (typeof requireMention === "boolean") {
+    return requireMention;
+  }
   return true;
 }
 
 export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
-  return requireMention === false ? "always" : "mention";
+  return !requireMention ? "always" : "mention";
 }
 
 export function buildGroupIntro(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
@@ -68,9 +74,15 @@ export function buildGroupIntro(params: {
   const providerKey = rawProvider?.toLowerCase() ?? "";
   const providerId = normalizeChannelId(rawProvider);
   const providerLabel = (() => {
-    if (!providerKey) return "chat";
-    if (isInternalMessageChannel(providerKey)) return "WebChat";
-    if (providerId) return getChannelPlugin(providerId)?.meta.label ?? providerId;
+    if (!providerKey) {
+      return "chat";
+    }
+    if (isInternalMessageChannel(providerKey)) {
+      return "WebChat";
+    }
+    if (providerId) {
+      return getChannelPlugin(providerId)?.meta.label ?? providerId;
+    }
     return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
   })();
   const subjectLine = subject
@@ -95,7 +107,7 @@ export function buildGroupIntro(params: {
     : undefined;
   const silenceLine =
     activation === "always"
-      ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so Moltbot stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
+      ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
       : undefined;
   const cautionLine =
     activation === "always"

@@ -4,10 +4,14 @@ import path from "node:path";
 import { note } from "../terminal/note.js";
 
 export function noteSourceInstallIssues(root: string | null) {
-  if (!root) return;
+  if (!root) {
+    return;
+  }
 
   const workspaceMarker = path.join(root, "pnpm-workspace.yaml");
-  if (!fs.existsSync(workspaceMarker)) return;
+  if (!fs.existsSync(workspaceMarker)) {
+    return;
+  }
 
   const warnings: string[] = [];
   const nodeModules = path.join(root, "node_modules");

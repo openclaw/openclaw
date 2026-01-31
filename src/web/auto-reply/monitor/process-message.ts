@@ -60,13 +60,17 @@ async function resolveWhatsAppCommandAuthorized(params: {
   msg: WebInboundMsg;
 }): Promise<boolean> {
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  if (!useAccessGroups) return true;
+  if (!useAccessGroups) {
+    return true;
+  }
 
   const isGroup = params.msg.chatType === "group";
   const senderE164 = normalizeE164(
     isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
   );
-  if (!senderE164) return false;
+  if (!senderE164) {
+    return false;
+  }
 
   const configuredAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
   const configuredGroupAllowFrom =
@@ -74,8 +78,12 @@ async function resolveWhatsAppCommandAuthorized(params: {
     (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
   if (isGroup) {
-    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) return false;
-    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) return true;
+    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) {
+      return false;
+    }
+    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) {
+      return true;
+    }
     return normalizeAllowFromE164(configuredGroupAllowFrom).includes(senderE164);
   }
 
@@ -89,7 +97,9 @@ async function resolveWhatsAppCommandAuthorized(params: {
       : params.msg.selfE164
         ? [params.msg.selfE164]
         : [];
-  if (allowFrom.some((v) => String(v).trim() === "*")) return true;
+  if (allowFrom.some((v) => String(v).trim() === "*")) {
+    return true;
+  }
   return normalizeAllowFromE164(allowFrom).includes(senderE164);
 }
 
@@ -221,9 +231,13 @@ export async function processMessage(params: {
   const dmRouteTarget =
     params.msg.chatType !== "group"
       ? (() => {
-          if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
+          if (params.msg.senderE164) {
+            return normalizeE164(params.msg.senderE164);
+          }
           // In direct chats, `msg.from` is already the canonical conversation id.
-          if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
+          if (params.msg.from.includes("@")) {
+            return jidToE164(params.msg.from);
+          }
           return normalizeE164(params.msg.from);
         })()
       : undefined;
@@ -252,7 +266,7 @@ export async function processMessage(params: {
   const responsePrefix =
     prefixContext.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
-      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[moltbot]")
+      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[openclaw]")
       : undefined);
 
   const ctxPayload = finalizeInboundContext({

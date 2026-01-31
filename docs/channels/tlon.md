@@ -3,9 +3,10 @@ summary: "Tlon/Urbit support status, capabilities, and configuration"
 read_when:
   - Working on Tlon/Urbit channel features
 ---
+
 # Tlon (plugin)
 
-Tlon is a decentralized messenger built on Urbit. Moltbot connects to your Urbit ship and can
+Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
 respond to DMs and group chat messages. Group replies require an @ mention by default and can
 be further restricted via allowlists.
 
@@ -19,24 +20,24 @@ Tlon ships as a plugin and is not bundled with the core install.
 Install via CLI (npm registry):
 
 ```bash
-moltbot plugins install @moltbot/tlon
+openclaw plugins install @openclaw/tlon
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-moltbot plugins install ./extensions/tlon
+openclaw plugins install ./extensions/tlon
 ```
 
 Details: [Plugins](/plugin)
 
 ## Setup
 
-1) Install the Tlon plugin.
-2) Gather your ship URL and login code.
-3) Configure `channels.tlon`.
-4) Restart the gateway.
-5) DM the bot or mention it in a group channel.
+1. Install the Tlon plugin.
+2. Gather your ship URL and login code.
+3. Configure `channels.tlon`.
+4. Restart the gateway.
+5. DM the bot or mention it in a group channel.
 
 Minimal config (single account):
 
@@ -47,9 +48,9 @@ Minimal config (single account):
       enabled: true,
       ship: "~sampel-palnet",
       url: "https://your-ship-host",
-      code: "lidlut-tabwed-pillex-ridrup"
-    }
-  }
+      code: "lidlut-tabwed-pillex-ridrup",
+    },
+  },
 }
 ```
 
@@ -61,12 +62,9 @@ Auto-discovery is enabled by default. You can also pin channels manually:
 {
   channels: {
     tlon: {
-      groupChannels: [
-        "chat/~host-ship/general",
-        "chat/~host-ship/support"
-      ]
-    }
-  }
+      groupChannels: ["chat/~host-ship/general", "chat/~host-ship/support"],
+    },
+  },
 }
 ```
 
@@ -76,9 +74,9 @@ Disable auto-discovery:
 {
   channels: {
     tlon: {
-      autoDiscoverChannels: false
-    }
-  }
+      autoDiscoverChannels: false,
+    },
+  },
 }
 ```
 
@@ -90,9 +88,9 @@ DM allowlist (empty = allow all):
 {
   channels: {
     tlon: {
-      dmAllowlist: ["~zod", "~nec"]
-    }
-  }
+      dmAllowlist: ["~zod", "~nec"],
+    },
+  },
 }
 ```
 
@@ -107,21 +105,21 @@ Group authorization (restricted by default):
         channelRules: {
           "chat/~host-ship/general": {
             mode: "restricted",
-            allowedShips: ["~zod", "~nec"]
+            allowedShips: ["~zod", "~nec"],
           },
           "chat/~host-ship/announcements": {
-            mode: "open"
-          }
-        }
-      }
-    }
-  }
+            mode: "open",
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
 ## Delivery targets (CLI/cron)
 
-Use these with `moltbot message send` or cron delivery:
+Use these with `openclaw message send` or cron delivery:
 
 - DM: `~sampel-palnet` or `dm/~sampel-palnet`
 - Group: `chat/~host-ship/channel` or `group:~host-ship/channel`
@@ -129,5 +127,5 @@ Use these with `moltbot message send` or cron delivery:
 ## Notes
 
 - Group replies require a mention (e.g. `~your-bot-ship`) to respond.
-- Thread replies: if the inbound message is in a thread, Moltbot replies in-thread.
+- Thread replies: if the inbound message is in a thread, OpenClaw replies in-thread.
 - Media: `sendMedia` falls back to text + URL (no native upload).

@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `moltbot node` (headless node host)"
+summary: "CLI reference for `openclaw node` (headless node host)"
 read_when:
   - Running the headless node host
   - Pairing a non-macOS node for system.run
 ---
 
-# `moltbot node`
+# `openclaw node`
 
 Run a **headless node host** that connects to the Gateway WebSocket and exposes
 `system.run` / `system.which` on this machine.
@@ -16,6 +16,7 @@ Use a node host when you want agents to **run commands on other machines** in yo
 network without installing a full macOS companion app there.
 
 Common use cases:
+
 - Run commands on remote Linux/Windows boxes (build servers, lab machines, NAS).
 - Keep exec **sandboxed** on the gateway, but delegate approved runs to other hosts.
 - Provide a lightweight, headless execution target for automation or CI nodes.
@@ -35,19 +36,20 @@ Disable it on the node if needed:
 {
   nodeHost: {
     browserProxy: {
-      enabled: false
-    }
-  }
+      enabled: false,
+    },
+  },
 }
 ```
 
 ## Run (foreground)
 
 ```bash
-moltbot node run --host <gateway-host> --port 18789
+openclaw node run --host <gateway-host> --port 18789
 ```
 
 Options:
+
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--tls`: Use TLS for the gateway connection
@@ -60,10 +62,11 @@ Options:
 Install a headless node host as a user service.
 
 ```bash
-moltbot node install --host <gateway-host> --port 18789
+openclaw node install --host <gateway-host> --port 18789
 ```
 
 Options:
+
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--tls`: Use TLS for the gateway connection
@@ -76,13 +79,13 @@ Options:
 Manage the service:
 
 ```bash
-moltbot node status
-moltbot node stop
-moltbot node restart
-moltbot node uninstall
+openclaw node status
+openclaw node stop
+openclaw node restart
+openclaw node uninstall
 ```
 
-Use `moltbot node run` for a foreground node host (no service).
+Use `openclaw node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
 
@@ -92,17 +95,17 @@ The first connection creates a pending node pair request on the Gateway.
 Approve it via:
 
 ```bash
-moltbot nodes pending
-moltbot nodes approve <requestId>
+openclaw nodes pending
+openclaw nodes approve <requestId>
 ```
 
 The node host stores its node id, token, display name, and gateway connection info in
-`~/.clawdbot/node.json`.
+`~/.openclaw/node.json`.
 
 ## Exec approvals
 
 `system.run` is gated by local exec approvals:
 
-- `~/.clawdbot/exec-approvals.json`
+- `~/.openclaw/exec-approvals.json`
 - [Exec approvals](/tools/exec-approvals)
-- `moltbot approvals --node <id|name|ip>` (edit from the Gateway)
+- `openclaw approvals --node <id|name|ip>` (edit from the Gateway)

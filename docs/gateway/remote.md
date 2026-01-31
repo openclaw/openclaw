@@ -3,6 +3,7 @@ summary: "Remote access using SSH tunnels (Gateway WS) and tailnets"
 read_when:
   - Running or troubleshooting remote gateway setups
 ---
+
 # Remote access (SSH, tunnels, and tailnets)
 
 This repo supports “remote over SSH” by keeping a single Gateway (the master) running on a dedicated host (desktop/server) and connecting clients to it.
@@ -34,7 +35,7 @@ This is ideal when your laptop sleeps often but you want the agent always-on.
 
 The laptop does **not** run the agent. It connects remotely:
 
-- Use the macOS app’s **Remote over SSH** mode (Settings → General → “Moltbot runs”).
+- Use the macOS app’s **Remote over SSH** mode (Settings → General → “OpenClaw runs”).
 - The app opens and manages the tunnel, so WebChat + health checks “just work.”
 
 Runbook: [macOS remote access](/platforms/mac/remote).
@@ -53,12 +54,14 @@ Guide: [Tailscale](/gateway/tailscale) and [Web overview](/web).
 One gateway service owns state + channels. Nodes are peripherals.
 
 Flow example (Telegram → node):
+
 - Telegram message arrives at the **Gateway**.
 - Gateway runs the **agent** and decides whether to call a node tool.
 - Gateway calls the **node** over the Gateway WebSocket (`node.*` RPC).
 - Node returns the result; Gateway replies back out to Telegram.
 
 Notes:
+
 - **Nodes do not run the gateway service.** Only one gateway should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)).
 - macOS app “node mode” is just a node client over the Gateway WebSocket.
 
@@ -71,10 +74,11 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 ```
 
 With the tunnel up:
-- `moltbot health` and `moltbot status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
-- `moltbot gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
 
-Note: replace `18789` with your configured `gateway.port` (or `--port`/`CLAWDBOT_GATEWAY_PORT`).
+- `openclaw health` and `openclaw status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
+- `openclaw gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
+
+Note: replace `18789` with your configured `gateway.port` (or `--port`/`OPENCLAW_GATEWAY_PORT`).
 
 ## CLI remote defaults
 
@@ -86,9 +90,9 @@ You can persist a remote target so CLI commands use it by default:
     mode: "remote",
     remote: {
       url: "ws://127.0.0.1:18789",
-      token: "your-token"
-    }
-  }
+      token: "your-token",
+    },
+  },
 }
 ```
 

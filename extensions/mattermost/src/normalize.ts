@@ -1,6 +1,8 @@
 export function normalizeMattermostMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const lower = trimmed.toLowerCase();
   if (lower.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
@@ -31,8 +33,14 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
 
 export function looksLikeMattermostTargetId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) return false;
-  if (/^(user|channel|group|mattermost):/i.test(trimmed)) return true;
-  if (/^[@#]/.test(trimmed)) return true;
+  if (!trimmed) {
+    return false;
+  }
+  if (/^(user|channel|group|mattermost):/i.test(trimmed)) {
+    return true;
+  }
+  if (/^[@#]/.test(trimmed)) {
+    return true;
+  }
   return /^[a-z0-9]{8,}$/i.test(trimmed);
 }

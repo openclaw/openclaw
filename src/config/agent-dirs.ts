@@ -3,7 +3,7 @@ import path from "node:path";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
-import type { MoltbotConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.js";
 
 export type DuplicateAgentDir = {
   agentDir: string;
@@ -28,7 +28,7 @@ function canonicalizeAgentDir(agentDir: string): string {
   return resolved;
 }
 
-function collectReferencedAgentIds(cfg: MoltbotConfig): string[] {
+function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
 
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
@@ -37,7 +37,9 @@ function collectReferencedAgentIds(cfg: MoltbotConfig): string[] {
   ids.add(normalizeAgentId(defaultAgentId));
 
   for (const entry of agents) {
-    if (entry?.id) ids.add(normalizeAgentId(entry.id));
+    if (entry?.id) {
+      ids.add(normalizeAgentId(entry.id));
+    }
   }
 
   const bindings = cfg.bindings;
@@ -54,7 +56,7 @@ function collectReferencedAgentIds(cfg: MoltbotConfig): string[] {
 }
 
 function resolveEffectiveAgentDir(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   agentId: string,
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): string {
@@ -63,13 +65,15 @@ function resolveEffectiveAgentDir(
     ? cfg.agents?.list.find((agent) => normalizeAgentId(agent.id) === id)?.agentDir
     : undefined;
   const trimmed = configured?.trim();
-  if (trimmed) return resolveUserPath(trimmed);
+  if (trimmed) {
+    return resolveUserPath(trimmed);
+  }
   const root = resolveStateDir(deps?.env ?? process.env, deps?.homedir ?? os.homedir);
   return path.join(root, "agents", id, "agent");
 }
 
 export function findDuplicateAgentDirs(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): DuplicateAgentDir[] {
   const byDir = new Map<string, { agentDir: string; agentIds: string[] }>();

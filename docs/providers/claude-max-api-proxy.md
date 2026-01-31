@@ -5,16 +5,17 @@ read_when:
   - You want a local API server that wraps Claude Code CLI
   - You want to save money by using subscription instead of API keys
 ---
+
 # Claude Max API Proxy
 
 **claude-max-api-proxy** is a community tool that exposes your Claude Max/Pro subscription as an OpenAI-compatible API endpoint. This allows you to use your subscription with any tool that supports the OpenAI API format.
 
 ## Why Use This?
 
-| Approach | Cost | Best For |
-|----------|------|----------|
-| Anthropic API | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume |
-| Claude Max subscription | $200/month flat | Personal use, development, unlimited usage |
+| Approach                | Cost                                                | Best For                                   |
+| ----------------------- | --------------------------------------------------- | ------------------------------------------ |
+| Anthropic API           | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume               |
+| Claude Max subscription | $200/month flat                                     | Personal use, development, unlimited usage |
 
 If you have a Claude Max subscription and want to use it with OpenAI-compatible tools, this proxy can save you significant money.
 
@@ -26,6 +27,7 @@ Your App → claude-max-api-proxy → Claude Code CLI → Anthropic (via subscri
 ```
 
 The proxy:
+
 1. Accepts OpenAI-format requests at `http://localhost:3456/v1/chat/completions`
 2. Converts them to Claude Code CLI commands
 3. Returns responses in OpenAI format (streaming supported)
@@ -67,31 +69,31 @@ curl http://localhost:3456/v1/chat/completions \
   }'
 ```
 
-### With Moltbot
+### With OpenClaw
 
-You can point Moltbot at the proxy as a custom OpenAI-compatible endpoint:
+You can point OpenClaw at the proxy as a custom OpenAI-compatible endpoint:
 
 ```json5
 {
   env: {
     OPENAI_API_KEY: "not-needed",
-    OPENAI_BASE_URL: "http://localhost:3456/v1"
+    OPENAI_BASE_URL: "http://localhost:3456/v1",
   },
   agents: {
     defaults: {
-      model: { primary: "openai/claude-opus-4" }
-    }
-  }
+      model: { primary: "openai/claude-opus-4" },
+    },
+  },
 }
 ```
 
 ## Available Models
 
-| Model ID | Maps To |
-|----------|---------|
-| `claude-opus-4` | Claude Opus 4 |
+| Model ID          | Maps To         |
+| ----------------- | --------------- |
+| `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |
-| `claude-haiku-4` | Claude Haiku 4 |
+| `claude-haiku-4`  | Claude Haiku 4  |
 
 ## Auto-Start on macOS
 
@@ -134,12 +136,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 
 ## Notes
 
-- This is a **community tool**, not officially supported by Anthropic or Moltbot
+- This is a **community tool**, not officially supported by Anthropic or OpenClaw
 - Requires an active Claude Max/Pro subscription with Claude Code CLI authenticated
 - The proxy runs locally and does not send data to any third-party servers
 - Streaming responses are fully supported
 
 ## See Also
 
-- [Anthropic provider](/providers/anthropic) - Native Moltbot integration with Claude setup-token or API keys
+- [Anthropic provider](/providers/anthropic) - Native OpenClaw integration with Claude setup-token or API keys
 - [OpenAI provider](/providers/openai) - For OpenAI/Codex subscriptions

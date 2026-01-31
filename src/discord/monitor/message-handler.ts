@@ -17,7 +17,7 @@ import { resolveDiscordMessageText } from "./message-utils.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type DiscordConfig = NonNullable<
-  import("../../config/config.js").MoltbotConfig["channels"]
+  import("../../config/config.js").OpenClawConfig["channels"]
 >["discord"];
 
 export function createDiscordMessageHandler(params: {
@@ -47,22 +47,34 @@ export function createDiscordMessageHandler(params: {
     buildKey: (entry) => {
       const message = entry.data.message;
       const authorId = entry.data.author?.id;
-      if (!message || !authorId) return null;
+      if (!message || !authorId) {
+        return null;
+      }
       const channelId = message.channelId;
-      if (!channelId) return null;
+      if (!channelId) {
+        return null;
+      }
       return `discord:${params.accountId}:${channelId}:${authorId}`;
     },
     shouldDebounce: (entry) => {
       const message = entry.data.message;
-      if (!message) return false;
-      if (message.attachments && message.attachments.length > 0) return false;
+      if (!message) {
+        return false;
+      }
+      if (message.attachments && message.attachments.length > 0) {
+        return false;
+      }
       const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
-      if (!baseText.trim()) return false;
+      if (!baseText.trim()) {
+        return false;
+      }
       return !hasControlCommand(baseText, params.cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
-      if (!last) return;
+      if (!last) {
+        return;
+      }
       if (entries.length === 1) {
         const ctx = await preflightDiscordMessage({
           ...params,
@@ -71,7 +83,9 @@ export function createDiscordMessageHandler(params: {
           data: last.data,
           client: last.client,
         });
-        if (!ctx) return;
+        if (!ctx) {
+          return;
+        }
         await processDiscordMessage(ctx);
         return;
       }
@@ -100,7 +114,9 @@ export function createDiscordMessageHandler(params: {
         data: syntheticData,
         client: last.client,
       });
-      if (!ctx) return;
+      if (!ctx) {
+        return;
+      }
       if (entries.length > 1) {
         const ids = entries.map((entry) => entry.data.message?.id).filter(Boolean) as string[];
         if (ids.length > 0) {

@@ -5,6 +5,7 @@ read_when:
   - Changing model fallback behavior or selection UX
   - Updating model scan probes (tools/images)
 ---
+
 # Models CLI
 
 See [/concepts/model-failover](/concepts/model-failover) for auth profile
@@ -13,15 +14,16 @@ Quick provider overview + examples: [/concepts/model-providers](/concepts/model-
 
 ## How model selection works
 
-Moltbot selects models in this order:
+OpenClaw selects models in this order:
 
-1) **Primary** model (`agents.defaults.model.primary` or `agents.defaults.model`).
-2) **Fallbacks** in `agents.defaults.model.fallbacks` (in order).
-3) **Provider auth failover** happens inside a provider before moving to the
+1. **Primary** model (`agents.defaults.model.primary` or `agents.defaults.model`).
+2. **Fallbacks** in `agents.defaults.model.fallbacks` (in order).
+3. **Provider auth failover** happens inside a provider before moving to the
    next model.
 
 Related:
-- `agents.defaults.models` is the allowlist/catalog of models Moltbot can use (plus aliases).
+
+- `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
@@ -35,7 +37,7 @@ Related:
 If you don’t want to hand-edit config, run the onboarding wizard:
 
 ```bash
-moltbot onboard
+openclaw onboard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)
@@ -59,7 +61,7 @@ Provider configuration examples (including OpenCode Zen) live in
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
 session overrides. When a user selects a model that isn’t in that allowlist,
-Moltbot returns:
+OpenClaw returns:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
@@ -80,9 +82,9 @@ Example allowlist config:
     model: { primary: "anthropic/claude-sonnet-4-5" },
     models: {
       "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
-      "anthropic/claude-opus-4-5": { alias: "Opus" }
-    }
-  }
+      "anthropic/claude-opus-4-5": { alias: "Opus" },
+    },
+  },
 }
 ```
 
@@ -99,39 +101,40 @@ You can switch models for the current session without restarting:
 ```
 
 Notes:
+
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
 - `/model <#>` selects from that picker.
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - If the model ID itself contains `/` (OpenRouter-style), you must include the provider prefix (example: `/model openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, Moltbot treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
 
 ## CLI commands
 
 ```bash
-moltbot models list
-moltbot models status
-moltbot models set <provider/model>
-moltbot models set-image <provider/model>
+openclaw models list
+openclaw models status
+openclaw models set <provider/model>
+openclaw models set-image <provider/model>
 
-moltbot models aliases list
-moltbot models aliases add <alias> <provider/model>
-moltbot models aliases remove <alias>
+openclaw models aliases list
+openclaw models aliases add <alias> <provider/model>
+openclaw models aliases remove <alias>
 
-moltbot models fallbacks list
-moltbot models fallbacks add <provider/model>
-moltbot models fallbacks remove <provider/model>
-moltbot models fallbacks clear
+openclaw models fallbacks list
+openclaw models fallbacks add <provider/model>
+openclaw models fallbacks remove <provider/model>
+openclaw models fallbacks clear
 
-moltbot models image-fallbacks list
-moltbot models image-fallbacks add <provider/model>
-moltbot models image-fallbacks remove <provider/model>
-moltbot models image-fallbacks clear
+openclaw models image-fallbacks list
+openclaw models image-fallbacks add <provider/model>
+openclaw models image-fallbacks remove <provider/model>
+openclaw models image-fallbacks clear
 ```
 
-`moltbot models` (no subcommand) is a shortcut for `models status`.
+`openclaw models` (no subcommand) is a shortcut for `models status`.
 
 ### `models list`
 
@@ -159,12 +162,12 @@ Preferred Anthropic auth is the Claude Code CLI setup-token (run anywhere; paste
 
 ```bash
 claude setup-token
-moltbot models status
+openclaw models status
 ```
 
 ## Scanning (OpenRouter free models)
 
-`moltbot models scan` inspects OpenRouter’s **free model catalog** and can
+`openclaw models scan` inspects OpenRouter’s **free model catalog** and can
 optionally probe models for tool and image support.
 
 Key flags:
@@ -181,12 +184,14 @@ Probing requires an OpenRouter API key (from auth profiles or
 `OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.
 
 Scan results are ranked by:
-1) Image support
-2) Tool latency
-3) Context size
-4) Parameter count
+
+1. Image support
+2. Tool latency
+3. Context size
+4. Parameter count
 
 Input
+
 - OpenRouter `/models` list (filter `:free`)
 - Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/environment))
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
@@ -198,5 +203,5 @@ mode, pass `--yes` to accept defaults.
 ## Models registry (`models.json`)
 
 Custom providers in `models.providers` are written into `models.json` under the
-agent directory (default `~/.clawdbot/agents/<agentId>/models.json`). This file
+agent directory (default `~/.openclaw/agents/<agentId>/models.json`). This file
 is merged by default unless `models.mode` is set to `replace`.

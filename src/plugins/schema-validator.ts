@@ -14,7 +14,9 @@ type CachedValidator = {
 const schemaCache = new Map<string, CachedValidator>();
 
 function formatAjvErrors(errors: ErrorObject[] | null | undefined): string[] {
-  if (!errors || errors.length === 0) return ["invalid config"];
+  if (!errors || errors.length === 0) {
+    return ["invalid config"];
+  }
   return errors.map((error) => {
     const path = error.instancePath?.replace(/^\//, "").replace(/\//g, ".") || "<root>";
     const message = error.message ?? "invalid";
@@ -29,12 +31,14 @@ export function validateJsonSchemaValue(params: {
 }): { ok: true } | { ok: false; errors: string[] } {
   let cached = schemaCache.get(params.cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = ajv.compile(params.schema) as ValidateFunction;
+    const validate = ajv.compile(params.schema);
     cached = { validate, schema: params.schema };
     schemaCache.set(params.cacheKey, cached);
   }
 
   const ok = cached.validate(params.value);
-  if (ok) return { ok: true };
+  if (ok) {
+    return { ok: true };
+  }
   return { ok: false, errors: formatAjvErrors(cached.validate.errors) };
 }

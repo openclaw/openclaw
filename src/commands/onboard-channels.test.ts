@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -76,7 +76,7 @@ describe("setupChannels", () => {
       }),
     };
 
-    await setupChannels({} as MoltbotConfig, runtime, prompter, {
+    await setupChannels({} as OpenClawConfig, runtime, prompter, {
       skipConfirm: true,
       quickstartDefaults: true,
       forceAllowFromChannels: ["whatsapp"],
@@ -90,8 +90,12 @@ describe("setupChannels", () => {
 
   it("prompts for configured channel action and skips configuration when told to skip", async () => {
     const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Select channel (QuickStart)") return "telegram";
-      if (message.includes("already configured")) return "skip";
+      if (message === "Select channel (QuickStart)") {
+        return "telegram";
+      }
+      if (message.includes("already configured")) {
+        return "skip";
+      }
       throw new Error(`unexpected select prompt: ${message}`);
     });
     const multiselect = vi.fn(async () => {
@@ -127,7 +131,7 @@ describe("setupChannels", () => {
             botToken: "token",
           },
         },
-      } as MoltbotConfig,
+      } as OpenClawConfig,
       runtime,
       prompter,
       {
@@ -156,7 +160,9 @@ describe("setupChannels", () => {
         expect(telegram?.hint).toContain("disabled");
         return selectionCount === 1 ? "telegram" : "__done__";
       }
-      if (message.includes("already configured")) return "skip";
+      if (message.includes("already configured")) {
+        return "skip";
+      }
       return "__done__";
     });
     const multiselect = vi.fn(async () => {
@@ -189,7 +195,7 @@ describe("setupChannels", () => {
             enabled: false,
           },
         },
-      } as MoltbotConfig,
+      } as OpenClawConfig,
       runtime,
       prompter,
       {

@@ -4,12 +4,13 @@ read_when:
   - You want to operate the Gateway from a browser
   - You want Tailnet access without SSH tunnels
 ---
+
 # Control UI (browser)
 
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
-- optional prefix: set `gateway.controlUi.basePath` (e.g. `/moltbot`)
+- optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
@@ -19,15 +20,17 @@ If the Gateway is running on the same computer, open:
 
 - http://127.0.0.1:18789/ (or http://localhost:18789/)
 
-If the page fails to load, start the Gateway first: `moltbot gateway`.
+If the page fails to load, start the Gateway first: `openclaw gateway`.
 
 Auth is supplied during the WebSocket handshake via:
+
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-The dashboard settings panel lets you store a token; passwords are not persisted.
-The onboarding wizard generates a gateway token by default, so paste it here on first connect.
+  The dashboard settings panel lets you store a token; passwords are not persisted.
+  The onboarding wizard generates a gateway token by default, so paste it here on first connect.
 
 ## What it can do (today)
+
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
@@ -37,7 +40,7 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
 - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)
-- Config: view/edit `~/.clawdbot/moltbot.json` (`config.get`, `config.set`)
+- Config: view/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`)
 - Config: apply + restart with validation (`config.apply`) and wake the last active session
 - Config writes include a base-hash guard to prevent clobbering concurrent edits
 - Config schema + form rendering (`config.schema`, including plugin + channel schemas); Raw JSON editor remains available
@@ -62,14 +65,15 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
 
 ```bash
-moltbot gateway --tailscale serve
+openclaw gateway --tailscale serve
 ```
 
 Open:
+
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
 By default, Serve requests can authenticate via Tailscale identity headers
-(`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. Moltbot
+(`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw
 verifies the identity by resolving the `x-forwarded-for` address with
 `tailscale whois` and matching it to the header, and only accepts these when the
 request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
@@ -79,10 +83,11 @@ if you want to require a token/password even for Serve traffic.
 ### Bind to tailnet + token
 
 ```bash
-moltbot gateway --bind tailnet --token "$(openssl rand -hex 32)"
+openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
 ```
 
 Then open:
+
 - `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
 
 Paste the token into the UI settings (sent as `connect.params.auth.token`).
@@ -91,9 +96,10 @@ Paste the token into the UI settings (sent as `connect.params.auth.token`).
 
 If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`),
 the browser runs in a **non-secure context** and blocks WebCrypto. By default,
-Moltbot **blocks** Control UI connections without device identity.
+OpenClaw **blocks** Control UI connections without device identity.
 
 **Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
+
 - `https://<magicdns>/` (Serve)
 - `http://127.0.0.1:18789/` (on the gateway host)
 
@@ -104,8 +110,8 @@ Moltbot **blocks** Control UI connections without device identity.
   gateway: {
     controlUi: { allowInsecureAuth: true },
     bind: "tailnet",
-    auth: { mode: "token", token: "replace-me" }
-  }
+    auth: { mode: "token", token: "replace-me" },
+  },
 }
 ```
 
@@ -125,7 +131,7 @@ pnpm ui:build # auto-installs UI deps on first run
 Optional absolute base (when you want fixed asset URLs):
 
 ```bash
-CLAWDBOT_CONTROL_UI_BASE_PATH=/moltbot/ pnpm ui:build
+OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
 ```
 
 For local development (separate dev server):
@@ -142,8 +148,8 @@ The Control UI is static files; the WebSocket target is configurable and can be
 different from the HTTP origin. This is handy when you want the Vite dev server
 locally but the Gateway runs elsewhere.
 
-1) Start the UI dev server: `pnpm ui:dev`
-2) Open a URL like:
+1. Start the UI dev server: `pnpm ui:dev`
+2. Open a URL like:
 
 ```text
 http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
@@ -156,6 +162,7 @@ http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-toke
 ```
 
 Notes:
+
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
 - `token` is stored in localStorage; `password` is kept in memory only.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { LEGACY_MACOS_APP_SOURCES_DIR, MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
+import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
 import { CronPayloadSchema } from "../gateway/protocol/schema.js";
 
 type SchemaLike = {
@@ -30,10 +30,7 @@ function extractCronChannels(schema: SchemaLike): string[] {
 
 const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
 
-const SWIFT_FILE_CANDIDATES = [
-  `${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`,
-  `${LEGACY_MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`,
-];
+const SWIFT_FILE_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
 
 async function resolveSwiftFiles(cwd: string): Promise<string[]> {
   const matches: string[] = [];

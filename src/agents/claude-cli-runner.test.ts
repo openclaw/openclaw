@@ -20,7 +20,9 @@ function createDeferred<T>() {
 
 async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: number) {
   for (let i = 0; i < 50; i += 1) {
-    if (mockFn.mock.calls.length >= count) return;
+    if (mockFn.mock.calls.length >= count) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(`Expected ${count} calls, got ${mockFn.mock.calls.length}`);
@@ -45,7 +47,7 @@ describe("runClaudeCliAgent", () => {
     });
 
     await runClaudeCliAgent({
-      sessionId: "moltbot-session",
+      sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
@@ -71,7 +73,7 @@ describe("runClaudeCliAgent", () => {
     });
 
     await runClaudeCliAgent({
-      sessionId: "moltbot-session",
+      sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",

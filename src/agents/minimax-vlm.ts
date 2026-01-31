@@ -45,11 +45,17 @@ export async function minimaxUnderstandImage(params: {
   modelBaseUrl?: string;
 }): Promise<string> {
   const apiKey = params.apiKey.trim();
-  if (!apiKey) throw new Error("MiniMax VLM: apiKey required");
+  if (!apiKey) {
+    throw new Error("MiniMax VLM: apiKey required");
+  }
   const prompt = params.prompt.trim();
-  if (!prompt) throw new Error("MiniMax VLM: prompt required");
+  if (!prompt) {
+    throw new Error("MiniMax VLM: prompt required");
+  }
   const imageDataUrl = params.imageDataUrl.trim();
-  if (!imageDataUrl) throw new Error("MiniMax VLM: imageDataUrl required");
+  if (!imageDataUrl) {
+    throw new Error("MiniMax VLM: imageDataUrl required");
+  }
   if (!/^data:image\/(png|jpeg|webp);base64,/i.test(imageDataUrl)) {
     throw new Error("MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL");
   }
@@ -65,7 +71,7 @@ export async function minimaxUnderstandImage(params: {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "MM-API-Source": "Moltbot",
+      "MM-API-Source": "OpenClaw",
     },
     body: JSON.stringify({
       prompt,

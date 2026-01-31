@@ -16,7 +16,7 @@ describe("tool-helpers", () => {
     });
 
     it("formats valid JSON array as code block", () => {
-      const input = '[1, 2, 3]';
+      const input = "[1, 2, 3]";
       const result = formatToolOutputForSidebar(input);
 
       expect(result).toBe(`\`\`\`json

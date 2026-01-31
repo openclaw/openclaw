@@ -38,7 +38,7 @@ describe("memory manager sync failures", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-mem-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello");
@@ -77,7 +77,9 @@ describe("memory manager sync failures", () => {
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
-    if (!result.manager) throw new Error("manager missing");
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager;
     const syncSpy = vi.spyOn(manager, "sync");
 

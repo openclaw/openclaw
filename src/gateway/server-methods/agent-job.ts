@@ -28,26 +28,30 @@ function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
 }
 
 function ensureAgentRunListener() {
-  if (agentRunListenerStarted) return;
+  if (agentRunListenerStarted) {
+    return;
+  }
   agentRunListenerStarted = true;
   onAgentEvent((evt) => {
-    if (!evt) return;
-    if (evt.stream !== "lifecycle") return;
+    if (!evt) {
+      return;
+    }
+    if (evt.stream !== "lifecycle") {
+      return;
+    }
     const phase = evt.data?.phase;
     if (phase === "start") {
-      const startedAt =
-        typeof evt.data?.startedAt === "number" ? (evt.data.startedAt as number) : undefined;
+      const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
       agentRunStarts.set(evt.runId, startedAt ?? Date.now());
       return;
     }
-    if (phase !== "end" && phase !== "error") return;
+    if (phase !== "end" && phase !== "error") {
+      return;
+    }
     const startedAt =
-      typeof evt.data?.startedAt === "number"
-        ? (evt.data.startedAt as number)
-        : agentRunStarts.get(evt.runId);
-    const endedAt =
-      typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : undefined;
-    const error = typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      typeof evt.data?.startedAt === "number" ? evt.data.startedAt : agentRunStarts.get(evt.runId);
+    const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
+    const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
     agentRunStarts.delete(evt.runId);
     recordAgentRunSnapshot({
       runId: evt.runId,
@@ -72,23 +76,35 @@ export async function waitForAgentJob(params: {
   const { runId, timeoutMs } = params;
   ensureAgentRunListener();
   const cached = getCachedAgentRun(runId);
-  if (cached) return cached;
-  if (timeoutMs <= 0) return null;
+  if (cached) {
+    return cached;
+  }
+  if (timeoutMs <= 0) {
+    return null;
+  }
 
   return await new Promise((resolve) => {
     let settled = false;
     const finish = (entry: AgentRunSnapshot | null) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       unsubscribe();
       resolve(entry);
     };
     const unsubscribe = onAgentEvent((evt) => {
-      if (!evt || evt.stream !== "lifecycle") return;
-      if (evt.runId !== runId) return;
+      if (!evt || evt.stream !== "lifecycle") {
+        return;
+      }
+      if (evt.runId !== runId) {
+        return;
+      }
       const phase = evt.data?.phase;
-      if (phase !== "end" && phase !== "error") return;
+      if (phase !== "end" && phase !== "error") {
+        return;
+      }
       const cached = getCachedAgentRun(runId);
       if (cached) {
         finish(cached);
@@ -96,11 +112,10 @@ export async function waitForAgentJob(params: {
       }
       const startedAt =
         typeof evt.data?.startedAt === "number"
-          ? (evt.data.startedAt as number)
+          ? evt.data.startedAt
           : agentRunStarts.get(evt.runId);
-      const endedAt =
-        typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : undefined;
-      const error = typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
+      const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
       const snapshot: AgentRunSnapshot = {
         runId: evt.runId,
         status: phase === "error" ? "error" : "ok",

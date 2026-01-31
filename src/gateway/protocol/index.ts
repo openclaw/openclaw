@@ -321,7 +321,9 @@ export const validateWebLoginStartParams =
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
-  if (!errors?.length) return "unknown validation error";
+  if (!errors?.length) {
+    return "unknown validation error";
+  }
 
   const parts: string[] = [];
 

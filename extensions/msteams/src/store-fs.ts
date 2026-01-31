@@ -30,11 +30,15 @@ export async function readJsonFile<T>(
   try {
     const raw = await fs.promises.readFile(filePath, "utf-8");
     const parsed = safeParseJson<T>(raw);
-    if (parsed == null) return { value: fallback, exists: true };
+    if (parsed == null) {
+      return { value: fallback, exists: true };
+    }
     return { value: parsed, exists: true };
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return { value: fallback, exists: false };
+    if (code === "ENOENT") {
+      return { value: fallback, exists: false };
+    }
     return { value: fallback, exists: false };
   }
 }

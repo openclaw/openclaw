@@ -37,18 +37,22 @@ export function renderSlackCard(params: {
         </div>
       </div>
 
-      ${slack?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${
+        slack?.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${slack.lastError}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${slack?.probe
-        ? html`<div class="callout" style="margin-top: 12px;">
+      ${
+        slack?.probe
+          ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${slack.probe.ok ? "ok" : "failed"} ·
             ${slack.probe.status ?? ""} ${slack.probe.error ?? ""}
           </div>`
-        : nothing}
+          : nothing
+      }
 
       ${renderChannelConfigSection({ channelId: "slack", props })}
 

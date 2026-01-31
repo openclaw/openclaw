@@ -7,7 +7,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
@@ -40,7 +40,7 @@ type SessionKeyResolution = {
 };
 
 export function resolveSessionKeyForRequest(opts: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -74,14 +74,16 @@ export function resolveSessionKeyForRequest(opts: {
     const foundKey = Object.keys(sessionStore).find(
       (key) => sessionStore[key]?.sessionId === opts.sessionId,
     );
-    if (foundKey) sessionKey = foundKey;
+    if (foundKey) {
+      sessionKey = foundKey;
+    }
   }
 
   return { sessionKey, sessionStore, storePath };
 }
 
 export function resolveSession(opts: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;

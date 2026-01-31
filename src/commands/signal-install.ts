@@ -94,7 +94,9 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
 async function findSignalCliBinary(root: string): Promise<string | null> {
   const candidates: string[] = [];
   const enqueue = async (dir: string, depth: number) => {
-    if (depth > 3) return;
+    if (depth > 3) {
+      return;
+    }
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
@@ -120,7 +122,7 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
   const response = await fetch(apiUrl, {
     headers: {
-      "User-Agent": "moltbot",
+      "User-Agent": "openclaw",
       Accept: "application/vnd.github+json",
     },
   });
@@ -146,7 +148,7 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
     };
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-signal-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-"));
   const archivePath = path.join(tmpDir, assetName);
 
   runtime.log(`Downloading signal-cli ${version} (${assetName})…`);

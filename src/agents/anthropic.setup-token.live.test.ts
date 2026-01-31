@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
@@ -12,7 +12,7 @@ import {
   validateAnthropicSetupToken,
 } from "../commands/auth-token.js";
 import { loadConfig } from "../config/config.js";
-import { resolveMoltbotAgentDir } from "./agent-paths.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   type AuthProfileCredential,
   ensureAuthProfileStore,
@@ -20,13 +20,13 @@ import {
 } from "./auth-profiles.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
-import { ensureMoltbotModelsJson } from "./models-config.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
-const SETUP_TOKEN_RAW = process.env.CLAWDBOT_LIVE_SETUP_TOKEN?.trim() ?? "";
-const SETUP_TOKEN_VALUE = process.env.CLAWDBOT_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
-const SETUP_TOKEN_PROFILE = process.env.CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
-const SETUP_TOKEN_MODEL = process.env.CLAWDBOT_LIVE_SETUP_TOKEN_MODEL?.trim() ?? "";
+const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
+const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
+const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
+const SETUP_TOKEN_MODEL = process.env.OPENCLAW_LIVE_SETUP_TOKEN_MODEL?.trim() ?? "";
 
 const ENABLED = LIVE && Boolean(SETUP_TOKEN_RAW || SETUP_TOKEN_VALUE || SETUP_TOKEN_PROFILE);
 const describeLive = ENABLED ? describe : describe.skip;
@@ -46,8 +46,12 @@ function listSetupTokenProfiles(store: {
 }): string[] {
   return Object.entries(store.profiles)
     .filter(([, cred]) => {
-      if (cred.type !== "token") return false;
-      if (normalizeProviderId(cred.provider) !== "anthropic") return false;
+      if (cred.type !== "token") {
+        return false;
+      }
+      if (normalizeProviderId(cred.provider) !== "anthropic") {
+        return false;
+      }
       return isSetupToken(cred.token);
     })
     .map(([id]) => id);
@@ -56,7 +60,9 @@ function listSetupTokenProfiles(store: {
 function pickSetupTokenProfile(candidates: string[]): string {
   const preferred = ["anthropic:setup-token-test", "anthropic:setup-token", "anthropic:default"];
   for (const id of preferred) {
-    if (candidates.includes(id)) return id;
+    if (candidates.includes(id)) {
+      return id;
+    }
   }
   return candidates[0] ?? "";
 }
@@ -70,7 +76,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     if (error) {
       throw new Error(`Invalid setup-token: ${error}`);
     }
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-setup-token-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-token-"));
     const profileId = `anthropic:setup-token-live-${randomUUID()}`;
     const store = ensureAuthProfileStore(tempDir, {
       allowKeychainPrompt: false,
@@ -90,7 +96,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     };
   }
 
-  const agentDir = resolveMoltbotAgentDir();
+  const agentDir = resolveOpenClawAgentDir();
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -108,13 +114,13 @@ async function resolveTokenSource(): Promise<TokenSource> {
 
   if (SETUP_TOKEN_RAW && SETUP_TOKEN_RAW !== "1" && SETUP_TOKEN_RAW !== "auto") {
     throw new Error(
-      "CLAWDBOT_LIVE_SETUP_TOKEN did not look like a setup-token. Use CLAWDBOT_LIVE_SETUP_TOKEN_VALUE for raw tokens.",
+      "OPENCLAW_LIVE_SETUP_TOKEN did not look like a setup-token. Use OPENCLAW_LIVE_SETUP_TOKEN_VALUE for raw tokens.",
     );
   }
 
   if (candidates.length === 0) {
     throw new Error(
-      "No Anthropics setup-token profiles found. Set CLAWDBOT_LIVE_SETUP_TOKEN_VALUE or CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE.",
+      "No Anthropics setup-token profiles found. Set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE.",
     );
   }
   return { agentDir, profileId: pickSetupTokenProfile(candidates) };
@@ -124,7 +130,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   const normalized = raw?.trim() ?? "";
   if (normalized) {
     const parsed = parseModelRef(normalized, "anthropic");
-    if (!parsed) return null;
+    if (!parsed) {
+      return null;
+    }
     return (
       models.find(
         (model) =>
@@ -141,7 +149,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   ];
   for (const id of preferred) {
     const match = models.find((model) => model.id === id);
-    if (match) return match;
+    if (match) {
+      return match;
+    }
   }
   return models[0] ?? null;
 }
@@ -153,7 +163,7 @@ describeLive("live anthropic setup-token", () => {
       const tokenSource = await resolveTokenSource();
       try {
         const cfg = loadConfig();
-        await ensureMoltbotModelsJson(cfg, tokenSource.agentDir);
+        await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
         const authStorage = discoverAuthStorage(tokenSource.agentDir);
         const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);

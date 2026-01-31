@@ -73,7 +73,9 @@ function makeProc(pid = 123) {
       return undefined;
     },
     emitExit: () => {
-      for (const cb of handlers.get("exit") ?? []) cb(0);
+      for (const cb of handlers.get("exit") ?? []) {
+        cb(0);
+      }
     },
     kill: () => {
       return true;
@@ -94,9 +96,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
         color: "#FF4500",
         attachOnly: cfgAttachOnly,
         headless: true,
-        defaultProfile: "clawd",
+        defaultProfile: "openclaw",
         profiles: {
-          clawd: { cdpPort: testPort + 1, color: "#FF4500" },
+          openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
         },
       },
     }),
@@ -108,20 +110,20 @@ const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => reachable),
   isChromeReachable: vi.fn(async () => reachable),
-  launchClawdChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
+  launchOpenClawChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
     launchCalls.push({ port: profile.cdpPort });
     reachable = true;
     return {
       pid: 123,
       exe: { kind: "chrome", path: "/fake/chrome" },
-      userDataDir: "/tmp/clawd",
+      userDataDir: "/tmp/openclaw",
       cdpPort: profile.cdpPort,
       startedAt: Date.now(),
       proc,
     };
   }),
-  resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd"),
-  stopClawdChrome: vi.fn(async () => {
+  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
+  stopOpenClawChrome: vi.fn(async () => {
     reachable = false;
   }),
 }));
@@ -164,7 +166,9 @@ async function getFreePort(): Promise<number> {
         s.close((err) => (err ? reject(err) : resolve(assigned)));
       });
     });
-    if (port < 65535) return port;
+    if (port < 65535) {
+      return port;
+    }
   }
 }
 
@@ -191,17 +195,23 @@ describe("browser control server", () => {
     createTargetId = null;
 
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
-      if (createTargetId) return { targetId: createTargetId };
+      if (createTargetId) {
+        return { targetId: createTargetId };
+      }
       throw new Error("cdp disabled");
     });
 
-    for (const fn of Object.values(pwMocks)) fn.mockClear();
-    for (const fn of Object.values(cdpMocks)) fn.mockClear();
+    for (const fn of Object.values(pwMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(cdpMocks)) {
+      fn.mockClear();
+    }
 
     testPort = await getFreePort();
     cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
-    prevGatewayPort = process.env.CLAWDBOT_GATEWAY_PORT;
-    process.env.CLAWDBOT_GATEWAY_PORT = String(testPort - 2);
+    prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+    process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
 
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;
@@ -210,7 +220,9 @@ describe("browser control server", () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         if (u.includes("/json/list")) {
-          if (!reachable) return makeResponse([]);
+          if (!reachable) {
+            return makeResponse([]);
+          }
           return makeResponse([
             {
               id: "abcd1234",
@@ -243,8 +255,12 @@ describe("browser control server", () => {
             type: "page",
           });
         }
-        if (u.includes("/json/activate/")) return makeResponse("ok");
-        if (u.includes("/json/close/")) return makeResponse("ok");
+        if (u.includes("/json/activate/")) {
+          return makeResponse("ok");
+        }
+        if (u.includes("/json/close/")) {
+          return makeResponse("ok");
+        }
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );
@@ -254,9 +270,9 @@ describe("browser control server", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     if (prevGatewayPort === undefined) {
-      delete process.env.CLAWDBOT_GATEWAY_PORT;
+      delete process.env.OPENCLAW_GATEWAY_PORT;
     } else {
-      process.env.CLAWDBOT_GATEWAY_PORT = prevGatewayPort;
+      process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
     }
     const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
@@ -286,11 +302,11 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const select = (await postJson(`${base}/act`, {
+      const select = await postJson(`${base}/act`, {
         kind: "select",
         ref: "5",
         values: ["a", "b"],
-      })) as { ok: boolean };
+      });
       expect(select.ok).toBe(true);
       expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: cdpBaseUrl,
@@ -299,10 +315,10 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
 
-      const fill = (await postJson(`${base}/act`, {
+      const fill = await postJson(`${base}/act`, {
         kind: "fill",
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
-      })) as { ok: boolean };
+      });
       expect(fill.ok).toBe(true);
       expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: cdpBaseUrl,
@@ -310,11 +326,11 @@ describe("browser control server", () => {
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
       });
 
-      const resize = (await postJson(`${base}/act`, {
+      const resize = await postJson(`${base}/act`, {
         kind: "resize",
         width: 800,
         height: 600,
-      })) as { ok: boolean };
+      });
       expect(resize.ok).toBe(true);
       expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: cdpBaseUrl,
@@ -323,10 +339,10 @@ describe("browser control server", () => {
         height: 600,
       });
 
-      const wait = (await postJson(`${base}/act`, {
+      const wait = await postJson(`${base}/act`, {
         kind: "wait",
         timeMs: 5,
-      })) as { ok: boolean };
+      });
       expect(wait.ok).toBe(true);
       expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: cdpBaseUrl,
@@ -336,10 +352,10 @@ describe("browser control server", () => {
         textGone: undefined,
       });
 
-      const evalRes = (await postJson(`${base}/act`, {
+      const evalRes = await postJson(`${base}/act`, {
         kind: "evaluate",
         fn: "() => 1",
-      })) as { ok: boolean; result?: unknown };
+      });
       expect(evalRes.ok).toBe(true);
       expect(evalRes.result).toBe("ok");
       expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledWith({
@@ -358,17 +374,17 @@ describe("browser control server", () => {
       cfgEvaluateEnabled = false;
       const base = await startServerAndBase();
 
-      const waitRes = (await postJson(`${base}/act`, {
+      const waitRes = await postJson(`${base}/act`, {
         kind: "wait",
         fn: "() => window.ready === true",
-      })) as { error?: string };
+      });
       expect(waitRes.error).toContain("browser.evaluateEnabled=false");
       expect(pwMocks.waitForViaPlaywright).not.toHaveBeenCalled();
 
-      const res = (await postJson(`${base}/act`, {
+      const res = await postJson(`${base}/act`, {
         kind: "evaluate",
         fn: "() => 1",
-      })) as { error?: string };
+      });
 
       expect(res.error).toContain("browser.evaluateEnabled=false");
       expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
@@ -441,17 +457,14 @@ describe("browser control server", () => {
     expect(consoleRes.ok).toBe(true);
     expect(Array.isArray(consoleRes.messages)).toBe(true);
 
-    const pdf = (await postJson(`${base}/pdf`, {})) as {
-      ok: boolean;
-      path?: string;
-    };
+    const pdf = await postJson(`${base}/pdf`, {});
     expect(pdf.ok).toBe(true);
     expect(typeof pdf.path).toBe("string");
 
-    const shot = (await postJson(`${base}/screenshot`, {
+    const shot = await postJson(`${base}/screenshot`, {
       element: "body",
       type: "jpeg",
-    })) as { ok: boolean; path?: string };
+    });
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
   });

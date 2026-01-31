@@ -92,7 +92,9 @@ export async function prepareSlackMessage(params: {
 
   const isBotMessage = Boolean(message.bot_id);
   if (isBotMessage) {
-    if (message.user && ctx.botUserId && message.user === ctx.botUserId) return null;
+    if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
+      return null;
+    }
     if (!allowBots) {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
       return null;
@@ -337,7 +339,9 @@ export async function prepareSlackMessage(params: {
     maxBytes: ctx.mediaMaxBytes,
   });
   const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
-  if (!rawBody) return null;
+  if (!rawBody) {
+    return null;
+  }
 
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const ackReactionValue = ackReaction ?? "";
@@ -552,7 +556,9 @@ export async function prepareSlackMessage(params: {
   });
 
   const replyTarget = ctxPayload.To ?? undefined;
-  if (!replyTarget) return null;
+  if (!replyTarget) {
+    return null;
+  }
 
   if (shouldLogVerbose()) {
     logVerbose(`slack inbound: channel=${message.channel} from=${slackFrom} preview="${preview}"`);

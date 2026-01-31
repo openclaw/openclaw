@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
@@ -44,9 +44,13 @@ async function runCliEntry(params: {
   url: string;
   config?: LinkToolsConfig;
 }): Promise<string | null> {
-  if ((params.entry.type ?? "cli") !== "cli") return null;
+  if ((params.entry.type ?? "cli") !== "cli") {
+    return null;
+  }
   const command = params.entry.command.trim();
-  if (!command) return null;
+  if (!command) {
+    return null;
+  }
   const args = params.entry.args ?? [];
   const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
   const templCtx = {
@@ -84,7 +88,9 @@ async function runLinkEntries(params: {
         url: params.url,
         config: params.config,
       });
-      if (output) return output;
+      if (output) {
+        return output;
+      }
     } catch (err) {
       lastError = err;
       if (shouldLogVerbose()) {
@@ -99,12 +105,14 @@ async function runLinkEntries(params: {
 }
 
 export async function runLinkUnderstanding(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   ctx: MsgContext;
   message?: string;
 }): Promise<LinkUnderstandingResult> {
   const config = params.cfg.tools?.links;
-  if (!config || config.enabled === false) return { urls: [], outputs: [] };
+  if (!config || config.enabled === false) {
+    return { urls: [], outputs: [] };
+  }
 
   const scopeDecision = resolveScopeDecision({ config, ctx: params.ctx });
   if (scopeDecision === "deny") {
@@ -116,10 +124,14 @@ export async function runLinkUnderstanding(params: {
 
   const message = params.message ?? params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body;
   const links = extractLinksFromMessage(message ?? "", { maxLinks: config?.maxLinks });
-  if (links.length === 0) return { urls: [], outputs: [] };
+  if (links.length === 0) {
+    return { urls: [], outputs: [] };
+  }
 
   const entries = config?.models ?? [];
-  if (entries.length === 0) return { urls: links, outputs: [] };
+  if (entries.length === 0) {
+    return { urls: links, outputs: [] };
+  }
 
   const outputs: string[] = [];
   for (const url of links) {
@@ -129,7 +141,9 @@ export async function runLinkUnderstanding(params: {
       url,
       config,
     });
-    if (output) outputs.push(output);
+    if (output) {
+      outputs.push(output);
+    }
   }
 
   return { urls: links, outputs };

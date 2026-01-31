@@ -65,7 +65,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
         }
         // Fallback to first allowFrom entry
         // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
-        return { ok: true, to: allowList[0]! };
+        return { ok: true, to: allowList[0] };
       }
 
       // For explicit mode, accept any valid channel name
@@ -75,7 +75,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     // No target provided, use allowFrom fallback
     if (allowList.length > 0) {
       // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
-      return { ok: true, to: allowList[0]! };
+      return { ok: true, to: allowList[0] };
     }
 
     // No target and no allowFrom - error
@@ -99,7 +99,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    *
    * @example
    * const result = await twitchOutbound.sendText({
-   *   cfg: moltbotConfig,
+   *   cfg: openclawConfig,
    *   to: "#mychannel",
    *   text: "Hello Twitch!",
    *   accountId: "default",
@@ -159,7 +159,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    *
    * @example
    * const result = await twitchOutbound.sendMedia({
-   *   cfg: moltbotConfig,
+   *   cfg: openclawConfig,
    *   to: "#mychannel",
    *   text: "Check this out!",
    *   mediaUrl: "https://example.com/image.png",

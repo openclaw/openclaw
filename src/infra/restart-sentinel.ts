@@ -56,7 +56,7 @@ const SENTINEL_FILENAME = "restart-sentinel.json";
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string {
-  return `Run: ${formatCliCommand("moltbot doctor --non-interactive", env)}`;
+  return `Run: ${formatCliCommand("openclaw doctor --non-interactive", env)}`;
 }
 
 export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -102,7 +102,9 @@ export async function consumeRestartSentinel(
 ): Promise<RestartSentinel | null> {
   const filePath = resolveRestartSentinelPath(env);
   const parsed = await readRestartSentinel(env);
-  if (!parsed) return null;
+  if (!parsed) {
+    return null;
+  }
   await fs.unlink(filePath).catch(() => {});
   return parsed;
 }
@@ -119,8 +121,12 @@ export function summarizeRestartSentinel(payload: RestartSentinelPayload): strin
 }
 
 export function trimLogTail(input?: string | null, maxChars = 8000) {
-  if (!input) return null;
+  if (!input) {
+    return null;
+  }
   const text = input.trimEnd();
-  if (text.length <= maxChars) return text;
+  if (text.length <= maxChars) {
+    return text;
+  }
   return `…${text.slice(text.length - maxChars)}`;
 }

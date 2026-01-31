@@ -24,13 +24,17 @@ const DEFAULT_MAX_LINES = 17;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
 function countLines(text: string) {
-  if (!text) return 0;
+  if (!text) {
+    return 0;
+  }
   return text.split("\n").length;
 }
 
 function parseFenceLine(line: string): OpenFence | null {
   const match = line.match(FENCE_RE);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const indent = match[1] ?? "";
   const marker = match[2] ?? "";
   return {
@@ -46,10 +50,16 @@ function closeFenceLine(openFence: OpenFence) {
 }
 
 function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
-  if (!openFence) return text;
+  if (!openFence) {
+    return text;
+  }
   const closeLine = closeFenceLine(openFence);
-  if (!text) return closeLine;
-  if (!text.endsWith("\n")) return `${text}\n${closeLine}`;
+  if (!text) {
+    return closeLine;
+  }
+  if (!text.endsWith("\n")) {
+    return `${text}\n${closeLine}`;
+  }
   return `${text}${closeLine}`;
 }
 
@@ -59,7 +69,9 @@ function splitLongLine(
   opts: { preserveWhitespace: boolean },
 ): string[] {
   const limit = Math.max(1, Math.floor(maxChars));
-  if (line.length <= limit) return [line];
+  if (line.length <= limit) {
+    return [line];
+  }
   const out: string[] = [];
   let remaining = line;
   while (remaining.length > limit) {
@@ -76,12 +88,16 @@ function splitLongLine(
         break;
       }
     }
-    if (breakIdx <= 0) breakIdx = limit;
+    if (breakIdx <= 0) {
+      breakIdx = limit;
+    }
     out.push(remaining.slice(0, breakIdx));
     // Keep the separator for the next segment so words don't get glued together.
     remaining = remaining.slice(breakIdx);
   }
-  if (remaining.length) out.push(remaining);
+  if (remaining.length) {
+    out.push(remaining);
+  }
   return out;
 }
 
@@ -94,10 +110,14 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
 
   const body = text ?? "";
-  if (!body) return [];
+  if (!body) {
+    return [];
+  }
 
   const alreadyOk = body.length <= maxChars && countLines(body) <= maxLines;
-  if (alreadyOk) return [body];
+  if (alreadyOk) {
+    return [body];
+  }
 
   const lines = body.split("\n");
   const chunks: string[] = [];
@@ -107,9 +127,13 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   let openFence: OpenFence | null = null;
 
   const flush = () => {
-    if (!current) return;
+    if (!current) {
+      return;
+    }
     const payload = closeFenceIfNeeded(current, openFence);
-    if (payload.trim().length) chunks.push(payload);
+    if (payload.trim().length) {
+      chunks.push(payload);
+    }
     current = "";
     currentLines = 0;
     if (openFence) {
@@ -162,7 +186,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
 
       if (current.length > 0) {
         current += addition;
-        if (!isLineContinuation) currentLines += 1;
+        if (!isLineContinuation) {
+          currentLines += 1;
+        }
       } else {
         current = segment;
         currentLines = 1;
@@ -174,7 +200,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
 
   if (current.length) {
     const payload = closeFenceIfNeeded(current, openFence);
-    if (payload.trim().length) chunks.push(payload);
+    if (payload.trim().length) {
+      chunks.push(payload);
+    }
   }
 
   return rebalanceReasoningItalics(text, chunks);
@@ -210,11 +238,15 @@ export function chunkDiscordTextWithMode(
 // each chunk and reopen at the start of the next so every chunk renders
 // consistently.
 function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
-  if (chunks.length <= 1) return chunks;
+  if (chunks.length <= 1) {
+    return chunks;
+  }
 
   const opensWithReasoningItalics =
     source.startsWith("Reasoning:\n_") && source.trimEnd().endsWith("_");
-  if (!opensWithReasoningItalics) return chunks;
+  if (!opensWithReasoningItalics) {
+    return chunks;
+  }
 
   const adjusted = [...chunks];
   for (let i = 0; i < adjusted.length; i++) {
@@ -227,7 +259,9 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
       adjusted[i] = `${current}_`;
     }
 
-    if (isLast) break;
+    if (isLast) {
+      break;
+    }
 
     // Re-open italics on the next chunk if needed.
     const next = adjusted[i + 1];

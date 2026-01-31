@@ -4,7 +4,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { getChannelMessageAdapter } from "./channel-adapters.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
@@ -39,16 +39,26 @@ function resolveContextGuardTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
 ): string | undefined {
-  if (!CONTEXT_GUARDED_ACTIONS.has(action)) return undefined;
-
-  if (action === "thread-reply" || action === "thread-create") {
-    if (typeof params.channelId === "string") return params.channelId;
-    if (typeof params.to === "string") return params.to;
+  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
     return undefined;
   }
 
-  if (typeof params.to === "string") return params.to;
-  if (typeof params.channelId === "string") return params.channelId;
+  if (action === "thread-reply" || action === "thread-create") {
+    if (typeof params.channelId === "string") {
+      return params.channelId;
+    }
+    if (typeof params.to === "string") {
+      return params.to;
+    }
+    return undefined;
+  }
+
+  if (typeof params.to === "string") {
+    return params.to;
+  }
+  if (typeof params.channelId === "string") {
+    return params.channelId;
+  }
   return undefined;
 }
 
@@ -62,10 +72,14 @@ function isCrossContextTarget(params: {
   toolContext?: ChannelThreadingToolContext;
 }): boolean {
   const currentTarget = params.toolContext?.currentChannelId?.trim();
-  if (!currentTarget) return false;
+  if (!currentTarget) {
+    return false;
+  }
   const normalizedTarget = normalizeTarget(params.channel, params.target);
   const normalizedCurrent = normalizeTarget(params.channel, currentTarget);
-  if (!normalizedTarget || !normalizedCurrent) return false;
+  if (!normalizedTarget || !normalizedCurrent) {
+    return false;
+  }
   return normalizedTarget !== normalizedCurrent;
 }
 
@@ -74,13 +88,19 @@ export function enforceCrossContextPolicy(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
 }): void {
   const currentTarget = params.toolContext?.currentChannelId?.trim();
-  if (!currentTarget) return;
-  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) return;
+  if (!currentTarget) {
+    return;
+  }
+  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
+    return;
+  }
 
-  if (params.cfg.tools?.message?.allowCrossContextSend) return;
+  if (params.cfg.tools?.message?.allowCrossContextSend) {
+    return;
+  }
 
   const currentProvider = params.toolContext?.currentChannelProvider;
   const allowWithinProvider =
@@ -97,10 +117,14 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  if (allowWithinProvider) return;
+  if (allowWithinProvider) {
+    return;
+  }
 
   const target = resolveContextGuardTarget(params.action, params.args);
-  if (!target) return;
+  if (!target) {
+    return;
+  }
 
   if (!isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })) {
     return;
@@ -112,19 +136,27 @@ export function enforceCrossContextPolicy(params: {
 }
 
 export async function buildCrossContextDecoration(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: ChannelId;
   target: string;
   toolContext?: ChannelThreadingToolContext;
   accountId?: string | null;
 }): Promise<CrossContextDecoration | null> {
-  if (!params.toolContext?.currentChannelId) return null;
+  if (!params.toolContext?.currentChannelId) {
+    return null;
+  }
   // Skip decoration for direct tool sends (agent composing, not forwarding)
-  if (params.toolContext.skipCrossContextDecoration) return null;
-  if (!isCrossContextTarget(params)) return null;
+  if (params.toolContext.skipCrossContextDecoration) {
+    return null;
+  }
+  if (!isCrossContextTarget(params)) {
+    return null;
+  }
 
   const markerConfig = params.cfg.tools?.message?.crossContext?.marker;
-  if (markerConfig?.enabled === false) return null;
+  if (markerConfig?.enabled === false) {
+    return null;
+  }
 
   const currentName =
     (await lookupDirectoryDisplay({

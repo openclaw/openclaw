@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
@@ -27,7 +27,7 @@ export type EmbeddingProviderResult = {
 };
 
 export type EmbeddingProviderOptions = {
-  config: MoltbotConfig;
+  config: OpenClawConfig;
   agentDir?: string;
   provider: "openai" | "local" | "gemini" | "auto";
   remote?: {
@@ -47,8 +47,12 @@ const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma
 
 function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
   const modelPath = options.local?.modelPath?.trim();
-  if (!modelPath) return false;
-  if (/^(hf:|https?:)/i.test(modelPath)) return false;
+  if (!modelPath) {
+    return false;
+  }
+  if (/^(hf:|https?:)/i.test(modelPath)) {
+    return false;
+  }
   const resolved = resolveUserPath(modelPath);
   try {
     return fsSync.statSync(resolved).isFile();
@@ -95,14 +99,14 @@ async function createLocalEmbeddingProvider(
     embedQuery: async (text) => {
       const ctx = await ensureContext();
       const embedding = await ctx.getEmbeddingFor(text);
-      return Array.from(embedding.vector) as number[];
+      return Array.from(embedding.vector);
     },
     embedBatch: async (texts) => {
       const ctx = await ensureContext();
       const embeddings = await Promise.all(
         texts.map(async (text) => {
           const embedding = await ctx.getEmbeddingFor(text);
-          return Array.from(embedding.vector) as number[];
+          return Array.from(embedding.vector);
         }),
       );
       return embeddings;
@@ -155,7 +159,7 @@ export async function createEmbeddingProvider(
           missingKeyErrors.push(message);
           continue;
         }
-        throw new Error(message);
+        throw new Error(message, { cause: err });
       }
     }
 
@@ -181,20 +185,28 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        throw new Error(`${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`);
+        // oxlint-disable-next-line preserve-caught-error
+        throw new Error(
+          `${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`,
+          { cause: fallbackErr },
+        );
       }
     }
-    throw new Error(reason);
+    throw new Error(reason, { cause: primaryErr });
   }
 }
 
 function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    return err.message;
+  }
   return String(err);
 }
 
 function isNodeLlamaCppMissing(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
+  if (!(err instanceof Error)) {
+    return false;
+  }
   const code = (err as Error & { code?: unknown }).code;
   if (code === "ERR_MODULE_NOT_FOUND") {
     return err.message.includes("node-llama-cpp");
@@ -216,7 +228,7 @@ function formatLocalSetupError(err: unknown): string {
     "To enable local embeddings:",
     "1) Use Node 22 LTS (recommended for installs/updates)",
     missing
-      ? "2) Reinstall Moltbot (this should install node-llama-cpp): npm i -g moltbot@latest"
+      ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
     'Or set agents.defaults.memorySearch.provider = "openai" (remote).',

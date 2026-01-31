@@ -1,6 +1,6 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLineBot } from "./bot.js";
@@ -33,7 +33,7 @@ export interface MonitorLineProviderOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
-  config: MoltbotConfig;
+  config: OpenClawConfig;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
   webhookUrl?: string;
@@ -105,7 +105,9 @@ function startLineLoadingKeepalive(params: {
   let stopped = false;
 
   const trigger = () => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     void showLoadingAnimation(params.userId, {
       accountId: params.accountId,
       loadingSeconds,
@@ -116,7 +118,9 @@ function startLineLoadingKeepalive(params: {
   const timer = setInterval(trigger, intervalMs);
 
   return () => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     stopped = true;
     clearInterval(timer);
   };
@@ -154,7 +158,9 @@ export async function monitorLineProvider(
     runtime,
     config,
     onMessage: async (ctx) => {
-      if (!ctx) return;
+      if (!ctx) {
+        return;
+      }
 
       const { ctxPayload, replyToken, route } = ctx;
 

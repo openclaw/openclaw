@@ -1,55 +1,56 @@
 ---
-summary: "Moltbot plugins/extensions: discovery, config, and safety"
+summary: "OpenClaw plugins/extensions: discovery, config, and safety"
 read_when:
   - Adding or modifying plugins/extensions
   - Documenting plugin install or load rules
 ---
+
 # Plugins (Extensions)
 
 ## Quick start (new to plugins?)
 
-A plugin is just a **small code module** that extends Moltbot with extra
+A plugin is just a **small code module** that extends OpenClaw with extra
 features (commands, tools, and Gateway RPC).
 
 Most of the time, you’ll use plugins when you want a feature that’s not built
-into core Moltbot yet (or you want to keep optional features out of your main
+into core OpenClaw yet (or you want to keep optional features out of your main
 install).
 
 Fast path:
 
-1) See what’s already loaded:
+1. See what’s already loaded:
 
 ```bash
-moltbot plugins list
+openclaw plugins list
 ```
 
-2) Install an official plugin (example: Voice Call):
+2. Install an official plugin (example: Voice Call):
 
 ```bash
-moltbot plugins install @moltbot/voice-call
+openclaw plugins install @openclaw/voice-call
 ```
 
-3) Restart the Gateway, then configure under `plugins.entries.<id>.config`.
+3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 
 ## Available plugins (official)
 
-- Microsoft Teams is plugin-only as of 2026.1.15; install `@moltbot/msteams` if you use Teams.
+- Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
 - Memory (Core) — bundled memory search plugin (enabled by default via `plugins.slots.memory`)
 - Memory (LanceDB) — bundled long-term memory plugin (auto-recall/capture; set `plugins.slots.memory = "memory-lancedb"`)
-- [Voice Call](/plugins/voice-call) — `@moltbot/voice-call`
-- [Zalo Personal](/plugins/zalouser) — `@moltbot/zalouser`
-- [Matrix](/channels/matrix) — `@moltbot/matrix`
-- [Nostr](/channels/nostr) — `@moltbot/nostr`
-- [Zalo](/channels/zalo) — `@moltbot/zalo`
-- [Microsoft Teams](/channels/msteams) — `@moltbot/msteams`
+- [Voice Call](/plugins/voice-call) — `@openclaw/voice-call`
+- [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
+- [Matrix](/channels/matrix) — `@openclaw/matrix`
+- [Nostr](/channels/nostr) — `@openclaw/nostr`
+- [Zalo](/channels/zalo) — `@openclaw/zalo`
+- [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
 - Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
 - Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
-Moltbot plugins are **TypeScript modules** loaded at runtime via jiti. **Config
+OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti. **Config
 validation does not execute plugin code**; it uses the plugin manifest and JSON
 Schema instead. See [Plugin manifest](/plugins/manifest).
 
@@ -73,39 +74,44 @@ Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
-  text: "Hello from Moltbot",
+  text: "Hello from OpenClaw",
   cfg: api.config,
 });
 ```
 
 Notes:
+
 - Uses core `messages.tts` configuration (OpenAI or ElevenLabs).
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - Edge TTS is not supported for telephony.
 
 ## Discovery & precedence
 
-Moltbot scans, in order:
+OpenClaw scans, in order:
 
-1) Config paths
+1. Config paths
+
 - `plugins.load.paths` (file or directory)
 
-2) Workspace extensions
-- `<workspace>/.clawdbot/extensions/*.ts`
-- `<workspace>/.clawdbot/extensions/*/index.ts`
+2. Workspace extensions
 
-3) Global extensions
-- `~/.clawdbot/extensions/*.ts`
-- `~/.clawdbot/extensions/*/index.ts`
+- `<workspace>/.openclaw/extensions/*.ts`
+- `<workspace>/.openclaw/extensions/*/index.ts`
 
-4) Bundled extensions (shipped with Moltbot, **disabled by default**)
-- `<moltbot>/extensions/*`
+3. Global extensions
+
+- `~/.openclaw/extensions/*.ts`
+- `~/.openclaw/extensions/*/index.ts`
+
+4. Bundled extensions (shipped with OpenClaw, **disabled by default**)
+
+- `<openclaw>/extensions/*`
 
 Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
-or `moltbot plugins enable <id>`. Installed plugins are enabled by default,
+or `openclaw plugins enable <id>`. Installed plugins are enabled by default,
 but can be disabled the same way.
 
-Each plugin must include a `moltbot.plugin.json` file in its root. If a path
+Each plugin must include a `openclaw.plugin.json` file in its root. If a path
 points at a file, the plugin root is the file's directory and must contain the
 manifest.
 
@@ -114,12 +120,12 @@ wins and lower-precedence copies are ignored.
 
 ### Package packs
 
-A plugin directory may include a `package.json` with `moltbot.extensions`:
+A plugin directory may include a `package.json` with `openclaw.extensions`:
 
 ```json
 {
   "name": "my-pack",
-  "moltbot": {
+  "openclaw": {
     "extensions": ["./src/safety.ts", "./src/tools.ts"]
   }
 }
@@ -133,15 +139,15 @@ If your plugin imports npm deps, install them in that directory so
 
 ### Channel catalog metadata
 
-Channel plugins can advertise onboarding metadata via `moltbot.channel` and
-install hints via `moltbot.install`. This keeps the core catalog data-free.
+Channel plugins can advertise onboarding metadata via `openclaw.channel` and
+install hints via `openclaw.install`. This keeps the core catalog data-free.
 
 Example:
 
 ```json
 {
-  "name": "@moltbot/nextcloud-talk",
-  "moltbot": {
+  "name": "@openclaw/nextcloud-talk",
+  "openclaw": {
     "extensions": ["./index.ts"],
     "channel": {
       "id": "nextcloud-talk",
@@ -154,7 +160,7 @@ Example:
       "aliases": ["nc-talk", "nc"]
     },
     "install": {
-      "npmSpec": "@moltbot/nextcloud-talk",
+      "npmSpec": "@openclaw/nextcloud-talk",
       "localPath": "extensions/nextcloud-talk",
       "defaultChoice": "npm"
     }
@@ -162,15 +168,16 @@ Example:
 }
 ```
 
-Moltbot can also merge **external channel catalogs** (for example, an MPM
+OpenClaw can also merge **external channel catalogs** (for example, an MPM
 registry export). Drop a JSON file at one of:
-- `~/.clawdbot/mpm/plugins.json`
-- `~/.clawdbot/mpm/catalog.json`
-- `~/.clawdbot/plugins/catalog.json`
 
-Or point `CLAWDBOT_PLUGIN_CATALOG_PATHS` (or `CLAWDBOT_MPM_CATALOG_PATHS`) at
+- `~/.openclaw/mpm/plugins.json`
+- `~/.openclaw/mpm/catalog.json`
+- `~/.openclaw/plugins/catalog.json`
+
+Or point `OPENCLAW_PLUGIN_CATALOG_PATHS` (or `OPENCLAW_MPM_CATALOG_PATHS`) at
 one or more JSON files (comma/semicolon/`PATH`-delimited). Each file should
-contain `{ "entries": [ { "name": "@scope/pkg", "moltbot": { "channel": {...}, "install": {...} } } ] }`.
+contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
 
 ## Plugin IDs
 
@@ -179,7 +186,7 @@ Default plugin ids:
 - Package packs: `package.json` `name`
 - Standalone file: file base name (`~/.../voice-call.ts` → `voice-call`)
 
-If a plugin exports `id`, Moltbot uses it but warns when it doesn’t match the
+If a plugin exports `id`, OpenClaw uses it but warns when it doesn’t match the
 configured id.
 
 ## Config
@@ -192,13 +199,14 @@ configured id.
     deny: ["untrusted-plugin"],
     load: { paths: ["~/Projects/oss/voice-call-extension"] },
     entries: {
-      "voice-call": { enabled: true, config: { provider: "twilio" } }
-    }
-  }
+      "voice-call": { enabled: true, config: { provider: "twilio" } },
+    },
+  },
 }
 ```
 
 Fields:
+
 - `enabled`: master toggle (default: true)
 - `allow`: allowlist (optional)
 - `deny`: denylist (optional; deny wins)
@@ -208,11 +216,12 @@ Fields:
 Config changes **require a gateway restart**.
 
 Validation rules (strict):
+
 - Unknown plugin ids in `entries`, `allow`, `deny`, or `slots` are **errors**.
 - Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
   the channel id.
 - Plugin config is validated using the JSON Schema embedded in
-  `moltbot.plugin.json` (`configSchema`).
+  `openclaw.plugin.json` (`configSchema`).
 - If a plugin is disabled, its config is preserved and a **warning** is emitted.
 
 ## Plugin slots (exclusive categories)
@@ -224,9 +233,9 @@ Some plugin categories are **exclusive** (only one active at a time). Use
 {
   plugins: {
     slots: {
-      memory: "memory-core" // or "none" to disable memory plugins
-    }
-  }
+      memory: "memory-core", // or "none" to disable memory plugins
+    },
+  },
 }
 ```
 
@@ -237,7 +246,7 @@ are disabled with diagnostics.
 
 The Control UI uses `config.schema` (JSON Schema + `uiHints`) to render better forms.
 
-Moltbot augments `uiHints` at runtime based on discovered plugins:
+OpenClaw augments `uiHints` at runtime based on discovered plugins:
 
 - Adds per-plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
 - Merges optional plugin-provided config field hints under:
@@ -269,24 +278,24 @@ Example:
 ## CLI
 
 ```bash
-moltbot plugins list
-moltbot plugins info <id>
-moltbot plugins install <path>                 # copy a local file/dir into ~/.clawdbot/extensions/<id>
-moltbot plugins install ./extensions/voice-call # relative path ok
-moltbot plugins install ./plugin.tgz           # install from a local tarball
-moltbot plugins install ./plugin.zip           # install from a local zip
-moltbot plugins install -l ./extensions/voice-call # link (no copy) for dev
-moltbot plugins install @moltbot/voice-call # install from npm
-moltbot plugins update <id>
-moltbot plugins update --all
-moltbot plugins enable <id>
-moltbot plugins disable <id>
-moltbot plugins doctor
+openclaw plugins list
+openclaw plugins info <id>
+openclaw plugins install <path>                 # copy a local file/dir into ~/.openclaw/extensions/<id>
+openclaw plugins install ./extensions/voice-call # relative path ok
+openclaw plugins install ./plugin.tgz           # install from a local tarball
+openclaw plugins install ./plugin.zip           # install from a local zip
+openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
+openclaw plugins install @openclaw/voice-call # install from npm
+openclaw plugins update <id>
+openclaw plugins update --all
+openclaw plugins enable <id>
+openclaw plugins disable <id>
+openclaw plugins doctor
 ```
 
 `plugins update` only works for npm installs tracked under `plugins.installs`.
 
-Plugins may also register their own top‑level commands (example: `moltbot voicecall`).
+Plugins may also register their own top‑level commands (example: `openclaw voicecall`).
 
 ## Plugin API (overview)
 
@@ -303,7 +312,7 @@ event-driven automation without a separate hook pack install.
 ### Example
 
 ```
-import { registerPluginHooksFromDir } from "moltbot/plugin-sdk";
+import { registerPluginHooksFromDir } from "openclaw/plugin-sdk";
 
 export default function register(api) {
   registerPluginHooksFromDir(api, "./hooks");
@@ -311,20 +320,21 @@ export default function register(api) {
 ```
 
 Notes:
+
 - Hook directories follow the normal hook structure (`HOOK.md` + `handler.ts`).
 - Hook eligibility rules still apply (OS/bins/env/config requirements).
-- Plugin-managed hooks show up in `moltbot hooks list` with `plugin:<id>`.
-- You cannot enable/disable plugin-managed hooks via `moltbot hooks`; enable/disable the plugin instead.
+- Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
+- You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
 
 ## Provider plugins (model auth)
 
 Plugins can register **model provider auth** flows so users can run OAuth or
-API-key setup inside Moltbot (no external scripts needed).
+API-key setup inside OpenClaw (no external scripts needed).
 
 Register a provider via `api.registerProvider(...)`. Each provider exposes one
 or more auth methods (OAuth, API key, device code, etc.). These methods power:
 
-- `moltbot models auth login --provider <id> [--method <id>]`
+- `openclaw models auth login --provider <id> [--method <id>]`
 
 Example:
 
@@ -361,6 +371,7 @@ api.registerProvider({
 ```
 
 Notes:
+
 - `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
   `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
 - Return `configPatch` when you need to add default models or provider config.
@@ -387,7 +398,9 @@ const myChannel = {
   config: {
     listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
     resolveAccount: (cfg, accountId) =>
-      (cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? { accountId }),
+      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
+        accountId,
+      },
   },
   outbound: {
     deliveryMode: "direct",
@@ -401,6 +414,7 @@ export default function (api) {
 ```
 
 Notes:
+
 - Put config under `channels.<id>` (not `plugins.entries`).
 - `meta.label` is used for labels in CLI/UI lists.
 - `meta.aliases` adds alternate ids for normalization and CLI inputs.
@@ -412,27 +426,32 @@ Notes:
 Use this when you want a **new chat surface** (a “messaging channel”), not a model provider.
 Model provider docs live under `/providers/*`.
 
-1) Pick an id + config shape
+1. Pick an id + config shape
+
 - All channel config lives under `channels.<id>`.
 - Prefer `channels.<id>.accounts.<accountId>` for multi‑account setups.
 
-2) Define the channel metadata
+2. Define the channel metadata
+
 - `meta.label`, `meta.selectionLabel`, `meta.docsPath`, `meta.blurb` control CLI/UI lists.
 - `meta.docsPath` should point at a docs page like `/channels/<id>`.
 - `meta.preferOver` lets a plugin replace another channel (auto-enable prefers it).
 - `meta.detailLabel` and `meta.systemImage` are used by UIs for detail text/icons.
 
-3) Implement the required adapters
+3. Implement the required adapters
+
 - `config.listAccountIds` + `config.resolveAccount`
 - `capabilities` (chat types, media, threads, etc.)
 - `outbound.deliveryMode` + `outbound.sendText` (for basic send)
 
-4) Add optional adapters as needed
+4. Add optional adapters as needed
+
 - `setup` (wizard), `security` (DM policy), `status` (health/diagnostics)
 - `gateway` (start/stop/login), `mentions`, `threading`, `streaming`
 - `actions` (message actions), `commands` (native command behavior)
 
-5) Register the channel in your plugin
+5. Register the channel in your plugin
+
 - `api.registerChannel({ plugin })`
 
 Minimal config example:
@@ -442,10 +461,10 @@ Minimal config example:
   channels: {
     acmechat: {
       accounts: {
-        default: { token: "ACME_TOKEN", enabled: true }
-      }
-    }
-  }
+        default: { token: "ACME_TOKEN", enabled: true },
+      },
+    },
+  },
 }
 ```
 
@@ -466,7 +485,9 @@ const plugin = {
   config: {
     listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
     resolveAccount: (cfg, accountId) =>
-      (cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? { accountId }),
+      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
+        accountId,
+      },
   },
   outbound: {
     deliveryMode: "direct",
@@ -503,11 +524,14 @@ export default function (api) {
 
 ```ts
 export default function (api) {
-  api.registerCli(({ program }) => {
-    program.command("mycmd").action(() => {
-      console.log("Hello");
-    });
-  }, { commands: ["mycmd"] });
+  api.registerCli(
+    ({ program }) => {
+      program.command("mycmd").action(() => {
+        console.log("Hello");
+      });
+    },
+    { commands: ["mycmd"] },
+  );
 }
 ```
 
@@ -536,7 +560,7 @@ Command handler context:
 - `isAuthorizedSender`: Whether the sender is an authorized user
 - `args`: Arguments passed after the command (if `acceptsArgs: true`)
 - `commandBody`: The full command text
-- `config`: The current Moltbot config
+- `config`: The current OpenClaw config
 
 Command options:
 
@@ -563,6 +587,7 @@ api.registerCommand({
 ```
 
 Notes:
+
 - Plugin commands are processed **before** built-in commands and the AI agent
 - Commands are registered globally and work across all channels
 - Command names are case-insensitive (`/MyStatus` matches `/mystatus`)
@@ -598,14 +623,14 @@ it’s present in your workspace/managed skills locations.
 
 Recommended packaging:
 
-- Main package: `moltbot` (this repo)
-- Plugins: separate npm packages under `@moltbot/*` (example: `@moltbot/voice-call`)
+- Main package: `openclaw` (this repo)
+- Plugins: separate npm packages under `@openclaw/*` (example: `@openclaw/voice-call`)
 
 Publishing contract:
 
-- Plugin `package.json` must include `moltbot.extensions` with one or more entry files.
+- Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
 - Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
-- `moltbot plugins install <npm-spec>` uses `npm pack`, extracts into `~/.clawdbot/extensions/<id>/`, and enables it in config.
+- `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
 - Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.
 
 ## Example plugin: Voice Call
@@ -614,7 +639,7 @@ This repo includes a voice‑call plugin (Twilio or log fallback):
 
 - Source: `extensions/voice-call`
 - Skill: `skills/voice-call`
-- CLI: `moltbot voicecall start|status`
+- CLI: `openclaw voicecall start|status`
 - Tool: `voice_call`
 - RPC: `voicecall.start`, `voicecall.status`
 - Config (twilio): `provider: "twilio"` + `twilio.accountSid/authToken/from` (optional `statusCallbackUrl`, `twimlUrl`)
@@ -635,4 +660,4 @@ Plugins run in-process with the Gateway. Treat them as trusted code:
 Plugins can (and should) ship tests:
 
 - In-repo plugins can keep Vitest tests under `src/**` (example: `src/plugins/voice-call.plugin.test.ts`).
-- Separately published plugins should run their own CI (lint/build/test) and validate `moltbot.extensions` points at the built entrypoint (`dist/index.js`).
+- Separately published plugins should run their own CI (lint/build/test) and validate `openclaw.extensions` points at the built entrypoint (`dist/index.js`).

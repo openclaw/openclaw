@@ -53,12 +53,14 @@ export async function buildNodeInstallPlan(params: {
   if (params.runtime === "node") {
     const systemNode = await resolveSystemNodeInfo({ env: params.env });
     const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-    if (warning) params.warn?.(warning, "Node daemon runtime");
+    if (warning) {
+      params.warn?.(warning, "Node daemon runtime");
+    }
   }
 
   const environment = buildNodeServiceEnvironment({ env: params.env });
   const description = formatNodeServiceDescription({
-    version: environment.CLAWDBOT_SERVICE_VERSION,
+    version: environment.OPENCLAW_SERVICE_VERSION,
   });
 
   return { programArguments, workingDirectory, environment, description };

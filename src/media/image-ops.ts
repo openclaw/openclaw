@@ -17,8 +17,8 @@ function isBun(): boolean {
 
 function prefersSips(): boolean {
   return (
-    process.env.CLAWDBOT_IMAGE_BACKEND === "sips" ||
-    (process.env.CLAWDBOT_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
+    process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
+    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
   );
 }
 
@@ -69,7 +69,9 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
         buffer[exifStart + 5] === 0
       ) {
         const tiffStart = exifStart + 6;
-        if (buffer.length < tiffStart + 8) return null;
+        if (buffer.length < tiffStart + 8) {
+          return null;
+        }
 
         // Check byte order (II = little-endian, MM = big-endian)
         const byteOrder = buffer.toString("ascii", tiffStart, tiffStart + 2);
@@ -83,12 +85,16 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
         // Read IFD0 offset
         const ifd0Offset = readU32(tiffStart + 4);
         const ifd0Start = tiffStart + ifd0Offset;
-        if (buffer.length < ifd0Start + 2) return null;
+        if (buffer.length < ifd0Start + 2) {
+          return null;
+        }
 
         const numEntries = readU16(ifd0Start);
         for (let i = 0; i < numEntries; i++) {
           const entryOffset = ifd0Start + 2 + i * 12;
-          if (buffer.length < entryOffset + 12) break;
+          if (buffer.length < entryOffset + 12) {
+            break;
+          }
 
           const tag = readU16(entryOffset);
           // Orientation tag = 0x0112
@@ -120,7 +126,7 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
 }
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-img-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-img-"));
   try {
     return await fn(dir);
   } finally {
@@ -142,11 +148,17 @@ async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | n
     );
     const w = stdout.match(/pixelWidth:\s*([0-9]+)/);
     const h = stdout.match(/pixelHeight:\s*([0-9]+)/);
-    if (!w?.[1] || !h?.[1]) return null;
+    if (!w?.[1] || !h?.[1]) {
+      return null;
+    }
     const width = Number.parseInt(w[1], 10);
     const height = Number.parseInt(h[1], 10);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-    if (width <= 0 || height <= 0) return null;
+    if (!Number.isFinite(width) || !Number.isFinite(height)) {
+      return null;
+    }
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
     return { width, height };
   });
 }
@@ -204,8 +216,12 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
     const meta = await sharp(buffer).metadata();
     const width = Number(meta.width ?? 0);
     const height = Number(meta.height ?? 0);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-    if (width <= 0 || height <= 0) return null;
+    if (!Number.isFinite(width) || !Number.isFinite(height)) {
+      return null;
+    }
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
     return { width, height };
   } catch {
     return null;
@@ -350,7 +366,7 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
     // Check if the image has an alpha channel
     // PNG color types with alpha: 4 (grayscale+alpha), 6 (RGBA)
     // Sharp reports this via 'channels' (4 = RGBA) or 'hasAlpha'
-    return meta.hasAlpha === true || meta.channels === 4;
+    return meta.hasAlpha || meta.channels === 4;
   } catch {
     return false;
   }

@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { LEGACY_MANIFEST_KEY } from "../compat/legacy-names.js";
-import type { MoltbotConfig } from "../config/config.js";
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { shouldIncludeHook } from "./config.js";
 import {
   parseFrontmatter,
-  resolveMoltbotMetadata,
+  resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
 import type {
@@ -22,13 +22,11 @@ import type {
 
 type HookPackageManifest = {
   name?: string;
-  moltbot?: { hooks?: string[] };
-  [LEGACY_MANIFEST_KEY]?: { hooks?: string[] };
-};
+} & Partial<Record<typeof MANIFEST_KEY, { hooks?: string[] }>>;
 
 function filterHookEntries(
   entries: HookEntry[],
-  config?: MoltbotConfig,
+  config?: OpenClawConfig,
   eligibility?: HookEligibilityContext,
 ): HookEntry[] {
   return entries.filter((entry) => shouldIncludeHook({ entry, config, eligibility }));
@@ -36,7 +34,9 @@ function filterHookEntries(
 
 function readHookPackageManifest(dir: string): HookPackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  if (!fs.existsSync(manifestPath)) return null;
+  if (!fs.existsSync(manifestPath)) {
+    return null;
+  }
   try {
     const raw = fs.readFileSync(manifestPath, "utf-8");
     return JSON.parse(raw) as HookPackageManifest;
@@ -46,8 +46,10 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {
-  const raw = manifest.moltbot?.hooks ?? manifest[LEGACY_MANIFEST_KEY]?.hooks;
-  if (!Array.isArray(raw)) return [];
+  const raw = manifest[MANIFEST_KEY]?.hooks;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
@@ -58,7 +60,9 @@ function loadHookFromDir(params: {
   nameHint?: string;
 }): Hook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
-  if (!fs.existsSync(hookMdPath)) return null;
+  if (!fs.existsSync(hookMdPath)) {
+    return null;
+  }
 
   try {
     const content = fs.readFileSync(hookMdPath, "utf-8");
@@ -85,7 +89,7 @@ function loadHookFromDir(params: {
     return {
       name,
       description,
-      source: params.source as Hook["source"],
+      source: params.source,
       pluginId: params.pluginId,
       filePath: hookMdPath,
       baseDir: params.hookDir,
@@ -103,16 +107,22 @@ function loadHookFromDir(params: {
 function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: string }): Hook[] {
   const { dir, source, pluginId } = params;
 
-  if (!fs.existsSync(dir)) return [];
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
 
   const stat = fs.statSync(dir);
-  if (!stat.isDirectory()) return [];
+  if (!stat.isDirectory()) {
+    return [];
+  }
 
   const hooks: Hook[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory()) {
+      continue;
+    }
 
     const hookDir = path.join(dir, entry.name);
     const manifest = readHookPackageManifest(hookDir);
@@ -127,7 +137,9 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
           pluginId,
           nameHint: path.basename(resolvedHookDir),
         });
-        if (hook) hooks.push(hook);
+        if (hook) {
+          hooks.push(hook);
+        }
       }
       continue;
     }
@@ -138,7 +150,9 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
       pluginId,
       nameHint: entry.name,
     });
-    if (hook) hooks.push(hook);
+    if (hook) {
+      hooks.push(hook);
+    }
   }
 
   return hooks;
@@ -169,7 +183,7 @@ export function loadHookEntriesFromDir(params: {
         pluginId: params.pluginId,
       },
       frontmatter,
-      metadata: resolveMoltbotMetadata(frontmatter),
+      metadata: resolveOpenClawMetadata(frontmatter),
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
     return entry;
@@ -179,7 +193,7 @@ export function loadHookEntriesFromDir(params: {
 function loadHookEntries(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: OpenClawConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
   },
@@ -195,31 +209,39 @@ function loadHookEntries(
   const bundledHooks = bundledHooksDir
     ? loadHooksFromDir({
         dir: bundledHooksDir,
-        source: "moltbot-bundled",
+        source: "openclaw-bundled",
       })
     : [];
   const extraHooks = extraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadHooksFromDir({
       dir: resolved,
-      source: "moltbot-workspace", // Extra dirs treated as workspace
+      source: "openclaw-workspace", // Extra dirs treated as workspace
     });
   });
   const managedHooks = loadHooksFromDir({
     dir: managedHooksDir,
-    source: "moltbot-managed",
+    source: "openclaw-managed",
   });
   const workspaceHooks = loadHooksFromDir({
     dir: workspaceHooksDir,
-    source: "moltbot-workspace",
+    source: "openclaw-workspace",
   });
 
   const merged = new Map<string, Hook>();
   // Precedence: extra < bundled < managed < workspace (workspace wins)
-  for (const hook of extraHooks) merged.set(hook.name, hook);
-  for (const hook of bundledHooks) merged.set(hook.name, hook);
-  for (const hook of managedHooks) merged.set(hook.name, hook);
-  for (const hook of workspaceHooks) merged.set(hook.name, hook);
+  for (const hook of extraHooks) {
+    merged.set(hook.name, hook);
+  }
+  for (const hook of bundledHooks) {
+    merged.set(hook.name, hook);
+  }
+  for (const hook of managedHooks) {
+    merged.set(hook.name, hook);
+  }
+  for (const hook of workspaceHooks) {
+    merged.set(hook.name, hook);
+  }
 
   return Array.from(merged.values()).map((hook) => {
     let frontmatter: ParsedHookFrontmatter = {};
@@ -232,7 +254,7 @@ function loadHookEntries(
     return {
       hook,
       frontmatter,
-      metadata: resolveMoltbotMetadata(frontmatter),
+      metadata: resolveOpenClawMetadata(frontmatter),
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
   });
@@ -241,7 +263,7 @@ function loadHookEntries(
 export function buildWorkspaceHookSnapshot(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: OpenClawConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
     entries?: HookEntry[];
@@ -265,7 +287,7 @@ export function buildWorkspaceHookSnapshot(
 export function loadWorkspaceHookEntries(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: OpenClawConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
   },

@@ -52,7 +52,9 @@ export async function ensureConfigReady(params: {
       : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
-  if (!invalid) return;
+  if (!invalid) {
+    return;
+  }
 
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
@@ -71,7 +73,9 @@ export async function ensureConfigReady(params: {
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   params.runtime.error("");
-  params.runtime.error(`${muted("Run:")} ${commandText(formatCliCommand("moltbot doctor --fix"))}`);
+  params.runtime.error(
+    `${muted("Run:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
+  );
   if (!allowInvalid) {
     params.runtime.exit(1);
   }

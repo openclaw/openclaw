@@ -30,7 +30,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     hints?: string[];
     warnings?: string[];
   }) => {
-    if (!json) return;
+    if (!json) {
+      return;
+    }
     emitDaemonActionJson({ action: "install", ...payload });
   };
   const fail = (message: string) => {
@@ -84,7 +86,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
         defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("moltbot gateway install --force")}`,
+          `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
         );
       }
       return;
@@ -94,11 +96,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: opts.token || cfg.gateway?.auth?.token || process.env.CLAWDBOT_GATEWAY_TOKEN,
+    token: opts.token || cfg.gateway?.auth?.token || process.env.OPENCLAW_GATEWAY_TOKEN,
     runtime: runtimeRaw,
     warn: (message) => {
-      if (json) warnings.push(message);
-      else defaultRuntime.log(message);
+      if (json) {
+        warnings.push(message);
+      } else {
+        defaultRuntime.log(message);
+      }
     },
     config: cfg,
   });

@@ -36,9 +36,13 @@ export function hasWebCredsSync(authDir: string): boolean {
 
 function readCredsJsonRaw(filePath: string): string | null {
   try {
-    if (!fsSync.existsSync(filePath)) return null;
+    if (!fsSync.existsSync(filePath)) {
+      return null;
+    }
     const stats = fsSync.statSync(filePath);
-    if (!stats.isFile() || stats.size <= 1) return null;
+    if (!stats.isFile() || stats.size <= 1) {
+      return null;
+    }
     return fsSync.readFileSync(filePath, "utf-8");
   } catch {
     return null;
@@ -58,7 +62,9 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     }
 
     const backupRaw = readCredsJsonRaw(backupPath);
-    if (!backupRaw) return;
+    if (!backupRaw) {
+      return;
+    }
 
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
@@ -80,7 +86,9 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
   }
   try {
     const stats = await fs.stat(credsPath);
-    if (!stats.isFile() || stats.size <= 1) return false;
+    if (!stats.isFile() || stats.size <= 1) {
+      return false;
+    }
     const raw = await fs.readFile(credsPath, "utf-8");
     JSON.parse(raw);
     return true;
@@ -92,15 +100,25 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
 async function clearLegacyBaileysAuthState(authDir: string) {
   const entries = await fs.readdir(authDir, { withFileTypes: true });
   const shouldDelete = (name: string) => {
-    if (name === "oauth.json") return false;
-    if (name === "creds.json" || name === "creds.json.bak") return true;
-    if (!name.endsWith(".json")) return false;
+    if (name === "oauth.json") {
+      return false;
+    }
+    if (name === "creds.json" || name === "creds.json.bak") {
+      return true;
+    }
+    if (!name.endsWith(".json")) {
+      return false;
+    }
     return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
   };
   await Promise.all(
     entries.map(async (entry) => {
-      if (!entry.isFile()) return;
-      if (!shouldDelete(entry.name)) return;
+      if (!entry.isFile()) {
+        return;
+      }
+      if (!shouldDelete(entry.name)) {
+        return;
+      }
       await fs.rm(path.join(authDir, entry.name), { force: true });
     }),
   );
@@ -177,7 +195,7 @@ export async function pickWebChannel(
   const hasWeb = await webAuthExists(authDir);
   if (!hasWeb) {
     throw new Error(
-      `No WhatsApp Web session found. Run \`${formatCliCommand("moltbot channels login --channel whatsapp --verbose")}\` to link.`,
+      `No WhatsApp Web session found. Run \`${formatCliCommand("openclaw channels login --channel whatsapp --verbose")}\` to link.`,
     );
   }
   return choice;

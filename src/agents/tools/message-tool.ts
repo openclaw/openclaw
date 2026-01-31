@@ -9,7 +9,7 @@ import {
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
@@ -88,8 +88,12 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
       ),
     ),
   };
-  if (!options.includeButtons) delete props.buttons;
-  if (!options.includeCards) delete props.card;
+  if (!options.includeButtons) {
+    delete props.buttons;
+  }
+  if (!options.includeCards) {
+    delete props.card;
+  }
   return props;
 }
 
@@ -242,7 +246,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
@@ -250,7 +254,7 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
 };
 
-function buildMessageToolSchema(cfg: MoltbotConfig) {
+function buildMessageToolSchema(cfg: OpenClawConfig) {
   const actions = listChannelMessageActions(cfg);
   const includeButtons = supportsChannelMessageButtons(cfg);
   const includeCards = supportsChannelMessageCards(cfg);
@@ -262,7 +266,9 @@ function buildMessageToolSchema(cfg: MoltbotConfig) {
 
 function resolveAgentAccountId(value?: string): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   return normalizeAccountId(trimmed);
 }
 
@@ -272,9 +278,13 @@ function filterActionsForContext(params: {
   currentChannelId?: string;
 }): ChannelMessageActionName[] {
   const channel = normalizeMessageChannel(params.channel);
-  if (!channel || channel !== "bluebubbles") return params.actions;
+  if (!channel || channel !== "bluebubbles") {
+    return params.actions;
+  }
   const currentChannelId = params.currentChannelId?.trim();
-  if (!currentChannelId) return params.actions;
+  if (!currentChannelId) {
+    return params.actions;
+  }
   const normalizedTarget =
     normalizeTargetForProvider(channel, currentChannelId) ?? currentChannelId;
   const lowered = normalizedTarget.trim().toLowerCase();
@@ -283,12 +293,14 @@ function filterActionsForContext(params: {
     lowered.startsWith("chat_id:") ||
     lowered.startsWith("chat_identifier:") ||
     lowered.startsWith("group:");
-  if (isGroupTarget) return params.actions;
+  if (isGroupTarget) {
+    return params.actions;
+  }
   return params.actions.filter((action) => !BLUEBUBBLES_GROUP_ACTIONS.has(action));
 }
 
 function buildMessageToolDescription(options?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   currentChannel?: string;
   currentChannelId?: string;
 }): string {
@@ -307,7 +319,7 @@ function buildMessageToolDescription(options?: {
     if (channelActions.length > 0) {
       // Always include "send" as a base action
       const allActions = new Set(["send", ...channelActions]);
-      const actionList = Array.from(allActions).sort().join(", ");
+      const actionList = Array.from(allActions).toSorted().join(", ");
       return `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
     }
   }
@@ -396,7 +408,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       });
 
       const toolResult = getToolResult(result);
-      if (toolResult) return toolResult;
+      if (toolResult) {
+        return toolResult;
+      }
       return jsonResult(result.payload);
     },
   };

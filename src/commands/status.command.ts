@@ -174,7 +174,9 @@ export async function statusCommand(
   if (opts.verbose) {
     const details = buildGatewayConnectionDetails();
     runtime.log(info("Gateway connection:"));
-    for (const line of details.message.split("\n")) runtime.log(`  ${line}`);
+    for (const line of details.message.split("\n")) {
+      runtime.log(`  ${line}`);
+    }
     runtime.log("");
   }
 
@@ -182,7 +184,9 @@ export async function statusCommand(
 
   const dashboard = (() => {
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
-    if (!controlUiEnabled) return "disabled";
+    if (!controlUiEnabled) {
+      return "disabled";
+    }
     const links = resolveControlUiLinks({
       port: resolveGatewayPort(cfg),
       bind: cfg.gateway?.bind,
@@ -236,12 +240,16 @@ export async function statusCommand(
     getNodeDaemonStatusSummary(),
   ]);
   const daemonValue = (() => {
-    if (daemon.installed === false) return `${daemon.label} not installed`;
+    if (daemon.installed === false) {
+      return `${daemon.label} not installed`;
+    }
     const installedPrefix = daemon.installed === true ? "installed · " : "";
     return `${daemon.label} ${installedPrefix}${daemon.loadedText}${daemon.runtimeShort ? ` · ${daemon.runtimeShort}` : ""}`;
   })();
   const nodeDaemonValue = (() => {
-    if (nodeDaemon.installed === false) return `${nodeDaemon.label} not installed`;
+    if (nodeDaemon.installed === false) {
+      return `${nodeDaemon.label} not installed`;
+    }
     const installedPrefix = nodeDaemon.installed === true ? "installed · " : "";
     return `${nodeDaemon.label} ${installedPrefix}${nodeDaemon.loadedText}${nodeDaemon.runtimeShort ? ` · ${nodeDaemon.runtimeShort}` : ""}`;
   })();
@@ -258,7 +266,9 @@ export async function statusCommand(
   const heartbeatValue = (() => {
     const parts = summary.heartbeat.agents
       .map((agent) => {
-        if (!agent.enabled || !agent.everyMs) return `disabled (${agent.agentId})`;
+        if (!agent.enabled || !agent.everyMs) {
+          return `disabled (${agent.agentId})`;
+        }
         const everyLabel = agent.every;
         return `${everyLabel} (${agent.agentId})`;
       })
@@ -283,8 +293,12 @@ export async function statusCommand(
     const parts: string[] = [];
     const dirtySuffix = memory.dirty ? ` · ${warn("dirty")}` : "";
     parts.push(`${memory.files} files · ${memory.chunks} chunks${dirtySuffix}`);
-    if (memory.sources?.length) parts.push(`sources ${memory.sources.join(", ")}`);
-    if (memoryPlugin.slot) parts.push(`plugin ${memoryPlugin.slot}`);
+    if (memory.sources?.length) {
+      parts.push(`sources ${memory.sources.join(", ")}`);
+    }
+    if (memoryPlugin.slot) {
+      parts.push(`plugin ${memoryPlugin.slot}`);
+    }
     const colorByTone = (tone: Tone, text: string) =>
       tone === "ok" ? ok(text) : tone === "warn" ? warn(text) : muted(text);
     const vector = memory.vector;
@@ -363,7 +377,7 @@ export async function statusCommand(
     },
   ];
 
-  runtime.log(theme.heading("Moltbot status"));
+  runtime.log(theme.heading("OpenClaw status"));
   runtime.log("");
   runtime.log(theme.heading("Overview"));
   runtime.log(
@@ -395,25 +409,33 @@ export async function statusCommand(
     runtime.log(theme.muted("No critical or warn findings detected."));
   } else {
     const severityLabel = (sev: "critical" | "warn" | "info") => {
-      if (sev === "critical") return theme.error("CRITICAL");
-      if (sev === "warn") return theme.warn("WARN");
+      if (sev === "critical") {
+        return theme.error("CRITICAL");
+      }
+      if (sev === "warn") {
+        return theme.warn("WARN");
+      }
       return theme.muted("INFO");
     };
     const sevRank = (sev: "critical" | "warn" | "info") =>
       sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
-    const sorted = [...importantFindings].sort((a, b) => sevRank(a.severity) - sevRank(b.severity));
+    const sorted = [...importantFindings].toSorted(
+      (a, b) => sevRank(a.severity) - sevRank(b.severity),
+    );
     const shown = sorted.slice(0, 6);
     for (const f of shown) {
       runtime.log(`  ${severityLabel(f.severity)} ${f.title}`);
       runtime.log(`    ${shortenText(f.detail.replaceAll("\n", " "), 160)}`);
-      if (f.remediation?.trim()) runtime.log(`    ${theme.muted(`Fix: ${f.remediation.trim()}`)}`);
+      if (f.remediation?.trim()) {
+        runtime.log(`    ${theme.muted(`Fix: ${f.remediation.trim()}`)}`);
+      }
     }
     if (sorted.length > shown.length) {
       runtime.log(theme.muted(`… +${sorted.length - shown.length} more`));
     }
   }
-  runtime.log(theme.muted(`Full report: ${formatCliCommand("moltbot security audit")}`));
-  runtime.log(theme.muted(`Deep probe: ${formatCliCommand("moltbot security audit --deep")}`));
+  runtime.log(theme.muted(`Full report: ${formatCliCommand("openclaw security audit")}`));
+  runtime.log(theme.muted(`Deep probe: ${formatCliCommand("openclaw security audit --deep")}`));
 
   runtime.log("");
   runtime.log(theme.heading("Channels"));
@@ -422,8 +444,11 @@ export async function statusCommand(
     for (const issue of channelIssues) {
       const key = issue.channel;
       const list = map.get(key);
-      if (list) list.push(issue);
-      else map.set(key, [issue]);
+      if (list) {
+        list.push(issue);
+      } else {
+        map.set(key, [issue]);
+      }
     }
     return map;
   })();
@@ -522,17 +547,31 @@ export async function statusCommand(
 
     for (const line of formatHealthChannelLines(health, { accountMode: "all" })) {
       const colon = line.indexOf(":");
-      if (colon === -1) continue;
+      if (colon === -1) {
+        continue;
+      }
       const item = line.slice(0, colon).trim();
       const detail = line.slice(colon + 1).trim();
       const normalized = detail.toLowerCase();
       const status = (() => {
-        if (normalized.startsWith("ok")) return ok("OK");
-        if (normalized.startsWith("failed")) return warn("WARN");
-        if (normalized.startsWith("not configured")) return muted("OFF");
-        if (normalized.startsWith("configured")) return ok("OK");
-        if (normalized.startsWith("linked")) return ok("LINKED");
-        if (normalized.startsWith("not linked")) return warn("UNLINKED");
+        if (normalized.startsWith("ok")) {
+          return ok("OK");
+        }
+        if (normalized.startsWith("failed")) {
+          return warn("WARN");
+        }
+        if (normalized.startsWith("not configured")) {
+          return muted("OFF");
+        }
+        if (normalized.startsWith("configured")) {
+          return ok("OK");
+        }
+        if (normalized.startsWith("linked")) {
+          return ok("LINKED");
+        }
+        if (normalized.startsWith("not linked")) {
+          return warn("UNLINKED");
+        }
         return warn("WARN");
       })();
       rows.push({ Item: item, Status: status, Detail: detail });
@@ -560,8 +599,8 @@ export async function statusCommand(
   }
 
   runtime.log("");
-  runtime.log("FAQ: https://docs.molt.bot/faq");
-  runtime.log("Troubleshooting: https://docs.molt.bot/troubleshooting");
+  runtime.log("FAQ: https://docs.openclaw.ai/faq");
+  runtime.log("Troubleshooting: https://docs.openclaw.ai/troubleshooting");
   runtime.log("");
   const updateHint = formatUpdateAvailableHint(update);
   if (updateHint) {
@@ -569,11 +608,11 @@ export async function statusCommand(
     runtime.log("");
   }
   runtime.log("Next steps:");
-  runtime.log(`  Need to share?      ${formatCliCommand("moltbot status --all")}`);
-  runtime.log(`  Need to debug live? ${formatCliCommand("moltbot logs --follow")}`);
+  runtime.log(`  Need to share?      ${formatCliCommand("openclaw status --all")}`);
+  runtime.log(`  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`);
   if (gatewayReachable) {
-    runtime.log(`  Need to test channels? ${formatCliCommand("moltbot status --deep")}`);
+    runtime.log(`  Need to test channels? ${formatCliCommand("openclaw status --deep")}`);
   } else {
-    runtime.log(`  Fix reachability first: ${formatCliCommand("moltbot gateway probe")}`);
+    runtime.log(`  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);
   }
 }

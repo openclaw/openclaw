@@ -5,11 +5,14 @@ import {
   parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import {
-  type MoltbotConfig,
+  type OpenClawConfig,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../../config/config.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -18,21 +21,31 @@ export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean 
 };
 
 export const formatTokenK = (value?: number | null) => {
-  if (!value || !Number.isFinite(value)) return "-";
-  if (value < 1024) return `${Math.round(value)}`;
+  if (!value || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value < 1024) {
+    return `${Math.round(value)}`;
+  }
   return `${Math.round(value / 1024)}k`;
 };
 
 export const formatMs = (value?: number | null) => {
-  if (value === null || value === undefined) return "-";
-  if (!Number.isFinite(value)) return "-";
-  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
   return `${Math.round(value / 100) / 10}s`;
 };
 
 export async function updateConfig(
-  mutator: (cfg: MoltbotConfig) => MoltbotConfig,
-): Promise<MoltbotConfig> {
+  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
@@ -43,7 +56,7 @@ export async function updateConfig(
   return next;
 }
 
-export function resolveModelTarget(params: { raw: string; cfg: MoltbotConfig }): {
+export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig }): {
   provider: string;
   model: string;
 } {
@@ -62,12 +75,14 @@ export function resolveModelTarget(params: { raw: string; cfg: MoltbotConfig }):
   return resolved.ref;
 }
 
-export function buildAllowlistSet(cfg: MoltbotConfig): Set<string> {
+export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
   const allowed = new Set<string>();
   const models = cfg.agents?.defaults?.models ?? {};
   for (const raw of Object.keys(models)) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
-    if (!parsed) continue;
+    if (!parsed) {
+      continue;
+    }
     allowed.add(modelKey(parsed.provider, parsed.model));
   }
   return allowed;
@@ -75,11 +90,31 @@ export function buildAllowlistSet(cfg: MoltbotConfig): Set<string> {
 
 export function normalizeAlias(alias: string): string {
   const trimmed = alias.trim();
-  if (!trimmed) throw new Error("Alias cannot be empty.");
+  if (!trimmed) {
+    throw new Error("Alias cannot be empty.");
+  }
   if (!/^[A-Za-z0-9_.:-]+$/.test(trimmed)) {
     throw new Error("Alias must use letters, numbers, dots, underscores, colons, or dashes.");
   }
   return trimmed;
+}
+
+export function resolveKnownAgentId(params: {
+  cfg: OpenClawConfig;
+  rawAgentId?: string | null;
+}): string | undefined {
+  const raw = params.rawAgentId?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const agentId = normalizeAgentId(raw);
+  const knownAgents = listAgentIds(params.cfg);
+  if (!knownAgents.includes(agentId)) {
+    throw new Error(
+      `Unknown agent id "${raw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+    );
+  }
+  return agentId;
 }
 
 export { modelKey };

@@ -116,7 +116,7 @@ export function createProcessTool(
             exitSignal: s.exitSignal ?? undefined,
           }));
         const lines = [...running, ...finished]
-          .sort((a, b) => b.startedAt - a.startedAt)
+          .toSorted((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
             return `${s.sessionId} ${pad(s.status, 9)} ${formatDuration(s.runtimeMs)} :: ${label}`;
@@ -337,8 +337,11 @@ export function createProcessTool(
           }
           await new Promise<void>((resolve, reject) => {
             stdin.write(params.data ?? "", (err) => {
-              if (err) reject(err);
-              else resolve();
+              if (err) {
+                reject(err);
+              } else {
+                resolve();
+              }
             });
           });
           if (params.eof) {
@@ -414,8 +417,11 @@ export function createProcessTool(
           }
           await new Promise<void>((resolve, reject) => {
             stdin.write(data, (err) => {
-              if (err) reject(err);
-              else resolve();
+              if (err) {
+                reject(err);
+              } else {
+                resolve();
+              }
             });
           });
           return {
@@ -472,8 +478,11 @@ export function createProcessTool(
           }
           await new Promise<void>((resolve, reject) => {
             stdin.write("\r", (err) => {
-              if (err) reject(err);
-              else resolve();
+              if (err) {
+                reject(err);
+              } else {
+                resolve();
+              }
             });
           });
           return {
@@ -540,8 +549,11 @@ export function createProcessTool(
           }
           await new Promise<void>((resolve, reject) => {
             stdin.write(payload, (err) => {
-              if (err) reject(err);
-              else resolve();
+              if (err) {
+                reject(err);
+              } else {
+                resolve();
+              }
             });
           });
           return {

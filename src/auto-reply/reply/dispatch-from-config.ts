@@ -1,4 +1,4 @@
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -29,7 +29,9 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
     ...(Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : []),
   ].filter(Boolean) as string[];
   const types = rawTypes.map((type) => normalizeMediaType(type));
-  if (types.some((type) => type === "audio" || type.startsWith("audio/"))) return true;
+  if (types.some((type) => type === "audio" || type.startsWith("audio/"))) {
+    return true;
+  }
 
   const body =
     typeof ctx.BodyForCommands === "string"
@@ -42,19 +44,25 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
             ? ctx.Body
             : "";
   const trimmed = body.trim();
-  if (!trimmed) return false;
-  if (AUDIO_PLACEHOLDER_RE.test(trimmed)) return true;
+  if (!trimmed) {
+    return false;
+  }
+  if (AUDIO_PLACEHOLDER_RE.test(trimmed)) {
+    return true;
+  }
   return AUDIO_HEADER_RE.test(trimmed);
 };
 
 const resolveSessionTtsAuto = (
   ctx: FinalizedMsgContext,
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
 ): string | undefined => {
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
-  if (!sessionKey) return undefined;
+  if (!sessionKey) {
+    return undefined;
+  }
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
@@ -73,7 +81,7 @@ export type DispatchFromConfigResult = {
 
 export async function dispatchReplyFromConfig(params: {
   ctx: FinalizedMsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof getReplyFromConfig;
@@ -94,7 +102,9 @@ export async function dispatchReplyFromConfig(params: {
       error?: string;
     },
   ) => {
-    if (!diagnosticsEnabled) return;
+    if (!diagnosticsEnabled) {
+      return;
+    }
     logMessageProcessed({
       channel,
       chatId,
@@ -108,7 +118,9 @@ export async function dispatchReplyFromConfig(params: {
   };
 
   const markProcessing = () => {
-    if (!canTrackSession || !sessionKey) return;
+    if (!canTrackSession || !sessionKey) {
+      return;
+    }
     logMessageQueued({ sessionKey, channel, source: "dispatch" });
     logSessionStateChange({
       sessionKey,
@@ -118,7 +130,9 @@ export async function dispatchReplyFromConfig(params: {
   };
 
   const markIdle = (reason: string) => {
-    if (!canTrackSession || !sessionKey) return;
+    if (!canTrackSession || !sessionKey) {
+      return;
+    }
     logSessionStateChange({
       sessionKey,
       state: "idle",
@@ -210,8 +224,12 @@ export async function dispatchReplyFromConfig(params: {
   ): Promise<void> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
-    if (!originatingChannel || !originatingTo) return;
-    if (abortSignal?.aborted) return;
+    if (!originatingChannel || !originatingTo) {
+      return;
+    }
+    if (abortSignal?.aborted) {
+      return;
+    }
     const result = await routeReply({
       payload,
       channel: originatingChannel,
@@ -249,7 +267,9 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
         });
         queuedFinal = result.ok;
-        if (result.ok) routedFinalCount += 1;
+        if (result.ok) {
+          routedFinalCount += 1;
+        }
         if (!result.ok) {
           logVerbose(
             `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
@@ -357,7 +377,9 @@ export async function dispatchReplyFromConfig(params: {
           );
         }
         queuedFinal = result.ok || queuedFinal;
-        if (result.ok) routedFinalCount += 1;
+        if (result.ok) {
+          routedFinalCount += 1;
+        }
       } else {
         queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
       }
@@ -400,7 +422,9 @@ export async function dispatchReplyFromConfig(params: {
               cfg,
             });
             queuedFinal = result.ok || queuedFinal;
-            if (result.ok) routedFinalCount += 1;
+            if (result.ok) {
+              routedFinalCount += 1;
+            }
             if (!result.ok) {
               logVerbose(
                 `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,

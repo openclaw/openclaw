@@ -34,7 +34,9 @@ function resolveCredentials(
 
 function normalizeRoomToken(to: string): string {
   const trimmed = to.trim();
-  if (!trimmed) throw new Error("Room token is required for Nextcloud Talk sends");
+  if (!trimmed) {
+    throw new Error("Room token is required for Nextcloud Talk sends");
+  }
 
   let normalized = trimmed;
   if (normalized.startsWith("nextcloud-talk:")) {
@@ -47,7 +49,9 @@ function normalizeRoomToken(to: string): string {
     normalized = normalized.slice("room:".length).trim();
   }
 
-  if (!normalized) throw new Error("Room token is required for Nextcloud Talk sends");
+  if (!normalized) {
+    throw new Error("Room token is required for Nextcloud Talk sends");
+  }
   return normalized;
 }
 

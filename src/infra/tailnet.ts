@@ -7,9 +7,13 @@ export type TailnetAddresses = {
 
 function isTailnetIPv4(address: string): boolean {
   const parts = address.split(".");
-  if (parts.length !== 4) return false;
+  if (parts.length !== 4) {
+    return false;
+  }
   const octets = parts.map((p) => Number.parseInt(p, 10));
-  if (octets.some((n) => !Number.isFinite(n) || n < 0 || n > 255)) return false;
+  if (octets.some((n) => !Number.isFinite(n) || n < 0 || n > 255)) {
+    return false;
+  }
 
   // Tailscale IPv4 range: 100.64.0.0/10
   // https://tailscale.com/kb/1015/100.x-addresses
@@ -30,13 +34,23 @@ export function listTailnetAddresses(): TailnetAddresses {
 
   const ifaces = os.networkInterfaces();
   for (const entries of Object.values(ifaces)) {
-    if (!entries) continue;
+    if (!entries) {
+      continue;
+    }
     for (const e of entries) {
-      if (!e || e.internal) continue;
+      if (!e || e.internal) {
+        continue;
+      }
       const address = e.address?.trim();
-      if (!address) continue;
-      if (isTailnetIPv4(address)) ipv4.push(address);
-      if (isTailnetIPv6(address)) ipv6.push(address);
+      if (!address) {
+        continue;
+      }
+      if (isTailnetIPv4(address)) {
+        ipv4.push(address);
+      }
+      if (isTailnetIPv6(address)) {
+        ipv6.push(address);
+      }
     }
   }
 

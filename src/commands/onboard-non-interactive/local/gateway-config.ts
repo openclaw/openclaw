@@ -1,15 +1,15 @@
-import type { MoltbotConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
-  nextConfig: MoltbotConfig;
+  nextConfig: OpenClawConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   defaultPort: number;
 }): {
-  nextConfig: MoltbotConfig;
+  nextConfig: OpenClawConfig;
   port: number;
   bind: string;
   authMode: string;
@@ -41,14 +41,20 @@ export function applyNonInteractiveGatewayConfig(params: {
   // Tighten config to safe combos:
   // - If Tailscale is on, force loopback bind (the tunnel handles external access).
   // - If using Tailscale Funnel, require password auth.
-  if (tailscaleMode !== "off" && bind !== "loopback") bind = "loopback";
-  if (tailscaleMode === "funnel" && authMode !== "password") authMode = "password";
+  if (tailscaleMode !== "off" && bind !== "loopback") {
+    bind = "loopback";
+  }
+  if (tailscaleMode === "funnel" && authMode !== "password") {
+    authMode = "password";
+  }
 
   let nextConfig = params.nextConfig;
   let gatewayToken = opts.gatewayToken?.trim() || undefined;
 
   if (authMode === "token") {
-    if (!gatewayToken) gatewayToken = randomToken();
+    if (!gatewayToken) {
+      gatewayToken = randomToken();
+    }
     nextConfig = {
       ...nextConfig,
       gateway: {

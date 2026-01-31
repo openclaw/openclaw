@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveMoltbotPackageRoot } from "./moltbot-root.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { VERSION } from "../version.js";
@@ -19,8 +19,12 @@ const UPDATE_CHECK_FILENAME = "update-check.json";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
-  if (allowInTests) return false;
-  if (process.env.VITEST || process.env.NODE_ENV === "test") return true;
+  if (allowInTests) {
+    return false;
+  }
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return true;
+  }
   return false;
 }
 
@@ -45,19 +49,27 @@ export async function runGatewayUpdateCheck(params: {
   isNixMode: boolean;
   allowInTests?: boolean;
 }): Promise<void> {
-  if (shouldSkipCheck(Boolean(params.allowInTests))) return;
-  if (params.isNixMode) return;
-  if (params.cfg.update?.checkOnStart === false) return;
+  if (shouldSkipCheck(Boolean(params.allowInTests))) {
+    return;
+  }
+  if (params.isNixMode) {
+    return;
+  }
+  if (params.cfg.update?.checkOnStart === false) {
+    return;
+  }
 
   const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
   const state = await readState(statePath);
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
   if (lastCheckedAt && Number.isFinite(lastCheckedAt)) {
-    if (now - lastCheckedAt < UPDATE_CHECK_INTERVAL_MS) return;
+    if (now - lastCheckedAt < UPDATE_CHECK_INTERVAL_MS) {
+      return;
+    }
   }
 
-  const root = await resolveMoltbotPackageRoot({
+  const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
@@ -93,7 +105,7 @@ export async function runGatewayUpdateCheck(params: {
       state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
     if (shouldNotify) {
       params.log.info(
-        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("moltbot update")}`,
+        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("openclaw update")}`,
       );
       nextState.lastNotifiedVersion = resolved.version;
       nextState.lastNotifiedTag = tag;

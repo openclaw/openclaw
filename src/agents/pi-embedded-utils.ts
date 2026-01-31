@@ -11,8 +11,12 @@ import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
  * - </minimax:tool_call> closing tags
  */
 export function stripMinimaxToolCallXml(text: string): string {
-  if (!text) return text;
-  if (!/minimax:tool_call/i.test(text)) return text;
+  if (!text) {
+    return text;
+  }
+  if (!/minimax:tool_call/i.test(text)) {
+    return text;
+  }
 
   // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
   let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
@@ -30,8 +34,12 @@ export function stripMinimaxToolCallXml(text: string): string {
  * not be shown to users.
  */
 export function stripDowngradedToolCallText(text: string): string {
-  if (!text) return text;
-  if (!/\[Tool (?:Call|Result)/i.test(text)) return text;
+  if (!text) {
+    return text;
+  }
+  if (!/\[Tool (?:Call|Result)/i.test(text)) {
+    return text;
+  }
 
   const consumeJsonish = (
     input: string,
@@ -52,7 +60,9 @@ export function stripDowngradedToolCallText(text: string): string {
       }
       break;
     }
-    if (index >= input.length) return null;
+    if (index >= input.length) {
+      return null;
+    }
 
     const startChar = input[index];
     if (startChar === "{" || startChar === "[") {
@@ -81,7 +91,9 @@ export function stripDowngradedToolCallText(text: string): string {
         }
         if (ch === "}" || ch === "]") {
           depth -= 1;
-          if (depth === 0) return i + 1;
+          if (depth === 0) {
+            return i + 1;
+          }
         }
       }
       return null;
@@ -99,7 +111,9 @@ export function stripDowngradedToolCallText(text: string): string {
           escape = true;
           continue;
         }
-        if (ch === '"') return i + 1;
+        if (ch === '"') {
+          return i + 1;
+        }
       }
       return null;
     }
@@ -117,7 +131,9 @@ export function stripDowngradedToolCallText(text: string): string {
     let cursor = 0;
     for (const match of input.matchAll(markerRe)) {
       const start = match.index ?? 0;
-      if (start < cursor) continue;
+      if (start < cursor) {
+        continue;
+      }
       result += input.slice(cursor, start);
       let index = start + match[0].length;
       while (index < input.length && (input[index] === " " || input[index] === "\t")) {
@@ -125,7 +141,9 @@ export function stripDowngradedToolCallText(text: string): string {
       }
       if (input[index] === "\r") {
         index += 1;
-        if (input[index] === "\n") index += 1;
+        if (input[index] === "\n") {
+          index += 1;
+        }
       } else if (input[index] === "\n") {
         index += 1;
       }
@@ -134,17 +152,27 @@ export function stripDowngradedToolCallText(text: string): string {
       }
       if (input.slice(index, index + 9).toLowerCase() === "arguments") {
         index += 9;
-        if (input[index] === ":") index += 1;
-        if (input[index] === " ") index += 1;
+        if (input[index] === ":") {
+          index += 1;
+        }
+        if (input[index] === " ") {
+          index += 1;
+        }
         const end = consumeJsonish(input, index, { allowLeadingNewlines: true });
-        if (end !== null) index = end;
+        if (end !== null) {
+          index = end;
+        }
       }
       if (
         (input[index] === "\n" || input[index] === "\r") &&
         (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
       ) {
-        if (input[index] === "\r") index += 1;
-        if (input[index] === "\n") index += 1;
+        if (input[index] === "\r") {
+          index += 1;
+        }
+        if (input[index] === "\n") {
+          index += 1;
+        }
       }
       cursor = index;
     }
@@ -172,7 +200,9 @@ export function stripThinkingTagsFromText(text: string): string {
 
 export function extractAssistantText(msg: AssistantMessage): string {
   const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
-    if (!block || typeof block !== "object") return false;
+    if (!block || typeof block !== "object") {
+      return false;
+    }
     const rec = block as Record<string, unknown>;
     return rec.type === "text" && typeof rec.text === "string";
   };
@@ -192,10 +222,14 @@ export function extractAssistantText(msg: AssistantMessage): string {
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {
-  if (!Array.isArray(msg.content)) return "";
+  if (!Array.isArray(msg.content)) {
+    return "";
+  }
   const blocks = msg.content
     .map((block) => {
-      if (!block || typeof block !== "object") return "";
+      if (!block || typeof block !== "object") {
+        return "";
+      }
       const record = block as unknown as Record<string, unknown>;
       if (record.type === "thinking" && typeof record.thinking === "string") {
         return record.thinking.trim();
@@ -208,7 +242,9 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
 
 export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
-  if (!trimmed) return "";
+  if (!trimmed) {
+    return "";
+  }
   // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
   // Keep the plain "Reasoning:" prefix so existing parsing/detection keeps working.
   // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
@@ -229,11 +265,17 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   // Avoid false positives: only treat it as structured thinking when it begins
   // with a think tag (common for local/OpenAI-compat providers that emulate
   // reasoning blocks via tags).
-  if (!trimmedStart.startsWith("<")) return null;
+  if (!trimmedStart.startsWith("<")) {
+    return null;
+  }
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
   const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  if (!openRe.test(trimmedStart)) return null;
-  if (!closeRe.test(text)) return null;
+  if (!openRe.test(trimmedStart)) {
+    return null;
+  }
+  if (!closeRe.test(text)) {
+    return null;
+  }
 
   const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let inThinking = false;
@@ -242,12 +284,16 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   const blocks: ThinkTaggedSplitBlock[] = [];
 
   const pushText = (value: string) => {
-    if (!value) return;
+    if (!value) {
+      return;
+    }
     blocks.push({ type: "text", text: value });
   };
   const pushThinking = (value: string) => {
     const cleaned = value.trim();
-    if (!cleaned) return;
+    if (!cleaned) {
+      return;
+    }
     blocks.push({ type: "thinking", thinking: cleaned });
   };
 
@@ -269,18 +315,26 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     }
   }
 
-  if (inThinking) return null;
+  if (inThinking) {
+    return null;
+  }
   pushText(text.slice(cursor));
 
   const hasThinking = blocks.some((b) => b.type === "thinking");
-  if (!hasThinking) return null;
+  if (!hasThinking) {
+    return null;
+  }
   return blocks;
 }
 
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
-  if (!Array.isArray(message.content)) return;
+  if (!Array.isArray(message.content)) {
+    return;
+  }
   const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
-  if (hasThinkingBlock) return;
+  if (hasThinkingBlock) {
+    return;
+  }
 
   const next: AssistantMessage["content"] = [];
   let changed = false;
@@ -301,17 +355,23 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
         next.push({ type: "thinking", thinking: part.thinking });
       } else if (part.type === "text") {
         const cleaned = part.text.trimStart();
-        if (cleaned) next.push({ type: "text", text: cleaned });
+        if (cleaned) {
+          next.push({ type: "text", text: cleaned });
+        }
       }
     }
   }
 
-  if (!changed) return;
+  if (!changed) {
+    return;
+  }
   message.content = next;
 }
 
 export function extractThinkingFromTaggedText(text: string): string {
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
   const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let result = "";
   let lastIndex = 0;
@@ -329,14 +389,20 @@ export function extractThinkingFromTaggedText(text: string): string {
 }
 
 export function extractThinkingFromTaggedStream(text: string): string {
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
   const closed = extractThinkingFromTaggedText(text);
-  if (closed) return closed;
+  if (closed) {
+    return closed;
+  }
 
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   const openMatches = [...text.matchAll(openRe)];
-  if (openMatches.length === 0) return "";
+  if (openMatches.length === 0) {
+    return "";
+  }
   const closeMatches = [...text.matchAll(closeRe)];
   const lastOpen = openMatches[openMatches.length - 1];
   const lastClose = closeMatches[closeMatches.length - 1];

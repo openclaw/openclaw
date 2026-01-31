@@ -12,7 +12,9 @@ export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
-    if (raw.startsWith("~")) return path.resolve(raw.replace("~", os.homedir()));
+    if (raw.startsWith("~")) {
+      return path.resolve(raw.replace("~", os.homedir()));
+    }
     return path.resolve(raw);
   }
   return DEFAULT_CRON_STORE_PATH;
@@ -21,7 +23,7 @@ export function resolveCronStorePath(storePath?: string) {
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
-    const parsed = JSON5.parse(raw) as Partial<CronStoreFile> | null;
+    const parsed = JSON5.parse(raw);
     const jobs = Array.isArray(parsed?.jobs) ? (parsed?.jobs as never[]) : [];
     return {
       version: 1,

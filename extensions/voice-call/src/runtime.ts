@@ -34,7 +34,9 @@ type Logger = {
 };
 
 function isLoopbackBind(bind: string | undefined): boolean {
-  if (!bind) return false;
+  if (!bind) {
+    return false;
+  }
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 
@@ -42,9 +44,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
     isLoopbackBind(config.serve?.bind) &&
-    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ||
-      config.tunnel?.allowNgrokFreeTier ||
-      false);
+    (config.tunnel?.allowNgrokFreeTierLoopbackBypass || config.tunnel?.allowNgrokFreeTier || false);
 
   switch (config.provider) {
     case "telnyx":
@@ -63,9 +63,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           allowNgrokFreeTierLoopbackBypass,
           publicUrl: config.publicUrl,
           skipVerification: config.skipSignatureVerification,
-          streamPath: config.streaming?.enabled
-            ? config.streaming.streamPath
-            : undefined,
+          streamPath: config.streaming?.enabled ? config.streaming.streamPath : undefined,
         },
       );
     case "plivo":
@@ -83,9 +81,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
     case "mock":
       return new MockProvider();
     default:
-      throw new Error(
-        `Unsupported voice-call provider: ${String(config.provider)}`,
-      );
+      throw new Error(`Unsupported voice-call provider: ${String(config.provider)}`);
   }
 }
 
@@ -106,9 +102,7 @@ export async function createVoiceCallRuntime(params: {
   const config = resolveVoiceCallConfig(rawConfig);
 
   if (!config.enabled) {
-    throw new Error(
-      "Voice call disabled. Enable the plugin entry in config.",
-    );
+    throw new Error("Voice call disabled. Enable the plugin entry in config.");
   }
 
   const validation = validateProviderConfig(config);
@@ -118,12 +112,7 @@ export async function createVoiceCallRuntime(params: {
 
   const provider = resolveProvider(config);
   const manager = new CallManager(config);
-  const webhookServer = new VoiceCallWebhookServer(
-    config,
-    manager,
-    provider,
-    coreConfig,
-  );
+  const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
 
   const localUrl = await webhookServer.start();
 
@@ -143,9 +132,7 @@ export async function createVoiceCallRuntime(params: {
       publicUrl = tunnelResult?.publicUrl ?? null;
     } catch (err) {
       log.error(
-        `[voice-call] Tunnel setup failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `[voice-call] Tunnel setup failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
