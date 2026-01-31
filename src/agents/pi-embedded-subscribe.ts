@@ -260,6 +260,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   ): string => {
     if (!text) return text;
 
+    // If reasoning is explicitly disabled, treat <think> tags as normal text (pass-through).
+    // This allows models like Kimi/DeepSeek to show their thinking process in the main chat
+    // when the client doesn't support a dedicated reasoning channel.
+    if (reasoningMode === "off") return text;
+
     const inlineStateStart = state.inlineCode ?? createInlineCodeState();
     const codeSpans = buildCodeSpanIndex(text, inlineStateStart);
 

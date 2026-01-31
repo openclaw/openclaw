@@ -171,12 +171,12 @@ export async function runPreparedReply(
   );
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
-        cfg,
-        sessionCtx,
-        sessionEntry,
-        defaultActivation,
-        silentToken: SILENT_REPLY_TOKEN,
-      })
+      cfg,
+      sessionCtx,
+      sessionEntry,
+      defaultActivation,
+      silentToken: SILENT_REPLY_TOKEN,
+    })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
   const extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
