@@ -51,6 +51,85 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+/**
+ * Categorize errors to provide better error messages to users.
+ * Returns error message, type, and optional hint for remediation.
+ */
+function categorizeError(err: unknown): {
+  message: string;
+  type: "model" | "tool" | "network" | "config" | "timeout" | "unknown";
+  hint?: string;
+} {
+  const message = err instanceof Error ? err.message : String(err);
+
+  // File system errors
+  if (message.includes("ENOENT") || message.includes("ENOTDIR")) {
+    return { message, type: "tool", hint: "File or directory not found" };
+  }
+  if (message.includes("EACCES") || message.includes("EPERM")) {
+    return { message, type: "tool", hint: "Permission denied" };
+  }
+  if (message.includes("EISDIR")) {
+    return { message, type: "tool", hint: "Expected file but found directory" };
+  }
+
+  // API/Model errors
+  if (message.includes("rate limit") || message.includes("429")) {
+    return { message, type: "model", hint: "Rate limit exceeded - retry in a few moments" };
+  }
+  if (
+    message.includes("401") ||
+    message.includes("unauthorized") ||
+    message.includes("authentication")
+  ) {
+    return { message, type: "config", hint: "Check API credentials and permissions" };
+  }
+  if (message.includes("403") || message.includes("forbidden")) {
+    return { message, type: "config", hint: "Access denied - check permissions" };
+  }
+  if (message.includes("400") || message.includes("invalid request")) {
+    return { message, type: "model", hint: "Invalid request parameters" };
+  }
+  if (message.includes("500") || message.includes("503")) {
+    return { message, type: "model", hint: "API service error - try again later" };
+  }
+  if (message.includes("quota") || message.includes("billing")) {
+    return { message, type: "config", hint: "Check billing and API quota limits" };
+  }
+
+  // Network errors
+  if (message.includes("ECONNREFUSED") || message.includes("ETIMEDOUT")) {
+    return { message, type: "network", hint: "Connection failed - check network connectivity" };
+  }
+  if (message.includes("ENOTFOUND") || message.includes("DNS") || message.includes("EAI_AGAIN")) {
+    return { message, type: "network", hint: "DNS resolution failed - check hostname" };
+  }
+  if (message.includes("ENETUNREACH") || message.includes("EHOSTUNREACH")) {
+    return { message, type: "network", hint: "Network unreachable - check connection" };
+  }
+
+  // Timeout errors
+  if (
+    message.toLowerCase().includes("timeout") ||
+    message.toLowerCase().includes("timed out") ||
+    message.includes("ETIMEDOUT")
+  ) {
+    return { message, type: "timeout", hint: "Operation took too long - try increasing timeout" };
+  }
+
+  // Context/memory errors
+  if (message.includes("context") && message.includes("too large")) {
+    return { message, type: "model", hint: "Conversation too long - try clearing history" };
+  }
+
+  // Missing environment/config
+  if (message.includes("missing") && (message.includes("key") || message.includes("token"))) {
+    return { message, type: "config", hint: "Missing required configuration or credentials" };
+  }
+
+  return { message, type: "unknown" };
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -212,6 +291,7 @@ export async function runAgentTurnWithFallback(params: {
                 return result;
               })
               .catch((err) => {
+                const { message, type, hint } = categorizeError(err);
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -219,7 +299,9 @@ export async function runAgentTurnWithFallback(params: {
                     phase: "error",
                     startedAt,
                     endedAt: Date.now(),
-                    error: err instanceof Error ? err.message : String(err),
+                    error: message,
+                    errorType: type,
+                    errorHint: hint,
                   },
                 });
                 throw err;
