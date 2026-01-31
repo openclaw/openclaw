@@ -12,6 +12,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentDir,
 } from "../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 
 /**
  * Generate a short 1-2 word filename slug from session content using LLM
@@ -38,6 +39,11 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
+    const modelRef = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId,
+    });
+
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
@@ -48,6 +54,8 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       timeoutMs: 15_000, // 15 second timeout
       runId: `slug-gen-${Date.now()}`,
+      provider: modelRef.provider,
+      model: modelRef.model,
     });
 
     // Extract text from payloads
