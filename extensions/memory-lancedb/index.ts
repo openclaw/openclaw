@@ -168,12 +168,12 @@ class Embeddings {
       const modelPath = this.model.startsWith("models/") ? this.model : `models/${this.model}`;
       const url = `${baseUrl}/${modelPath}:embedContent`;
       
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
+       const res = await fetch(url, {
+         method: "POST",
+         headers: {
+           "Content-Type": "application/json",
+           "x-goog-api-key": this.apiKey,
+         },
         body: JSON.stringify({
           content: { parts: [{ text }] },
           taskType: "RETRIEVAL_QUERY",
