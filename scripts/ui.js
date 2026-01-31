@@ -122,7 +122,9 @@ if (!runner) {
  */
 function stripInlineCommentArgs(args) {
   const idx = args.indexOf("#");
-  if (idx === -1) return args;
+  if (idx === -1) {
+    return args;
+  }
   return args.slice(0, idx);
 }
 
