@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   isAbortError,
@@ -173,7 +173,7 @@ describe("isTransientNetworkError", () => {
       try {
         process.emit("unhandledRejection", new Error("boom"), Promise.resolve());
         await Promise.resolve();
-      } catch (_err) {
+      } catch {
         thrown = true;
       }
       expect(thrown).toBe(true);

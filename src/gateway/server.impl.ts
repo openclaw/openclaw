@@ -93,7 +93,7 @@ const canvasRuntime = runtimeForLogger(logCanvas);
 process.on("unhandledRejection", (reason) => {
   try {
     log.error("Unhandled promise rejection", { error: formatUncaughtError(reason) });
-  } catch (_e) {
+  } catch {
     // Fallback: ensure we don't throw from the handler
     log.error("Unhandled promise rejection (formatting failed)", { error: String(reason) });
   }
@@ -102,7 +102,7 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
   try {
     log.error("Uncaught exception", { error: formatUncaughtError(err) });
-  } catch (_e) {
+  } catch {
     log.error("Uncaught exception (formatting failed)", { error: String(err) });
   }
 });
