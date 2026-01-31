@@ -79,7 +79,7 @@ export function createSessionsListTool(opts?: {
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
 
-      const list = await callGateway({
+      const list = await callGateway<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -196,7 +196,7 @@ export function createSessionsListTool(opts?: {
             alias,
             mainKey,
           });
-          const history = await callGateway({
+          const history = await callGateway<{ messages: Array<unknown> }>({
             method: "chat.history",
             params: { sessionKey: resolvedKey, limit: messageLimit },
           });
