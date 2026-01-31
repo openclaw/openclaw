@@ -3,10 +3,24 @@ name: notion
 description: Notion API for creating and managing pages, databases, and blocks.
 homepage: https://developers.notion.com
 metadata:
-  {
-    "openclaw":
-      { "emoji": "📝", "requires": { "env": ["NOTION_API_KEY"] }, "primaryEnv": "NOTION_API_KEY" },
-  }
+  openclaw:
+    emoji: "📝"
+    requires:
+      env:
+        - NOTION_API_KEY
+    primaryEnv: NOTION_API_KEY
+    permissions:
+      version: 1
+      declared_purpose: "Create and manage Notion pages, databases, and blocks"
+      network:
+        - "api.notion.com"
+      exec:
+        - "curl"
+      env:
+        - "NOTION_API_KEY"
+      sensitive_data:
+        personal_info: true
+      security_notes: "Requires a Notion API key. Can read/write pages and databases that have been shared with the integration. Personal notes and data may be accessed."
 ---
 
 # notion

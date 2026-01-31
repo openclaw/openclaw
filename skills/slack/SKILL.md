@@ -1,7 +1,19 @@
 ---
 name: slack
 description: Use when you need to control Slack from OpenClaw via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.
-metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.slack"] } } }
+metadata:
+  openclaw:
+    emoji: "💬"
+    requires:
+      config:
+        - channels.slack
+    permissions:
+      version: 1
+      declared_purpose: "Send and manage messages in Slack workspaces"
+      network:
+        - "slack.com"
+        - "*.slack.com"
+      security_notes: "Uses bot token configured in OpenClaw. Can read, send, edit, and delete messages in authorized channels. Actions are limited to the bot's Slack permissions."
 ---
 
 # Slack Actions

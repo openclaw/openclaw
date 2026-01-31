@@ -3,23 +3,29 @@ name: obsidian
 description: Work with Obsidian vaults (plain Markdown notes) and automate via obsidian-cli.
 homepage: https://help.obsidian.md
 metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "💎",
-        "requires": { "bins": ["obsidian-cli"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "yakitrak/yakitrak/obsidian-cli",
-              "bins": ["obsidian-cli"],
-              "label": "Install obsidian-cli (brew)",
-            },
-          ],
-      },
-  }
+  openclaw:
+    emoji: "💎"
+    requires:
+      bins:
+        - obsidian-cli
+    install:
+      - id: brew
+        kind: brew
+        formula: yakitrak/yakitrak/obsidian-cli
+        bins:
+          - obsidian-cli
+        label: Install obsidian-cli (brew)
+    permissions:
+      version: 1
+      declared_purpose: "Manage Obsidian vaults and notes"
+      filesystem:
+        - "read:~/Library/Application Support/obsidian"
+        - "readwrite:~/**/*.md"
+      exec:
+        - "obsidian-cli"
+      sensitive_data:
+        personal_info: true
+      security_notes: "Accesses Obsidian vaults which may contain personal notes. Can read vault configuration and create/edit/delete Markdown files."
 ---
 
 # Obsidian

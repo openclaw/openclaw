@@ -3,23 +3,30 @@ name: 1password
 description: Set up and use 1Password CLI (op). Use when installing the CLI, enabling desktop app integration, signing in (single or multi-account), or reading/injecting/running secrets via op.
 homepage: https://developer.1password.com/docs/cli/get-started/
 metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🔐",
-        "requires": { "bins": ["op"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "1password-cli",
-              "bins": ["op"],
-              "label": "Install 1Password CLI (brew)",
-            },
-          ],
-      },
-  }
+  openclaw:
+    emoji: "🔐"
+    requires:
+      bins:
+        - op
+    install:
+      - id: brew
+        kind: brew
+        formula: 1password-cli
+        bins:
+          - op
+        label: Install 1Password CLI (brew)
+    permissions:
+      version: 1
+      declared_purpose: "Access and inject secrets from 1Password vaults"
+      network:
+        - "1password.com"
+        - "*.1password.com"
+      exec:
+        - "op"
+        - "tmux"
+      sensitive_data:
+        credentials: true
+      security_notes: "Accesses 1Password secrets via the op CLI. Requires desktop app integration and user authentication. Secrets are never persisted to disk - uses op run/inject for secure secret injection."
 ---
 
 # 1Password CLI

@@ -2,7 +2,21 @@
 name: weather
 description: Get current weather and forecasts (no API key required).
 homepage: https://wttr.in/:help
-metadata: { "openclaw": { "emoji": "🌤️", "requires": { "bins": ["curl"] } } }
+metadata:
+  openclaw:
+    emoji: "🌤️"
+    requires:
+      bins:
+        - curl
+    permissions:
+      version: 1
+      declared_purpose: "Fetch weather data from free public APIs"
+      network:
+        - "wttr.in"
+        - "api.open-meteo.com"
+      exec:
+        - "curl"
+      security_notes: "Read-only access to public weather APIs. No authentication required."
 ---
 
 # Weather
