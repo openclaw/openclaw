@@ -3,6 +3,63 @@ import Network
 import Observation
 import SwiftUI
 import UIKit
+import UserNotifications
+
+enum NotificationAuthorizationStatus: Sendable {
+    case notDetermined
+    case denied
+    case authorized
+    case provisional
+    case ephemeral
+}
+
+protocol NotificationCentering: Sendable {
+    func authorizationStatus() async -> NotificationAuthorizationStatus
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
+    func add(_ request: UNNotificationRequest) async throws
+}
+
+struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable {
+    private let center: UNUserNotificationCenter
+
+    init(center: UNUserNotificationCenter = .current()) {
+        self.center = center
+    }
+
+    func authorizationStatus() async -> NotificationAuthorizationStatus {
+        let settings = await self.center.notificationSettings()
+        return switch settings.authorizationStatus {
+        case .authorized:
+            .authorized
+        case .provisional:
+            .provisional
+        case .ephemeral:
+            .ephemeral
+        case .denied:
+            .denied
+        case .notDetermined:
+            .notDetermined
+        @unknown default:
+            .denied
+        }
+    }
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        try await self.center.requestAuthorization(options: options)
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        try await withCheckedThrowingContinuation { cont in
+            self.center.add(request) { error in
+                if let error {
+                    cont.resume(throwing: error)
+                } else {
+                    cont.resume()
+                }
+            }
+        }
+    }
+}
 
 @MainActor
 @Observable
@@ -28,6 +85,7 @@ final class NodeAppModel {
     private let gateway = GatewayNodeSession()
     private var gatewayTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
+    private let notificationCenter: NotificationCentering
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     let voiceWake = VoiceWakeManager()
     let talkMode = TalkModeManager()
@@ -42,7 +100,8 @@ final class NodeAppModel {
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
 
-    init() {
+    init(notificationCenter: NotificationCentering = LiveNotificationCenter()) {
+        self.notificationCenter = notificationCenter
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
             let sessionKey = await MainActor.run { self.mainSessionKey }
@@ -542,12 +601,14 @@ final class NodeAppModel {
                 return try await self.handleCameraInvoke(req)
             case OpenClawScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawSystemCommand.notify.rawValue:
+                return try await self.handleSystemNotify(req)
             default:
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
                     error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
-            }
+        }
         } catch {
             if command.hasPrefix("camera.") {
                 let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -628,6 +689,7 @@ final class NodeAppModel {
         case OpenClawCanvasCommand.present.rawValue:
             let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
                 OpenClawCanvasPresentParams()
+            // iOS ignores placement params (canvas presents full-screen).
             let url = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if url.isEmpty {
                 self.screen.showDefaultCanvas()
@@ -636,6 +698,7 @@ final class NodeAppModel {
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
+            self.showLocalCanvasOnDisconnect()
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
@@ -857,6 +920,58 @@ final class NodeAppModel {
             screenIndex: params.screenIndex,
             hasAudio: params.includeAudio ?? true))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleSystemNotify(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawSystemNotifyParams.self, from: req.paramsJSON)
+        let status = await self.notificationCenter.authorizationStatus()
+        let authorized: Bool
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            authorized = true
+        case .notDetermined:
+            authorized = (try await self.notificationCenter
+                .requestAuthorization(options: [.alert, .sound, .badge]))
+        case .denied:
+            authorized = false
+        }
+
+        guard authorized else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "NOTIFICATION_PERMISSION_REQUIRED: enable Notifications in Settings"))
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = params.title
+        content.body = params.body
+        let sound = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if sound.isEmpty {
+            content.sound = .default
+        } else {
+            content.sound = UNNotificationSound(named: UNNotificationSoundName(rawValue: sound))
+        }
+        if let priority = params.priority {
+            switch priority {
+            case .passive:
+                content.interruptionLevel = .passive
+            case .active:
+                content.interruptionLevel = .active
+            case .timeSensitive:
+                content.interruptionLevel = .timeSensitive
+            }
+        }
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: trigger)
+        try await self.notificationCenter.add(request)
+        return BridgeInvokeResponse(id: req.id, ok: true)
     }
 
 }
