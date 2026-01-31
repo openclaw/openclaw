@@ -2,14 +2,9 @@
   "name": "openclaw",
   "version": "2026.1.30",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
-  "type": "module",
-  "main": "dist/index.js",
-  "exports": {
-    ".": "./dist/index.js",
-    "./plugin-sdk": "./dist/plugin-sdk/index.js",
-    "./plugin-sdk/*": "./dist/plugin-sdk/*",
-    "./cli-entry": "./openclaw.mjs"
-  },
+  "keywords": [],
+  "license": "MIT",
+  "author": "",
   "bin": {
     "openclaw": "./openclaw.mjs"
   },
@@ -77,6 +72,14 @@
     "dist/pairing/**",
     "dist/whatsapp/**"
   ],
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugin-sdk": "./dist/plugin-sdk/index.js",
+    "./plugin-sdk/*": "./dist/plugin-sdk/*",
+    "./cli-entry": "./openclaw.mjs"
+  },
   "scripts": {
     "dev": "node scripts/run-node.mjs",
     "postinstall": "node scripts/postinstall.js",
@@ -146,13 +149,6 @@
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500"
   },
-  "keywords": [],
-  "author": "",
-  "license": "MIT",
-  "engines": {
-    "node": ">=22.12.0"
-  },
-  "packageManager": "pnpm@10.23.0",
   "dependencies": {
     "@agentclientprotocol/sdk": "0.13.1",
     "@aws-sdk/client-bedrock": "^3.980.0",
@@ -205,10 +201,6 @@
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
-  "peerDependencies": {
-    "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.15.1"
-  },
   "devDependencies": {
     "@grammyjs/types": "^3.23.0",
     "@lit-labs/signals": "^0.2.0",
@@ -231,9 +223,17 @@
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
+  "peerDependencies": {
+    "@napi-rs/canvas": "^0.1.89",
+    "node-llama-cpp": "3.15.1"
+  },
   "overrides": {
     "tar": "7.5.4"
   },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@10.23.0",
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {

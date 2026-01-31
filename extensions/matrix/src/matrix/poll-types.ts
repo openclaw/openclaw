@@ -82,9 +82,10 @@ export function getTextContent(text?: TextContent): string {
 }
 
 export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const poll = (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START]
-    ?? (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START]
-    ?? (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
+  const poll =
+    (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START] ??
+    (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START] ??
+    (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
   if (!poll) return null;
 
   const question = getTextContent(poll.question);

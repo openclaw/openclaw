@@ -66,13 +66,13 @@ If you don’t have a global install yet, run the CLI via `pnpm openclaw ...`.
 
 What this does:
 
-1) **Profile isolation** (global `--dev`)
+1. **Profile isolation** (global `--dev`)
    - `OPENCLAW_PROFILE=dev`
    - `OPENCLAW_STATE_DIR=~/.openclaw-dev`
    - `OPENCLAW_CONFIG_PATH=~/.openclaw-dev/openclaw.json`
    - `OPENCLAW_GATEWAY_PORT=19001` (browser/canvas shift accordingly)
 
-2) **Dev bootstrap** (`gateway --dev`)
+2. **Dev bootstrap** (`gateway --dev`)
    - Writes a minimal config if missing (`gateway.mode=local`, bind loopback).
    - Sets `agent.workspace` to the dev workspace.
    - Sets `agent.skipBootstrap=true` (no BOOTSTRAP.md).

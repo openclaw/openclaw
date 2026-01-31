@@ -1,4 +1,9 @@
-import type { AllowlistMatch, ChannelGroupContext, GroupPolicy, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
+import type {
+  AllowlistMatch,
+  ChannelGroupContext,
+  GroupPolicy,
+  GroupToolPolicyConfig,
+} from "openclaw/plugin-sdk";
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
@@ -10,7 +15,10 @@ import {
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
-  return raw.trim().toLowerCase().replace(/^(nextcloud-talk|nc-talk|nc):/i, "");
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "");
 }
 
 export function normalizeNextcloudTalkAllowlist(
@@ -89,7 +97,9 @@ export function resolveNextcloudTalkRoomMatch(params: {
 export function resolveNextcloudTalkGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  const cfg = params.cfg as { channels?: { "nextcloud-talk"?: { rooms?: Record<string, NextcloudTalkRoomConfig> } } };
+  const cfg = params.cfg as {
+    channels?: { "nextcloud-talk"?: { rooms?: Record<string, NextcloudTalkRoomConfig> } };
+  };
   const roomToken = params.groupId?.trim();
   if (!roomToken) return undefined;
   const roomName = params.groupChannel?.trim() || undefined;

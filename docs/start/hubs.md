@@ -3,6 +3,7 @@ summary: "Hubs that link to every OpenClaw doc"
 read_when:
   - You want a complete map of the documentation
 ---
+
 # Docs hubs
 
 Use these hubs to discover every page, including deep dives and reference docs that don’t appear in the left nav.

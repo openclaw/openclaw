@@ -1,6 +1,12 @@
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
-import { GRAPH_ROOT, inferPlaceholder, isRecord, normalizeContentType, resolveAllowedHosts } from "./shared.js";
+import {
+  GRAPH_ROOT,
+  inferPlaceholder,
+  isRecord,
+  normalizeContentType,
+  resolveAllowedHosts,
+} from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,

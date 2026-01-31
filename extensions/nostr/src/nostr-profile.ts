@@ -95,7 +95,7 @@ export function contentToProfile(content: ProfileContent): NostrProfile {
 export function createProfileEvent(
   sk: Uint8Array,
   profile: NostrProfile,
-  lastPublishedAt?: number
+  lastPublishedAt?: number,
 ): Event {
   const content = profileToContent(profile);
   const contentJson = JSON.stringify(content);
@@ -111,7 +111,7 @@ export function createProfileEvent(
       tags: [],
       created_at: createdAt,
     },
-    sk
+    sk,
   );
 
   return event;
@@ -138,7 +138,7 @@ const RELAY_PUBLISH_TIMEOUT_MS = 5000;
 export async function publishProfileEvent(
   pool: SimplePool,
   relays: string[],
-  event: Event
+  event: Event,
 ): Promise<ProfilePublishResult> {
   const successes: string[] = [];
   const failures: Array<{ relay: string; error: string }> = [];
@@ -184,7 +184,7 @@ export async function publishProfile(
   sk: Uint8Array,
   relays: string[],
   profile: NostrProfile,
-  lastPublishedAt?: number
+  lastPublishedAt?: number,
 ): Promise<ProfilePublishResult> {
   const event = createProfileEvent(sk, profile, lastPublishedAt);
   return publishProfileEvent(pool, relays, event);

@@ -4,6 +4,7 @@ read_when:
   - Setting up auth expiry monitoring or alerts
   - Automating Claude Code / Codex OAuth refresh checks
 ---
+
 # Auth monitoring
 
 OpenClaw exposes OAuth expiry health via `openclaw models status`. Use that for
@@ -16,6 +17,7 @@ openclaw models status --check
 ```
 
 Exit codes:
+
 - `0`: OK
 - `1`: expired or missing credentials
 - `2`: expiring soon (within 24h)

@@ -20,10 +20,7 @@ import {
 } from "./resolve-allowlist.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams } from "./send.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-import {
-  listMSTeamsDirectoryGroupsLive,
-  listMSTeamsDirectoryPeersLive,
-} from "./directory-live.js";
+import { listMSTeamsDirectoryGroupsLive, listMSTeamsDirectoryPeersLive } from "./directory-live.js";
 
 type ResolvedMSTeamsAccount = {
   accountId: string;
@@ -225,8 +222,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         note: undefined as string | undefined,
       }));
 
-      const stripPrefix = (value: string) =>
-        normalizeMSTeamsUserInput(value);
+      const stripPrefix = (value: string) => normalizeMSTeamsUserInput(value);
 
       if (kind === "user") {
         const pending: Array<{ input: string; query: string; index: number }> = [];
@@ -314,7 +310,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
               target.name =
                 entry.channelName && entry.teamName
                   ? `${entry.teamName}/${entry.channelName}`
-                  : entry.channelName ?? entry.teamName;
+                  : (entry.channelName ?? entry.teamName);
             } else {
               target.id = entry.teamId;
               target.name = entry.teamName;

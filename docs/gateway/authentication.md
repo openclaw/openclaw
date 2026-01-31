@@ -4,6 +4,7 @@ read_when:
   - Debugging model auth or OAuth expiry
   - Documenting authentication or credential storage
 ---
+
 # Authentication
 
 OpenClaw supports OAuth and API keys for model providers. For Anthropic
@@ -17,16 +18,16 @@ layout.
 
 If you’re using Anthropic directly, use an API key.
 
-1) Create an API key in the Anthropic Console.
-2) Put it on the **gateway host** (the machine running `openclaw gateway`).
+1. Create an API key in the Anthropic Console.
+2. Put it on the **gateway host** (the machine running `openclaw gateway`).
 
 ```bash
 export ANTHROPIC_API_KEY="..."
 openclaw models status
 ```
 
-3) If the Gateway runs under systemd/launchd, prefer putting the key in
-`~/.openclaw/.env` so the daemon can read it:
+3. If the Gateway runs under systemd/launchd, prefer putting the key in
+   `~/.openclaw/.env` so the daemon can read it:
 
 ```bash
 cat >> ~/.openclaw/.env <<'EOF'

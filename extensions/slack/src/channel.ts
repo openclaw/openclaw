@@ -67,11 +67,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       const botToken = account.botToken?.trim();
       const tokenOverride = token && token !== botToken ? token : undefined;
       if (tokenOverride) {
-        await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, PAIRING_APPROVED_MESSAGE, {
-          token: tokenOverride,
-        });
+        await getSlackRuntime().channel.slack.sendMessageSlack(
+          `user:${id}`,
+          PAIRING_APPROVED_MESSAGE,
+          {
+            token: tokenOverride,
+          },
+        );
       } else {
-        await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, PAIRING_APPROVED_MESSAGE);
+        await getSlackRuntime().channel.slack.sendMessageSlack(
+          `user:${id}`,
+          PAIRING_APPROVED_MESSAGE,
+        );
       }
     },
   },
@@ -231,7 +238,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       const isActionEnabled = (key: string, defaultValue = true) => {
         for (const account of accounts) {
           const gate = createActionGate(
-            (account.actions ?? cfg.channels?.slack?.actions) as Record<string, boolean | undefined>,
+            (account.actions ?? cfg.channels?.slack?.actions) as Record<
+              string,
+              boolean | undefined
+            >,
           );
           if (gate(key, defaultValue)) return true;
         }

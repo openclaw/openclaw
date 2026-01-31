@@ -90,7 +90,8 @@ export async function verifyGoogleChatRequest(params: {
       });
       const payload = ticket.getPayload();
       const email = payload?.email ?? "";
-      const ok = payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+      const ok =
+        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
       return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };

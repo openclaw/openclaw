@@ -176,7 +176,7 @@ function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: s
 }
 
 // Export for use in import validation
-export { validateUrlSafety }
+export { validateUrlSafety };
 
 // ============================================================================
 // Validation Schemas
@@ -249,7 +249,7 @@ function parseAccountIdFromPath(pathname: string): string | null {
 // ============================================================================
 
 export function createNostrProfileHttpHandler(
-  ctx: NostrProfileHttpContext
+  ctx: NostrProfileHttpContext,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -303,7 +303,7 @@ export function createNostrProfileHttpHandler(
 async function handleGetProfile(
   accountId: string,
   ctx: NostrProfileHttpContext,
-  res: ServerResponse
+  res: ServerResponse,
 ): Promise<true> {
   const configProfile = ctx.getConfigProfile(accountId);
   const publishState = await getNostrProfileState(accountId);
@@ -324,7 +324,7 @@ async function handleUpdateProfile(
   accountId: string,
   ctx: NostrProfileHttpContext,
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
 ): Promise<true> {
   // Rate limiting
   if (!checkRateLimit(accountId)) {
@@ -423,7 +423,7 @@ async function handleImportProfile(
   accountId: string,
   ctx: NostrProfileHttpContext,
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
 ): Promise<true> {
   // Get account info
   const accountInfo = ctx.getAccountInfo(accountId);

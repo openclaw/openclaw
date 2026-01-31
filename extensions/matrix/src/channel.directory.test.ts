@@ -34,7 +34,12 @@ describe("matrix directory", () => {
     expect(matrixPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      matrixPlugin.directory!.listPeers({ cfg, accountId: undefined, query: undefined, limit: undefined }),
+      matrixPlugin.directory!.listPeers({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "user", id: "user:@alice:example.org" },
@@ -45,7 +50,12 @@ describe("matrix directory", () => {
     );
 
     await expect(
-      matrixPlugin.directory!.listGroups({ cfg, accountId: undefined, query: undefined, limit: undefined }),
+      matrixPlugin.directory!.listGroups({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "group", id: "room:!room1:example.org" },

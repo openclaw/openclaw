@@ -12,10 +12,7 @@ import {
 
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
-import {
-  looksLikeMattermostTargetId,
-  normalizeMattermostMessagingTarget,
-} from "./normalize.js";
+import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { mattermostOnboardingAdapter } from "./onboarding.js";
 import {
   listMattermostAccountIds,
@@ -116,9 +113,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => formatAllowEntry(String(entry)))
-        .filter(Boolean),
+      allowFrom.map((entry) => formatAllowEntry(String(entry))).filter(Boolean),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

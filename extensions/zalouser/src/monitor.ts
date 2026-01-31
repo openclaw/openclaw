@@ -3,12 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import type { OpenClawConfig, MarkdownTableMode, RuntimeEnv } from "openclaw/plugin-sdk";
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk";
 import { sendMessageZalouser } from "./send.js";
-import type {
-  ResolvedZalouserAccount,
-  ZcaFriend,
-  ZcaGroup,
-  ZcaMessage,
-} from "./types.js";
+import type { ResolvedZalouserAccount, ZcaFriend, ZcaGroup, ZcaMessage } from "./types.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { parseJsonOutput, runZca, runZcaStreaming } from "./zca.js";
 
@@ -30,10 +25,7 @@ function normalizeZalouserEntry(entry: string): string {
   return entry.replace(/^(zalouser|zlu):/i, "").trim();
 }
 
-function buildNameIndex<T>(
-  items: T[],
-  nameFn: (item: T) => string | undefined,
-): Map<string, T[]> {
+function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined): Map<string, T[]> {
   const index = new Map<string, T[]>();
   for (const item of items) {
     const name = nameFn(item)?.trim().toLowerCase();
@@ -183,10 +175,7 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const rawBody = content.trim();
-  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(
-    rawBody,
-    config,
-  );
+  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
     !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
       ? await core.channel.pairing.readAllowFromStore("zalouser").catch(() => [])
@@ -197,7 +186,9 @@ async function processMessage(
   const commandAuthorized = shouldComputeAuth
     ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
-        authorizers: [{ configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands }],
+        authorizers: [
+          { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        ],
       })
     : undefined;
 
@@ -256,11 +247,17 @@ async function processMessage(
     core.channel.commands.isControlCommandMessage(rawBody, config) &&
     commandAuthorized !== true
   ) {
-    logVerbose(core, runtime, `zalouser: drop control command from unauthorized sender ${senderId}`);
+    logVerbose(
+      core,
+      runtime,
+      `zalouser: drop control command from unauthorized sender ${senderId}`,
+    );
     return;
   }
 
-  const peer = isGroup ? { kind: "group" as const, id: chatId } : { kind: "group" as const, id: senderId };
+  const peer = isGroup
+    ? { kind: "group" as const, id: chatId }
+    : { kind: "group" as const, id: senderId };
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
@@ -343,9 +340,7 @@ async function processMessage(
         });
       },
       onError: (err, info) => {
-        runtime.error(
-          `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
-        );
+        runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
       },
     },
   });

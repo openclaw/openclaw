@@ -1,8 +1,6 @@
 {
   "id": "google-antigravity-auth",
-  "providers": [
-    "google-antigravity"
-  ],
+  "providers": ["google-antigravity"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

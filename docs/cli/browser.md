@@ -11,6 +11,7 @@ read_when:
 Manage OpenClaw’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
 
 Related:
+
 - Browser tool + API: [Browser tool](/tools/browser)
 - Chrome extension relay: [Chrome extension](/tools/chrome-extension)
 
@@ -34,6 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 ## Profiles
 
 Profiles are named browser routing configs. In practice:
+
 - `openclaw`: launches/attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
 - `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
 

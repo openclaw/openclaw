@@ -22,16 +22,14 @@ export function setPathValue(
     if (typeof key === "number") {
       if (!Array.isArray(current)) return;
       if (current[key] == null) {
-        current[key] =
-          typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
+        current[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
       }
       current = current[key] as Record<string, unknown> | unknown[];
     } else {
       if (typeof current !== "object" || current == null) return;
       const record = current as Record<string, unknown>;
       if (record[key] == null) {
-        record[key] =
-          typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
+        record[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
       }
       current = record[key] as Record<string, unknown> | unknown[];
     }
@@ -59,9 +57,7 @@ export function removePathValue(
       current = current[key] as Record<string, unknown> | unknown[];
     } else {
       if (typeof current !== "object" || current == null) return;
-      current = (current as Record<string, unknown>)[key] as
-        | Record<string, unknown>
-        | unknown[];
+      current = (current as Record<string, unknown>)[key] as Record<string, unknown> | unknown[];
     }
     if (current == null) return;
   }

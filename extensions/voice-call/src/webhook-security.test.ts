@@ -38,9 +38,7 @@ function plivoV3Signature(params: {
 
   const sortedQuery = Array.from(queryMap.keys())
     .sort()
-    .flatMap((k) =>
-      [...(queryMap.get(k) ?? [])].sort().map((v) => `${k}=${v}`),
-    )
+    .flatMap((k) => [...(queryMap.get(k) ?? [])].sort().map((v) => `${k}=${v}`))
     .join("&");
 
   const postParams = new URLSearchParams(params.postBody);
@@ -71,24 +69,17 @@ function plivoV3Signature(params: {
   return canonicalizeBase64(digest);
 }
 
-function twilioSignature(params: {
-  authToken: string;
-  url: string;
-  postBody: string;
-}): string {
+function twilioSignature(params: { authToken: string; url: string; postBody: string }): string {
   let dataToSign = params.url;
-  const sortedParams = Array.from(
-    new URLSearchParams(params.postBody).entries(),
-  ).sort((a, b) => a[0].localeCompare(b[0]));
+  const sortedParams = Array.from(new URLSearchParams(params.postBody).entries()).sort((a, b) =>
+    a[0].localeCompare(b[0]),
+  );
 
   for (const [key, value] of sortedParams) {
     dataToSign += key + value;
   }
 
-  return crypto
-    .createHmac("sha1", params.authToken)
-    .update(dataToSign)
-    .digest("base64");
+  return crypto.createHmac("sha1", params.authToken).update(dataToSign).digest("base64");
 }
 
 describe("verifyPlivoWebhook", () => {

@@ -19,8 +19,7 @@ function readAccessToken(value: unknown): string | null {
   if (typeof value === "string") return value;
   if (value && typeof value === "object") {
     const token =
-      (value as { accessToken?: unknown }).accessToken ??
-      (value as { token?: unknown }).token;
+      (value as { accessToken?: unknown }).accessToken ?? (value as { token?: unknown }).token;
     return typeof token === "string" ? token : null;
   }
   return null;
@@ -49,7 +48,10 @@ function readStringArray(value: unknown): string[] | undefined {
 
 function readScopes(value: unknown): string[] | undefined {
   if (typeof value !== "string") return undefined;
-  const out = value.split(/\s+/).map((entry) => entry.trim()).filter(Boolean);
+  const out = value
+    .split(/\s+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
   return out.length > 0 ? out : undefined;
 }
 
@@ -75,9 +77,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
         }
       | undefined;
     try {
-      const graphToken = await tokenProvider.getAccessToken(
-        "https://graph.microsoft.com",
-      );
+      const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
       const accessToken = readAccessToken(graphToken);
       const payload = accessToken ? decodeJwtPayload(accessToken) : null;
       graph = {

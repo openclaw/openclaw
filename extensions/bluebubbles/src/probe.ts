@@ -108,11 +108,7 @@ export async function probeBlueBubbles(params: {
   if (!password) return { ok: false, error: "password not configured" };
   const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/ping", password });
   try {
-    const res = await blueBubblesFetchWithTimeout(
-      url,
-      { method: "GET" },
-      params.timeoutMs,
-    );
+    const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, params.timeoutMs);
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }

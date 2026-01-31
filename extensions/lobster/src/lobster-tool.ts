@@ -192,9 +192,11 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       const execPath = resolveExecutablePath(
         typeof params.lobsterPath === "string" ? params.lobsterPath : undefined,
       );
-      const cwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : process.cwd();
+      const cwd =
+        typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : process.cwd();
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
-      const maxStdoutBytes = typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
+      const maxStdoutBytes =
+        typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
 
       const argv = (() => {
         if (action === "run") {

@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
 ---
+
 # OpenRouter
 
 OpenRouter provides a **unified API** that routes requests to many models behind a single
@@ -22,9 +23,9 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
   env: { OPENROUTER_API_KEY: "sk-or-..." },
   agents: {
     defaults: {
-      model: { primary: "openrouter/anthropic/claude-sonnet-4-5" }
-    }
-  }
+      model: { primary: "openrouter/anthropic/claude-sonnet-4-5" },
+    },
+  },
 }
 ```
 

@@ -59,7 +59,8 @@ export const googlechatDock: ChannelDock = {
   outbound: { textChunkLimit: 4000 },
   config: {
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveGoogleChatAccount({ cfg: cfg as OpenClawConfig, accountId }).config.dm?.allowFrom ??
+      (
+        resolveGoogleChatAccount({ cfg: cfg as OpenClawConfig, accountId }).config.dm?.allowFrom ??
         []
       ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
@@ -166,10 +167,11 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       credentialSource: account.credentialSource,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveGoogleChatAccount({
-        cfg: cfg as OpenClawConfig,
-        accountId,
-      }).config.dm?.allowFrom ?? []
+      (
+        resolveGoogleChatAccount({
+          cfg: cfg as OpenClawConfig,
+          accountId,
+        }).config.dm?.allowFrom ?? []
       ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
@@ -342,7 +344,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           ...next,
           channels: {
             ...next.channels,
-            "googlechat": {
+            googlechat: {
               ...(next.channels?.["googlechat"] ?? {}),
               enabled: true,
               ...configPatch,
@@ -354,7 +356,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         ...next,
         channels: {
           ...next.channels,
-          "googlechat": {
+          googlechat: {
             ...(next.channels?.["googlechat"] ?? {}),
             enabled: true,
             accounts: {
@@ -372,8 +374,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) =>
-      getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     resolveTarget: ({ to, allowFrom, mode }) => {
@@ -445,8 +446,11 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg as OpenClawConfig,
         resolveChannelLimitMb: ({ cfg, accountId }) =>
-          (cfg.channels?.["googlechat"] as { accounts?: Record<string, { mediaMaxMb?: number }>; mediaMaxMb?: number } | undefined)
-            ?.accounts?.[accountId]?.mediaMaxMb ??
+          (
+            cfg.channels?.["googlechat"] as
+              | { accounts?: Record<string, { mediaMaxMb?: number }>; mediaMaxMb?: number }
+              | undefined
+          )?.accounts?.[accountId]?.mediaMaxMb ??
           (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });

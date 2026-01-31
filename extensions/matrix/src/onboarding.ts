@@ -15,7 +15,8 @@ import type { CoreConfig, DmPolicy } from "./types.js";
 const channel = "matrix" as const;
 
 function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy) {
-  const allowFrom = policy === "open" ? addWildcardAllowFrom(cfg.channels?.matrix?.dm?.allowFrom) : undefined;
+  const allowFrom =
+    policy === "open" ? addWildcardAllowFrom(cfg.channels?.matrix?.dm?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -390,10 +391,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
                 unresolved.push(entry);
               }
             }
-            roomKeys = [
-              ...resolvedIds,
-              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
-            ];
+            roomKeys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
             if (resolvedIds.length > 0 || unresolved.length > 0) {
               await prompter.note(
                 [

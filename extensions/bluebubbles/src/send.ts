@@ -87,7 +87,9 @@ function extractMessageId(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "unknown";
   const record = payload as Record<string, unknown>;
   const data =
-    record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>) : null;
+    record.data && typeof record.data === "object"
+      ? (record.data as Record<string, unknown>)
+      : null;
   const candidates = [
     record.messageId,
     record.messageGuid,
@@ -308,7 +310,11 @@ async function createNewChatWithMessage(params: {
   if (!res.ok) {
     const errorText = await res.text();
     // Check for Private API not enabled error
-    if (res.status === 400 || res.status === 403 || errorText.toLowerCase().includes("private api")) {
+    if (
+      res.status === 400 ||
+      res.status === 403 ||
+      errorText.toLowerCase().includes("private api")
+    ) {
       throw new Error(
         `BlueBubbles send failed: Cannot create new chat - Private API must be enabled. Original error: ${errorText || res.status}`,
       );

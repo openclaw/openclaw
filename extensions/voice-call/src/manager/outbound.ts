@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 
-import { TerminalStates, type CallId, type CallRecord, type OutboundCallOptions } from "../types.js";
+import {
+  TerminalStates,
+  type CallId,
+  type CallRecord,
+  type OutboundCallOptions,
+} from "../types.js";
 import type { CallMode } from "../config.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
 import type { CallManagerContext } from "./context.js";
@@ -8,7 +13,12 @@ import { getCallByProviderCallId } from "./lookup.js";
 import { generateNotifyTwiml } from "./twiml.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import { clearMaxDurationTimer, clearTranscriptWaiter, rejectTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
+import {
+  clearMaxDurationTimer,
+  clearTranscriptWaiter,
+  rejectTranscriptWaiter,
+  waitForFinalTranscript,
+} from "./timers.js";
 
 export async function initiateCall(
   ctx: CallManagerContext,
@@ -38,8 +48,7 @@ export async function initiateCall(
 
   const callId = crypto.randomUUID();
   const from =
-    ctx.config.fromNumber ||
-    (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
+    ctx.config.fromNumber || (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
   if (!from) {
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
@@ -120,8 +129,7 @@ export async function speak(
 
     addTranscriptEntry(call, "bot", text);
 
-    const voice =
-      ctx.provider?.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+    const voice = ctx.provider?.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
     await ctx.provider.playTts({
       callId,
       providerCallId: call.providerCallId,

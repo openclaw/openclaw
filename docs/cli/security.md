@@ -10,6 +10,7 @@ read_when:
 Security tools (audit + optional fixes).
 
 Related:
+
 - Security guide: [Security](/gateway/security)
 
 ## Audit

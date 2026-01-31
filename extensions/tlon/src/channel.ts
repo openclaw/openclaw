@@ -189,7 +189,8 @@ export const tlonPlugin: ChannelPlugin = {
   configSchema: tlonChannelConfigSchema,
   config: {
     listAccountIds: (cfg) => listTlonAccountIds(cfg as OpenClawConfig),
-    resolveAccount: (cfg, accountId) => resolveTlonAccount(cfg as OpenClawConfig, accountId ?? undefined),
+    resolveAccount: (cfg, accountId) =>
+      resolveTlonAccount(cfg as OpenClawConfig, accountId ?? undefined),
     defaultAccountId: () => "default",
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const useDefault = !accountId || accountId === "default";

@@ -309,7 +309,8 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
                 ...next.channels?.["nextcloud-talk"]?.accounts,
                 [accountId]: {
                   ...next.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-                  enabled: next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
+                  enabled:
+                    next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
                   baseUrl,
                   ...(secret ? { botSecret: secret } : {}),
                 },

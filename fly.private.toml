@@ -9,7 +9,7 @@
 #
 # See https://fly.io/docs/reference/configuration/
 
-app = "my-openclaw"    # change to your app name
+app = "my-openclaw" # change to your app name
 primary_region = "iad" # change to your closest region
 
 [build]

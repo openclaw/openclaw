@@ -1,5 +1,5 @@
 ---
-summary: 'Run OpenClaw Gateway 24/7 on a cheap Hetzner VPS (Docker) with durable state and baked-in binaries'
+summary: "Run OpenClaw Gateway 24/7 on a cheap Hetzner VPS (Docker) with durable state and baked-in binaries"
 read_when:
   - You want OpenClaw running 24/7 on a cloud VPS (not your laptop)
   - You want a production-grade, always-on Gateway on your own VPS
@@ -177,20 +177,20 @@ services:
     ports:
       # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
-      - '127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789'
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
 
       # Optional: only if you run iOS/Android nodes against this VPS and need Canvas host.
       # If you expose this publicly, read /gateway/security and firewall accordingly.
       # - "18793:18793"
     command:
       [
-        'node',
-        'dist/index.js',
-        'gateway',
-        '--bind',
-        '${OPENCLAW_GATEWAY_BIND}',
-        '--port',
-        '${OPENCLAW_GATEWAY_PORT}',
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND}",
+        "--port",
+        "${OPENCLAW_GATEWAY_PORT}",
       ]
 ```
 

@@ -23,9 +23,7 @@ function readZaloAccountStatus(value: ChannelAccountSnapshot): ZaloAccountStatus
   };
 }
 
-export function collectZaloStatusIssues(
-  accounts: ChannelAccountSnapshot[],
-): ChannelStatusIssue[] {
+export function collectZaloStatusIssues(accounts: ChannelAccountSnapshot[]): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
     const account = readZaloAccountStatus(entry);
@@ -40,8 +38,7 @@ export function collectZaloStatusIssues(
         channel: "zalo",
         accountId,
         kind: "config",
-        message:
-          'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
+        message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
         fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
       });
     }

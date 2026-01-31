@@ -35,9 +35,7 @@ function extractImages(message: unknown): ImageBlock[] {
           const data = source.data as string;
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
-          const url = data.startsWith("data:")
-            ? data
-            : `data:${mediaType};base64,${data}`;
+          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
           images.push({ url });
         } else if (typeof b.url === "string") {
           images.push({ url: b.url });
@@ -122,11 +120,7 @@ export function renderMessageGroup(
         ? assistantName
         : normalizedRole;
   const roleClass =
-    normalizedRole === "user"
-      ? "user"
-      : normalizedRole === "assistant"
-        ? "assistant"
-        : "other";
+    normalizedRole === "user" ? "user" : normalizedRole === "assistant" ? "assistant" : "other";
   const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
@@ -143,8 +137,7 @@ export function renderMessageGroup(
           renderGroupedMessage(
             item.message,
             {
-              isStreaming:
-                group.isStreaming && index === group.messages.length - 1,
+              isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
             },
             opts.onOpenSidebar,
@@ -159,10 +152,7 @@ export function renderMessageGroup(
   `;
 }
 
-function renderAvatar(
-  role: string,
-  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
-) {
+function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" | "avatar">) {
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
@@ -179,7 +169,7 @@ function renderAvatar(
       ? "user"
       : normalized === "assistant"
         ? "assistant"
-      : normalized === "tool"
+        : normalized === "tool"
           ? "tool"
           : "other";
 
@@ -199,9 +189,7 @@ function renderAvatar(
 
 function isAvatarUrl(value: string): boolean {
   return (
-    /^https?:\/\//i.test(value) ||
-    /^data:image\//i.test(value) ||
-    /^\//.test(value) // Relative paths from avatar endpoint
+    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || /^\//.test(value) // Relative paths from avatar endpoint
   );
 }
 
@@ -245,13 +233,9 @@ function renderGroupedMessage(
 
   const extractedText = extractTextCached(message);
   const extractedThinking =
-    opts.showReasoning && role === "assistant"
-      ? extractThinkingCached(message)
-      : null;
+    opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
-  const reasoningMarkdown = extractedThinking
-    ? formatReasoningMarkdown(extractedThinking)
-    : null;
+  const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
 
@@ -265,9 +249,7 @@ function renderGroupedMessage(
     .join(" ");
 
   if (!markdown && hasToolCards && isToolResult) {
-    return html`${toolCards.map((card) =>
-      renderToolCardSidebar(card, onOpenSidebar),
-    )}`;
+    return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
   if (!markdown && !hasToolCards && !hasImages) return nothing;
@@ -276,14 +258,18 @@ function renderGroupedMessage(
     <div class="${bubbleClasses}">
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
       ${renderMessageImages(images)}
-      ${reasoningMarkdown
-        ? html`<div class="chat-thinking">${unsafeHTML(
-            toSanitizedMarkdownHtml(reasoningMarkdown),
-          )}</div>`
-        : nothing}
-      ${markdown
-        ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
-        : nothing}
+      ${
+        reasoningMarkdown
+          ? html`<div class="chat-thinking">${unsafeHTML(
+              toSanitizedMarkdownHtml(reasoningMarkdown),
+            )}</div>`
+          : nothing
+      }
+      ${
+        markdown
+          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          : nothing
+      }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;

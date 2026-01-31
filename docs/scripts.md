@@ -4,6 +4,7 @@ read_when:
   - Running scripts from the repo
   - Adding or changing scripts under ./scripts
 ---
+
 # Scripts
 
 The `scripts/` directory contains helper scripts for local workflows and ops tasks.

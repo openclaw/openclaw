@@ -98,12 +98,18 @@ export async function sendMessageMSTeams(
     cfg,
     channel: "msteams",
   });
-  const messageText = getMSTeamsRuntime().channel.text.convertMarkdownTables(
-    text ?? "",
-    tableMode,
-  );
+  const messageText = getMSTeamsRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
-  const { adapter, appId, conversationId, ref, log, conversationType, tokenProvider, sharePointSiteId } = ctx;
+  const {
+    adapter,
+    appId,
+    conversationId,
+    ref,
+    log,
+    conversationType,
+    tokenProvider,
+    sharePointSiteId,
+  } = ctx;
 
   log.debug("sending proactive message", {
     conversationId,
@@ -114,10 +120,11 @@ export async function sendMessageMSTeams(
 
   // Handle media if present
   if (mediaUrl) {
-    const mediaMaxBytes = resolveChannelMediaMaxBytes({
-      cfg,
-      resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-    }) ?? MSTEAMS_MAX_MEDIA_BYTES;
+    const mediaMaxBytes =
+      resolveChannelMediaMaxBytes({
+        cfg,
+        resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+      }) ?? MSTEAMS_MAX_MEDIA_BYTES;
     const media = await loadWebMedia(mediaUrl, mediaMaxBytes);
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
@@ -134,12 +141,14 @@ export async function sendMessageMSTeams(
     });
 
     // Personal chats: base64 only works for images; use FileConsentCard for large files or non-images
-    if (requiresFileConsent({
-      conversationType,
-      contentType: media.contentType,
-      bufferSize: media.buffer.length,
-      thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
-    })) {
+    if (
+      requiresFileConsent({
+        conversationType,
+        contentType: media.contentType,
+        bufferSize: media.buffer.length,
+        thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
+      })
+    ) {
       const { activity, uploadId } = prepareFileConsentActivity({
         media: { buffer: media.buffer, filename: fileName, contentType: media.contentType },
         conversationId,
@@ -255,7 +264,10 @@ export async function sendMessageMSTeams(
       }
 
       // Fallback: no SharePoint site configured, use OneDrive with markdown link
-      log.debug("uploading to OneDrive (no SharePoint site configured)", { fileName, conversationType });
+      log.debug("uploading to OneDrive (no SharePoint site configured)", {
+        fileName,
+        conversationType,
+      });
 
       const uploaded = await uploadAndShareOneDrive({
         buffer: media.buffer,
@@ -285,7 +297,11 @@ export async function sendMessageMSTeams(
         messageId = extractMessageId(response) ?? "unknown";
       });
 
-      log.info("sent message with OneDrive file link", { conversationId, messageId, shareUrl: uploaded.shareUrl });
+      log.info("sent message with OneDrive file link", {
+        conversationId,
+        messageId,
+        shareUrl: uploaded.shareUrl,
+      });
 
       return { messageId, conversationId };
     } catch (err) {
@@ -310,7 +326,16 @@ async function sendTextWithMedia(
   text: string,
   mediaUrl: string | undefined,
 ): Promise<SendMSTeamsMessageResult> {
-  const { adapter, appId, conversationId, ref, log, tokenProvider, sharePointSiteId, mediaMaxBytes } = ctx;
+  const {
+    adapter,
+    appId,
+    conversationId,
+    ref,
+    log,
+    tokenProvider,
+    sharePointSiteId,
+    mediaMaxBytes,
+  } = ctx;
 
   let messageIds: string[];
   try {

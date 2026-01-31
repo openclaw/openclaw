@@ -1,8 +1,6 @@
 {
   "id": "telegram",
-  "channels": [
-    "telegram"
-  ],
+  "channels": ["telegram"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

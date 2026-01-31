@@ -1,5 +1,5 @@
 ---
-summary: 'Optional Docker-based setup and onboarding for OpenClaw'
+summary: "Optional Docker-based setup and onboarding for OpenClaw"
 read_when:
   - You want a containerized gateway instead of local installs
   - You are validating the Docker flow
@@ -281,32 +281,32 @@ If you plan to install packages in `setupCommand`, note:
   agents: {
     defaults: {
       sandbox: {
-        mode: 'non-main', // off | non-main | all
-        scope: 'agent', // session | agent | shared (agent is default)
-        workspaceAccess: 'none', // none | ro | rw
-        workspaceRoot: '~/.openclaw/sandboxes',
+        mode: "non-main", // off | non-main | all
+        scope: "agent", // session | agent | shared (agent is default)
+        workspaceAccess: "none", // none | ro | rw
+        workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
-          image: 'openclaw-sandbox:bookworm-slim',
-          workdir: '/workspace',
+          image: "openclaw-sandbox:bookworm-slim",
+          workdir: "/workspace",
           readOnlyRoot: true,
-          tmpfs: ['/tmp', '/var/tmp', '/run'],
-          network: 'none',
-          user: '1000:1000',
-          capDrop: ['ALL'],
-          env: { LANG: 'C.UTF-8' },
-          setupCommand: 'apt-get update && apt-get install -y git curl jq',
+          tmpfs: ["/tmp", "/var/tmp", "/run"],
+          network: "none",
+          user: "1000:1000",
+          capDrop: ["ALL"],
+          env: { LANG: "C.UTF-8" },
+          setupCommand: "apt-get update && apt-get install -y git curl jq",
           pidsLimit: 256,
-          memory: '1g',
-          memorySwap: '2g',
+          memory: "1g",
+          memorySwap: "2g",
           cpus: 1,
           ulimits: {
             nofile: { soft: 1024, hard: 2048 },
             nproc: 256,
           },
-          seccompProfile: '/path/to/seccomp.json',
-          apparmorProfile: 'openclaw-sandbox',
-          dns: ['1.1.1.1', '8.8.8.8'],
-          extraHosts: ['internal.service:10.0.0.5'],
+          seccompProfile: "/path/to/seccomp.json",
+          apparmorProfile: "openclaw-sandbox",
+          dns: ["1.1.1.1", "8.8.8.8"],
+          extraHosts: ["internal.service:10.0.0.5"],
         },
         prune: {
           idleHours: 24, // 0 disables idle pruning
@@ -319,18 +319,18 @@ If you plan to install packages in `setupCommand`, note:
     sandbox: {
       tools: {
         allow: [
-          'exec',
-          'process',
-          'read',
-          'write',
-          'edit',
-          'sessions_list',
-          'sessions_history',
-          'sessions_send',
-          'sessions_spawn',
-          'session_status',
+          "exec",
+          "process",
+          "read",
+          "write",
+          "edit",
+          "sessions_list",
+          "sessions_history",
+          "sessions_send",
+          "sessions_spawn",
+          "session_status",
         ],
-        deny: ['browser', 'canvas', 'nodes', 'cron', 'discord', 'gateway'],
+        deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"],
       },
     },
   },
@@ -366,7 +366,7 @@ This builds `openclaw-sandbox-common:bookworm-slim`. To use it:
 {
   agents: {
     defaults: {
-      sandbox: { docker: { image: 'openclaw-sandbox-common:bookworm-slim' } },
+      sandbox: { docker: { image: "openclaw-sandbox-common:bookworm-slim" } },
     },
   },
 }
@@ -410,7 +410,7 @@ Custom browser image:
 {
   agents: {
     defaults: {
-      sandbox: { browser: { image: 'my-openclaw-browser' } },
+      sandbox: { browser: { image: "my-openclaw-browser" } },
     },
   },
 }
@@ -437,7 +437,7 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 {
   agents: {
     defaults: {
-      sandbox: { docker: { image: 'my-openclaw-sbx' } },
+      sandbox: { docker: { image: "my-openclaw-sbx" } },
     },
   },
 }

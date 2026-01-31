@@ -84,9 +84,7 @@ export class OpenAITTSProvider {
     this.instructions = config.instructions;
 
     if (!this.apiKey) {
-      throw new Error(
-        "OpenAI API key required (set OPENAI_API_KEY or pass apiKey)",
-      );
+      throw new Error("OpenAI API key required (set OPENAI_API_KEY or pass apiKey)");
     }
   }
 
@@ -215,11 +213,7 @@ function linearToMulaw(sample: number): number {
   // Add bias and find segment
   sample += BIAS;
   let exponent = 7;
-  for (
-    let expMask = 0x4000;
-    (sample & expMask) === 0 && exponent > 0;
-    exponent--, expMask >>= 1
-  ) {
+  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {
     // Find the segment (exponent)
   }
 
@@ -252,10 +246,7 @@ export function mulawToLinear(mulaw: number): number {
  * Chunk audio buffer into 20ms frames for streaming.
  * At 8kHz mono, 20ms = 160 samples = 160 bytes (mu-law).
  */
-export function chunkAudio(
-  audio: Buffer,
-  chunkSize = 160,
-): Generator<Buffer, void, unknown> {
+export function chunkAudio(audio: Buffer, chunkSize = 160): Generator<Buffer, void, unknown> {
   return (function* () {
     for (let i = 0; i < audio.length; i += chunkSize) {
       yield audio.subarray(i, Math.min(i + chunkSize, audio.length));

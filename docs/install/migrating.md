@@ -4,6 +4,7 @@ read_when:
   - You are moving OpenClaw to a new laptop/server
   - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
 ---
+
 # Migrating OpenClaw to a new machine
 
 This guide migrates a OpenClaw Gateway from one machine to another **without redoing onboarding**.

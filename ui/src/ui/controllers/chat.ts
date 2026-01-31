@@ -144,9 +144,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   try {
     await state.client.request(
       "chat.abort",
-      runId
-        ? { sessionKey: state.sessionKey, runId }
-        : { sessionKey: state.sessionKey },
+      runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
     );
     return true;
   } catch (err) {
@@ -155,20 +153,13 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
 }
 
-export function handleChatEvent(
-  state: ChatState,
-  payload?: ChatEventPayload,
-) {
+export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) return null;
   if (payload.sessionKey !== state.sessionKey) return null;
 
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
-  if (
-    payload.runId &&
-    state.chatRunId &&
-    payload.runId !== state.chatRunId
-  ) {
+  if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") return "final";
     return null;
   }

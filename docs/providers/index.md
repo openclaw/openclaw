@@ -4,6 +4,7 @@ read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
 ---
+
 # Model Providers
 
 OpenClaw can use many LLM providers. Pick a provider, authenticate, then set the
@@ -22,12 +23,12 @@ See [Venice AI](/providers/venice).
 
 ## Quick start
 
-1) Authenticate with the provider (usually via `openclaw onboard`).
-2) Set the default model:
+1. Authenticate with the provider (usually via `openclaw onboard`).
+2. Set the default model:
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } }
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
 }
 ```
 

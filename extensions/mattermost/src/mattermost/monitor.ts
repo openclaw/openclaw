@@ -154,9 +154,7 @@ function normalizeAllowEntry(entry: string): string {
 }
 
 function normalizeAllowList(entries: Array<string | number>): string[] {
-  const normalized = entries
-    .map((entry) => normalizeAllowEntry(String(entry)))
-    .filter(Boolean);
+  const normalized = entries.map((entry) => normalizeAllowEntry(String(entry))).filter(Boolean);
   return Array.from(new Set(normalized));
 }
 
@@ -427,7 +425,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       hasControlCommand,
     });
     const commandAuthorized =
-      kind === "dm" ? dmPolicy === "open" || senderAllowedForCommands : commandGate.commandAuthorized;
+      kind === "dm"
+        ? dmPolicy === "open" || senderAllowedForCommands
+        : commandGate.commandAuthorized;
 
     if (kind === "dm") {
       if (dmPolicy === "disabled") {
@@ -441,9 +441,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             id: senderId,
             meta: { name: senderName },
           });
-          logVerboseMessage(
-            `mattermost: pairing request sender=${senderId} created=${created}`,
-          );
+          logVerboseMessage(`mattermost: pairing request sender=${senderId} created=${created}`);
           if (created) {
             try {
               await sendMessageMattermost(
@@ -457,15 +455,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
-              logVerboseMessage(
-                `mattermost: pairing reply failed for ${senderId}: ${String(err)}`,
-              );
+              logVerboseMessage(`mattermost: pairing reply failed for ${senderId}: ${String(err)}`);
             }
           }
         } else {
-          logVerboseMessage(
-            `mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`,
-          );
+          logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
         }
         return;
       }
@@ -480,9 +474,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
         if (!groupAllowedForCommands) {
-          logVerboseMessage(
-            `mattermost: drop group sender=${senderId} (not in groupAllowFrom)`,
-          );
+          logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
           return;
         }
       }
@@ -542,14 +534,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         historyMap: channelHistories,
         limit: historyLimit,
         historyKey: historyKey ?? "",
-        entry: historyKey && trimmed
-          ? {
-              sender: pendingSender,
-              body: trimmed,
-              timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
-              messageId: post.id ?? undefined,
-            }
-          : null,
+        entry:
+          historyKey && trimmed
+            ? {
+                sender: pendingSender,
+                body: trimmed,
+                timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+                messageId: post.id ?? undefined,
+              }
+            : null,
       });
     };
 
@@ -707,9 +700,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
     );
 
-    const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "mattermost", account.accountId, {
-      fallbackLimit: account.textChunkLimit ?? 4000,
-    });
+    const textLimit = core.channel.text.resolveTextChunkLimit(
+      cfg,
+      "mattermost",
+      account.accountId,
+      {
+        fallbackLimit: account.textChunkLimit ?? 4000,
+      },
+    );
     const tableMode = core.channel.text.resolveMarkdownTableMode({
       cfg,
       channel: "mattermost",
@@ -784,7 +782,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     markDispatchIdle();
     if (historyKey) {
-      clearHistoryEntriesIfEnabled({ historyMap: channelHistories, historyKey, limit: historyLimit });
+      clearHistoryEntriesIfEnabled({
+        historyMap: channelHistories,
+        historyKey,
+        limit: historyLimit,
+      });
     }
   };
 

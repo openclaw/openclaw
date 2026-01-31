@@ -5,6 +5,7 @@ read_when:
   - Integrating Peekaboo via Swift Package Manager
   - Changing PeekabooBridge protocol/paths
 ---
+
 # Peekaboo Bridge (macOS UI automation)
 
 OpenClaw can host **PeekabooBridge** as a local, permission‑aware UI automation
@@ -20,6 +21,7 @@ macOS app’s TCC permissions.
 ## Enable the bridge
 
 In the macOS app:
+
 - Settings → **Enable Peekaboo Bridge**
 
 When enabled, OpenClaw starts a local UNIX socket server. If disabled, the host

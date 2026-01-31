@@ -113,7 +113,9 @@ export async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
 }): Promise<DimensionalFileInfo | undefined> {
-  const meta = await getCore().media.getImageMetadata(params.buffer).catch(() => null);
+  const meta = await getCore()
+    .media.getImageMetadata(params.buffer)
+    .catch(() => null);
   if (!meta) return undefined;
   const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
   const maxDim = Math.max(meta.width, meta.height);
@@ -125,7 +127,9 @@ export async function prepareImageInfo(params: {
         quality: THUMBNAIL_QUALITY,
         withoutEnlargement: true,
       });
-      const thumbMeta = await getCore().media.getImageMetadata(thumbBuffer).catch(() => null);
+      const thumbMeta = await getCore()
+        .media.getImageMetadata(thumbBuffer)
+        .catch(() => null);
       const thumbUri = await params.client.uploadContent(
         thumbBuffer,
         "image/jpeg",
@@ -201,7 +205,7 @@ export async function uploadMediaMaybeEncrypted(
   },
 ): Promise<{ url: string; file?: EncryptedFile }> {
   // Check if room is encrypted and crypto is available
-  const isEncrypted = client.crypto && await client.crypto.isRoomEncrypted(roomId);
+  const isEncrypted = client.crypto && (await client.crypto.isRoomEncrypted(roomId));
 
   if (isEncrypted && client.crypto) {
     // Encrypt the media before uploading

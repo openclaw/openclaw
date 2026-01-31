@@ -14,7 +14,10 @@ import {
 } from "./timers.js";
 import { endCall } from "./outbound.js";
 
-function shouldAcceptInbound(config: CallManagerContext["config"], from: string | undefined): boolean {
+function shouldAcceptInbound(
+  config: CallManagerContext["config"],
+  from: string | undefined,
+): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
 
   switch (policy) {

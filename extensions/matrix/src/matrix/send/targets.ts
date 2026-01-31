@@ -31,8 +31,7 @@ async function persistDirectRoom(
   } catch {
     // Ignore fetch errors and fall back to an empty map.
   }
-  const existing =
-    directContent && !Array.isArray(directContent) ? directContent : {};
+  const existing = directContent && !Array.isArray(directContent) ? directContent : {};
   const current = Array.isArray(existing[userId]) ? existing[userId] : [];
   if (current[0] === roomId) return;
   const next = [roomId, ...current.filter((id) => id !== roomId)];
@@ -46,15 +45,10 @@ async function persistDirectRoom(
   }
 }
 
-async function resolveDirectRoomId(
-  client: MatrixClient,
-  userId: string,
-): Promise<string> {
+async function resolveDirectRoomId(client: MatrixClient, userId: string): Promise<string> {
   const trimmed = userId.trim();
   if (!trimmed.startsWith("@")) {
-    throw new Error(
-      `Matrix user IDs must be fully qualified (got "${trimmed}")`,
-    );
+    throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
   }
 
   const cached = directRoomCache.get(trimmed);
@@ -65,9 +59,7 @@ async function resolveDirectRoomId(
     const directContent = (await client.getAccountData(
       EventType.Direct,
     )) as MatrixDirectAccountData | null;
-    const list = Array.isArray(directContent?.[trimmed])
-      ? directContent[trimmed]
-      : [];
+    const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
     if (list.length > 0) {
       directRoomCache.set(trimmed, list[0]);
       return list[0];
@@ -112,10 +104,7 @@ async function resolveDirectRoomId(
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
 }
 
-export async function resolveMatrixRoomId(
-  client: MatrixClient,
-  raw: string,
-): Promise<string> {
+export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Promise<string> {
   const target = normalizeTarget(raw);
   const lowered = target.toLowerCase();
   if (lowered.startsWith("matrix:")) {
