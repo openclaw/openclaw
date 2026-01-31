@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "created": "2026-01-31",
+    "lastUpdated": "2026-01-31",
+    "description": "Tracks entity/fact access for memory decay. Hot (7d), Warm (8-30d), Cold (30d+)"
+  },
+  "entities": {
+    "projects/meshguard": {
+      "accessCount": 45,
+      "lastAccessed": "2026-01-29",
+      "tier": "hot"
+    },
+    "projects/savestate": {
+      "accessCount": 28,
+      "lastAccessed": "2026-01-29",
+      "tier": "hot"
+    },
+    "projects/agent-console": {
+      "accessCount": 35,
+      "lastAccessed": "2026-01-31",
+      "tier": "hot"
+    },
+    "projects/undercoveragent": {
+      "accessCount": 15,
+      "lastAccessed": "2026-01-31",
+      "tier": "hot"
+    },
+    "projects/nothockney": {
+      "accessCount": 8,
+      "lastAccessed": "2026-01-26",
+      "tier": "hot"
+    },
+    "people/erin": {
+      "accessCount": 22,
+      "lastAccessed": "2026-01-30",
+      "tier": "hot"
+    },
+    "people/kate": {
+      "accessCount": 12,
+      "lastAccessed": "2026-01-09",
+      "tier": "warm"
+    },
+    "people/claire": {
+      "accessCount": 5,
+      "lastAccessed": "2026-01-15",
+      "tier": "warm"
+    },
+    "people/samuel": {
+      "accessCount": 4,
+      "lastAccessed": "2026-01-10",
+      "tier": "warm"
+    },
+    "people/toby-shea": {
+      "accessCount": 18,
+      "lastAccessed": "2026-01-28",
+      "tier": "hot"
+    },
+    "infra/synology": {
+      "accessCount": 15,
+      "lastAccessed": "2026-01-25",
+      "tier": "hot"
+    },
+    "infra/vercel": {
+      "accessCount": 30,
+      "lastAccessed": "2026-01-31",
+      "tier": "hot"
+    },
+    "infra/vikunja": {
+      "accessCount": 25,
+      "lastAccessed": "2026-01-31",
+      "tier": "hot"
+    }
+  }
+}

@@ -48,6 +48,35 @@ You wake up fresh each session. These files are your continuity:
 
 Capture what matters. Decisions, context, things to remember. Skip the secrets unless asked to keep them.
 
+### 🔥 Memory Decay — Hot/Warm/Cold
+
+Track entity access to prioritize what stays top-of-mind:
+
+```bash
+# Log when you access an entity (project, person, infra)
+python3 scripts/memory-decay.py access "projects/meshguard"
+
+# See current tier breakdown
+python3 scripts/memory-decay.py tiers
+
+# Recalculate tiers (run weekly or after time passes)
+python3 scripts/memory-decay.py recalc
+```
+
+**Tiers:**
+- 🔥 **Hot** (accessed in last 7 days) — Load these context docs first
+- 🌡️ **Warm** (8-30 days) — Load if relevant to conversation
+- ❄️ **Cold** (30+ days) — Available via qmd search, don't preload
+
+**Frequency resistance:** High-access entities resist decay. Something accessed 50+ times stays warm longer.
+
+**When to log access:**
+- Reading a project context doc → log it
+- Working on a project substantially → log it
+- Discussing a person in depth → log it
+
+Don't log every mention — just meaningful engagement with an entity.
+
 ### 👥 People Memory — Use ppl.gift!
 
 When you learn something about a person, **save it to ppl.gift** as a note:
