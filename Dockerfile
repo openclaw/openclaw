@@ -46,8 +46,9 @@ RUN mkdir -p /home/node/.clawdbot /home/node/.moltbot \
 # - dangerouslyDisableDeviceAuth: required for reverse proxy (browser sends device identity
 #   over HTTPS, but gateway can't verify pairing approval without persistent state/manual approval)
 # Security note: This disables device-level auth; rely on token/password auth instead
-RUN echo 'gateway:\n  trustedProxies:\n    - "10.0.0.0/8"\n    - "172.16.0.0/12"\n    - "192.168.0.0/16"\n  controlUi:\n    dangerouslyDisableDeviceAuth: true' > /home/node/.moltbot/config.yaml \
-    && chown node:node /home/node/.moltbot/config.yaml
+# NOTE: Config must be openclaw.json (not config.yaml) - the code only reads .json files
+RUN echo '{"gateway":{"trustedProxies":["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"],"controlUi":{"dangerouslyDisableDeviceAuth":true}}}' > /home/node/.moltbot/openclaw.json \
+    && chown node:node /home/node/.moltbot/openclaw.json
 
 USER node
 
