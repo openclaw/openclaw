@@ -45,7 +45,8 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             inputTokens: input,
             outputTokens: output,
-            totalTokens: promptTokens > 0 ? promptTokens : (params.usage?.total ?? input),
+            totalTokens:
+              promptTokens > 0 ? promptTokens + output : (params.usage?.total ?? input + output),
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
