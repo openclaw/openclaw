@@ -36,7 +36,7 @@ export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<S
     };
   }
   try {
-    const version = await signalRpcRequest<unknown>("version", undefined, {
+    const version = await signalRpcRequest("version", undefined, {
       baseUrl,
       timeoutMs,
     });

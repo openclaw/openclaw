@@ -95,14 +95,14 @@ async function createLocalEmbeddingProvider(
     embedQuery: async (text) => {
       const ctx = await ensureContext();
       const embedding = await ctx.getEmbeddingFor(text);
-      return Array.from(embedding.vector) as number[];
+      return Array.from(embedding.vector);
     },
     embedBatch: async (texts) => {
       const ctx = await ensureContext();
       const embeddings = await Promise.all(
         texts.map(async (text) => {
           const embedding = await ctx.getEmbeddingFor(text);
-          return Array.from(embedding.vector) as number[];
+          return Array.from(embedding.vector);
         }),
       );
       return embeddings;
@@ -155,7 +155,7 @@ export async function createEmbeddingProvider(
           missingKeyErrors.push(message);
           continue;
         }
-        throw new Error(message);
+        throw new Error(message, { cause: err });
       }
     }
 
@@ -181,10 +181,14 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        throw new Error(`${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`);
+        throw new Error(
+          `${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`,
+          { cause: primaryErr },
+          { cause: fallbackErr },
+        );
       }
     }
-    throw new Error(reason);
+    throw new Error(reason, { cause: primaryErr });
   }
 }
 

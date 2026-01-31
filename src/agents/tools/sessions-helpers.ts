@@ -135,7 +135,7 @@ async function resolveSessionKeyFromSessionId(params: {
 }): Promise<SessionReferenceResolution> {
   try {
     // Resolve via gateway so we respect store routing and visibility rules.
-    const result = (await callGateway({
+    const result = await callGateway({
       method: "sessions.resolve",
       params: {
         sessionId: params.sessionId,
@@ -143,7 +143,7 @@ async function resolveSessionKeyFromSessionId(params: {
         includeGlobal: !params.restrictToSpawned,
         includeUnknown: !params.restrictToSpawned,
       },
-    })) as { key?: unknown };
+    });
     const key = typeof result?.key === "string" ? result.key.trim() : "";
     if (!key) {
       throw new Error(
@@ -188,13 +188,13 @@ async function resolveSessionKeyFromKey(params: {
 }): Promise<SessionReferenceResolution | null> {
   try {
     // Try key-based resolution first so non-standard keys keep working.
-    const result = (await callGateway({
+    const result = await callGateway({
       method: "sessions.resolve",
       params: {
         key: params.key,
         spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
       },
-    })) as { key?: unknown };
+    });
     const key = typeof result?.key === "string" ? result.key.trim() : "";
     if (!key) return null;
     return {

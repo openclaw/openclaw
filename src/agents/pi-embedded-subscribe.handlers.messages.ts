@@ -162,7 +162,7 @@ export function handleMessageEnd(
   const msg = evt.message;
   if (msg?.role !== "assistant") return;
 
-  const assistantMessage = msg as AssistantMessage;
+  const assistantMessage = msg;
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);

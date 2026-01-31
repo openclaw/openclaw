@@ -401,7 +401,9 @@ export async function statusCommand(
     };
     const sevRank = (sev: "critical" | "warn" | "info") =>
       sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
-    const sorted = [...importantFindings].sort((a, b) => sevRank(a.severity) - sevRank(b.severity));
+    const sorted = [...importantFindings].toSorted(
+      (a, b) => sevRank(a.severity) - sevRank(b.severity),
+    );
     const shown = sorted.slice(0, 6);
     for (const f of shown) {
       runtime.log(`  ${severityLabel(f.severity)} ${f.title}`);

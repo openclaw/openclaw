@@ -45,7 +45,7 @@ export async function removeChannelConfigWizard(
         ],
       }),
       runtime,
-    ) as string;
+    );
 
     if (channel === "done") return next;
 

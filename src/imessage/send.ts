@@ -101,7 +101,7 @@ export async function sendMessageIMessage(
 
   const params: Record<string, unknown> = {
     text: message,
-    service: (service || "auto") as IMessageService,
+    service: service || "auto",
     region,
   };
   if (filePath) params.file = filePath;

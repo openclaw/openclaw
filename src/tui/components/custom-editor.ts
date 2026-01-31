@@ -19,9 +19,6 @@ export class CustomEditor extends Editor {
   onShiftTab?: () => void;
   onAltEnter?: () => void;
 
-  constructor(tui: TUI, theme: EditorTheme, options?: EditorOptions) {
-    super(tui, theme, options);
-  }
   handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();

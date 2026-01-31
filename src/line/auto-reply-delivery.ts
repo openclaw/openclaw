@@ -121,9 +121,7 @@ export async function deliverLineAutoReply(params: {
     : { text: "", flexMessages: [] };
 
   for (const flexMsg of processed.flexMessages) {
-    richMessages.push(
-      deps.createFlexMessage(flexMsg.altText.slice(0, 400), flexMsg.contents as FlexContainer),
-    );
+    richMessages.push(deps.createFlexMessage(flexMsg.altText.slice(0, 400), flexMsg.contents));
   }
 
   const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];

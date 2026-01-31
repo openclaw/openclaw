@@ -53,7 +53,7 @@ export function registerBrowserAgentStorageRoutes(
           secure: toBoolean(cookie.secure) ?? undefined,
           sameSite:
             cookie.sameSite === "Lax" || cookie.sameSite === "None" || cookie.sameSite === "Strict"
-              ? (cookie.sameSite as "Lax" | "None" | "Strict")
+              ? cookie.sameSite
               : undefined,
         },
       });
@@ -270,7 +270,7 @@ export function registerBrowserAgentStorageRoutes(
     const schemeRaw = toStringOrEmpty(body.colorScheme);
     const colorScheme =
       schemeRaw === "dark" || schemeRaw === "light" || schemeRaw === "no-preference"
-        ? (schemeRaw as "dark" | "light" | "no-preference")
+        ? schemeRaw
         : schemeRaw === "none"
           ? null
           : undefined;

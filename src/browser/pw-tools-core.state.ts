@@ -136,7 +136,8 @@ export async function setTimezoneViaPlaywright(opts: {
     } catch (err) {
       const msg = String(err);
       if (msg.includes("Timezone override is already in effect")) return;
-      if (msg.includes("Invalid timezone")) throw new Error(`Invalid timezone ID: ${timezoneId}`);
+      if (msg.includes("Invalid timezone"))
+        throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
       throw err;
     }
   });

@@ -220,7 +220,7 @@ export async function statusAllCommand(
 
     progress.setLabel("Querying gateway…");
     const health = gatewayReachable
-      ? await callGateway<unknown>({
+      ? await callGateway({
           method: "health",
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
           ...callOverrides,
@@ -379,19 +379,17 @@ export async function statusAllCommand(
       daemon
         ? {
             Item: "Gateway service",
-            Value:
-              daemon.installed === false
-                ? `${daemon.label} not installed`
-                : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
+            Value: !daemon.installed
+              ? `${daemon.label} not installed`
+              : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
           }
         : { Item: "Gateway service", Value: "unknown" },
       nodeService
         ? {
             Item: "Node service",
-            Value:
-              nodeService.installed === false
-                ? `${nodeService.label} not installed`
-                : `${nodeService.label} ${nodeService.installed ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
+            Value: !nodeService.installed
+              ? `${nodeService.label} not installed`
+              : `${nodeService.label} ${nodeService.installed ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
           }
         : { Item: "Node service", Value: "unknown" },
       {

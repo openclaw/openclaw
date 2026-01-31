@@ -44,7 +44,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context }) => {
-    const p = params as Record<string, unknown>;
+    const p = params;
     if (!validateAgentParams(p)) {
       respond(
         false,
@@ -430,7 +430,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as AgentIdentityParams;
+    const p = params;
     const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
     const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
@@ -471,7 +471,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as AgentWaitParams;
+    const p = params;
     const runId = p.runId.trim();
     const timeoutMs =
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)

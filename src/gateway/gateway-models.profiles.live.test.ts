@@ -965,7 +965,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       });
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const all = modelRegistry.getAll() as Array<Model<Api>>;
+      const all = modelRegistry.getAll();
 
       const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
       const useModern = !rawModels || rawModels === "modern" || rawModels === "all";

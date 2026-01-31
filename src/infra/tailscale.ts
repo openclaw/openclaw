@@ -120,7 +120,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
         typeof parsed.Self === "object" && parsed.Self !== null
           ? (parsed.Self as Record<string, unknown>)
           : undefined;
-      const dns = typeof self?.DNSName === "string" ? (self.DNSName as string) : undefined;
+      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
       const ips = Array.isArray(self?.TailscaleIPs)
         ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
         : [];

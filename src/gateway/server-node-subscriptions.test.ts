@@ -17,7 +17,7 @@ describe("node subscription manager", () => {
     manager.sendToSession("main", "chat", { ok: true }, sendEvent);
 
     expect(sent).toHaveLength(2);
-    expect(sent.map((s) => s.nodeId).sort()).toEqual(["node-a", "node-b"]);
+    expect(sent.map((s) => s.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
     expect(sent[0].event).toBe("chat");
   });
 

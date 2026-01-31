@@ -174,7 +174,7 @@ export async function buildChannelSummary(
         })
       : undefined;
 
-    const summaryRecord = summary as Record<string, unknown> | undefined;
+    const summaryRecord = summary;
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     const configured =

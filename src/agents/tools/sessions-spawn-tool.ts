@@ -84,9 +84,7 @@ export function createSessionsSpawnTool(opts?: {
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cleanup =
-        params.cleanup === "keep" || params.cleanup === "delete"
-          ? (params.cleanup as "keep" | "delete")
-          : "keep";
+        params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const requesterOrigin = normalizeDeliveryContext({
         channel: opts?.agentChannel,
         accountId: opts?.agentAccountId,
@@ -211,7 +209,7 @@ export function createSessionsSpawnTool(opts?: {
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
       try {
-        const response = (await callGateway({
+        const response = await callGateway({
           method: "agent",
           params: {
             message: task,
@@ -230,7 +228,7 @@ export function createSessionsSpawnTool(opts?: {
             groupSpace: opts?.agentGroupSpace ?? undefined,
           },
           timeoutMs: 10_000,
-        })) as { runId?: string };
+        });
         if (typeof response?.runId === "string" && response.runId) {
           childRunId = response.runId;
         }

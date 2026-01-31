@@ -33,11 +33,11 @@ export async function promptChannelAccessPolicy(params: {
     options.push({ value: "disabled", label: "Disabled (block all channels)" });
   }
   const initialValue = params.currentPolicy ?? "allowlist";
-  return (await params.prompter.select({
+  return await params.prompter.select({
     message: `${params.label} access`,
     options,
     initialValue,
-  })) as ChannelAccessPolicy;
+  });
 }
 
 export async function promptChannelAllowlist(params: {

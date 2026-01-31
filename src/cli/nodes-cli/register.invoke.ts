@@ -112,7 +112,7 @@ function resolveExecDefaults(
 
 async function resolveNodePlatform(opts: NodesRpcOpts, nodeId: string): Promise<string | null> {
   try {
-    const res = (await callGatewayCli("node.list", opts, {})) as unknown;
+    const res = await callGatewayCli("node.list", opts, {});
     const nodes = parseNodeList(res);
     const match = nodes.find((node) => node.nodeId === nodeId);
     return typeof match?.platform === "string" ? match.platform : null;
@@ -324,7 +324,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             invokeParams.timeoutMs = invokeTimeout;
           }
 
-          const result = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const result = await callGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;

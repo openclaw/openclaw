@@ -23,7 +23,7 @@ async function getOsFreePort(): Promise<number> {
         reject(new Error("failed to acquire free port"));
         return;
       }
-      const port = (addr as AddressInfo).port;
+      const port = addr.port;
       server.close((err) => (err ? reject(err) : resolve(port)));
     });
   });

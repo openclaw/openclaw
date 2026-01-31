@@ -33,7 +33,7 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
   }
-  return value as T;
+  return value;
 }
 
 export function summarizeExistingConfig(config: OpenClawConfig): string {

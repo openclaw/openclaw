@@ -37,7 +37,7 @@ export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   );
   debugAccounts("listTelegramAccountIds", ids);
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
