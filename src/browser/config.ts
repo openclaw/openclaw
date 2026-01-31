@@ -100,6 +100,7 @@ export function parseHttpUrl(raw: string, label: string) {
 /**
  * Ensure the default "openclaw" profile exists in the profiles map.
  * Auto-creates it with the legacy CDP port (from browser.cdpUrl) or first port if missing.
+ * Also normalizes all profiles to have a default color if not specified.
  */
 function ensureDefaultProfile(
   profiles: Record<string, BrowserProfileConfig> | undefined,
@@ -107,7 +108,17 @@ function ensureDefaultProfile(
   legacyCdpPort?: number,
   derivedDefaultCdpPort?: number,
 ): Record<string, BrowserProfileConfig> {
-  const result = { ...profiles };
+  const result: Record<string, BrowserProfileConfig> = {};
+
+  // Normalize existing profiles - ensure each has a color
+  for (const [name, profile] of Object.entries(profiles ?? {})) {
+    result[name] = {
+      ...profile,
+      color: profile.color?.trim() || defaultColor,
+    };
+  }
+
+  // Add default "openclaw" profile if missing
   if (!result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]) {
     result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] = {
       cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? CDP_PORT_RANGE_START,
@@ -263,7 +274,7 @@ export function resolveProfile(
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    color: profile.color,
+    color: profile.color || DEFAULT_OPENCLAW_BROWSER_COLOR,
     driver,
   };
 }

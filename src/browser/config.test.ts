@@ -149,4 +149,16 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome")).toBe(null);
     expect(resolved.defaultProfile).toBe("openclaw");
   });
+
+  it("assigns default color to profiles without a color specified", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        desktop: { cdpUrl: "http://127.0.0.1:9222" } as any,
+      },
+    });
+    const desktop = resolveProfile(resolved, "desktop");
+    expect(desktop).not.toBe(null);
+    expect(desktop?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(desktop?.color).toBe("#FF4500"); // DEFAULT_OPENCLAW_BROWSER_COLOR
+  });
 });
