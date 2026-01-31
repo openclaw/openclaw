@@ -6,7 +6,11 @@ import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import {
+  sanitizeHeaders,
+  type EmbeddingProvider,
+  type EmbeddingProviderOptions,
+} from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 
 export type GeminiEmbeddingClient = {
@@ -169,7 +173,8 @@ export async function resolveGeminiEmbeddingClient(
   const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  // Merge headers while filtering out prototype pollution keys
+  const headerOverrides = sanitizeHeaders(providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     ...headerOverrides,
   };

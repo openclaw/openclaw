@@ -26,6 +26,33 @@ export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
+// Header keys that could cause prototype pollution if merged via Object.assign
+const DANGEROUS_HEADER_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Safely merge header objects while filtering out prototype pollution keys.
+ */
+export function sanitizeHeaders(
+  ...sources: Array<Record<string, string> | undefined>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const source of sources) {
+    if (!source || typeof source !== "object") {
+      continue;
+    }
+    for (const key of Object.keys(source)) {
+      if (DANGEROUS_HEADER_KEYS.has(key)) {
+        continue;
+      }
+      const value = source[key];
+      if (typeof value === "string") {
+        result[key] = value;
+      }
+    }
+  }
+  return result;
+}
+
 export type EmbeddingProvider = {
   id: string;
   model: string;
