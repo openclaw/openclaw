@@ -8,8 +8,8 @@ services:
     envVars:
       - key: PORT
         value: "8080"
-      - key: SETUP_PASSWORD
-        sync: false
+      - key: NODE_ENV
+        value: "production"
       - key: OPENCLAW_STATE_DIR
         value: /data/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR
@@ -18,6 +18,10 @@ services:
         value: "8ce1726d13a61426451d7ddb8dd96d484809eaefbe1b5e93aaa4d0a8e5ffe366"
       - key: OPENCLAW_GATEWAY_PAIRING
         value: "off"
+      - key: SETUP_PASSWORD
+        value: "setup123"
+      - key: ANTHROPIC_API_KEY
+        sync: false
     disk:
       name: openclaw-data
       mountPath: /data
