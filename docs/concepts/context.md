@@ -4,6 +4,7 @@ read_when:
   - You want to understand what “context” means in OpenClaw
   - You are debugging why the model “knows” something (or forgot it)
   - You want to reduce context overhead (/context, /status, /compact)
+title: "Context"
 ---
 
 # Context

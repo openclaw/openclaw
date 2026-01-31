@@ -3,6 +3,7 @@ summary: "Install OpenClaw (recommended installer, global install, or from sourc
 read_when:
   - Installing OpenClaw
   - You want to install from GitHub
+title: "Install"
 ---
 
 # Install

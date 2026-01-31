@@ -3,6 +3,7 @@ summary: "Setup guide: keep your OpenClaw setup tailored while staying up-to-dat
 read_when:
   - Setting up a new machine
   - You want “latest + greatest” without breaking your personal setup
+title: "Setup"
 ---
 
 # Setup

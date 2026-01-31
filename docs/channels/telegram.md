@@ -2,6 +2,7 @@
 summary: "Telegram bot support status, capabilities, and configuration"
 read_when:
   - Working on Telegram features or webhooks
+title: "Telegram"
 ---
 
 # Telegram (Bot API)

@@ -5,6 +5,7 @@ read_when:
   - You want a production-grade, always-on Gateway on your own VPS
   - You want full control over persistence, binaries, and restart behavior
   - You are running OpenClaw in Docker on Hetzner or a similar provider
+title: "Hetzner"
 ---
 
 # OpenClaw on Hetzner (Docker, Production VPS Guide)

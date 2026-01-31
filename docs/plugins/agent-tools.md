@@ -3,6 +3,7 @@ summary: "Write agent tools in a plugin (schemas, optional tools, allowlists)"
 read_when:
   - You want to add a new agent tool in a plugin
   - You need to make a tool opt-in via allowlists
+title: "Plugin Agent Tools"
 ---
 
 # Plugin agent tools

@@ -4,6 +4,7 @@ read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
   - Verifying chat history parity across clients
+title: "Android App"
 ---
 
 # Android App (Node)

@@ -1,6 +1,7 @@
 ---
 summary: "RPC protocol notes for onboarding wizard and config schema"
 read_when: "Changing onboarding wizard steps or config schema endpoints"
+title: "Onboarding and Config Protocol"
 ---
 
 # Onboarding + Config Protocol

@@ -4,6 +4,7 @@ read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
   - You need the safest local model guidance
+title: "Local Models"
 ---
 
 # Local models

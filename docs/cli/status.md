@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw status` (diagnostics, probes, usage snapsh
 read_when:
   - You want a quick diagnosis of channel health + recent session recipients
   - You want a pasteable “all” status for debugging
+title: "status"
 ---
 
 # `openclaw status`

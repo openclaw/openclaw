@@ -1,3 +1,7 @@
+---
+title: "Creating Skills"
+---
+
 # Creating Custom Skills 🛠
 
 OpenClaw is designed to be easily extensible. "Skills" are the primary way to add new capabilities to your assistant.

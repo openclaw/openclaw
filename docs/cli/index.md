@@ -3,6 +3,7 @@ summary: "OpenClaw CLI reference for `openclaw` commands, subcommands, and optio
 read_when:
   - Adding or modifying CLI commands or options
   - Documenting new command surfaces
+title: "CLI Reference"
 ---
 
 # CLI reference

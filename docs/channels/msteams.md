@@ -2,6 +2,7 @@
 summary: "Microsoft Teams bot support status, capabilities, and configuration"
 read_when:
   - Working on MS Teams channel features
+title: "Microsoft Teams"
 ---
 
 # Microsoft Teams (plugin)

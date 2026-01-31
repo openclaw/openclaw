@@ -2,6 +2,7 @@
 summary: "Image and media handling rules for send, gateway, and agent replies"
 read_when:
   - Modifying media pipeline or attachments
+title: "Image and Media Support"
 ---
 
 # Image & Media Support — 2025-12-05

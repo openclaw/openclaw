@@ -2,6 +2,7 @@
 summary: "Runbook for the Gateway service, lifecycle, and operations"
 read_when:
   - Running or debugging the gateway process
+title: "Gateway Runbook"
 ---
 
 # Gateway service runbook

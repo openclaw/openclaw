@@ -2,6 +2,7 @@
 summary: "How to run tests locally (vitest) and when to use force/coverage modes"
 read_when:
   - Running or fixing tests
+title: "Tests"
 ---
 
 # Tests

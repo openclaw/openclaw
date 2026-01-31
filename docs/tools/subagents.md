@@ -3,6 +3,7 @@ summary: "Sub-agents: spawning isolated agent runs that announce results back to
 read_when:
   - You want background/parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
+title: "Sub-Agents"
 ---
 
 # Sub-agents

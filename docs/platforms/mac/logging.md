@@ -3,6 +3,7 @@ summary: "OpenClaw logging: rolling diagnostics file log + unified log privacy f
 read_when:
   - Capturing macOS logs or investigating private data logging
   - Debugging voice wake/session lifecycle issues
+title: "macOS Logging"
 ---
 
 # Logging (macOS)

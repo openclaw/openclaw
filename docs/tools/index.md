@@ -3,6 +3,7 @@ summary: "Agent tool surface for OpenClaw (browser, canvas, nodes, message, cron
 read_when:
   - Adding or modifying agent tools
   - Retiring or changing `openclaw-*` skills
+title: "Tools"
 ---
 
 # Tools (OpenClaw)

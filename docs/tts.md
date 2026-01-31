@@ -4,6 +4,7 @@ read_when:
   - Enabling text-to-speech for replies
   - Configuring TTS providers or limits
   - Using /tts commands
+title: "Text-to-Speech"
 ---
 
 # Text-to-speech (TTS)

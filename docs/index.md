@@ -2,6 +2,7 @@
 summary: "Top-level overview of OpenClaw, features, and purpose"
 read_when:
   - Introducing OpenClaw to newcomers
+title: "OpenClaw"
 ---
 
 # OpenClaw 🦞

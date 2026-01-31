@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw node` (headless node host)"
 read_when:
   - Running the headless node host
   - Pairing a non-macOS node for system.run
+title: "node"
 ---
 
 # `openclaw node`

@@ -3,6 +3,7 @@ summary: "Gateway web surfaces: Control UI, bind modes, and security"
 read_when:
   - You want to access the Gateway over Tailscale
   - You want the browser Control UI and config editing
+title: "Web"
 ---
 
 # Web (Gateway)

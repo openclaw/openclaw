@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw memory` (status/index/search)"
 read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
+title: "memory"
 ---
 
 # `openclaw memory`

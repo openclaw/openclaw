@@ -3,6 +3,7 @@ summary: "OpenClaw plugins/extensions: discovery, config, and safety"
 read_when:
   - Adding or modifying plugins/extensions
   - Documenting plugin install or load rules
+title: "Plugins"
 ---
 
 # Plugins (Extensions)

@@ -2,6 +2,7 @@
 summary: "Nextcloud Talk support status, capabilities, and configuration"
 read_when:
   - Working on Nextcloud Talk channel features
+title: "Nextcloud Talk"
 ---
 
 # Nextcloud Talk (plugin)

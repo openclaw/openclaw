@@ -3,6 +3,7 @@ summary: "Use OpenCode Zen (curated models) with OpenClaw"
 read_when:
   - You want OpenCode Zen for model access
   - You want a curated list of coding-friendly models
+title: "OpenCode Zen"
 ---
 
 # OpenCode Zen

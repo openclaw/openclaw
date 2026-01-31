@@ -4,6 +4,7 @@ read_when:
   - Explaining how inbound messages become replies
   - Clarifying sessions, queueing modes, or streaming behavior
   - Documenting reasoning visibility and usage implications
+title: "Messages"
 ---
 
 # Messages

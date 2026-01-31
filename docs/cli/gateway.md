@@ -4,6 +4,7 @@ read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (LAN + tailnet)
+title: "gateway"
 ---
 
 # Gateway CLI
