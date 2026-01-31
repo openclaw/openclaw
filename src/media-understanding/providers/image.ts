@@ -1,6 +1,8 @@
+import { join } from "node:path";
+
 import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
@@ -12,8 +14,8 @@ export async function describeImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const authStorage = new AuthStorage(join(params.agentDir, "auth.json"));
+  const modelRegistry = new ModelRegistry(authStorage, join(params.agentDir, "models.json"));
   const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);

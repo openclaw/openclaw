@@ -232,15 +232,20 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     "@mariozechner/pi-coding-agent",
   );
 
-  return {
-    ...actual,
-    discoverModels: (...args: unknown[]) => {
+  class MockModelRegistry extends actual.ModelRegistry {
+    override getAll(): ReturnType<typeof actual.ModelRegistry.prototype.getAll> {
       if (!piSdkMock.enabled) {
-        return (actual.discoverModels as (...args: unknown[]) => unknown)(...args);
+        return super.getAll();
       }
       piSdkMock.discoverCalls += 1;
-      return piSdkMock.models;
-    },
+      // Cast to expected type for testing purposes
+      return piSdkMock.models as ReturnType<typeof actual.ModelRegistry.prototype.getAll>;
+    }
+  }
+
+  return {
+    ...actual,
+    ModelRegistry: MockModelRegistry,
   };
 });
 
