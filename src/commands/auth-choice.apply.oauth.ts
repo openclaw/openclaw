@@ -68,8 +68,9 @@ export async function applyAuthChoiceOAuth(
       });
 
       spin.stop("Chutes OAuth complete");
-      const email = typeof creds.email === "string" ? creds.email.trim() : "";
-      const profileId = `chutes:${email || "default"}`;
+      const email =
+        typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
+      const profileId = `chutes:${email}`;
 
       await writeOAuthCredentials("chutes", creds, params.agentDir);
       nextConfig = applyAuthProfileConfig(nextConfig, {

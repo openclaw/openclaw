@@ -458,11 +458,10 @@ export async function runEmbeddedAttempt(
         settingsManager,
         additionalExtensionPaths,
         noSkills: true,
-        systemPromptOverride: () => systemPrompt(""),
+        systemPromptOverride: systemPrompt,
         agentsFilesOverride: () => ({ agentsFiles: [] }),
       });
       await resourceLoader.reload();
-
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
