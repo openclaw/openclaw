@@ -1510,7 +1510,7 @@ export async function textToSpeech(params: {
         // Set output format and extension based on format
         const formatExtensions: Record<string, string> = {
           wav: ".wav",
-          s16le: ".raw",
+          s16le: ".s16le",
           mp3: ".mp3",
           opus: ".opus",
           mulaw: ".raw",
