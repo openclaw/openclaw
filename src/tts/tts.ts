@@ -13,6 +13,7 @@ import path from "node:path";
 
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
+import WebSocket from "ws";
 
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -51,6 +52,12 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_DEEPDUB_WS_URL = "wss://wsapi.deepdub.ai/open";
+const DEFAULT_DEEPDUB_MODEL = "dd-etts-2.5";
+const DEFAULT_DEEPDUB_VOICE_PROMPT_ID = "5d3dc622-69bd-4c00-9513-05df47dbdea6_authoritative";
+const DEFAULT_DEEPDUB_LOCALE = "en-US";
+const DEFAULT_DEEPDUB_FORMAT = "mp3";
+const DEFAULT_DEEPDUB_SAMPLE_RATE = 48000;
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -65,6 +72,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  deepdub: "opus",
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -72,6 +80,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  deepdub: "mp3",
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -79,6 +88,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  deepdub: { format: "mulaw" as const, sampleRate: 8000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -123,6 +133,16 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  deepdub: {
+    apiKey?: string;
+    wsUrl: string;
+    model: string;
+    voicePromptId: string;
+    locale: string;
+    temperature?: number;
+    format: "wav" | "s16le" | "mp3" | "opus" | "mulaw";
+    sampleRate: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -248,7 +268,7 @@ function resolveModelOverridePolicy(
 }
 
 export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
-  const raw: TtsConfig = cfg.messages?.tts ?? {};
+  const raw: Partial<TtsConfig> = cfg.messages?.tts ?? {};
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
   const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
@@ -297,6 +317,16 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    deepdub: {
+      apiKey: raw.deepdub?.apiKey,
+      wsUrl: raw.deepdub?.wsUrl?.trim() || DEFAULT_DEEPDUB_WS_URL,
+      model: raw.deepdub?.model?.trim() || DEFAULT_DEEPDUB_MODEL,
+      voicePromptId: raw.deepdub?.voicePromptId?.trim() || DEFAULT_DEEPDUB_VOICE_PROMPT_ID,
+      locale: raw.deepdub?.locale?.trim() || DEFAULT_DEEPDUB_LOCALE,
+      temperature: raw.deepdub?.temperature,
+      format: raw.deepdub?.format ?? DEFAULT_DEEPDUB_FORMAT,
+      sampleRate: raw.deepdub?.sampleRate ?? DEFAULT_DEEPDUB_SAMPLE_RATE,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -436,6 +466,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "deepdub")) {
+    return "deepdub";
+  }
   return "edge";
 }
 
@@ -500,10 +533,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "deepdub") {
+    return config.deepdub.apiKey || process.env.DEEPDUB_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "deepdub", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -635,8 +671,13 @@ function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
-              overrides.provider = rawValue;
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "deepdub" ||
+              rawValue === "edge"
+            ) {
+              overrides.provider = rawValue as TtsProvider;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
             }
@@ -1160,6 +1201,168 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+/**
+ * Deepdub TTS via WebSocket API.
+ * Connects, sends text-to-speech request, collects audio chunks, returns buffer.
+ * Uses the regular wsapi endpoint (wss://wsapi.deepdub.ai/open).
+ */
+async function deepdubTTS(params: {
+  text: string;
+  apiKey: string;
+  wsUrl: string;
+  model: string;
+  voicePromptId: string;
+  locale: string;
+  temperature?: number;
+  format: "wav" | "s16le" | "mp3" | "opus" | "mulaw";
+  sampleRate: number;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const {
+    text,
+    apiKey,
+    wsUrl,
+    model,
+    voicePromptId,
+    locale,
+    temperature,
+    format,
+    sampleRate,
+    timeoutMs,
+  } = params;
+
+  // Generate a unique generation ID for this request
+  const generationId = crypto.randomUUID();
+
+  return new Promise((resolve, reject) => {
+    const audioChunks: Buffer[] = [];
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let requestSent = false;
+    let resolved = false;
+
+    const cleanup = () => {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = undefined;
+      }
+    };
+
+    // Connect with API key header (must be before setTimeout to avoid reference error)
+    const ws = new WebSocket(wsUrl, {
+      headers: {
+        "x-api-key": apiKey,
+      },
+    });
+
+    // Set up timeout after ws is initialized
+    timeoutHandle = setTimeout(() => {
+      cleanup();
+      ws.close();
+      if (!resolved) {
+        resolved = true;
+        reject(new Error("Deepdub TTS request timed out"));
+      }
+    }, timeoutMs);
+
+    ws.on("error", (err: Error) => {
+      cleanup();
+      ws.close();
+      if (!resolved) {
+        resolved = true;
+        reject(new Error(`Deepdub WebSocket error: ${err.message}`));
+      }
+    });
+
+    ws.on("close", () => {
+      cleanup();
+      if (resolved) {
+        return;
+      }
+      // If we have audio and request was sent, resolve with it
+      if (audioChunks.length > 0 && requestSent) {
+        resolved = true;
+        resolve(Buffer.concat(audioChunks));
+      } else {
+        // Close without audio - reject to allow fallback
+        resolved = true;
+        reject(new Error("Deepdub WebSocket closed without receiving audio"));
+      }
+    });
+
+    ws.on("open", () => {
+      // Send text-to-speech request (regular API format)
+      const ttsRequest = {
+        action: "text-to-speech",
+        generationId,
+        targetText: text,
+        model,
+        voicePromptId,
+        locale,
+        temperature: temperature != null ? temperature : undefined,
+        format,
+        sampleRate: sampleRate > 0 ? sampleRate : undefined,
+      };
+      ws.send(JSON.stringify(ttsRequest));
+      requestSent = true;
+    });
+
+    ws.on("message", (data: Buffer | ArrayBuffer | Buffer[]) => {
+      try {
+        // Handle different data types from WebSocket
+        let dataStr: string;
+        if (Buffer.isBuffer(data)) {
+          dataStr = data.toString("utf8");
+        } else if (data instanceof ArrayBuffer) {
+          dataStr = Buffer.from(data).toString("utf8");
+        } else if (Array.isArray(data)) {
+          dataStr = Buffer.concat(data).toString("utf8");
+        } else {
+          dataStr = Buffer.from(data as Uint8Array).toString("utf8");
+        }
+        const msg = JSON.parse(dataStr) as Record<string, unknown>;
+
+        // Handle error messages
+        if (msg.error) {
+          const errMsg = typeof msg.error === "string" ? msg.error : "Unknown Deepdub error";
+          cleanup();
+          ws.close();
+          if (!resolved) {
+            resolved = true;
+            reject(new Error(errMsg));
+          }
+          return;
+        }
+
+        // Verify this is our generation
+        if (msg.generationId !== generationId) {
+          return;
+        }
+
+        // Handle audio chunks
+        // Response format: {"generationId": "...", "data": "base64", "index": N, "isFinished": bool}
+        if (typeof msg.data === "string" && msg.data.length > 0) {
+          const audioData = Buffer.from(msg.data, "base64");
+          audioChunks.push(audioData);
+        }
+
+        // Check if this is the last chunk
+        if (msg.isFinished === true) {
+          cleanup();
+          ws.close();
+          if (!resolved) {
+            resolved = true;
+            resolve(Buffer.concat(audioChunks));
+          }
+        }
+      } catch (err) {
+        // JSON parse error - continue receiving
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logVerbose(`Deepdub: failed to parse message: ${errMsg}`);
+      }
+    });
+  });
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1264,6 +1467,10 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
+      let providerOutputFormat: string;
+      let providerExtension: string;
+      let providerVoiceCompatible: boolean;
+
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
@@ -1287,6 +1494,35 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.elevenlabs;
+        providerExtension = output.extension;
+        providerVoiceCompatible = output.voiceCompatible;
+      } else if (provider === "deepdub") {
+        // Use configured format, or mp3 for Telegram (opus requires different handling)
+        const deepdubFormat = channelId === "telegram" ? "opus" : config.deepdub.format;
+        audioBuffer = await deepdubTTS({
+          text: params.text,
+          apiKey,
+          wsUrl: config.deepdub.wsUrl,
+          model: config.deepdub.model,
+          voicePromptId: config.deepdub.voicePromptId,
+          locale: config.deepdub.locale,
+          temperature: config.deepdub.temperature,
+          format: deepdubFormat,
+          sampleRate: config.deepdub.sampleRate,
+          timeoutMs: config.timeoutMs,
+        });
+        // Set output format and extension based on format
+        const formatExtensions: Record<string, string> = {
+          wav: ".wav",
+          s16le: ".s16le",
+          mp3: ".mp3",
+          opus: ".opus",
+          mulaw: ".raw",
+        };
+        providerOutputFormat = deepdubFormat;
+        providerExtension = formatExtensions[deepdubFormat] || ".mp3";
+        providerVoiceCompatible = deepdubFormat === "opus";
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -1298,12 +1534,15 @@ export async function textToSpeech(params: {
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.openai;
+        providerExtension = output.extension;
+        providerVoiceCompatible = output.voiceCompatible;
       }
 
       const latencyMs = Date.now() - providerStart;
 
       const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${providerExtension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -1312,8 +1551,8 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        outputFormat: providerOutputFormat,
+        voiceCompatible: providerVoiceCompatible,
       };
     } catch (err) {
       const error = err as Error;
@@ -1388,6 +1627,32 @@ export async function textToSpeechTelephony(params: {
           provider,
           outputFormat: output.format,
           sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "deepdub") {
+        // Use mulaw format at 8kHz for telephony (Twilio-compatible)
+        const output = TELEPHONY_OUTPUT.deepdub;
+        const audioBuffer = await deepdubTTS({
+          text: params.text,
+          apiKey,
+          wsUrl: config.deepdub.wsUrl,
+          model: config.deepdub.model,
+          voicePromptId: config.deepdub.voicePromptId,
+          locale: config.deepdub.locale,
+          temperature: config.deepdub.temperature,
+          format: output.format,
+          sampleRate: output.sampleRate,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: "mulaw",
+          sampleRate: 8000,
         };
       }
 

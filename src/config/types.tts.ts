@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "deepdub";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,24 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Deepdub TTS configuration (WebSocket API). */
+  deepdub?: {
+    apiKey?: string;
+    /** WebSocket URL (default: wss://wsapi.deepdub.ai/open). */
+    wsUrl?: string;
+    /** TTS model (default: dd-etts-3.0). */
+    model?: "dd-etts-3.0";
+    /** Voice prompt ID for voice selection. */
+    voicePromptId?: string;
+    /** Locale for TTS (default: en-US). */
+    locale?: string;
+    /** Temperature for voice variation. */
+    temperature?: number;
+    /** Audio format: wav, mp3, opus, mulaw (default: mp3). */
+    format?: "wav" | "mp3" | "opus" | "mulaw" | "s16le";
+    /** Sample rate: 8000, 16000, 22050, 24000, 44100, 48000 (default: 48000). */
+    sampleRate?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
