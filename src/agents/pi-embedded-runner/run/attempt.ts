@@ -869,7 +869,7 @@ export async function runEmbeddedAttempt(
       const lastAssistant = messagesSnapshot
         .slice()
         .toReversed()
-        .find((m) => m?.role === "assistant");
+        .find((m) => m.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(

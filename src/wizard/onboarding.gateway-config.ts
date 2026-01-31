@@ -45,10 +45,10 @@ export async function configureGatewayForOnboarding(
           10,
         );
 
-  let bind =
+  let bind: GatewayWizardSettings["bind"] =
     flow === "quickstart"
       ? quickstartGateway.bind
-      : await prompter.select({
+      : await prompter.select<GatewayWizardSettings["bind"]>({
           message: "Gateway bind",
           options: [
             { value: "loopback", label: "Loopback (127.0.0.1)" },
@@ -107,10 +107,10 @@ export async function configureGatewayForOnboarding(
           initialValue: "token",
         })) as GatewayAuthChoice);
 
-  const tailscaleMode =
+  const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
     flow === "quickstart"
       ? quickstartGateway.tailscaleMode
-      : await prompter.select({
+      : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
           message: "Tailscale exposure",
           options: [
             { value: "off", label: "Off", hint: "No Tailscale exposure" },

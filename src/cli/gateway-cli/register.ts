@@ -254,8 +254,7 @@ export function registerGatewayCli(program: Command) {
             return;
           }
           const rich = isRich();
-          const obj =
-            result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+          const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
           const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
           defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
           defaultRuntime.log(

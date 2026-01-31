@@ -240,7 +240,7 @@ describe("provider timeouts (e2e)", () => {
 
       try {
         const sessionKey = "agent:dev:timeout-fallback";
-        await client.request<Record<string, unknown>>("sessions.patch", {
+        await client.request("sessions.patch", {
           key: sessionKey,
           model: "primary/gpt-5.2",
         });

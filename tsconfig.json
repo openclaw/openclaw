@@ -5,6 +5,7 @@
     "forceConsistentCasingInFileNames": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "lib": ["DOM", "DOM.Iterable", "ES2023", "ScriptHost"],
     "noEmit": true,
     "noEmitOnError": true,
     "outDir": "dist",
