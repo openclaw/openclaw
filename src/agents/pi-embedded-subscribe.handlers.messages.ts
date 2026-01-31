@@ -1,6 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 
-import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -111,35 +110,39 @@ export function handleMessageUpdate(
     })
     .trim();
   if (next && next !== ctx.state.lastStreamedAssistant) {
-    const previousText = ctx.state.lastStreamedAssistant ?? "";
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(next);
-    const { text: previousCleanedText } = parseReplyDirectives(previousText);
-    if (cleanedText.startsWith(previousCleanedText)) {
-      const deltaText = cleanedText.slice(previousCleanedText.length);
+    const parsedDelta = chunk ? ctx.consumePartialReplyDirectives(chunk) : null;
+    const deltaText = parsedDelta?.text ?? "";
+    const mediaUrls = parsedDelta?.mediaUrls;
+    if (!deltaText && (!mediaUrls || mediaUrls.length === 0) && !parsedDelta?.audioAsVoice) {
       ctx.state.lastStreamedAssistant = next;
-      emitAgentEvent({
-        runId: ctx.params.runId,
-        stream: "assistant",
-        data: {
-          text: cleanedText,
-          delta: deltaText,
-          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-        },
+      return;
+    }
+    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+    const cleanedText = `${previousCleaned}${deltaText}`;
+    ctx.state.lastStreamedAssistant = next;
+    ctx.state.lastStreamedAssistantCleaned = cleanedText;
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "assistant",
+      data: {
+        text: cleanedText,
+        delta: deltaText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+      },
+    });
+    void ctx.params.onAgentEvent?.({
+      stream: "assistant",
+      data: {
+        text: cleanedText,
+        delta: deltaText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+      },
+    });
+    if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
+      void ctx.params.onPartialReply({
+        text: cleanedText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       });
-      void ctx.params.onAgentEvent?.({
-        stream: "assistant",
-        data: {
-          text: cleanedText,
-          delta: deltaText,
-          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-        },
-      });
-      if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
-        void ctx.params.onPartialReply({
-          text: cleanedText,
-          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-        });
-      }
     }
   }
 

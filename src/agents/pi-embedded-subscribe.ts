@@ -47,6 +47,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
     lastStreamedAssistant: undefined,
+    lastStreamedAssistantCleaned: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     assistantMessageIndex: 0,
@@ -77,16 +78,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
+  const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
     state.blockBuffer = "";
     blockChunker?.reset();
     replyDirectiveAccumulator.reset();
+    partialReplyDirectiveAccumulator.reset();
     state.blockState.thinking = false;
     state.blockState.final = false;
     state.blockState.inlineCode = createInlineCodeState();
     state.lastStreamedAssistant = undefined;
+    state.lastStreamedAssistantCleaned = undefined;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
@@ -447,6 +451,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
     replyDirectiveAccumulator.consume(text, options);
+  const consumePartialReplyDirectives = (text: string, options?: { final?: boolean }) =>
+    partialReplyDirectiveAccumulator.consume(text, options);
 
   const flushBlockReplyBuffer = () => {
     if (!params.onBlockReply) {
@@ -509,6 +515,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     flushBlockReplyBuffer,
     emitReasoningStream,
     consumeReplyDirectives,
+    consumePartialReplyDirectives,
     resetAssistantMessageState,
     resetForCompactionRetry,
     finalizeAssistantTexts,

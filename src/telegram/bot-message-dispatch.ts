@@ -1,10 +1,10 @@
 // @ts-nocheck
-import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
+import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
@@ -55,7 +55,7 @@ export const dispatchTelegramMessage = async ({
     msg,
     chatId,
     isGroup,
-    resolvedThreadId,
+    replyThreadId,
     historyKey,
     historyLimit,
     groupHistories,
@@ -69,11 +69,12 @@ export const dispatchTelegramMessage = async ({
   } = context;
 
   const isPrivateChat = msg.chat.type === "private";
+  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const draftMaxChars = Math.min(textLimit, 4096);
   const canStreamDraft =
     streamMode !== "off" &&
     isPrivateChat &&
-    typeof resolvedThreadId === "number" &&
+    typeof messageThreadId === "number" &&
     (await resolveBotTopicsEnabled(primaryCtx));
   const draftStream = canStreamDraft
     ? createTelegramDraftStream({
@@ -81,7 +82,7 @@ export const dispatchTelegramMessage = async ({
         chatId,
         draftId: msg.message_id || Date.now(),
         maxChars: draftMaxChars,
-        messageThreadId: resolvedThreadId,
+        messageThreadId: replyThreadId,
         log: logVerbose,
         warn: logVerbose,
       })
@@ -240,7 +241,7 @@ export const dispatchTelegramMessage = async ({
           bot,
           replyToMode,
           textLimit,
-          messageThreadId: resolvedThreadId,
+          messageThreadId: replyThreadId,
           tableMode,
           chunkMode,
           onVoiceRecording: sendRecordVoice,
@@ -273,15 +274,8 @@ export const dispatchTelegramMessage = async ({
     },
     replyOptions: {
       skillFilter,
-      onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
-      onReasoningStream: draftStream
-        ? (payload) => {
-            if (payload.text) {
-              draftStream.update(payload.text);
-            }
-          }
-        : undefined,
       disableBlockStreaming,
+      onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
       onModelSelected: (ctx) => {
         prefixContext.onModelSelected(ctx);
       },
@@ -298,7 +292,7 @@ export const dispatchTelegramMessage = async ({
       bot,
       replyToMode,
       textLimit,
-      messageThreadId: resolvedThreadId,
+      messageThreadId: replyThreadId,
       tableMode,
       chunkMode,
       linkPreview: telegramCfg.linkPreview,
