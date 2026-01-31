@@ -1,0 +1,35 @@
+{
+  "id": "voicenode-bridge",
+  "name": "voiceNode Bridge",
+  "description": "Bilateral WebSocket bridge for voiceNode tool execution and chat",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the voiceNode bridge server"
+      },
+      "port": {
+        "type": "number",
+        "default": 9100,
+        "description": "Port for the WebSocket bridge server"
+      },
+      "token": {
+        "type": "string",
+        "description": "Shared secret token for authentication"
+      },
+      "toolCallTimeout": {
+        "type": "number",
+        "default": 30000,
+        "description": "Timeout for tool call responses from voiceNode (ms)"
+      },
+      "allowedTools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Glob patterns for tools that can be invoked on voiceNode"
+      }
+    }
+  }
+}
