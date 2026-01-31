@@ -37,11 +37,15 @@ export class MockProvider implements VoiceCallProvider {
       if (Array.isArray(payload.events)) {
         for (const evt of payload.events) {
           const normalized = this.normalizeEvent(evt);
-          if (normalized) events.push(normalized);
+          if (normalized) {
+            events.push(normalized);
+          }
         }
       } else if (payload.event) {
         const normalized = this.normalizeEvent(payload.event);
-        if (normalized) events.push(normalized);
+        if (normalized) {
+          events.push(normalized);
+        }
       }
 
       return { events, statusCode: 200 };
@@ -51,7 +55,9 @@ export class MockProvider implements VoiceCallProvider {
   }
 
   private normalizeEvent(evt: Partial<NormalizedEvent>): NormalizedEvent | null {
-    if (!evt.type || !evt.callId) return null;
+    if (!evt.type || !evt.callId) {
+      return null;
+    }
 
     const base = {
       id: evt.id || crypto.randomUUID(),

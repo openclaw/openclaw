@@ -38,7 +38,9 @@ function buildLineReply(lineData: LineChannelData): ReplyPayload {
  * Data can be a URL (uri action) or plain text (message action) or key=value (postback)
  */
 function parseActions(actionsStr: string | undefined): CardAction[] {
-  if (!actionsStr) return [];
+  if (!actionsStr) {
+    return [];
+  }
 
   const results: CardAction[] = [];
 
@@ -47,7 +49,9 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
       .trim()
       .split("|")
       .map((s) => s.trim());
-    if (!label) continue;
+    if (!label) {
+      continue;
+    }
 
     const actionData = data || label;
 
@@ -158,12 +162,16 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
     requireAuth: false,
     handler: async (ctx) => {
       const argsStr = ctx.args?.trim() ?? "";
-      if (!argsStr) return { text: CARD_USAGE };
+      if (!argsStr) {
+        return { text: CARD_USAGE };
+      }
 
       const parsed = parseCardArgs(argsStr);
       const { type, args, flags } = parsed;
 
-      if (!type) return { text: CARD_USAGE };
+      if (!type) {
+        return { text: CARD_USAGE };
+      }
 
       // Only LINE supports rich cards; fallback to text elsewhere.
       if (ctx.channel !== "line") {

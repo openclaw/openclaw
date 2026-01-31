@@ -22,7 +22,9 @@ export async function pinMatrixMessage(
     await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
     return { pinned: next };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -40,7 +42,9 @@ export async function unpinMatrixMessage(
     await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
     return { pinned: next };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -65,6 +69,8 @@ export async function listMatrixPins(
     ).filter((event): event is MatrixMessageSummary => Boolean(event));
     return { pinned, events };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }

@@ -21,10 +21,16 @@ const DEFAULT_MODEL_IDS = [
 
 function normalizeBaseUrl(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) return DEFAULT_BASE_URL;
+  if (!trimmed) {
+    return DEFAULT_BASE_URL;
+  }
   let normalized = trimmed;
-  while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
-  if (!normalized.endsWith("/v1")) normalized = `${normalized}/v1`;
+  while (normalized.endsWith("/")) {
+    normalized = normalized.slice(0, -1);
+  }
+  if (!normalized.endsWith("/v1")) {
+    normalized = `${normalized}/v1`;
+  }
   return normalized;
 }
 

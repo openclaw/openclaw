@@ -119,9 +119,15 @@ export async function speak(
   text: string,
 ): Promise<{ success: boolean; error?: string }> {
   const call = ctx.activeCalls.get(callId);
-  if (!call) return { success: false, error: "Call not found" };
-  if (!ctx.provider || !call.providerCallId) return { success: false, error: "Call not connected" };
-  if (TerminalStates.has(call.state)) return { success: false, error: "Call has ended" };
+  if (!call) {
+    return { success: false, error: "Call not found" };
+  }
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
+    return { success: false, error: "Call has ended" };
+  }
 
   try {
     transitionState(call, "speaking");
@@ -197,9 +203,15 @@ export async function continueCall(
   prompt: string,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {
   const call = ctx.activeCalls.get(callId);
-  if (!call) return { success: false, error: "Call not found" };
-  if (!ctx.provider || !call.providerCallId) return { success: false, error: "Call not connected" };
-  if (TerminalStates.has(call.state)) return { success: false, error: "Call has ended" };
+  if (!call) {
+    return { success: false, error: "Call not found" };
+  }
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
+    return { success: false, error: "Call has ended" };
+  }
 
   try {
     await speak(ctx, callId, prompt);
@@ -227,9 +239,15 @@ export async function endCall(
   callId: CallId,
 ): Promise<{ success: boolean; error?: string }> {
   const call = ctx.activeCalls.get(callId);
-  if (!call) return { success: false, error: "Call not found" };
-  if (!ctx.provider || !call.providerCallId) return { success: false, error: "Call not connected" };
-  if (TerminalStates.has(call.state)) return { success: true };
+  if (!call) {
+    return { success: false, error: "Call not found" };
+  }
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
+    return { success: true };
+  }
 
   try {
     await ctx.provider.hangupCall({
@@ -247,7 +265,9 @@ export async function endCall(
     rejectTranscriptWaiter(ctx, callId, "Call ended: hangup-bot");
 
     ctx.activeCalls.delete(callId);
-    if (call.providerCallId) ctx.providerCallIdMap.delete(call.providerCallId);
+    if (call.providerCallId) {
+      ctx.providerCallIdMap.delete(call.providerCallId);
+    }
 
     return { success: true };
   } catch (err) {

@@ -25,7 +25,9 @@ export async function getMatrixMemberInfo(
       roomId: roomId ?? null,
     };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -76,6 +78,8 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
       memberCount,
     };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }

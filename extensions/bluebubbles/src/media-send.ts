@@ -12,15 +12,21 @@ const HTTP_URL_RE = /^https?:\/\//i;
 const MB = 1024 * 1024;
 
 function assertMediaWithinLimit(sizeBytes: number, maxBytes?: number): void {
-  if (typeof maxBytes !== "number" || maxBytes <= 0) return;
-  if (sizeBytes <= maxBytes) return;
+  if (typeof maxBytes !== "number" || maxBytes <= 0) {
+    return;
+  }
+  if (sizeBytes <= maxBytes) {
+    return;
+  }
   const maxLabel = (maxBytes / MB).toFixed(0);
   const sizeLabel = (sizeBytes / MB).toFixed(2);
   throw new Error(`Media exceeds ${maxLabel}MB limit (got ${sizeLabel}MB)`);
 }
 
 function resolveLocalMediaPath(source: string): string {
-  if (!source.startsWith("file://")) return source;
+  if (!source.startsWith("file://")) {
+    return source;
+  }
   try {
     return fileURLToPath(source);
   } catch {
@@ -29,7 +35,9 @@ function resolveLocalMediaPath(source: string): string {
 }
 
 function resolveFilenameFromSource(source?: string): string | undefined {
-  if (!source) return undefined;
+  if (!source) {
+    return undefined;
+  }
   if (source.startsWith("file://")) {
     try {
       return path.basename(fileURLToPath(source)) || undefined;

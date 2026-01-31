@@ -31,7 +31,9 @@ export async function listMatrixReactions(
     for (const event of res.chunk) {
       const content = event.content as ReactionEventContent;
       const key = content["m.relates_to"]?.key;
-      if (!key) continue;
+      if (!key) {
+        continue;
+      }
       const sender = event.sender ?? "";
       const entry: MatrixReactionSummary = summaries.get(key) ?? {
         key,
@@ -46,7 +48,9 @@ export async function listMatrixReactions(
     }
     return Array.from(summaries.values());
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -64,21 +68,29 @@ export async function removeMatrixReactions(
       { dir: "b", limit: 200 },
     )) as { chunk: MatrixRawEvent[] };
     const userId = await client.getUserId();
-    if (!userId) return { removed: 0 };
+    if (!userId) {
+      return { removed: 0 };
+    }
     const targetEmoji = opts.emoji?.trim();
     const toRemove = res.chunk
       .filter((event) => event.sender === userId)
       .filter((event) => {
-        if (!targetEmoji) return true;
+        if (!targetEmoji) {
+          return true;
+        }
         const content = event.content as ReactionEventContent;
         return content["m.relates_to"]?.key === targetEmoji;
       })
       .map((event) => event.event_id)
       .filter((id): id is string => Boolean(id));
-    if (toRemove.length === 0) return { removed: 0 };
+    if (toRemove.length === 0) {
+      return { removed: 0 };
+    }
     await Promise.all(toRemove.map((id) => client.redactEvent(resolvedRoom, id)));
     return { removed: toRemove.length };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }

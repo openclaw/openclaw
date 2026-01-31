@@ -33,7 +33,9 @@ export function resolveNextcloudTalkAllowlistMatch(params: {
   senderName?: string | null;
 }): AllowlistMatch<"wildcard" | "id" | "name"> {
   const allowFrom = normalizeNextcloudTalkAllowlist(params.allowFrom);
-  if (allowFrom.length === 0) return { allowed: false };
+  if (allowFrom.length === 0) {
+    return { allowed: false };
+  }
   if (allowFrom.includes("*")) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
@@ -101,7 +103,9 @@ export function resolveNextcloudTalkGroupToolPolicy(
     channels?: { "nextcloud-talk"?: { rooms?: Record<string, NextcloudTalkRoomConfig> } };
   };
   const roomToken = params.groupId?.trim();
-  if (!roomToken) return undefined;
+  if (!roomToken) {
+    return undefined;
+  }
   const roomName = params.groupChannel?.trim() || undefined;
   const match = resolveNextcloudTalkRoomMatch({
     rooms: cfg.channels?.["nextcloud-talk"]?.rooms,

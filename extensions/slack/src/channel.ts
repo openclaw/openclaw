@@ -43,8 +43,12 @@ function getTokenForOperation(
   const userToken = account.config.userToken?.trim() || undefined;
   const botToken = account.botToken?.trim();
   const allowUserWrites = account.config.userTokenReadOnly === false;
-  if (operation === "read") return userToken ?? botToken;
-  if (!allowUserWrites) return botToken;
+  if (operation === "read") {
+    return userToken ?? botToken;
+  }
+  if (!allowUserWrites) {
+    return botToken;
+  }
   return botToken ?? userToken;
 }
 
@@ -234,7 +238,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       const accounts = listEnabledSlackAccounts(cfg).filter(
         (account) => account.botTokenSource !== "none",
       );
-      if (accounts.length === 0) return [];
+      if (accounts.length === 0) {
+        return [];
+      }
       const isActionEnabled = (key: string, defaultValue = true) => {
         for (const account of accounts) {
           const gate = createActionGate(
@@ -243,7 +249,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
               boolean | undefined
             >,
           );
-          if (gate(key, defaultValue)) return true;
+          if (gate(key, defaultValue)) {
+            return true;
+          }
         }
         return false;
       };
@@ -263,15 +271,23 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         actions.add("unpin");
         actions.add("list-pins");
       }
-      if (isActionEnabled("memberInfo")) actions.add("member-info");
-      if (isActionEnabled("emojiList")) actions.add("emoji-list");
+      if (isActionEnabled("memberInfo")) {
+        actions.add("member-info");
+      }
+      if (isActionEnabled("emojiList")) {
+        actions.add("emoji-list");
+      }
       return Array.from(actions);
     },
     extractToolSend: ({ args }) => {
       const action = typeof args.action === "string" ? args.action.trim() : "";
-      if (action !== "sendMessage") return null;
+      if (action !== "sendMessage") {
+        return null;
+      }
       const to = typeof args.to === "string" ? args.to : undefined;
-      if (!to) return null;
+      if (!to) {
+        return null;
+      }
       const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
       return { to, accountId };
     },
@@ -544,7 +560,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     }),
     probeAccount: async ({ account, timeoutMs }) => {
       const token = account.botToken?.trim();
-      if (!token) return { ok: false, error: "missing token" };
+      if (!token) {
+        return { ok: false, error: "missing token" };
+      }
       return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => {

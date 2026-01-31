@@ -17,13 +17,17 @@ export function verifyNextcloudTalkSignature(params: {
   secret: string;
 }): boolean {
   const { signature, random, body, secret } = params;
-  if (!signature || !random || !secret) return false;
+  if (!signature || !random || !secret) {
+    return false;
+  }
 
   const expected = createHmac("sha256", secret)
     .update(random + body)
     .digest("hex");
 
-  if (signature.length !== expected.length) return false;
+  if (signature.length !== expected.length) {
+    return false;
+  }
   let result = 0;
   for (let i = 0; i < signature.length; i++) {
     result |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
@@ -46,7 +50,9 @@ export function extractNextcloudTalkHeaders(
   const random = getHeader(RANDOM_HEADER);
   const backend = getHeader(BACKEND_HEADER);
 
-  if (!signature || !random || !backend) return null;
+  if (!signature || !random || !backend) {
+    return null;
+  }
 
   return { signature, random, backend };
 }

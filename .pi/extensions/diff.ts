@@ -50,20 +50,30 @@ export default function (pi: ExtensionAPI) {
       const files: FileInfo[] = [];
 
       for (const line of lines) {
-        if (line.length < 4) continue; // Need at least "XY f"
+        if (line.length < 4) {
+          continue;
+        } // Need at least "XY f"
 
         const status = line.slice(0, 2);
         const file = line.slice(2).trimStart();
 
         // Translate status codes to short labels
         let statusLabel: string;
-        if (status.includes("M")) statusLabel = "M";
-        else if (status.includes("A")) statusLabel = "A";
-        else if (status.includes("D")) statusLabel = "D";
-        else if (status.includes("?")) statusLabel = "?";
-        else if (status.includes("R")) statusLabel = "R";
-        else if (status.includes("C")) statusLabel = "C";
-        else statusLabel = status.trim() || "~";
+        if (status.includes("M")) {
+          statusLabel = "M";
+        } else if (status.includes("A")) {
+          statusLabel = "A";
+        } else if (status.includes("D")) {
+          statusLabel = "D";
+        } else if (status.includes("?")) {
+          statusLabel = "?";
+        } else if (status.includes("R")) {
+          statusLabel = "R";
+        } else if (status.includes("C")) {
+          statusLabel = "C";
+        } else {
+          statusLabel = status.trim() || "~";
+        }
 
         files.push({ status: statusLabel, statusLabel, file });
       }

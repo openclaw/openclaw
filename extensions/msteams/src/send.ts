@@ -172,6 +172,7 @@ export async function sendMessageMSTeams(
         const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
         throw new Error(
           `msteams consent card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+          { cause: err },
         );
       }
 
@@ -310,6 +311,7 @@ export async function sendMessageMSTeams(
       const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
       throw new Error(
         `msteams file send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+        { cause: err },
       );
     }
   }
@@ -359,6 +361,7 @@ async function sendTextWithMedia(
     const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
     throw new Error(
       `msteams send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
     );
   }
 
@@ -424,6 +427,7 @@ export async function sendPollMSTeams(
     const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
     throw new Error(
       `msteams poll send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
     );
   }
 
@@ -483,6 +487,7 @@ export async function sendAdaptiveCardMSTeams(
     const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
     throw new Error(
       `msteams card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
     );
   }
 

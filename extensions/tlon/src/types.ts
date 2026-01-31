@@ -50,9 +50,7 @@ export function resolveTlonAccount(
   }
 
   const useDefault = !accountId || accountId === "default";
-  const account = useDefault
-    ? base
-    : (base.accounts?.[accountId] as Record<string, unknown> | undefined);
+  const account = useDefault ? base : base.accounts?.[accountId];
 
   const ship = (account?.ship ?? base.ship ?? null) as string | null;
   const url = (account?.url ?? base.url ?? null) as string | null;
@@ -86,7 +84,9 @@ export function listTlonAccountIds(cfg: OpenClawConfig): string[] {
   const base = cfg.channels?.tlon as
     | { ship?: string; accounts?: Record<string, Record<string, unknown>> }
     | undefined;
-  if (!base) return [];
+  if (!base) {
+    return [];
+  }
   const accounts = base.accounts ?? {};
   return [...(base.ship ? ["default"] : []), ...Object.keys(accounts)];
 }

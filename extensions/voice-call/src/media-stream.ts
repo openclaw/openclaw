@@ -295,7 +295,9 @@ export class MediaStreamHandler {
 
   private getTtsQueue(streamSid: string): TtsQueueEntry[] {
     const existing = this.ttsQueues.get(streamSid);
-    if (existing) return existing;
+    if (existing) {
+      return existing;
+    }
     const queue: TtsQueueEntry[] = [];
     this.ttsQueues.set(streamSid, queue);
     return queue;
@@ -339,7 +341,9 @@ export class MediaStreamHandler {
 
   private clearTtsState(streamSid: string): void {
     const queue = this.ttsQueues.get(streamSid);
-    if (queue) queue.length = 0;
+    if (queue) {
+      queue.length = 0;
+    }
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.ttsActiveControllers.delete(streamSid);
     this.ttsPlaying.delete(streamSid);

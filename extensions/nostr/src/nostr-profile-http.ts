@@ -113,33 +113,53 @@ function isPrivateIp(ip: string): boolean {
   // Handle IPv4
   const ipv4Match = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (ipv4Match) {
-    const [, a, b, c] = ipv4Match.map(Number);
+    const [, a, b] = ipv4Match.map(Number);
     // 127.0.0.0/8 (loopback)
-    if (a === 127) return true;
+    if (a === 127) {
+      return true;
+    }
     // 10.0.0.0/8 (private)
-    if (a === 10) return true;
+    if (a === 10) {
+      return true;
+    }
     // 172.16.0.0/12 (private)
-    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 172 && b >= 16 && b <= 31) {
+      return true;
+    }
     // 192.168.0.0/16 (private)
-    if (a === 192 && b === 168) return true;
+    if (a === 192 && b === 168) {
+      return true;
+    }
     // 169.254.0.0/16 (link-local)
-    if (a === 169 && b === 254) return true;
+    if (a === 169 && b === 254) {
+      return true;
+    }
     // 0.0.0.0/8
-    if (a === 0) return true;
+    if (a === 0) {
+      return true;
+    }
     return false;
   }
 
   // Handle IPv6
   const ipLower = ip.toLowerCase().replace(/^\[|\]$/g, "");
   // ::1 (loopback)
-  if (ipLower === "::1") return true;
+  if (ipLower === "::1") {
+    return true;
+  }
   // fe80::/10 (link-local)
-  if (ipLower.startsWith("fe80:")) return true;
+  if (ipLower.startsWith("fe80:")) {
+    return true;
+  }
   // fc00::/7 (unique local)
-  if (ipLower.startsWith("fc") || ipLower.startsWith("fd")) return true;
+  if (ipLower.startsWith("fc") || ipLower.startsWith("fd")) {
+    return true;
+  }
   // ::ffff:x.x.x.x (IPv4-mapped IPv6) - extract and check IPv4
   const v4Mapped = ipLower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (v4Mapped) return isPrivateIp(v4Mapped[1]);
+  if (v4Mapped) {
+    return isPrivateIp(v4Mapped[1]);
+  }
 
   return false;
 }

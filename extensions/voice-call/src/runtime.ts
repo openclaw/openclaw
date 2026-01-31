@@ -34,7 +34,9 @@ type Logger = {
 };
 
 function isLoopbackBind(bind: string | undefined): boolean {
-  if (!bind) return false;
+  if (!bind) {
+    return false;
+  }
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 

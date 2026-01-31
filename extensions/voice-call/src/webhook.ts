@@ -367,7 +367,9 @@ function runTailscaleCommand(
 
 export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {
   const { code, stdout } = await runTailscaleCommand(["status", "--json"]);
-  if (code !== 0) return null;
+  if (code !== 0) {
+    return null;
+  }
 
   try {
     const status = JSON.parse(stdout);

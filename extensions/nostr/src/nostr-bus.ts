@@ -36,11 +36,6 @@ const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 
-// Reconnect configuration (exponential backoff with jitter)
-const RECONNECT_BASE_MS = 1000; // 1 second base
-const RECONNECT_MAX_MS = 60000; // 60 seconds max
-const RECONNECT_JITTER = 0.3; // ±30% jitter
-
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
 const CIRCUIT_BREAKER_RESET_MS = 30000; // 30 seconds before half-open
@@ -137,7 +132,9 @@ function createCircuitBreaker(
 
   return {
     canAttempt(): boolean {
-      if (state.state === "closed") return true;
+      if (state.state === "closed") {
+        return true;
+      }
 
       if (state.state === "open") {
         // Check if enough time has passed to try half-open
@@ -243,10 +240,14 @@ function createRelayHealthTracker(): RelayHealthTracker {
 
     getScore(relay: string): number {
       const s = stats.get(relay);
-      if (!s) return 0.5; // Unknown relay gets neutral score
+      if (!s) {
+        return 0.5;
+      } // Unknown relay gets neutral score
 
       const total = s.successCount + s.failureCount;
-      if (total === 0) return 0.5;
+      if (total === 0) {
+        return 0.5;
+      }
 
       // Success rate (0-1)
       const successRate = s.successCount / total;
@@ -266,23 +267,9 @@ function createRelayHealthTracker(): RelayHealthTracker {
     },
 
     getSortedRelays(relays: string[]): string[] {
-      return [...relays].sort((a, b) => this.getScore(b) - this.getScore(a));
+      return [...relays].toSorted((a, b) => this.getScore(b) - this.getScore(a));
     },
   };
-}
-
-// ============================================================================
-// Reconnect with Exponential Backoff + Jitter
-// ============================================================================
-
-function computeReconnectDelay(attempt: number): number {
-  // Exponential backoff: base * 2^attempt
-  const exponential = RECONNECT_BASE_MS * Math.pow(2, attempt);
-  const capped = Math.min(exponential, RECONNECT_MAX_MS);
-
-  // Add jitter: ±JITTER%
-  const jitter = capped * RECONNECT_JITTER * (Math.random() * 2 - 1);
-  return Math.max(RECONNECT_BASE_MS, capped + jitter);
 }
 
 // ============================================================================
@@ -397,7 +384,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       recentEventIds = recentEventIds.slice(-MAX_PERSISTED_EVENT_IDS);
     }
 
-    if (pendingWrite) clearTimeout(pendingWrite);
+    if (pendingWrite) {
+      clearTimeout(pendingWrite);
+    }
     pendingWrite = setTimeout(() => {
       writeNostrBusState({
         accountId,
@@ -461,7 +450,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       // Decrypt the message
       let plaintext: string;
       try {
-        plaintext = await decrypt(sk, event.pubkey, event.content);
+        plaintext = decrypt(sk, event.pubkey, event.content);
         metrics.emit("decrypt.success");
       } catch (err) {
         metrics.emit("decrypt.failure");
@@ -515,7 +504,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         metrics.emit("relay.message.closed", 1, { relay });
         options.onDisconnect?.(relay);
       }
-      onError?.(new Error(`Subscription closed: ${reason}`), "subscription");
+      onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
     },
   });
 
@@ -614,7 +603,7 @@ async function sendEncryptedDm(
   healthTracker: RelayHealthTracker,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
-  const ciphertext = await encrypt(sk, toPubkey, text);
+  const ciphertext = encrypt(sk, toPubkey, text);
   const reply = finalizeEvent(
     {
       kind: 4,
@@ -640,6 +629,7 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
+      // oxlint-disable-next-line typescript/await-thenable typesciript/no-floating-promises
       await pool.publish([relay], reply);
       const latency = Date.now() - startTime;
 
@@ -672,7 +662,9 @@ async function sendEncryptedDm(
  * Check if a string looks like a valid Nostr pubkey (hex or npub)
  */
 export function isValidPubkey(input: string): boolean {
-  if (typeof input !== "string") return false;
+  if (typeof input !== "string") {
+    return false;
+  }
   const trimmed = input.trim();
 
   // npub format

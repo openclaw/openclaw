@@ -2,9 +2,9 @@
  * Tests for Nostr Profile Import
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
-import { mergeProfiles, type ProfileImportOptions } from "./nostr-profile-import.js";
+import { mergeProfiles } from "./nostr-profile-import.js";
 import type { NostrProfile } from "./config-schema.js";
 
 // Note: importProfileFromRelays requires real network calls or complex mocking

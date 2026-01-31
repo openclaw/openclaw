@@ -105,7 +105,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       from: from?.id,
       conversation: conversation?.id,
     });
-    if (htmlSummary) log.debug("html attachment summary", htmlSummary);
+    if (htmlSummary) {
+      log.debug("html attachment summary", htmlSummary);
+    }
 
     if (!from?.id) {
       log.debug("skipping message without from.id");
@@ -520,7 +522,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       markDispatchIdle();
       log.info("dispatch complete", { queuedFinal, counts });
 
-      const didSendReply = counts.final + counts.tool + counts.block > 0;
       if (!queuedFinal) {
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
@@ -563,17 +564,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       );
       const senderId =
         entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
-      if (!senderId || !conversationId) return null;
+      if (!senderId || !conversationId) {
+        return null;
+      }
       return `msteams:${appId}:${conversationId}:${senderId}`;
     },
     shouldDebounce: (entry) => {
-      if (!entry.text.trim()) return false;
-      if (entry.attachments.length > 0) return false;
+      if (!entry.text.trim()) {
+        return false;
+      }
+      if (entry.attachments.length > 0) {
+        return false;
+      }
       return !core.channel.text.hasControlCommand(entry.text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
-      if (!last) return;
+      if (!last) {
+        return;
+      }
       if (entries.length === 1) {
         await handleTeamsMessageNow(last);
         return;
@@ -582,7 +591,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .map((entry) => entry.text)
         .filter(Boolean)
         .join("\n");
-      if (!combinedText.trim()) return;
+      if (!combinedText.trim()) {
+        return;
+      }
       const combinedRawText = entries
         .map((entry) => entry.rawText)
         .filter(Boolean)

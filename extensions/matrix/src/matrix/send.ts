@@ -123,7 +123,9 @@ export async function sendMessageMatrix(
       const followupRelation = threadId ? relation : undefined;
       for (const chunk of textChunks) {
         const text = chunk.trim();
-        if (!text) continue;
+        if (!text) {
+          continue;
+        }
         const followup = buildTextContent(text, followupRelation);
         const followupEventId = await sendContent(followup);
         lastMessageId = followupEventId ?? lastMessageId;
@@ -131,7 +133,9 @@ export async function sendMessageMatrix(
     } else {
       for (const chunk of chunks.length ? chunks : [""]) {
         const text = chunk.trim();
-        if (!text) continue;
+        if (!text) {
+          continue;
+        }
         const content = buildTextContent(text, relation);
         const eventId = await sendContent(content);
         lastMessageId = eventId ?? lastMessageId;
@@ -211,7 +215,9 @@ export async function sendReadReceiptMatrix(
   eventId: string,
   client?: MatrixClient,
 ): Promise<void> {
-  if (!eventId?.trim()) return;
+  if (!eventId?.trim()) {
+    return;
+  }
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
     client,
   });

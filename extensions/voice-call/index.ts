@@ -169,7 +169,9 @@ const voiceCallPlugin = {
       if (!validation.valid) {
         throw new Error(validation.errors.join("; "));
       }
-      if (runtime) return runtime;
+      if (runtime) {
+        return runtime;
+      }
       if (!runtimePromise) {
         runtimePromise = createVoiceCallRuntime({
           config,
@@ -341,12 +343,16 @@ const voiceCallPlugin = {
             switch (params.action) {
               case "initiate_call": {
                 const message = String(params.message || "").trim();
-                if (!message) throw new Error("message required");
+                if (!message) {
+                  throw new Error("message required");
+                }
                 const to =
                   typeof params.to === "string" && params.to.trim()
                     ? params.to.trim()
                     : rt.config.toNumber;
-                if (!to) throw new Error("to required");
+                if (!to) {
+                  throw new Error("to required");
+                }
                 const result = await rt.manager.initiateCall(to, undefined, {
                   message,
                   mode:
@@ -385,7 +391,9 @@ const voiceCallPlugin = {
               }
               case "end_call": {
                 const callId = String(params.callId || "").trim();
-                if (!callId) throw new Error("callId required");
+                if (!callId) {
+                  throw new Error("callId required");
+                }
                 const result = await rt.manager.endCall(callId);
                 if (!result.success) {
                   throw new Error(result.error || "end failed");
@@ -394,7 +402,9 @@ const voiceCallPlugin = {
               }
               case "get_status": {
                 const callId = String(params.callId || "").trim();
-                if (!callId) throw new Error("callId required");
+                if (!callId) {
+                  throw new Error("callId required");
+                }
                 const call =
                   rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
                 return json(call ? { found: true, call } : { found: false });
@@ -405,7 +415,9 @@ const voiceCallPlugin = {
           const mode = params?.mode ?? "call";
           if (mode === "status") {
             const sid = typeof params.sid === "string" ? params.sid.trim() : "";
-            if (!sid) throw new Error("sid required for status");
+            if (!sid) {
+              throw new Error("sid required for status");
+            }
             const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
             return json(call ? { found: true, call } : { found: false });
           }
@@ -414,7 +426,9 @@ const voiceCallPlugin = {
             typeof params.to === "string" && params.to.trim()
               ? params.to.trim()
               : rt.config.toNumber;
-          if (!to) throw new Error("to required for call");
+          if (!to) {
+            throw new Error("to required for call");
+          }
           const result = await rt.manager.initiateCall(to, undefined, {
             message:
               typeof params.message === "string" && params.message.trim()
@@ -447,7 +461,9 @@ const voiceCallPlugin = {
     api.registerService({
       id: "voicecall",
       start: async () => {
-        if (!config.enabled) return;
+        if (!config.enabled) {
+          return;
+        }
         try {
           await ensureRuntime();
         } catch (err) {
@@ -459,7 +475,9 @@ const voiceCallPlugin = {
         }
       },
       stop: async () => {
-        if (!runtimePromise) return;
+        if (!runtimePromise) {
+          return;
+        }
         try {
           const rt = await runtimePromise;
           await rt.stop();

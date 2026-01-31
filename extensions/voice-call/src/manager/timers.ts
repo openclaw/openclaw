@@ -40,7 +40,9 @@ export function startMaxDurationTimer(params: {
 
 export function clearTranscriptWaiter(ctx: CallManagerContext, callId: CallId): void {
   const waiter = ctx.transcriptWaiters.get(callId);
-  if (!waiter) return;
+  if (!waiter) {
+    return;
+  }
   clearTimeout(waiter.timeout);
   ctx.transcriptWaiters.delete(callId);
 }
@@ -51,7 +53,9 @@ export function rejectTranscriptWaiter(
   reason: string,
 ): void {
   const waiter = ctx.transcriptWaiters.get(callId);
-  if (!waiter) return;
+  if (!waiter) {
+    return;
+  }
   clearTranscriptWaiter(ctx, callId);
   waiter.reject(new Error(reason));
 }
@@ -62,7 +66,9 @@ export function resolveTranscriptWaiter(
   transcript: string,
 ): void {
   const waiter = ctx.transcriptWaiters.get(callId);
-  if (!waiter) return;
+  if (!waiter) {
+    return;
+  }
   clearTranscriptWaiter(ctx, callId);
   waiter.resolve(transcript);
 }

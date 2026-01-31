@@ -36,7 +36,9 @@ export async function editMatrixMessage(
   opts: MatrixActionClientOpts = {},
 ) {
   const trimmed = content.trim();
-  if (!trimmed) throw new Error("Matrix edit requires content");
+  if (!trimmed) {
+    throw new Error("Matrix edit requires content");
+  }
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
@@ -56,7 +58,9 @@ export async function editMatrixMessage(
     const eventId = await client.sendMessage(resolvedRoom, payload);
     return { eventId: eventId ?? null };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -70,7 +74,9 @@ export async function deleteMatrixMessage(
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
     await client.redactEvent(resolvedRoom, messageId, opts.reason);
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -115,6 +121,8 @@ export async function readMatrixMessages(
       prevBatch: res.start ?? null,
     };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }

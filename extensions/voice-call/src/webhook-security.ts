@@ -24,7 +24,7 @@ export function validateTwilioSignature(
   let dataToSign = url;
 
   // Sort params alphabetically and append key+value
-  const sortedParams = Array.from(params.entries()).sort((a, b) =>
+  const sortedParams = Array.from(params.entries()).toSorted((a, b) =>
     a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
   );
 
@@ -129,9 +129,15 @@ function getHeader(
 }
 
 function isLoopbackAddress(address?: string): boolean {
-  if (!address) return false;
-  if (address === "127.0.0.1" || address === "::1") return true;
-  if (address.startsWith("::ffff:127.")) return true;
+  if (!address) {
+    return false;
+  }
+  if (address === "127.0.0.1" || address === "::1") {
+    return true;
+  }
+  if (address.startsWith("::ffff:127.")) {
+    return true;
+  }
   return false;
 }
 
@@ -272,7 +278,9 @@ type PlivoParamMap = Record<string, string[]>;
 function toParamMapFromSearchParams(sp: URLSearchParams): PlivoParamMap {
   const map: PlivoParamMap = {};
   for (const [key, value] of sp.entries()) {
-    if (!map[key]) map[key] = [];
+    if (!map[key]) {
+      map[key] = [];
+    }
     map[key].push(value);
   }
   return map;
@@ -280,8 +288,8 @@ function toParamMapFromSearchParams(sp: URLSearchParams): PlivoParamMap {
 
 function sortedQueryString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).sort()) {
-    const values = [...params[key]].sort();
+  for (const key of Object.keys(params).toSorted()) {
+    const values = [...params[key]].toSorted();
     for (const value of values) {
       parts.push(`${key}=${value}`);
     }
@@ -291,8 +299,8 @@ function sortedQueryString(params: PlivoParamMap): string {
 
 function sortedParamsString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).sort()) {
-    const values = [...params[key]].sort();
+  for (const key of Object.keys(params).toSorted()) {
+    const values = [...params[key]].toSorted();
     for (const value of values) {
       parts.push(`${key}${value}`);
     }
@@ -355,7 +363,9 @@ function validatePlivoV3Signature(params: {
     .map((s) => normalizeSignatureBase64(s));
 
   for (const sig of provided) {
-    if (timingSafeEqualString(expected, sig)) return true;
+    if (timingSafeEqualString(expected, sig)) {
+      return true;
+    }
   }
   return false;
 }

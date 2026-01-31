@@ -17,7 +17,9 @@ export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
     messageCache.set(channelNest, []);
   }
   const cache = messageCache.get(channelNest);
-  if (!cache) return;
+  if (!cache) {
+    return;
+  }
   cache.unshift(message);
   if (cache.length > MAX_CACHED_MESSAGES) {
     cache.pop();
@@ -35,7 +37,9 @@ export async function fetchChannelHistory(
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
     const data: any = await api.scry(scryPath);
-    if (!data) return [];
+    if (!data) {
+      return [];
+    }
 
     let posts: any[] = [];
     if (Array.isArray(data)) {

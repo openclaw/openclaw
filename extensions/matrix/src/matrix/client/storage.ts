@@ -21,7 +21,9 @@ function sanitizePathSegment(value: string): string {
 function resolveHomeserverKey(homeserver: string): string {
   try {
     const url = new URL(homeserver);
-    if (url.host) return sanitizePathSegment(url.host);
+    if (url.host) {
+      return sanitizePathSegment(url.host);
+    }
   } catch {
     // fall through
   }
@@ -84,8 +86,12 @@ export function maybeMigrateLegacyStorage(params: {
   const hasNewStorage =
     fs.existsSync(params.storagePaths.storagePath) || fs.existsSync(params.storagePaths.cryptoPath);
 
-  if (!hasLegacyStorage && !hasLegacyCrypto) return;
-  if (hasNewStorage) return;
+  if (!hasLegacyStorage && !hasLegacyCrypto) {
+    return;
+  }
+  if (hasNewStorage) {
+    return;
+  }
 
   fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
   if (hasLegacyStorage) {

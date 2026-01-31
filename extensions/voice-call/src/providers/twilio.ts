@@ -85,10 +85,14 @@ export class TwilioProvider implements VoiceCallProvider {
    */
   private deleteStoredTwimlForProviderCall(providerCallId: string): void {
     const webhookUrl = this.callWebhookUrls.get(providerCallId);
-    if (!webhookUrl) return;
+    if (!webhookUrl) {
+      return;
+    }
 
     const callIdMatch = webhookUrl.match(/callId=([^&]+)/);
-    if (!callIdMatch) return;
+    if (!callIdMatch) {
+      return;
+    }
 
     this.deleteStoredTwiml(callIdMatch[1]);
   }
@@ -212,8 +216,12 @@ export class TwilioProvider implements VoiceCallProvider {
    * Parse Twilio direction to normalized format.
    */
   private static parseDirection(direction: string | null): "inbound" | "outbound" | undefined {
-    if (direction === "inbound") return "inbound";
-    if (direction === "outbound-api" || direction === "outbound-dial") return "outbound";
+    if (direction === "inbound") {
+      return "inbound";
+    }
+    if (direction === "outbound-api" || direction === "outbound-dial") {
+      return "outbound";
+    }
     return undefined;
   }
 
@@ -291,7 +299,9 @@ export class TwilioProvider implements VoiceCallProvider {
    * When a call is answered, connects to media stream for bidirectional audio.
    */
   private generateTwimlResponse(ctx?: WebhookContext): string {
-    if (!ctx) return TwilioProvider.EMPTY_TWIML;
+    if (!ctx) {
+      return TwilioProvider.EMPTY_TWIML;
+    }
 
     const params = new URLSearchParams(ctx.rawBody);
     const type = typeof ctx.query?.type === "string" ? ctx.query.type.trim() : undefined;
@@ -512,12 +522,16 @@ export class TwilioProvider implements VoiceCallProvider {
       // Generate audio with core TTS (returns mu-law at 8kHz)
       const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
       for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
-        if (signal.aborted) break;
+        if (signal.aborted) {
+          break;
+        }
         handler.sendAudio(streamSid, chunk);
 
         // Pace the audio to match real-time playback
         await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
-        if (signal.aborted) break;
+        if (signal.aborted) {
+          break;
+        }
       }
 
       if (!signal.aborted) {

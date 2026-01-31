@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { getPublicKey } from "nostr-tools";
 import {
   createProfileEvent,
   profileToContent,
@@ -422,7 +421,7 @@ describe("profile type confusion", () => {
 
   it("handles prototype pollution attempt", () => {
     const malicious = JSON.parse('{"__proto__": {"polluted": true}}') as unknown;
-    const result = validateProfile(malicious);
+    validateProfile(malicious);
     // Should not pollute Object.prototype
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });

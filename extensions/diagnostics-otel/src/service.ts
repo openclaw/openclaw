@@ -21,14 +21,22 @@ function normalizeEndpoint(endpoint?: string): string | undefined {
 }
 
 function resolveOtelUrl(endpoint: string | undefined, path: string): string | undefined {
-  if (!endpoint) return undefined;
-  if (endpoint.includes("/v1/")) return endpoint;
+  if (!endpoint) {
+    return undefined;
+  }
+  if (endpoint.includes("/v1/")) {
+    return endpoint;
+  }
   return `${endpoint}/${path}`;
 }
 
 function resolveSampleRate(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  if (value < 0 || value > 1) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  if (value < 0 || value > 1) {
+    return undefined;
+  }
   return value;
 }
 
@@ -43,7 +51,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     async start(ctx) {
       const cfg = ctx.config.diagnostics;
       const otel = cfg?.otel;
-      if (!cfg?.enabled || !otel?.enabled) return;
+      if (!cfg?.enabled || !otel?.enabled) {
+        return;
+      }
 
       const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
       if (protocol !== "http/protobuf") {
@@ -60,7 +70,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracesEnabled = otel.traces !== false;
       const metricsEnabled = otel.metrics !== false;
       const logsEnabled = otel.logs === true;
-      if (!tracesEnabled && !metricsEnabled && !logsEnabled) return;
+      if (!tracesEnabled && !metricsEnabled && !logsEnabled) {
+        return;
+      }
 
       const resource = new Resource({
         [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
@@ -106,7 +118,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             : {}),
         });
 
-        await sdk.start();
+        sdk.start();
       }
 
       const logSeverityMap: Record<string, SeverityNumber> = {
@@ -201,11 +213,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         });
         logProvider = new LoggerProvider({ resource });
         logProvider.addLogRecordProcessor(
-          new BatchLogRecordProcessor(logExporter, {
-            ...(typeof otel.flushIntervalMs === "number"
+          new BatchLogRecordProcessor(
+            logExporter,
+            typeof otel.flushIntervalMs === "number"
               ? { scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs) }
-              : {}),
-          }),
+              : {},
+          ),
         );
         const otelLogger = logProvider.getLogger("openclaw");
 
@@ -237,7 +250,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
           const numericArgs = Object.entries(logObj)
             .filter(([key]) => /^\d+$/.test(key))
-            .sort((a, b) => Number(a[0]) - Number(b[0]))
+            .toSorted((a, b) => Number(a[0]) - Number(b[0]))
             .map(([, value]) => value);
 
           let bindings: Record<string, unknown> | undefined;
@@ -267,7 +280,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           const attributes: Record<string, string | number | boolean> = {
             "openclaw.log.level": logLevelName,
           };
-          if (meta?.name) attributes["openclaw.logger"] = meta.name;
+          if (meta?.name) {
+            attributes["openclaw.logger"] = meta.name;
+          }
           if (meta?.parentNames?.length) {
             attributes["openclaw.logger.parents"] = meta.parentNames.join(".");
           }
@@ -287,9 +302,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           if (numericArgs.length > 0) {
             attributes["openclaw.log.args"] = safeStringify(numericArgs);
           }
-          if (meta?.path?.filePath) attributes["code.filepath"] = meta.path.filePath;
-          if (meta?.path?.fileLine) attributes["code.lineno"] = Number(meta.path.fileLine);
-          if (meta?.path?.method) attributes["code.function"] = meta.path.method;
+          if (meta?.path?.filePath) {
+            attributes["code.filepath"] = meta.path.filePath;
+          }
+          if (meta?.path?.fileLine) {
+            attributes["code.lineno"] = Number(meta.path.fileLine);
+          }
+          if (meta?.path?.method) {
+            attributes["code.function"] = meta.path.method;
+          }
           if (meta?.path?.filePathWithLine) {
             attributes["openclaw.code.location"] = meta.path.filePathWithLine;
           }
@@ -326,30 +347,47 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         };
 
         const usage = evt.usage;
-        if (usage.input) tokensCounter.add(usage.input, { ...attrs, "openclaw.token": "input" });
-        if (usage.output) tokensCounter.add(usage.output, { ...attrs, "openclaw.token": "output" });
-        if (usage.cacheRead)
+        if (usage.input) {
+          tokensCounter.add(usage.input, { ...attrs, "openclaw.token": "input" });
+        }
+        if (usage.output) {
+          tokensCounter.add(usage.output, { ...attrs, "openclaw.token": "output" });
+        }
+        if (usage.cacheRead) {
           tokensCounter.add(usage.cacheRead, { ...attrs, "openclaw.token": "cache_read" });
-        if (usage.cacheWrite)
+        }
+        if (usage.cacheWrite) {
           tokensCounter.add(usage.cacheWrite, { ...attrs, "openclaw.token": "cache_write" });
-        if (usage.promptTokens)
+        }
+        if (usage.promptTokens) {
           tokensCounter.add(usage.promptTokens, { ...attrs, "openclaw.token": "prompt" });
-        if (usage.total) tokensCounter.add(usage.total, { ...attrs, "openclaw.token": "total" });
+        }
+        if (usage.total) {
+          tokensCounter.add(usage.total, { ...attrs, "openclaw.token": "total" });
+        }
 
-        if (evt.costUsd) costCounter.add(evt.costUsd, attrs);
-        if (evt.durationMs) durationHistogram.record(evt.durationMs, attrs);
-        if (evt.context?.limit)
+        if (evt.costUsd) {
+          costCounter.add(evt.costUsd, attrs);
+        }
+        if (evt.durationMs) {
+          durationHistogram.record(evt.durationMs, attrs);
+        }
+        if (evt.context?.limit) {
           contextHistogram.record(evt.context.limit, {
             ...attrs,
             "openclaw.context": "limit",
           });
-        if (evt.context?.used)
+        }
+        if (evt.context?.used) {
           contextHistogram.record(evt.context.used, {
             ...attrs,
             "openclaw.context": "used",
           });
+        }
 
-        if (!tracesEnabled) return;
+        if (!tracesEnabled) {
+          return;
+        }
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
           "openclaw.sessionKey": evt.sessionKey ?? "",
@@ -385,9 +423,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (typeof evt.durationMs === "number") {
           webhookDurationHistogram.record(evt.durationMs, attrs);
         }
-        if (!tracesEnabled) return;
+        if (!tracesEnabled) {
+          return;
+        }
         const spanAttrs: Record<string, string | number> = { ...attrs };
-        if (evt.chatId !== undefined) spanAttrs["openclaw.chatId"] = String(evt.chatId);
+        if (evt.chatId !== undefined) {
+          spanAttrs["openclaw.chatId"] = String(evt.chatId);
+        }
         const span = spanWithDuration("openclaw.webhook.processed", spanAttrs, evt.durationMs);
         span.end();
       };
@@ -400,12 +442,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.webhook": evt.updateType ?? "unknown",
         };
         webhookErrorCounter.add(1, attrs);
-        if (!tracesEnabled) return;
+        if (!tracesEnabled) {
+          return;
+        }
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
           "openclaw.error": evt.error,
         };
-        if (evt.chatId !== undefined) spanAttrs["openclaw.chatId"] = String(evt.chatId);
+        if (evt.chatId !== undefined) {
+          spanAttrs["openclaw.chatId"] = String(evt.chatId);
+        }
         const span = tracer.startSpan("openclaw.webhook.error", {
           attributes: spanAttrs,
         });
@@ -437,13 +483,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (typeof evt.durationMs === "number") {
           messageDurationHistogram.record(evt.durationMs, attrs);
         }
-        if (!tracesEnabled) return;
+        if (!tracesEnabled) {
+          return;
+        }
         const spanAttrs: Record<string, string | number> = { ...attrs };
-        if (evt.sessionKey) spanAttrs["openclaw.sessionKey"] = evt.sessionKey;
-        if (evt.sessionId) spanAttrs["openclaw.sessionId"] = evt.sessionId;
-        if (evt.chatId !== undefined) spanAttrs["openclaw.chatId"] = String(evt.chatId);
-        if (evt.messageId !== undefined) spanAttrs["openclaw.messageId"] = String(evt.messageId);
-        if (evt.reason) spanAttrs["openclaw.reason"] = evt.reason;
+        if (evt.sessionKey) {
+          spanAttrs["openclaw.sessionKey"] = evt.sessionKey;
+        }
+        if (evt.sessionId) {
+          spanAttrs["openclaw.sessionId"] = evt.sessionId;
+        }
+        if (evt.chatId !== undefined) {
+          spanAttrs["openclaw.chatId"] = String(evt.chatId);
+        }
+        if (evt.messageId !== undefined) {
+          spanAttrs["openclaw.messageId"] = String(evt.messageId);
+        }
+        if (evt.reason) {
+          spanAttrs["openclaw.reason"] = evt.reason;
+        }
         const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
         if (evt.outcome === "error") {
           span.setStatus({ code: SpanStatusCode.ERROR, message: evt.error });
@@ -474,7 +532,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "session.state" }>,
       ) => {
         const attrs: Record<string, string> = { "openclaw.state": evt.state };
-        if (evt.reason) attrs["openclaw.reason"] = evt.reason;
+        if (evt.reason) {
+          attrs["openclaw.reason"] = evt.reason;
+        }
         sessionStateCounter.add(1, attrs);
       };
 
@@ -486,10 +546,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (typeof evt.ageMs === "number") {
           sessionStuckAgeHistogram.record(evt.ageMs, attrs);
         }
-        if (!tracesEnabled) return;
+        if (!tracesEnabled) {
+          return;
+        }
         const spanAttrs: Record<string, string | number> = { ...attrs };
-        if (evt.sessionKey) spanAttrs["openclaw.sessionKey"] = evt.sessionKey;
-        if (evt.sessionId) spanAttrs["openclaw.sessionId"] = evt.sessionId;
+        if (evt.sessionKey) {
+          spanAttrs["openclaw.sessionKey"] = evt.sessionKey;
+        }
+        if (evt.sessionId) {
+          spanAttrs["openclaw.sessionId"] = evt.sessionId;
+        }
         spanAttrs["openclaw.queueDepth"] = evt.queueDepth ?? 0;
         spanAttrs["openclaw.ageMs"] = evt.ageMs;
         const span = tracer.startSpan("openclaw.session.stuck", { attributes: spanAttrs });

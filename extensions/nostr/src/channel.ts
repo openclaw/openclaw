@@ -63,7 +63,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         .map((entry) => String(entry).trim())
         .filter(Boolean)
         .map((entry) => {
-          if (entry === "*") return "*";
+          if (entry === "*") {
+            return "*";
+          }
           try {
             return normalizePubkey(entry);
           } catch {
@@ -162,7 +164,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
         const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) return [];
+        if (!lastError) {
+          return [];
+        }
         return [
           {
             channel: "nostr",

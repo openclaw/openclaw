@@ -35,7 +35,9 @@ export function collectTwitchStatusIssues(
   for (const entry of accounts) {
     const accountId = entry.accountId;
 
-    if (!accountId) continue;
+    if (!accountId) {
+      continue;
+    }
 
     let account: ReturnType<typeof getAccountConfig> | null = null;
     let cfg: Parameters<typeof resolveTwitchToken>[0] | undefined;

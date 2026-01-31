@@ -105,7 +105,9 @@ async function promptToken(
       initialValue: envToken ?? "",
       validate: (value) => {
         const raw = String(value ?? "").trim();
-        if (!raw) return "Required";
+        if (!raw) {
+          return "Required";
+        }
         if (!raw.startsWith("oauth:")) {
           return "Token should start with 'oauth:'";
         }
@@ -265,14 +267,18 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   getCurrent: (cfg) => {
     const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
     // Map allowedRoles to policy equivalent
-    if (account?.allowedRoles?.includes("all")) return "open";
-    if (account?.allowFrom && account.allowFrom.length > 0) return "allowlist";
+    if (account?.allowedRoles?.includes("all")) {
+      return "open";
+    }
+    if (account?.allowFrom && account.allowFrom.length > 0) {
+      return "allowlist";
+    }
     return "disabled";
   },
   setPolicy: (cfg, policy) => {
     const allowedRoles: TwitchRole[] =
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
-    return setTwitchAccessControl(cfg as OpenClawConfig, allowedRoles, true);
+    return setTwitchAccessControl(cfg, allowedRoles, true);
   },
   promptAllowFrom: async ({ cfg, prompter }) => {
     const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
@@ -289,7 +295,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    return setTwitchAccount(cfg as OpenClawConfig, {
+    return setTwitchAccount(cfg, {
       ...(account ?? undefined),
       allowFrom,
     });

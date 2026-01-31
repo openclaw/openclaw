@@ -26,7 +26,9 @@ describe("resolveMatrixRoomId", () => {
     const roomId = await resolveMatrixRoomId(client, userId);
 
     expect(roomId).toBe("!room:example.org");
+    // oxlint-disable-next-line typescript/unbound-method
     expect(client.getJoinedRooms).not.toHaveBeenCalled();
+    // oxlint-disable-next-line typescript/unbound-method
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
 

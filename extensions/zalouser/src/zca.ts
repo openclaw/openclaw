@@ -109,6 +109,7 @@ export function runZcaInteractive(args: string[], options?: ZcaRunOptions): Prom
 }
 
 function stripAnsi(str: string): string {
+  // oxlint-disable-next-line no-control-regex
   return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
 }
 

@@ -13,7 +13,9 @@ const runtimeStub = {
   state: {
     resolveStateDir: (env: NodeJS.ProcessEnv = process.env, homedir?: () => string) => {
       const override = env.OPENCLAW_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
-      if (override) return override;
+      if (override) {
+        return override;
+      }
       const resolvedHome = homedir ? homedir() : os.homedir();
       return path.join(resolvedHome, ".openclaw");
     },
@@ -66,7 +68,7 @@ describe("msteams conversation store (fs)", () => {
     await fs.promises.writeFile(filePath, `${JSON.stringify(json, null, 2)}\n`);
 
     const list = await store.list();
-    const ids = list.map((e) => e.conversationId).sort();
+    const ids = list.map((e) => e.conversationId).toSorted();
     expect(ids).toEqual(["19:active@thread.tacv2", "19:legacy@thread.tacv2"]);
 
     expect(await store.get("19:old@thread.tacv2")).toBeNull();
@@ -79,7 +81,7 @@ describe("msteams conversation store (fs)", () => {
 
     const rawAfter = await fs.promises.readFile(filePath, "utf-8");
     const jsonAfter = JSON.parse(rawAfter) as typeof json;
-    expect(Object.keys(jsonAfter.conversations).sort()).toEqual([
+    expect(Object.keys(jsonAfter.conversations).toSorted()).toEqual([
       "19:active@thread.tacv2",
       "19:legacy@thread.tacv2",
       "19:new@thread.tacv2",
