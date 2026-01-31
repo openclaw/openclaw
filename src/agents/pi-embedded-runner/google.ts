@@ -12,7 +12,7 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
@@ -348,9 +348,16 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedThinking)
-    : sanitizedThinking;
+  let repairedTools = sanitizedThinking;
+  if (policy.repairToolUseResultPairing) {
+    const report = repairToolUseResultPairing(sanitizedThinking);
+    repairedTools = report.messages;
+    if (report.droppedMalformedToolUseCount > 0) {
+      log.warn(
+        `session repair: stripped ${report.droppedMalformedToolUseCount} malformed tool_use block(s)`,
+      );
+    }
+  }
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
