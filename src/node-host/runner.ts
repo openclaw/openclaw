@@ -634,7 +634,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   });
 
   const skillBins = new SkillBinsCache(async () => {
-    const res = await client.request("skills.bins", {});
+    const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});
     const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
     return bins;
   });
