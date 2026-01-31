@@ -507,6 +507,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(outputItems).toContain("function_call");
       expect(outputItems).toContain("function_call_output");
       expect(outputItems).toContain("reasoning");
+      const reasoningItem = deltaEvents
+        .filter((e) => e.event === "response.output_item.added")
+        .map((e) => JSON.parse(e.data) as { item?: { type?: string; summary?: string } })
+        .map((parsed) => parsed.item)
+        .find((item) => item?.type === "reasoning");
+      expect(reasoningItem?.summary).toBe("thinking...");
+
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
         payloads: [{ text: "hello" }],

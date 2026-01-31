@@ -290,7 +290,8 @@ Event types currently emitted:
 
 Tool calls and internal tool results are emitted as `response.output_item.added`/`done`
 items with `type: "function_call"` and `type: "function_call_output"`. If reasoning
-streaming is enabled, `type: "reasoning"` output items are emitted as they arrive.
+streaming is enabled, `type: "reasoning"` output items are emitted as they arrive. If you
+request `reasoning.summary`, the reasoning text is returned in the `summary` field.
 
 ## Usage
 
