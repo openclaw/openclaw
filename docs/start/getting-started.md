@@ -3,6 +3,7 @@ summary: "Beginner guide: from zero to first message (wizard, auth, channels, pa
 read_when:
   - First time setup from zero
   - You want the fastest path from install → onboarding → first message
+title: "Getting Started"
 ---
 
 # Getting Started

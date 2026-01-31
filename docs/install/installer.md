@@ -4,6 +4,7 @@ read_when:
   - You want to understand `openclaw.bot/install.sh`
   - You want to automate installs (CI / headless)
   - You want to install from a GitHub checkout
+title: "Installer Internals"
 ---
 
 # Installer internals

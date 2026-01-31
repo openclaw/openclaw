@@ -4,6 +4,7 @@ read_when:
   - Building or debugging node clients (iOS/Android/macOS node mode)
   - Investigating pairing or bridge auth failures
   - Auditing the node surface exposed by the gateway
+title: "Bridge Protocol"
 ---
 
 # Bridge protocol (legacy node transport)

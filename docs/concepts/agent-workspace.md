@@ -3,6 +3,7 @@ summary: "Agent workspace: location, layout, and backup strategy"
 read_when:
   - You need to explain the agent workspace or its file layout
   - You want to back up or migrate an agent workspace
+title: "Agent Workspace"
 ---
 
 # Agent workspace

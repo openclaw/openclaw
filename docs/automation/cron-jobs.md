@@ -4,6 +4,7 @@ read_when:
   - Scheduling background jobs or wakeups
   - Wiring automation that should run with or alongside heartbeats
   - Deciding between heartbeat and cron for scheduled tasks
+title: "Cron Jobs"
 ---
 
 # Cron jobs (Gateway scheduler)

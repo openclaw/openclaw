@@ -4,6 +4,7 @@ read_when:
   - Explaining how streaming or chunking works on channels
   - Changing block streaming or channel chunking behavior
   - Debugging duplicate/early block replies or draft streaming
+title: "Streaming and Chunking"
 ---
 
 # Streaming + chunking

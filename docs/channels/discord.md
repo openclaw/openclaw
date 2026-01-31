@@ -2,6 +2,7 @@
 summary: "Discord bot support status, capabilities, and configuration"
 read_when:
   - Working on Discord channel features
+title: "Discord"
 ---
 
 # Discord (Bot API)

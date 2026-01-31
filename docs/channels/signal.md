@@ -3,6 +3,7 @@ summary: "Signal support via signal-cli (JSON-RPC + SSE), setup, and number mode
 read_when:
   - Setting up Signal support
   - Debugging Signal send/receive
+title: "Signal"
 ---
 
 # Signal (signal-cli)

@@ -4,6 +4,7 @@ read_when:
   - You want the agent to drive an existing Chrome tab (toolbar button)
   - You need remote Gateway + local browser automation via Tailscale
   - You want to understand the security implications of browser takeover
+title: "Chrome Extension"
 ---
 
 # Chrome extension (browser relay)
