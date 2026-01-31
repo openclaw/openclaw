@@ -42,12 +42,16 @@ function parseModelsArgs(raw: string): {
     }
     if (lower.startsWith("page=")) {
       const value = Number.parseInt(lower.slice("page=".length), 10);
-      if (Number.isFinite(value) && value > 0) page = value;
+      if (Number.isFinite(value) && value > 0) {
+        page = value;
+      }
       continue;
     }
     if (/^[0-9]+$/.test(lower)) {
       const value = Number.parseInt(lower, 10);
-      if (Number.isFinite(value) && value > 0) page = value;
+      if (Number.isFinite(value) && value > 0) {
+        page = value;
+      }
     }
   }
 
@@ -57,7 +61,9 @@ function parseModelsArgs(raw: string): {
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
       const rawValue = lower.slice(lower.indexOf("=") + 1);
       const value = Number.parseInt(rawValue, 10);
-      if (Number.isFinite(value) && value > 0) pageSize = Math.min(PAGE_SIZE_MAX, value);
+      if (Number.isFinite(value) && value > 0) {
+        pageSize = Math.min(PAGE_SIZE_MAX, value);
+      }
     }
   }
 
@@ -74,7 +80,9 @@ export async function resolveModelsCommandReply(params: {
   commandBodyNormalized: string;
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
-  if (!body.startsWith("/models")) return null;
+  if (!body.startsWith("/models")) {
+    return null;
+  }
 
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
@@ -108,13 +116,17 @@ export async function resolveModelsCommandReply(params: {
 
   const addRawModelRef = (raw?: string) => {
     const trimmed = raw?.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     const resolved = resolveModelRefFromString({
       raw: trimmed,
       defaultProvider: resolvedDefault.provider,
       aliasIndex,
     });
-    if (!resolved) return;
+    if (!resolved) {
+      return;
+    }
     add(resolved.ref.provider, resolved.ref.model);
   };
 
@@ -154,7 +166,7 @@ export async function resolveModelsCommandReply(params: {
   add(resolvedDefault.provider, resolvedDefault.model);
   addModelConfigEntries();
 
-  const providers = [...byProvider.keys()].sort();
+  const providers = [...byProvider.keys()].toSorted();
 
   if (!provider) {
     const lines: string[] = [
@@ -181,7 +193,7 @@ export async function resolveModelsCommandReply(params: {
     return { text: lines.join("\n") };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())].sort();
+  const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
   const total = models.length;
 
   if (total === 0) {
@@ -232,12 +244,16 @@ export async function resolveModelsCommandReply(params: {
 }
 
 export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
 
   const reply = await resolveModelsCommandReply({
     cfg: params.cfg,
     commandBodyNormalized: params.command.commandBodyNormalized,
   });
-  if (!reply) return null;
+  if (!reply) {
+    return null;
+  }
   return { reply, shouldContinue: false };
 };

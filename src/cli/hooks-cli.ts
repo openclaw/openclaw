@@ -67,8 +67,12 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
 }
 
 function formatHookStatus(hook: HookStatusEntry): string {
-  if (hook.eligible) return theme.success("✓ ready");
-  if (hook.disabled) return theme.warn("⏸ disabled");
+  if (hook.eligible) {
+    return theme.success("✓ ready");
+  }
+  if (hook.disabled) {
+    return theme.warn("⏸ disabled");
+  }
   return theme.error("✗ missing");
 }
 
@@ -78,7 +82,9 @@ function formatHookName(hook: HookStatusEntry): string {
 }
 
 function formatHookSource(hook: HookStatusEntry): string {
-  if (!hook.managedByPlugin) return hook.source;
+  if (!hook.managedByPlugin) {
+    return hook.source;
+  }
   return `plugin:${hook.pluginId ?? "unknown"}`;
 }
 
@@ -326,13 +332,24 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
     lines.push(theme.heading("Hooks not ready:"));
     for (const hook of notEligible) {
       const reasons = [];
-      if (hook.disabled) reasons.push("disabled");
-      if (hook.missing.bins.length > 0) reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
-      if (hook.missing.anyBins.length > 0)
+      if (hook.disabled) {
+        reasons.push("disabled");
+      }
+      if (hook.missing.bins.length > 0) {
+        reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
+      }
+      if (hook.missing.anyBins.length > 0) {
         reasons.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
-      if (hook.missing.env.length > 0) reasons.push(`env: ${hook.missing.env.join(", ")}`);
-      if (hook.missing.config.length > 0) reasons.push(`config: ${hook.missing.config.join(", ")}`);
-      if (hook.missing.os.length > 0) reasons.push(`os: ${hook.missing.os.join(", ")}`);
+      }
+      if (hook.missing.env.length > 0) {
+        reasons.push(`env: ${hook.missing.env.join(", ")}`);
+      }
+      if (hook.missing.config.length > 0) {
+        reasons.push(`config: ${hook.missing.config.join(", ")}`);
+      }
+      if (hook.missing.os.length > 0) {
+        reasons.push(`os: ${hook.missing.os.join(", ")}`);
+      }
       lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
     }
   }

@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/whatsapp",
-  "version": "2026.1.29",
-  "type": "module",
+  "version": "2026.1.30",
   "description": "OpenClaw WhatsApp channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

@@ -22,7 +22,9 @@ export function parseDiscordTarget(
   options: DiscordTargetParseOptions = {},
 ): DiscordTarget | undefined {
   const trimmed = raw.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
   if (mentionMatch) {
     return buildMessagingTarget("user", mentionMatch[1], trimmed);
@@ -80,7 +82,9 @@ export async function resolveDiscordTarget(
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<MessagingTarget | undefined> {
   const trimmed = raw.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
 
   const likelyUsername = isLikelyUsername(trimmed);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;

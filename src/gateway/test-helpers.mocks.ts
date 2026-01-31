@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { vi } from "vitest";
+import { Mock, vi } from "vitest";
 
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -199,8 +199,8 @@ export const setTestConfigRoot = (root: string) => {
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
-export const agentCommand = hoisted.agentCommand;
-export const getReplyFromConfig = hoisted.getReplyFromConfig;
+export const agentCommand: Mock<() => void> = hoisted.agentCommand;
+export const getReplyFromConfig: Mock<() => void> = hoisted.getReplyFromConfig;
 
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,
@@ -227,20 +227,25 @@ export const testIsNixMode = hoisted.testIsNixMode;
 export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
+vi.mock("../agents/pi-model-discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-model-discovery.js")>(
+    "../agents/pi-model-discovery.js",
   );
+
+  class MockModelRegistry extends actual.ModelRegistry {
+    override getAll(): ReturnType<typeof actual.ModelRegistry.prototype.getAll> {
+      if (!piSdkMock.enabled) {
+        return super.getAll();
+      }
+      piSdkMock.discoverCalls += 1;
+      // Cast to expected type for testing purposes
+      return piSdkMock.models as ReturnType<typeof actual.ModelRegistry.prototype.getAll>;
+    }
+  }
 
   return {
     ...actual,
-    discoverModels: (...args: unknown[]) => {
-      if (!piSdkMock.enabled) {
-        return (actual.discoverModels as (...args: unknown[]) => unknown)(...args);
-      }
-      piSdkMock.discoverCalls += 1;
-      return piSdkMock.models;
-    },
+    ModelRegistry: MockModelRegistry,
   };
 });
 
@@ -409,7 +414,7 @@ vi.mock("../config/config.js", async () => {
           : {};
       const overrideChannels =
         testState.channelsConfig && typeof testState.channelsConfig === "object"
-          ? { ...(testState.channelsConfig as Record<string, unknown>) }
+          ? { ...testState.channelsConfig }
           : {};
       const mergedChannels = { ...fileChannels, ...overrideChannels };
       if (testState.allowFrom !== undefined) {
@@ -436,9 +441,12 @@ vi.mock("../config/config.js", async () => {
         ...fileSession,
         mainKey: fileSession.mainKey ?? "main",
       };
-      if (typeof testState.sessionStorePath === "string")
+      if (typeof testState.sessionStorePath === "string") {
         session.store = testState.sessionStorePath;
-      if (testState.sessionConfig) Object.assign(session, testState.sessionConfig);
+      }
+      if (testState.sessionConfig) {
+        Object.assign(session, testState.sessionConfig);
+      }
 
       const fileGateway =
         fileConfig.gateway &&
@@ -446,9 +454,15 @@ vi.mock("../config/config.js", async () => {
         !Array.isArray(fileConfig.gateway)
           ? ({ ...(fileConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
           : {};
-      if (testState.gatewayBind) fileGateway.bind = testState.gatewayBind;
-      if (testState.gatewayAuth) fileGateway.auth = testState.gatewayAuth;
-      if (testState.gatewayControlUi) fileGateway.controlUi = testState.gatewayControlUi;
+      if (testState.gatewayBind) {
+        fileGateway.bind = testState.gatewayBind;
+      }
+      if (testState.gatewayAuth) {
+        fileGateway.auth = testState.gatewayAuth;
+      }
+      if (testState.gatewayControlUi) {
+        fileGateway.controlUi = testState.gatewayControlUi;
+      }
       const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
       const fileCanvasHost =
@@ -457,8 +471,9 @@ vi.mock("../config/config.js", async () => {
         !Array.isArray(fileConfig.canvasHost)
           ? ({ ...(fileConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
           : {};
-      if (typeof testState.canvasHostPort === "number")
+      if (typeof testState.canvasHostPort === "number") {
         fileCanvasHost.port = testState.canvasHostPort;
+      }
       const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
 
       const hooks = testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
@@ -467,8 +482,12 @@ vi.mock("../config/config.js", async () => {
         fileConfig.cron && typeof fileConfig.cron === "object" && !Array.isArray(fileConfig.cron)
           ? ({ ...(fileConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
           : {};
-      if (typeof testState.cronEnabled === "boolean") fileCron.enabled = testState.cronEnabled;
-      if (typeof testState.cronStorePath === "string") fileCron.store = testState.cronStorePath;
+      if (typeof testState.cronEnabled === "boolean") {
+        fileCron.enabled = testState.cronEnabled;
+      }
+      if (typeof testState.cronStorePath === "string") {
+        fileCron.store = testState.cronStorePath;
+      }
       const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
 
       const config = {

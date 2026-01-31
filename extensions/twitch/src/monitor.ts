@@ -137,7 +137,7 @@ async function deliverTwitchReply(params: {
   runtime: TwitchRuntimeEnv;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { payload, channel, account, accountId, config, tableMode, runtime, statusSink } = params;
+  const { payload, channel, account, accountId, config, runtime, statusSink } = params;
 
   try {
     const clientManager = getOrCreateClientManager(accountId, {
@@ -187,7 +187,9 @@ export async function monitorTwitchProvider(
 
   const coreLogger = core.logging.getChildLogger({ module: "twitch" });
   const logVerboseMessage = (message: string) => {
-    if (!core.logging.shouldLogVerbose()) return;
+    if (!core.logging.shouldLogVerbose()) {
+      return;
+    }
     coreLogger.debug?.(message);
   };
   const logger = {
@@ -212,7 +214,9 @@ export async function monitorTwitchProvider(
   }
 
   const unregisterHandler = clientManager.onMessage(account, (message) => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
 
     // Access control check
     const botUsername = account.username.toLowerCase();

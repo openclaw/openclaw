@@ -23,7 +23,9 @@ export function resolveAuthStorePathForDisplay(agentDir?: string): string {
 }
 
 export function ensureAuthStoreFile(pathname: string) {
-  if (fs.existsSync(pathname)) return;
+  if (fs.existsSync(pathname)) {
+    return;
+  }
   const payload: AuthProfileStore = {
     version: AUTH_STORE_VERSION,
     profiles: {},

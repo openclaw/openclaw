@@ -6,7 +6,9 @@ import { CONFIG_DIR, ensureDir } from "../utils.js";
 
 export function normalizeWideAreaDomain(raw?: string | null): string | null {
   const trimmed = raw?.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   return trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
 }
 
@@ -53,15 +55,21 @@ function formatYyyyMmDd(date: Date): string {
 function nextSerial(existingSerial: number | null, now: Date): number {
   const today = formatYyyyMmDd(now);
   const base = Number.parseInt(`${today}01`, 10);
-  if (!existingSerial || !Number.isFinite(existingSerial)) return base;
+  if (!existingSerial || !Number.isFinite(existingSerial)) {
+    return base;
+  }
   const existing = String(existingSerial);
-  if (existing.startsWith(today)) return existingSerial + 1;
+  if (existing.startsWith(today)) {
+    return existingSerial + 1;
+  }
   return base;
 }
 
 function extractSerial(zoneText: string): number | null {
   const match = zoneText.match(/^\s*@\s+IN\s+SOA\s+\S+\s+\S+\s+(\d+)\s+/m);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const parsed = Number.parseInt(match[1], 10);
   return Number.isFinite(parsed) ? parsed : null;
 }

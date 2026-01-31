@@ -31,9 +31,7 @@ insert.run("c", vec([0.2, 0.2, 0, 0]));
 
 const query = vec([1, 0, 0, 0]);
 const rows = db
-  .prepare(
-    "SELECT id, vec_distance_cosine(embedding, ?) AS dist FROM v ORDER BY dist ASC"
-  )
+  .prepare("SELECT id, vec_distance_cosine(embedding, ?) AS dist FROM v ORDER BY dist ASC")
   .all(query);
 
 console.log("sqlite-vec ok");

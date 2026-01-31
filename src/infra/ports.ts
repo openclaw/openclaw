@@ -25,7 +25,9 @@ function isErrno(err: unknown): err is NodeJS.ErrnoException {
 
 export async function describePortOwner(port: number): Promise<string | undefined> {
   const diagnostics = await inspectPortUsage(port);
-  if (diagnostics.listeners.length === 0) return undefined;
+  if (diagnostics.listeners.length === 0) {
+    return undefined;
+  }
   return formatPortDiagnostics(diagnostics).join("\n");
 }
 
@@ -80,8 +82,12 @@ export async function handlePortError(
   if (shouldLogVerbose()) {
     const stdout = (err as { stdout?: string })?.stdout;
     const stderr = (err as { stderr?: string })?.stderr;
-    if (stdout?.trim()) logDebug(`stdout: ${stdout.trim()}`);
-    if (stderr?.trim()) logDebug(`stderr: ${stderr.trim()}`);
+    if (stdout?.trim()) {
+      logDebug(`stdout: ${stdout.trim()}`);
+    }
+    if (stderr?.trim()) {
+      logDebug(`stderr: ${stderr.trim()}`);
+    }
   }
   return runtime.exit(1);
 }

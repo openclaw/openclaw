@@ -214,12 +214,20 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   const healthErr = (() => {
-    if (!params.health || typeof params.health !== "object") return "";
+    if (!params.health || typeof params.health !== "object") {
+      return "";
+    }
     const record = params.health as Record<string, unknown>;
-    if (!("error" in record)) return "";
+    if (!("error" in record)) {
+      return "";
+    }
     const value = record.error;
-    if (!value) return "";
-    if (typeof value === "string") return value;
+    if (!value) {
+      return "";
+    }
+    if (typeof value === "string") {
+      return value;
+    }
     try {
       return JSON.stringify(value, null, 2);
     } catch {

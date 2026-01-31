@@ -7,7 +7,9 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const key = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agents?.defaults?.models };
-    if (!nextModels[key]) nextModels[key] = {};
+    if (!nextModels[key]) {
+      nextModels[key] = {};
+    }
     const existingModel = cfg.agents?.defaults?.model as
       | { primary?: string; fallbacks?: string[] }
       | undefined;

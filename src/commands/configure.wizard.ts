@@ -240,7 +240,7 @@ export async function runConfigureWizard(
         ],
       }),
       runtime,
-    ) as "local" | "remote";
+    );
 
     if (mode === "remote") {
       let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
@@ -406,7 +406,9 @@ export async function runConfigureWizard(
 
       while (true) {
         const choice = await promptConfigureSection(runtime, ranSection);
-        if (choice === "__continue") break;
+        if (choice === "__continue") {
+          break;
+        }
         ranSection = true;
 
         if (choice === "workspace") {

@@ -27,7 +27,9 @@ describe("msteams directory", () => {
     expect(msteamsPlugin.directory?.listPeers).toBeTruthy();
     expect(msteamsPlugin.directory?.listGroups).toBeTruthy();
 
-    await expect(msteamsPlugin.directory!.listPeers({ cfg, query: undefined, limit: undefined })).resolves.toEqual(
+    await expect(
+      msteamsPlugin.directory!.listPeers({ cfg, query: undefined, limit: undefined }),
+    ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "user", id: "user:alice" },
         { kind: "user", id: "user:Bob" },
@@ -36,7 +38,9 @@ describe("msteams directory", () => {
       ]),
     );
 
-    await expect(msteamsPlugin.directory!.listGroups({ cfg, query: undefined, limit: undefined })).resolves.toEqual(
+    await expect(
+      msteamsPlugin.directory!.listGroups({ cfg, query: undefined, limit: undefined }),
+    ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "group", id: "conversation:chan1" },
         { kind: "group", id: "conversation:chan2" },

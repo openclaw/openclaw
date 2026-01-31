@@ -24,7 +24,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -44,6 +43,7 @@ import {
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
@@ -91,7 +91,9 @@ export function getTelegramSequentialKey(ctx: {
     rawText &&
     isControlCommandMessage(rawText, undefined, botUsername ? { botUsername } : undefined)
   ) {
-    if (typeof chatId === "number") return `telegram:${chatId}:control`;
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:control`;
+    }
     return "telegram:control";
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
@@ -158,8 +160,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const recordUpdateId = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
-    if (typeof updateId !== "number") return;
-    if (lastUpdateId !== null && updateId <= lastUpdateId) return;
+    if (typeof updateId !== "number") {
+      return;
+    }
+    if (lastUpdateId !== null && updateId <= lastUpdateId) {
+      return;
+    }
     lastUpdateId = updateId;
     void opts.updateOffset?.onUpdateId?.(updateId);
   };
@@ -167,7 +173,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
     if (typeof updateId === "number" && lastUpdateId !== null) {
-      if (updateId <= lastUpdateId) return true;
+      if (updateId <= lastUpdateId) {
+        return true;
+      }
     }
     const key = buildTelegramUpdateKey(ctx);
     const skipped = recentUpdates.check(key);
@@ -182,7 +190,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const MAX_RAW_UPDATE_STRING = 500;
   const MAX_RAW_UPDATE_ARRAY = 20;
   const stringifyUpdate = (update: unknown) => {
-    const seen = new WeakSet<object>();
+    const seen = new WeakSet();
     return JSON.stringify(update ?? null, (key, value) => {
       if (typeof value === "string" && value.length > MAX_RAW_UPDATE_STRING) {
         return `${value.slice(0, MAX_RAW_UPDATE_STRING)}...`;
@@ -195,7 +203,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
       if (value && typeof value === "object") {
         const obj = value as object;
-        if (seen.has(obj)) return "[Circular]";
+        if (seen.has(obj)) {
+          return "[Circular]";
+        }
         seen.add(obj);
       }
       return value;
@@ -235,7 +245,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined) ??
     (opts.allowFrom && opts.allowFrom.length > 0 ? opts.allowFrom : undefined);
   const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "first";
-  const streamMode = resolveTelegramStreamMode(telegramCfg);
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "telegram",
     providerSetting: telegramCfg.commands?.native,
@@ -254,6 +263,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
+  const streamMode = resolveTelegramStreamMode(telegramCfg);
   let botHasTopicsEnabled: boolean | undefined;
   const resolveBotTopicsEnabled = async (ctx?: TelegramContext) => {
     const fromCtx = ctx?.me as { has_topics_enabled?: boolean } | undefined;
@@ -261,7 +271,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       botHasTopicsEnabled = fromCtx.has_topics_enabled;
       return botHasTopicsEnabled;
     }
-    if (typeof botHasTopicsEnabled === "boolean") return botHasTopicsEnabled;
+    if (typeof botHasTopicsEnabled === "boolean") {
+      return botHasTopicsEnabled;
+    }
+    if (typeof bot.api.getMe !== "function") {
+      botHasTopicsEnabled = false;
+      return botHasTopicsEnabled;
+    }
     try {
       const me = (await withTelegramApiErrorLogging({
         operation: "getMe",
@@ -296,8 +312,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     try {
       const store = loadSessionStore(storePath);
       const entry = store[sessionKey];
-      if (entry?.groupActivation === "always") return false;
-      if (entry?.groupActivation === "mention") return true;
+      if (entry?.groupActivation === "always") {
+        return false;
+      }
+      if (entry?.groupActivation === "mention") {
+        return true;
+      }
     } catch (err) {
       logVerbose(`Failed to load session for activation check: ${String(err)}`);
     }
@@ -314,7 +334,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     });
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
     const groups = telegramCfg.groups;
-    if (!groups) return { groupConfig: undefined, topicConfig: undefined };
+    if (!groups) {
+      return { groupConfig: undefined, topicConfig: undefined };
+    }
     const groupKey = String(chatId);
     const groupConfig = groups[groupKey] ?? groups["*"];
     const topicConfig =
@@ -369,8 +391,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.on("message_reaction", async (ctx) => {
     try {
       const reaction = ctx.messageReaction;
-      if (!reaction) return;
-      if (shouldSkipUpdate(ctx)) return;
+      if (!reaction) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
 
       const chatId = reaction.chat.id;
       const messageId = reaction.message_id;
@@ -378,9 +404,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
       // Resolve reaction notification mode (default: "own")
       const reactionMode = telegramCfg.reactionNotifications ?? "own";
-      if (reactionMode === "off") return;
-      if (user?.is_bot) return;
-      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) return;
+      if (reactionMode === "off") {
+        return;
+      }
+      if (user?.is_bot) {
+        return;
+      }
+      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
+        return;
+      }
 
       // Detect added reactions
       const oldEmojis = new Set(
@@ -392,7 +424,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         .filter((r): r is { type: "emoji"; emoji: string } => r.type === "emoji")
         .filter((r) => !oldEmojis.has(r.emoji));
 
-      if (addedReactions.length === 0) return;
+      if (addedReactions.length === 0) {
+        return;
+      }
 
       // Build sender label
       const senderName = user

@@ -79,7 +79,9 @@ export async function approveTelegramPairingCode(params: {
     code: params.code,
     env: params.env,
   });
-  if (!res) return null;
+  if (!res) {
+    return null;
+  }
   const entry = res.entry
     ? {
         chatId: res.entry.id,

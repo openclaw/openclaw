@@ -19,8 +19,7 @@ export function resolveMatrixCredentialsDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir?: string,
 ): string {
-  const resolvedStateDir =
-    stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  const resolvedStateDir = stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
   return path.join(resolvedStateDir, "credentials", "matrix");
 }
 
@@ -34,7 +33,9 @@ export function loadMatrixCredentials(
 ): MatrixStoredCredentials | null {
   const credPath = resolveMatrixCredentialsPath(env);
   try {
-    if (!fs.existsSync(credPath)) return null;
+    if (!fs.existsSync(credPath)) {
+      return null;
+    }
     const raw = fs.readFileSync(credPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<MatrixStoredCredentials>;
     if (
@@ -73,7 +74,9 @@ export function saveMatrixCredentials(
 
 export function touchMatrixCredentials(env: NodeJS.ProcessEnv = process.env): void {
   const existing = loadMatrixCredentials(env);
-  if (!existing) return;
+  if (!existing) {
+    return;
+  }
 
   existing.lastUsedAt = new Date().toISOString();
   const credPath = resolveMatrixCredentialsPath(env);

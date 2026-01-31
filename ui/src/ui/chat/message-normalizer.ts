@@ -2,10 +2,7 @@
  * Message normalization utilities for chat rendering.
  */
 
-import type {
-  NormalizedMessage,
-  MessageContentItem,
-} from "../types/chat-types";
+import type { NormalizedMessage, MessageContentItem } from "../types/chat-types";
 
 /**
  * Normalize a raw message object into a consistent structure.
@@ -16,8 +13,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
-  const hasToolId =
-    typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
+  const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
 
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;

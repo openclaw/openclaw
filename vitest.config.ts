@@ -20,11 +20,7 @@ export default defineConfig({
     hookTimeout: isWindows ? 180_000 : 120_000,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
-    include: [
-      "src/**/*.test.ts",
-      "extensions/**/*.test.ts",
-      "test/format-error.test.ts",
-    ],
+    include: ["src/**/*.test.ts", "extensions/**/*.test.ts", "test/format-error.test.ts"],
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",

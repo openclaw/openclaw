@@ -29,8 +29,12 @@ function formatCharsAndTokens(chars: number): string {
 }
 
 function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized === "/context") return "";
-  if (commandBodyNormalized.startsWith("/context ")) return commandBodyNormalized.slice(8).trim();
+  if (commandBodyNormalized === "/context") {
+    return "";
+  }
+  if (commandBodyNormalized.startsWith("/context ")) {
+    return commandBodyNormalized.slice(8).trim();
+  }
   return "";
 }
 
@@ -38,7 +42,7 @@ function formatListTop(
   entries: Array<{ name: string; value: number }>,
   cap: number,
 ): { lines: string[]; omitted: number } {
-  const sorted = [...entries].sort((a, b) => b.value - a.value);
+  const sorted = [...entries].toSorted((a, b) => b.value - a.value);
   const top = sorted.slice(0, cap);
   const omitted = Math.max(0, sorted.length - top.length);
   const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
@@ -49,7 +53,9 @@ async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
   const existing = params.sessionEntry?.systemPromptReport;
-  if (existing && existing.source === "run") return existing;
+  if (existing && existing.source === "run") {
+    return existing;
+  }
 
   const workspaceDir = params.workspaceDir;
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
@@ -263,7 +269,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     );
     const toolPropsLines = report.tools.entries
       .filter((t) => t.propertiesCount != null)
-      .sort((a, b) => (b.propertiesCount ?? 0) - (a.propertiesCount ?? 0))
+      .toSorted((a, b) => (b.propertiesCount ?? 0) - (a.propertiesCount ?? 0))
       .slice(0, 30)
       .map((t) => `- ${t.name}: ${t.propertiesCount} params`);
 

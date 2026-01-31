@@ -39,14 +39,13 @@ export type NostrProfileState = {
 
 function normalizeAccountId(accountId?: string): string {
   const trimmed = accountId?.trim();
-  if (!trimmed) return "default";
+  if (!trimmed) {
+    return "default";
+  }
   return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
 }
 
-function resolveNostrStatePath(
-  accountId?: string,
-  env: NodeJS.ProcessEnv = process.env
-): string {
+function resolveNostrStatePath(accountId?: string, env: NodeJS.ProcessEnv = process.env): string {
   const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
   const normalized = normalizeAccountId(accountId);
   return path.join(stateDir, "nostr", `bus-state-${normalized}.json`);
@@ -54,7 +53,7 @@ function resolveNostrStatePath(
 
 function resolveNostrProfileStatePath(
   accountId?: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
   const normalized = normalizeAccountId(accountId);
@@ -69,7 +68,8 @@ function safeParseState(raw: string): NostrBusState | null {
       return {
         version: 2,
         lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt: typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
+        gatewayStartedAt:
+          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
         recentEventIds: Array.isArray(parsed.recentEventIds)
           ? parsed.recentEventIds.filter((x): x is string => typeof x === "string")
           : [],
@@ -81,7 +81,8 @@ function safeParseState(raw: string): NostrBusState | null {
       return {
         version: 2,
         lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt: typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
+        gatewayStartedAt:
+          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
         recentEventIds: [],
       };
     }
@@ -102,7 +103,9 @@ export async function readNostrBusState(params: {
     return safeParseState(raw);
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return null;
+    if (code === "ENOENT") {
+      return null;
+    }
     return null;
   }
 }
@@ -117,10 +120,7 @@ export async function writeNostrBusState(params: {
   const filePath = resolveNostrStatePath(params.accountId, params.env);
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(
-    dir,
-    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`
-  );
+  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrBusState = {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
@@ -141,17 +141,20 @@ export async function writeNostrBusState(params: {
  */
 export function computeSinceTimestamp(
   state: NostrBusState | null,
-  nowSec: number = Math.floor(Date.now() / 1000)
+  nowSec: number = Math.floor(Date.now() / 1000),
 ): number {
-  if (!state) return nowSec;
+  if (!state) {
+    return nowSec;
+  }
 
   // Use the most recent timestamp we have
-  const candidates = [
-    state.lastProcessedAt,
-    state.gatewayStartedAt,
-  ].filter((t): t is number => t !== null && t > 0);
+  const candidates = [state.lastProcessedAt, state.gatewayStartedAt].filter(
+    (t): t is number => t !== null && t > 0,
+  );
 
-  if (candidates.length === 0) return nowSec;
+  if (candidates.length === 0) {
+    return nowSec;
+  }
   return Math.max(...candidates);
 }
 
@@ -166,13 +169,12 @@ function safeParseProfileState(raw: string): NostrProfileState | null {
     if (parsed?.version === 1) {
       return {
         version: 1,
-        lastPublishedAt:
-          typeof parsed.lastPublishedAt === "number" ? parsed.lastPublishedAt : null,
+        lastPublishedAt: typeof parsed.lastPublishedAt === "number" ? parsed.lastPublishedAt : null,
         lastPublishedEventId:
           typeof parsed.lastPublishedEventId === "string" ? parsed.lastPublishedEventId : null,
         lastPublishResults:
           parsed.lastPublishResults && typeof parsed.lastPublishResults === "object"
-            ? (parsed.lastPublishResults as Record<string, "ok" | "failed" | "timeout">)
+            ? parsed.lastPublishResults
             : null,
       };
     }
@@ -193,7 +195,9 @@ export async function readNostrProfileState(params: {
     return safeParseProfileState(raw);
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return null;
+    if (code === "ENOENT") {
+      return null;
+    }
     return null;
   }
 }
@@ -208,10 +212,7 @@ export async function writeNostrProfileState(params: {
   const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(
-    dir,
-    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`
-  );
+  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
     lastPublishedAt: params.lastPublishedAt,

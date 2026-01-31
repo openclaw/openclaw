@@ -61,7 +61,9 @@ describe("installHooksFromArchive", () => {
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
     expect(result.hookPackId).toBe("zip-hooks");
     expect(result.hooks).toContain("zip-hook");
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "zip-hooks"));
@@ -109,7 +111,9 @@ describe("installHooksFromArchive", () => {
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
     expect(result.hookPackId).toBe("tar-hooks");
     expect(result.hooks).toContain("tar-hook");
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "tar-hooks"));
@@ -142,7 +146,9 @@ describe("installHooksFromPath", () => {
     const result = await installHooksFromPath({ path: hookDir, hooksDir });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
     expect(result.hookPackId).toBe("my-hook");
     expect(result.hooks).toEqual(["my-hook"]);
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "my-hook"));

@@ -65,7 +65,9 @@ function resolveHookKey(entry: HookEntry): string {
 
 function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
   const install = entry.metadata?.install ?? [];
-  if (install.length === 0) return [];
+  if (install.length === 0) {
+    return [];
+  }
 
   // For hooks, we just list all install options
   return install.map((spec, index) => {
@@ -115,8 +117,12 @@ function buildHookStatus(
   const requiredOs = entry.metadata?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) return false;
-    if (eligibility?.remote?.hasBin?.(bin)) return false;
+    if (hasBinary(bin)) {
+      return false;
+    }
+    if (eligibility?.remote?.hasBin?.(bin)) {
+      return false;
+    }
     return true;
   });
 
@@ -138,8 +144,12 @@ function buildHookStatus(
 
   const missingEnv: string[] = [];
   for (const envName of requiredEnv) {
-    if (process.env[envName]) continue;
-    if (hookConfig?.env?.[envName]) continue;
+    if (process.env[envName]) {
+      continue;
+    }
+    if (hookConfig?.env?.[envName]) {
+      continue;
+    }
     missingEnv.push(envName);
   }
 

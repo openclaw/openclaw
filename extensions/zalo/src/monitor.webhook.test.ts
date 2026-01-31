@@ -16,7 +16,9 @@ async function withServer(
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const address = server.address() as AddressInfo | null;
-  if (!address) throw new Error("missing server address");
+  if (!address) {
+    throw new Error("missing server address");
+  }
   try {
     await fn(`http://127.0.0.1:${address.port}`);
   } finally {
@@ -46,23 +48,26 @@ describe("handleZaloWebhookRequest", () => {
     });
 
     try {
-      await withServer(async (req, res) => {
-        const handled = await handleZaloWebhookRequest(req, res);
-        if (!handled) {
-          res.statusCode = 404;
-          res.end("not found");
-        }
-      }, async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/hook`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-          },
-          body: "null",
-        });
+      await withServer(
+        async (req, res) => {
+          const handled = await handleZaloWebhookRequest(req, res);
+          if (!handled) {
+            res.statusCode = 404;
+            res.end("not found");
+          }
+        },
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/hook`, {
+            method: "POST",
+            headers: {
+              "x-bot-api-secret-token": "secret",
+            },
+            body: "null",
+          });
 
-        expect(response.status).toBe(400);
-      });
+          expect(response.status).toBe(400);
+        },
+      );
     } finally {
       unregister();
     }

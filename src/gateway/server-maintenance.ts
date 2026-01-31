@@ -75,17 +75,21 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of params.dedupe) {
-      if (now - v.ts > DEDUPE_TTL_MS) params.dedupe.delete(k);
+      if (now - v.ts > DEDUPE_TTL_MS) {
+        params.dedupe.delete(k);
+      }
     }
     if (params.dedupe.size > DEDUPE_MAX) {
-      const entries = [...params.dedupe.entries()].sort((a, b) => a[1].ts - b[1].ts);
+      const entries = [...params.dedupe.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
       for (let i = 0; i < params.dedupe.size - DEDUPE_MAX; i++) {
         params.dedupe.delete(entries[i][0]);
       }
     }
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (now <= entry.expiresAtMs) continue;
+      if (now <= entry.expiresAtMs) {
+        continue;
+      }
       abortChatRunById(
         {
           chatAbortControllers: params.chatAbortControllers,
@@ -103,7 +107,9 @@ export function startGatewayMaintenanceTimers(params: {
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
     for (const [runId, abortedAt] of params.chatRunState.abortedRuns) {
-      if (now - abortedAt <= ABORTED_RUN_TTL_MS) continue;
+      if (now - abortedAt <= ABORTED_RUN_TTL_MS) {
+        continue;
+      }
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);

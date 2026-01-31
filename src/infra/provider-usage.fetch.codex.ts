@@ -30,7 +30,9 @@ export async function fetchCodexUsage(
     "User-Agent": "CodexBar",
     Accept: "application/json",
   };
-  if (accountId) headers["ChatGPT-Account-Id"] = accountId;
+  if (accountId) {
+    headers["ChatGPT-Account-Id"] = accountId;
+  }
 
   const res = await fetchJson(
     "https://chatgpt.com/backend-api/wham/usage",

@@ -70,7 +70,9 @@ describe("subscribeEmbeddedPiSession", () => {
         listeners.push(listener);
         return () => {
           const index = listeners.indexOf(listener);
-          if (index !== -1) listeners.splice(index, 1);
+          if (index !== -1) {
+            listeners.splice(index, 1);
+          }
         };
       },
     } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];

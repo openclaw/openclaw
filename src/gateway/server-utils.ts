@@ -11,8 +11,12 @@ export function normalizeVoiceWakeTriggers(input: unknown): string[] {
 }
 
 export function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
   const statusValue = (err as { status?: unknown })?.status;
   const codeValue = (err as { code?: unknown })?.code;
   const hasStatus = statusValue !== undefined;

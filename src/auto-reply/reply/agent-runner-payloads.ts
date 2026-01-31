@@ -52,7 +52,9 @@ export function buildReplyPayloads(params: {
           logVerbose("Stripped stray HEARTBEAT_OK token from reply");
         }
         const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-        if (stripped.shouldSkip && !hasMedia) return [];
+        if (stripped.shouldSkip && !hasMedia) {
+          return [];
+        }
         return [{ ...payload, text: stripped.text }];
       });
 

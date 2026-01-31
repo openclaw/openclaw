@@ -85,11 +85,10 @@ describe("CallManager", () => {
     const manager = new CallManager(config, storePath);
     manager.initialize(provider, "https://example.com/voice/webhook");
 
-    const { callId, success } = await manager.initiateCall(
-      "+15550000002",
-      undefined,
-      { message: "Hello there", mode: "notify" },
-    );
+    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
+      message: "Hello there",
+      mode: "notify",
+    });
     expect(success).toBe(true);
 
     manager.processEvent({

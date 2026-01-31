@@ -83,8 +83,12 @@ describe("extractGeminiCliCredentials", () => {
 
     mockExistsSync.mockImplementation((p: string) => {
       const normalized = normalizePath(p);
-      if (normalized === normalizePath(fakeGeminiPath)) return true;
-      if (normalized === normalizePath(fakeOauth2Path)) return true;
+      if (normalized === normalizePath(fakeGeminiPath)) {
+        return true;
+      }
+      if (normalized === normalizePath(fakeOauth2Path)) {
+        return true;
+      }
       return false;
     });
     mockRealpathSync.mockReturnValue(fakeResolvedPath);
@@ -160,8 +164,12 @@ describe("extractGeminiCliCredentials", () => {
 
     mockExistsSync.mockImplementation((p: string) => {
       const normalized = normalizePath(p);
-      if (normalized === normalizePath(fakeGeminiPath)) return true;
-      if (normalized === normalizePath(fakeOauth2Path)) return true;
+      if (normalized === normalizePath(fakeGeminiPath)) {
+        return true;
+      }
+      if (normalized === normalizePath(fakeOauth2Path)) {
+        return true;
+      }
       return false;
     });
     mockRealpathSync.mockReturnValue(fakeResolvedPath);
@@ -205,8 +213,12 @@ describe("extractGeminiCliCredentials", () => {
 
     mockExistsSync.mockImplementation((p: string) => {
       const normalized = normalizePath(p);
-      if (normalized === normalizePath(fakeGeminiPath)) return true;
-      if (normalized === normalizePath(fakeOauth2Path)) return true;
+      if (normalized === normalizePath(fakeGeminiPath)) {
+        return true;
+      }
+      if (normalized === normalizePath(fakeOauth2Path)) {
+        return true;
+      }
       return false;
     });
     mockRealpathSync.mockReturnValue(fakeResolvedPath);

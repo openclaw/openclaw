@@ -124,7 +124,9 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
   const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
     const name = nameRaw.trim();
-    if (!name) throw new Error("profile name is required");
+    if (!name) {
+      throw new Error("profile name is required");
+    }
     if (!isValidProfileName(name)) {
       throw new Error("invalid profile name");
     }

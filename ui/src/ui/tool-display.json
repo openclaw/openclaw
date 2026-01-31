@@ -90,7 +90,13 @@
         },
         "act": {
           "label": "act",
-          "detailKeys": ["request.kind", "request.ref", "request.selector", "request.text", "request.value"]
+          "detailKeys": [
+            "request.kind",
+            "request.ref",
+            "request.selector",
+            "request.text",
+            "request.value"
+          ]
         }
       }
     },
@@ -117,9 +123,15 @@
         "approve": { "label": "approve", "detailKeys": ["requestId"] },
         "reject": { "label": "reject", "detailKeys": ["requestId"] },
         "notify": { "label": "notify", "detailKeys": ["node", "nodeId", "title", "body"] },
-        "camera_snap": { "label": "camera snap", "detailKeys": ["node", "nodeId", "facing", "deviceId"] },
+        "camera_snap": {
+          "label": "camera snap",
+          "detailKeys": ["node", "nodeId", "facing", "deviceId"]
+        },
         "camera_list": { "label": "camera list", "detailKeys": ["node", "nodeId"] },
-        "camera_clip": { "label": "camera clip", "detailKeys": ["node", "nodeId", "facing", "duration", "durationMs"] },
+        "camera_clip": {
+          "label": "camera clip",
+          "detailKeys": ["node", "nodeId", "facing", "duration", "durationMs"]
+        },
         "screen_record": {
           "label": "screen record",
           "detailKeys": ["node", "nodeId", "duration", "durationMs", "fps", "screenIndex"]

@@ -19,13 +19,13 @@ Oracle’s free tier can be a great fit for OpenClaw (especially if you already 
 
 ## Cost Comparison (2026)
 
-| Provider | Plan | Specs | Price/mo | Notes |
-|----------|------|-------|----------|-------|
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity |
-| Hetzner | CX22 | 2 vCPU, 4GB RAM | ~ $4 | Cheapest paid option |
-| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
-| Vultr | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
-| Linode | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
+| Provider     | Plan            | Specs                  | Price/mo | Notes                 |
+| ------------ | --------------- | ---------------------- | -------- | --------------------- |
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0       | ARM, limited capacity |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4     | Cheapest paid option  |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6       | Easy UI, good docs    |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6       | Many locations        |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5       | Now part of Akamai    |
 
 ---
 
@@ -88,6 +88,7 @@ sudo tailscale up --ssh --hostname=openclaw
 This enables Tailscale SSH, so you can connect via `ssh openclaw` from any device on your tailnet — no public IP needed.
 
 Verify:
+
 ```bash
 tailscale status
 ```
@@ -165,6 +166,7 @@ https://openclaw.<tailnet-name>.ts.net/
 Replace `<tailnet-name>` with your tailnet name (visible in `tailscale status`).
 
 No SSH tunnel needed. Tailscale provides:
+
 - HTTPS encryption (automatic certs)
 - Authentication via Tailscale identity
 - Access from any device on your tailnet (laptop, phone, etc.)
@@ -175,18 +177,18 @@ No SSH tunnel needed. Tailscale provides:
 
 With the VCN locked down (only UDP 41641 open) and the Gateway bound to loopback, you get strong defense-in-depth: public traffic is blocked at the network edge, and admin access happens over your tailnet.
 
-This setup often removes the *need* for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `openclaw security audit`, and verify you aren’t accidentally listening on public interfaces.
+This setup often removes the _need_ for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `openclaw security audit`, and verify you aren’t accidentally listening on public interfaces.
 
 ### What's Already Protected
 
-| Traditional Step | Needed? | Why |
-|------------------|---------|-----|
-| UFW firewall | No | VCN blocks before traffic reaches instance |
-| fail2ban | No | No brute force if port 22 blocked at VCN |
-| sshd hardening | No | Tailscale SSH doesn't use sshd |
-| Disable root login | No | Tailscale uses Tailscale identity, not system users |
-| SSH key-only auth | No | Tailscale authenticates via your tailnet |
-| IPv6 hardening | Usually not | Depends on your VCN/subnet settings; verify what’s actually assigned/exposed |
+| Traditional Step   | Needed?     | Why                                                                          |
+| ------------------ | ----------- | ---------------------------------------------------------------------------- |
+| UFW firewall       | No          | VCN blocks before traffic reaches instance                                   |
+| fail2ban           | No          | No brute force if port 22 blocked at VCN                                     |
+| sshd hardening     | No          | Tailscale SSH doesn't use sshd                                               |
+| Disable root login | No          | Tailscale uses Tailscale identity, not system users                          |
+| SSH key-only auth  | No          | Tailscale authenticates via your tailnet                                     |
+| IPv6 hardening     | Usually not | Depends on your VCN/subnet settings; verify what’s actually assigned/exposed |
 
 ### Still Recommended
 
@@ -226,12 +228,15 @@ Then open `http://localhost:18789`.
 ## Troubleshooting
 
 ### Instance creation fails ("Out of capacity")
+
 Free tier ARM instances are popular. Try:
+
 - Different availability domain
 - Retry during off-peak hours (early morning)
 - Use the "Always Free" filter when selecting shape
 
 ### Tailscale won't connect
+
 ```bash
 # Check status
 sudo tailscale status
@@ -241,6 +246,7 @@ sudo tailscale up --ssh --hostname=openclaw --reset
 ```
 
 ### Gateway won't start
+
 ```bash
 openclaw gateway status
 openclaw doctor --non-interactive
@@ -248,6 +254,7 @@ journalctl --user -u openclaw-gateway -n 50
 ```
 
 ### Can't reach Control UI
+
 ```bash
 # Verify Tailscale Serve is running
 tailscale serve status
@@ -260,7 +267,9 @@ systemctl --user restart openclaw-gateway
 ```
 
 ### ARM binary issues
+
 Some tools may not have ARM builds. Check:
+
 ```bash
 uname -m  # Should show aarch64
 ```
@@ -272,10 +281,12 @@ Most npm packages work fine. For binaries, look for `linux-arm64` or `aarch64` r
 ## Persistence
 
 All state lives in:
+
 - `~/.openclaw/` — config, credentials, session data
 - `~/.openclaw/workspace/` — workspace (SOUL.md, memory, artifacts)
 
 Back up periodically:
+
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 ```

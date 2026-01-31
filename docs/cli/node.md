@@ -16,6 +16,7 @@ Use a node host when you want agents to **run commands on other machines** in yo
 network without installing a full macOS companion app there.
 
 Common use cases:
+
 - Run commands on remote Linux/Windows boxes (build servers, lab machines, NAS).
 - Keep exec **sandboxed** on the gateway, but delegate approved runs to other hosts.
 - Provide a lightweight, headless execution target for automation or CI nodes.
@@ -35,9 +36,9 @@ Disable it on the node if needed:
 {
   nodeHost: {
     browserProxy: {
-      enabled: false
-    }
-  }
+      enabled: false,
+    },
+  },
 }
 ```
 
@@ -48,6 +49,7 @@ openclaw node run --host <gateway-host> --port 18789
 ```
 
 Options:
+
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--tls`: Use TLS for the gateway connection
@@ -64,6 +66,7 @@ openclaw node install --host <gateway-host> --port 18789
 ```
 
 Options:
+
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--tls`: Use TLS for the gateway connection

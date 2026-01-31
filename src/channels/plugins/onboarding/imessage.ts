@@ -103,24 +103,36 @@ async function promptIMessageAllowFrom(params: {
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
       const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
+      if (!raw) {
+        return "Required";
+      }
       const parts = parseIMessageAllowFromInput(raw);
       for (const part of parts) {
-        if (part === "*") continue;
+        if (part === "*") {
+          continue;
+        }
         if (part.toLowerCase().startsWith("chat_id:")) {
           const id = part.slice("chat_id:".length).trim();
-          if (!/^\d+$/.test(id)) return `Invalid chat_id: ${part}`;
+          if (!/^\d+$/.test(id)) {
+            return `Invalid chat_id: ${part}`;
+          }
           continue;
         }
         if (part.toLowerCase().startsWith("chat_guid:")) {
-          if (!part.slice("chat_guid:".length).trim()) return "Invalid chat_guid entry";
+          if (!part.slice("chat_guid:".length).trim()) {
+            return "Invalid chat_guid entry";
+          }
           continue;
         }
         if (part.toLowerCase().startsWith("chat_identifier:")) {
-          if (!part.slice("chat_identifier:".length).trim()) return "Invalid chat_identifier entry";
+          if (!part.slice("chat_identifier:".length).trim()) {
+            return "Invalid chat_identifier entry";
+          }
           continue;
         }
-        if (!normalizeIMessageHandle(part)) return `Invalid handle: ${part}`;
+        if (!normalizeIMessageHandle(part)) {
+          return `Invalid handle: ${part}`;
+        }
       }
       return undefined;
     },

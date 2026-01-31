@@ -125,11 +125,11 @@ export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta {
 
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
   const normalized = normalizeChannelKey(raw);
-  if (!normalized) return null;
+  if (!normalized) {
+    return null;
+  }
   const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
-  return CHAT_CHANNEL_ORDER.includes(resolved as ChatChannelId)
-    ? (resolved as ChatChannelId)
-    : null;
+  return CHAT_CHANNEL_ORDER.includes(resolved) ? resolved : null;
 }
 
 // Channel docking: prefer this helper in shared code. Importing from
@@ -144,17 +144,21 @@ export function normalizeChannelId(raw?: string | null): ChatChannelId | null {
 // monitors, web login, etc). The plugin registry must be initialized first.
 export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
   const key = normalizeChannelKey(raw);
-  if (!key) return null;
+  if (!key) {
+    return null;
+  }
 
   const registry = requireActivePluginRegistry();
   const hit = registry.channels.find((entry) => {
     const id = String(entry.plugin.id ?? "")
       .trim()
       .toLowerCase();
-    if (id && id === key) return true;
+    if (id && id === key) {
+      return true;
+    }
     return (entry.plugin.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === key);
   });
-  return (hit?.plugin.id as ChannelId | undefined) ?? null;
+  return hit?.plugin.id ?? null;
 }
 
 export function formatChannelPrimerLine(meta: ChatChannelMeta): string {

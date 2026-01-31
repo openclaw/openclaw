@@ -21,7 +21,9 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
     "channel_created",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_created">) => {
       try {
-        if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+        if (ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
 
         const payload = event as SlackChannelCreatedEvent;
         const channelId = payload.channel?.id;
@@ -54,7 +56,9 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
     "channel_rename",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_rename">) => {
       try {
-        if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+        if (ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
 
         const payload = event as SlackChannelRenamedEvent;
         const channelId = payload.channel?.id;
@@ -87,12 +91,16 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
     "channel_id_changed",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_id_changed">) => {
       try {
-        if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+        if (ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
 
         const payload = event as SlackChannelIdChangedEvent;
         const oldChannelId = payload.old_channel_id;
         const newChannelId = payload.new_channel_id;
-        if (!oldChannelId || !newChannelId) return;
+        if (!oldChannelId || !newChannelId) {
+          return;
+        }
 
         const channelInfo = await ctx.resolveChannelName(newChannelId);
         const label = resolveSlackChannelLabel({

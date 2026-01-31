@@ -18,7 +18,9 @@ export const CDP_PORT_RANGE_END = 18899;
 export const PROFILE_NAME_REGEX = /^[a-z0-9][a-z0-9-]*$/;
 
 export function isValidProfileName(name: string): boolean {
-  if (!name || name.length > 64) return false;
+  if (!name || name.length > 64) {
+    return false;
+  }
   return PROFILE_NAME_REGEX.test(name);
 }
 
@@ -31,9 +33,13 @@ export function allocateCdpPort(
   if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= 0) {
     return null;
   }
-  if (start > end) return null;
+  if (start > end) {
+    return null;
+  }
   for (let port = start; port <= end; port++) {
-    if (!usedPorts.has(port)) return port;
+    if (!usedPorts.has(port)) {
+      return port;
+    }
   }
   return null;
 }
@@ -41,7 +47,9 @@ export function allocateCdpPort(
 export function getUsedPorts(
   profiles: Record<string, { cdpPort?: number; cdpUrl?: string }> | undefined,
 ): Set<number> {
-  if (!profiles) return new Set();
+  if (!profiles) {
+    return new Set();
+  }
   const used = new Set<number>();
   for (const profile of Object.values(profiles)) {
     if (typeof profile.cdpPort === "number") {
@@ -49,7 +57,9 @@ export function getUsedPorts(
       continue;
     }
     const rawUrl = profile.cdpUrl?.trim();
-    if (!rawUrl) continue;
+    if (!rawUrl) {
+      continue;
+    }
     try {
       const parsed = new URL(rawUrl);
       const port =
@@ -91,12 +101,14 @@ export function allocateColor(usedColors: Set<string>): string {
   // All colors used, cycle based on count
   const index = usedColors.size % PROFILE_COLORS.length;
   // biome-ignore lint/style/noNonNullAssertion: Array is non-empty constant
-  return PROFILE_COLORS[index] ?? PROFILE_COLORS[0]!;
+  return PROFILE_COLORS[index] ?? PROFILE_COLORS[0];
 }
 
 export function getUsedColors(
   profiles: Record<string, { color: string }> | undefined,
 ): Set<string> {
-  if (!profiles) return new Set();
+  if (!profiles) {
+    return new Set();
+  }
   return new Set(Object.values(profiles).map((p) => p.color.toUpperCase()));
 }

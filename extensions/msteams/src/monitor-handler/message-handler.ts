@@ -105,7 +105,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       from: from?.id,
       conversation: conversation?.id,
     });
-    if (htmlSummary) log.debug("html attachment summary", htmlSummary);
+    if (htmlSummary) {
+      log.debug("html attachment summary", htmlSummary);
+    }
 
     if (!from?.id) {
       log.debug("skipping message without from.id");
@@ -414,24 +416,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       preserveFilenames: cfg.media?.preserveFilenames,
     });
 
-	    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
-	    const envelopeFrom = isDirectMessage ? senderName : conversationType;
-	    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-	      agentId: route.agentId,
-	    });
-	    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-	    const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-	      storePath,
-	      sessionKey: route.sessionKey,
-	    });
-	    const body = core.channel.reply.formatAgentEnvelope({
-	      channel: "Teams",
-	      from: envelopeFrom,
-	      timestamp,
-	      previousTimestamp,
-	      envelope: envelopeOptions,
-	      body: rawBody,
-	    });
+    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+    const envelopeFrom = isDirectMessage ? senderName : conversationType;
+    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+    const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+      storePath,
+      sessionKey: route.sessionKey,
+    });
+    const body = core.channel.reply.formatAgentEnvelope({
+      channel: "Teams",
+      from: envelopeFrom,
+      timestamp,
+      previousTimestamp,
+      envelope: envelopeOptions,
+      body: rawBody,
+    });
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
@@ -441,25 +443,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         historyKey,
         limit: historyLimit,
         currentMessage: combinedBody,
-	        formatEntry: (entry) =>
-	          core.channel.reply.formatAgentEnvelope({
-	            channel: "Teams",
-	            from: conversationType,
-	            timestamp: entry.timestamp,
-	            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-	            envelope: envelopeOptions,
-	          }),
-	      });
-	    }
+        formatEntry: (entry) =>
+          core.channel.reply.formatAgentEnvelope({
+            channel: "Teams",
+            from: conversationType,
+            timestamp: entry.timestamp,
+            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+            envelope: envelopeOptions,
+          }),
+      });
+    }
 
-	    const ctxPayload = core.channel.reply.finalizeInboundContext({
-	      Body: combinedBody,
-	      RawBody: rawBody,
-	      CommandBody: rawBody,
-	      From: teamsFrom,
-	      To: teamsTo,
-	      SessionKey: route.sessionKey,
-	      AccountId: route.accountId,
+    const ctxPayload = core.channel.reply.finalizeInboundContext({
+      Body: combinedBody,
+      RawBody: rawBody,
+      CommandBody: rawBody,
+      From: teamsFrom,
+      To: teamsTo,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       ConversationLabel: envelopeFrom,
       GroupSubject: !isDirectMessage ? conversationType : undefined,
@@ -469,12 +471,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-	      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
-	      CommandAuthorized: commandAuthorized,
-	      OriginatingChannel: "msteams" as const,
-	      OriginatingTo: teamsTo,
-	      ...mediaPayload,
-	    });
+      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      CommandAuthorized: commandAuthorized,
+      OriginatingChannel: "msteams" as const,
+      OriginatingTo: teamsTo,
+      ...mediaPayload,
+    });
 
     await core.channel.session.recordInboundSession({
       storePath,
@@ -520,7 +522,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       markDispatchIdle();
       log.info("dispatch complete", { queuedFinal, counts });
 
-      const didSendReply = counts.final + counts.tool + counts.block > 0;
       if (!queuedFinal) {
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
@@ -563,17 +564,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       );
       const senderId =
         entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
-      if (!senderId || !conversationId) return null;
+      if (!senderId || !conversationId) {
+        return null;
+      }
       return `msteams:${appId}:${conversationId}:${senderId}`;
     },
     shouldDebounce: (entry) => {
-      if (!entry.text.trim()) return false;
-      if (entry.attachments.length > 0) return false;
+      if (!entry.text.trim()) {
+        return false;
+      }
+      if (entry.attachments.length > 0) {
+        return false;
+      }
       return !core.channel.text.hasControlCommand(entry.text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
-      if (!last) return;
+      if (!last) {
+        return;
+      }
       if (entries.length === 1) {
         await handleTeamsMessageNow(last);
         return;
@@ -582,7 +591,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .map((entry) => entry.text)
         .filter(Boolean)
         .join("\n");
-      if (!combinedText.trim()) return;
+      if (!combinedText.trim()) {
+        return;
+      }
       const combinedRawText = entries
         .map((entry) => entry.rawText)
         .filter(Boolean)

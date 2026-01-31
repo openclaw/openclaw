@@ -23,9 +23,13 @@ import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const configCommand = parseConfigCommand(params.command.commandBodyNormalized);
-  if (!configCommand) return null;
+  if (!configCommand) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /config from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -173,9 +177,13 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
 };
 
 export const handleDebugCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const debugCommand = parseDebugCommand(params.command.commandBodyNormalized);
-  if (!debugCommand) return null;
+  if (!debugCommand) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /debug from unauthorized sender: ${params.command.senderId || "<unknown>"}`,

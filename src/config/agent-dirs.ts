@@ -37,7 +37,9 @@ function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   ids.add(normalizeAgentId(defaultAgentId));
 
   for (const entry of agents) {
-    if (entry?.id) ids.add(normalizeAgentId(entry.id));
+    if (entry?.id) {
+      ids.add(normalizeAgentId(entry.id));
+    }
   }
 
   const bindings = cfg.bindings;
@@ -63,7 +65,9 @@ function resolveEffectiveAgentDir(
     ? cfg.agents?.list.find((agent) => normalizeAgentId(agent.id) === id)?.agentDir
     : undefined;
   const trimmed = configured?.trim();
-  if (trimmed) return resolveUserPath(trimmed);
+  if (trimmed) {
+    return resolveUserPath(trimmed);
+  }
   const root = resolveStateDir(deps?.env ?? process.env, deps?.homedir ?? os.homedir);
   return path.join(root, "agents", id, "agent");
 }

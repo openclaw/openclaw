@@ -110,7 +110,9 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
 
   for (const handler of HANDLERS) {
     const result = await handler(params, allowTextCommands);
-    if (result) return result;
+    if (result) {
+      return result;
+    }
   }
 
   const sendPolicy = resolveSendPolicy({

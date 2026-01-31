@@ -1,10 +1,10 @@
 // @ts-nocheck
-import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
+import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
@@ -28,7 +28,9 @@ async function resolveStickerVisionSupport(cfg, agentId) {
     const catalog = await loadModelCatalog({ config: cfg });
     const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    if (!entry) return false;
+    if (!entry) {
+      return false;
+    }
     return modelSupportsVision(entry);
   } catch {
     return false;
@@ -53,7 +55,7 @@ export const dispatchTelegramMessage = async ({
     msg,
     chatId,
     isGroup,
-    resolvedThreadId,
+    replyThreadId,
     historyKey,
     historyLimit,
     groupHistories,
@@ -67,11 +69,13 @@ export const dispatchTelegramMessage = async ({
   } = context;
 
   const isPrivateChat = msg.chat.type === "private";
+  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const draftThreadId = replyThreadId ?? messageThreadId;
   const draftMaxChars = Math.min(textLimit, 4096);
   const canStreamDraft =
     streamMode !== "off" &&
     isPrivateChat &&
-    typeof resolvedThreadId === "number" &&
+    typeof draftThreadId === "number" &&
     (await resolveBotTopicsEnabled(primaryCtx));
   const draftStream = canStreamDraft
     ? createTelegramDraftStream({
@@ -79,7 +83,7 @@ export const dispatchTelegramMessage = async ({
         chatId,
         draftId: msg.message_id || Date.now(),
         maxChars: draftMaxChars,
-        messageThreadId: resolvedThreadId,
+        messageThreadId: draftThreadId,
         log: logVerbose,
         warn: logVerbose,
       })
@@ -92,8 +96,12 @@ export const dispatchTelegramMessage = async ({
   let lastPartialText = "";
   let draftText = "";
   const updateDraftFromPartial = (text?: string) => {
-    if (!draftStream || !text) return;
-    if (text === lastPartialText) return;
+    if (!draftStream || !text) {
+      return;
+    }
+    if (text === lastPartialText) {
+      return;
+    }
     if (streamMode === "partial") {
       lastPartialText = text;
       draftStream.update(text);
@@ -108,7 +116,9 @@ export const dispatchTelegramMessage = async ({
       draftText = "";
     }
     lastPartialText = text;
-    if (!delta) return;
+    if (!delta) {
+      return;
+    }
     if (!draftChunker) {
       draftText = text;
       draftStream.update(draftText);
@@ -124,7 +134,9 @@ export const dispatchTelegramMessage = async ({
     });
   };
   const flushDraft = async () => {
-    if (!draftStream) return;
+    if (!draftStream) {
+      return;
+    }
     if (draftChunker?.hasBuffered()) {
       draftChunker.drain({
         force: true,
@@ -133,7 +145,9 @@ export const dispatchTelegramMessage = async ({
         },
       });
       draftChunker.reset();
-      if (draftText) draftStream.update(draftText);
+      if (draftText) {
+        draftStream.update(draftText);
+      }
     }
     await draftStream.flush();
   };
@@ -228,7 +242,7 @@ export const dispatchTelegramMessage = async ({
           bot,
           replyToMode,
           textLimit,
-          messageThreadId: resolvedThreadId,
+          messageThreadId: replyThreadId,
           tableMode,
           chunkMode,
           onVoiceRecording: sendRecordVoice,
@@ -240,7 +254,9 @@ export const dispatchTelegramMessage = async ({
         }
       },
       onSkip: (_payload, info) => {
-        if (info.reason !== "silent") deliveryState.skippedNonSilent += 1;
+        if (info.reason !== "silent") {
+          deliveryState.skippedNonSilent += 1;
+        }
       },
       onError: (err, info) => {
         runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
@@ -259,13 +275,8 @@ export const dispatchTelegramMessage = async ({
     },
     replyOptions: {
       skillFilter,
-      onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
-      onReasoningStream: draftStream
-        ? (payload) => {
-            if (payload.text) draftStream.update(payload.text);
-          }
-        : undefined,
       disableBlockStreaming,
+      onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
       onModelSelected: (ctx) => {
         prefixContext.onModelSelected(ctx);
       },
@@ -282,7 +293,7 @@ export const dispatchTelegramMessage = async ({
       bot,
       replyToMode,
       textLimit,
-      messageThreadId: resolvedThreadId,
+      messageThreadId: replyThreadId,
       tableMode,
       chunkMode,
       linkPreview: telegramCfg.linkPreview,
@@ -304,7 +315,9 @@ export const dispatchTelegramMessage = async ({
     ackReactionValue: ackReactionPromise ? "ack" : null,
     remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
     onError: (err) => {
-      if (!msg.message_id) return;
+      if (!msg.message_id) {
+        return;
+      }
       logAckFailure({
         log: logVerbose,
         channel: "telegram",

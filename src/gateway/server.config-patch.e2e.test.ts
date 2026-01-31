@@ -332,7 +332,7 @@ describe("gateway server sessions", () => {
       agentId: "home",
     });
     expect(homeSessions.ok).toBe(true);
-    expect(homeSessions.payload?.sessions.map((s) => s.key).sort()).toEqual([
+    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual([
       "agent:home:discord:group:dev",
       "agent:home:main",
     ]);

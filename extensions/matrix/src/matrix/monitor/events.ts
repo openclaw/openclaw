@@ -84,8 +84,7 @@ export function registerMatrixMonitorEvents(params: {
         const hint = formatNativeDependencyHint({
           packageName: "@matrix-org/matrix-sdk-crypto-nodejs",
           manager: "pnpm",
-          downloadCommand:
-            "node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
+          downloadCommand: "node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
         });
         const warning = `matrix: encryption enabled but crypto is unavailable; ${hint}`;
         logger.warn({ roomId }, warning);

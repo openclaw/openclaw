@@ -21,7 +21,9 @@ const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
  */
 function sanitizeFilename(name: string): string {
   const trimmed = name.trim();
-  if (!trimmed) return "";
+  if (!trimmed) {
+    return "";
+  }
   const sanitized = trimmed.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   // Collapse multiple underscores, trim leading/trailing, limit length
   return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
@@ -34,7 +36,9 @@ function sanitizeFilename(name: string): string {
  */
 export function extractOriginalFilename(filePath: string): string {
   const basename = path.basename(filePath);
-  if (!basename) return "file.bin"; // Fallback for empty input
+  if (!basename) {
+    return "file.bin";
+  } // Fallback for empty input
 
   const ext = path.extname(basename);
   const nameWithoutExt = path.basename(basename, ext);
@@ -68,7 +72,9 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
     entries.map(async (file) => {
       const full = path.join(mediaDir, file);
       const stat = await fs.stat(full).catch(() => null);
-      if (!stat) return;
+      if (!stat) {
+        return;
+      }
       if (now - stat.mtimeMs > ttlMs) {
         await fs.rm(full).catch(() => {});
       }

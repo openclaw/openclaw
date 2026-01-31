@@ -101,7 +101,9 @@ export function createMSTeamsReplyDispatcher(params: {
           sharePointSiteId: params.sharePointSiteId,
           mediaMaxBytes,
         });
-        if (ids.length > 0) params.onSentMessageIds?.(ids);
+        if (ids.length > 0) {
+          params.onSentMessageIds?.(ids);
+        }
       },
       onError: (err, info) => {
         const errMsg = formatUnknownError(err);

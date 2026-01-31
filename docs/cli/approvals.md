@@ -11,6 +11,7 @@ Manage exec approvals for the **local host**, **gateway host**, or a **node host
 By default, commands target the local approvals file on disk. Use `--gateway` to target the gateway, or `--node` to target a specific node.
 
 Related:
+
 - Exec approvals: [Exec approvals](/tools/exec-approvals)
 - Nodes: [Nodes](/nodes)
 

@@ -72,7 +72,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
   });
-  if (!normalized) return { ok: true };
+  if (!normalized) {
+    return { ok: true };
+  }
 
   let text = normalized.text ?? "";
   let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
@@ -151,6 +153,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
 ): channel is Exclude<OriginatingChannelType, typeof INTERNAL_MESSAGE_CHANNEL> {
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) return false;
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
   return normalizeChannelId(channel) !== null;
 }

@@ -25,9 +25,9 @@ Onboarding: select Zalo and confirm the install prompt to fetch the plugin autom
       enabled: true,
       botToken: "12345689:abc-xyz",
       dmPolicy: "pairing",
-      proxy: "http://proxy.local:8080"
-    }
-  }
+      proxy: "http://proxy.local:8080",
+    },
+  },
 }
 ```
 
@@ -39,9 +39,9 @@ Onboarding: select Zalo and confirm the install prompt to fetch the plugin autom
     zalo: {
       webhookUrl: "https://example.com/zalo-webhook",
       webhookSecret: "your-secret-8-plus-chars",
-      webhookPath: "/zalo-webhook"
-    }
-  }
+      webhookPath: "/zalo-webhook",
+    },
+  },
 }
 ```
 

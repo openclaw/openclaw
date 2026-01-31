@@ -1,8 +1,6 @@
 {
   "id": "matrix",
-  "channels": [
-    "matrix"
-  ],
+  "channels": ["matrix"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
