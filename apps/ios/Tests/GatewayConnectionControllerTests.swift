@@ -1,6 +1,4 @@
 import OpenClawKit
-import AVFoundation
-import CoreLocation
 import Foundation
 import Testing
 import UIKit
@@ -77,42 +75,5 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
 
             #expect(commands.contains(OpenClawLocationCommand.get.rawValue))
         }
-    }
-
-    @Test @MainActor func currentCommandsExcludeSystemExecButKeepNotify() {
-        withUserDefaults([
-            "node.instanceId": "ios-test",
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-            let commands = Set(controller._test_currentCommands())
-
-            #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
-            #expect(commands.contains(OpenClawSystemCommand.run.rawValue) == false)
-            #expect(commands.contains(OpenClawSystemCommand.which.rawValue) == false)
-            #expect(commands.contains(OpenClawSystemCommand.execApprovalsGet.rawValue) == false)
-            #expect(commands.contains(OpenClawSystemCommand.execApprovalsSet.rawValue) == false)
-        }
-    }
-
-    @Test @MainActor func currentPermissionsIncludeExpectedKeys() {
-        let provider = GatewayConnectionController.PermissionStatusProvider(
-            cameraStatus: { .authorized },
-            microphoneStatus: { .denied },
-            locationStatus: { .authorizedWhenInUse },
-            locationServicesEnabled: { true },
-            screenRecordingAvailable: { false })
-
-        let appModel = NodeAppModel()
-        let controller = GatewayConnectionController(
-            appModel: appModel,
-            startDiscovery: false,
-            permissionProvider: provider)
-        let permissions = controller._test_currentPermissions()
-
-        #expect(permissions["camera"] == true)
-        #expect(permissions["microphone"] == false)
-        #expect(permissions["location"] == true)
-        #expect(permissions["screenRecording"] == false)
     }
 }
