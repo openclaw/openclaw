@@ -108,6 +108,10 @@ describe("runReplyAgent steer mode thread routing", () => {
       defaultModel: "anthropic/claude-opus-4-5",
       resolvedVerboseLevel: "off",
       isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "none",
     });
 
     // Fast steer should NOT be attempted because originatingThreadId is set
@@ -156,6 +160,10 @@ describe("runReplyAgent steer mode thread routing", () => {
       defaultModel: "anthropic/claude-opus-4-5",
       resolvedVerboseLevel: "off",
       isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "none",
     });
 
     // Fast steer SHOULD be attempted
@@ -198,6 +206,10 @@ describe("runReplyAgent steer mode thread routing", () => {
       defaultModel: "anthropic/claude-opus-4-5",
       resolvedVerboseLevel: "off",
       isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "none",
     });
 
     // Should NOT fast steer - numeric thread ID still needs routing preserved
