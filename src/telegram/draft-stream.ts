@@ -74,13 +74,17 @@ export function createTelegramDraftStream(params: {
       return;
     }
     const text = pendingText;
-    pendingText = "";
-    if (!text.trim()) {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      if (pendingText === text) {
+        pendingText = "";
+      }
       if (pendingText) {
         schedule();
       }
       return;
     }
+    pendingText = "";
     inFlight = true;
     try {
       await sendDraft(text);

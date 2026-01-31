@@ -302,4 +302,5 @@ export function handleMessageEnd(
   ctx.state.blockState.final = false;
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
+  ctx.state.lastStreamedAssistantCleaned = undefined;
 }
