@@ -14,6 +14,7 @@ const log = createSubsystemLogger("agents/auth-profiles");
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const QWEN_CLI_CREDENTIALS_RELATIVE_PATH = ".qwen/oauth_creds.json";
+const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
@@ -27,11 +28,13 @@ type CachedValue<T> = {
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
 let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let qwenCliCache: CachedValue<QwenCliCredential> | null = null;
+let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 
 export function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
   qwenCliCache = null;
+  minimaxCliCache = null;
 }
 
 export type ClaudeCliCredential =
@@ -61,6 +64,14 @@ export type CodexCliCredential = {
 export type QwenCliCredential = {
   type: "oauth";
   provider: "qwen-portal";
+  access: string;
+  refresh: string;
+  expires: number;
+};
+
+export type MiniMaxCliCredential = {
+  type: "oauth";
+  provider: "minimax-portal";
   access: string;
   refresh: string;
   expires: number;
@@ -100,6 +111,11 @@ function resolveCodexHomePath() {
 function resolveQwenCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, QWEN_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
+  const baseDir = homeDir ?? resolveUserPath("~");
+  return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
 function computeCodexKeychainAccount(codexHome: string) {
@@ -194,6 +210,36 @@ function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredenti
   return {
     type: "oauth",
     provider: "qwen-portal",
+    access: accessToken,
+    refresh: refreshToken,
+    expires: expiresAt,
+  };
+}
+
+function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
+  const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const data = raw as Record<string, unknown>;
+  const accessToken = data.access_token;
+  const refreshToken = data.refresh_token;
+  const expiresAt = data.expiry_date;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return null;
+  }
+
+  return {
+    type: "oauth",
+    provider: "minimax-portal",
     access: accessToken,
     refresh: refreshToken,
     expires: expiresAt,
@@ -536,6 +582,28 @@ export function readQwenCliCredentialsCached(options?: {
   const value = readQwenCliCredentials({ homeDir: options?.homeDir });
   if (ttlMs > 0) {
     qwenCliCache = { value, readAt: now, cacheKey };
+  }
+  return value;
+}
+
+export function readMiniMaxCliCredentialsCached(options?: {
+  ttlMs?: number;
+  homeDir?: string;
+}): MiniMaxCliCredential | null {
+  const ttlMs = options?.ttlMs ?? 0;
+  const now = Date.now();
+  const cacheKey = resolveMiniMaxCliCredentialsPath(options?.homeDir);
+  if (
+    ttlMs > 0 &&
+    minimaxCliCache &&
+    minimaxCliCache.cacheKey === cacheKey &&
+    now - minimaxCliCache.readAt < ttlMs
+  ) {
+    return minimaxCliCache.value;
+  }
+  const value = readMiniMaxCliCredentials({ homeDir: options?.homeDir });
+  if (ttlMs > 0) {
+    minimaxCliCache = { value, readAt: now, cacheKey };
   }
   return value;
 }

@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - CLI: add per-agent `models status` (`--agent` filter). (#4780) Thanks @jlowin.
 - Agents: add Kimi K2.5 to the synthetic model catalog. (#4407) Thanks @manikv12.
 - Auth: switch Kimi Coding to built-in provider; normalize OAuth profile email.
+- Auth: add MiniMax OAuth plugin + onboarding option. (#4521) Thanks @Maosghoul.
 - Agents: update pi SDK/API usage and dependencies.
 - Web UI: refresh sessions after chat commands and improve session display names.
 - Build: move TypeScript builds to `tsdown` + `tsgo` (faster builds, CI typechecks), update tsconfig target, and clean up lint rules.
