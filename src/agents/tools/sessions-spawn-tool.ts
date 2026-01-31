@@ -221,7 +221,7 @@ export function createSessionsSpawnTool(opts?: {
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
       try {
-        const response = await callGateway({
+        const response = await callGateway<{ runId: string }>({
           method: "agent",
           params: {
             message: task,
