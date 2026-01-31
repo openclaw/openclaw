@@ -61,5 +61,5 @@ function primitiveToString(value: unknown): string {
 export function computeSandboxConfigHash(input: SandboxHashInput): string {
   const payload = normalizeForHash(input);
   const raw = JSON.stringify(payload);
-  return crypto.createHash("sha1").update(raw).digest("hex");
+  return crypto.createHash("sha256").update(raw).digest("hex");
 }

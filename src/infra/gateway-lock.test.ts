@@ -29,7 +29,7 @@ async function makeEnv() {
 function resolveLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha1").update(configPath).digest("hex").slice(0, 8);
+  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
   const lockDir = resolveGatewayLockDir();
   return { lockPath: path.join(lockDir, `gateway.${hash}.lock`), configPath };
 }
