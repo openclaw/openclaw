@@ -1,7 +1,9 @@
-import OpenClawKit
+import CoreLocation
 import Foundation
+import OpenClawKit
 import Testing
 import UIKit
+import UserNotifications
 @testable import OpenClaw
 
 private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws -> T) rethrows -> T {
@@ -27,6 +29,139 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         }
     }
     return try body()
+}
+
+private final class TestNotificationCenter: NotificationCentering, @unchecked Sendable {
+    private(set) var requestAuthorizationCalls = 0
+    private(set) var addedRequests: [UNNotificationRequest] = []
+    private var status: NotificationAuthorizationStatus
+
+    init(status: NotificationAuthorizationStatus) {
+        self.status = status
+    }
+
+    func authorizationStatus() async -> NotificationAuthorizationStatus {
+        status
+    }
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        requestAuthorizationCalls += 1
+        status = .authorized
+        return true
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        addedRequests.append(request)
+    }
+}
+
+private struct TestCameraService: CameraServicing {
+    func listDevices() async -> [CameraController.CameraDeviceInfo] { [] }
+    func snap(params: OpenClawCameraSnapParams) async throws -> (format: String, base64: String, width: Int, height: Int) {
+        ("jpeg", "dGVzdA==", 1, 1)
+    }
+    func clip(params: OpenClawCameraClipParams) async throws -> (format: String, base64: String, durationMs: Int, hasAudio: Bool) {
+        ("mp4", "dGVzdA==", 1000, true)
+    }
+}
+
+private struct TestScreenRecorder: ScreenRecordingServicing {
+    func record(
+        screenIndex: Int?,
+        durationMs: Int?,
+        fps: Double?,
+        includeAudio: Bool?,
+        outPath: String?) async throws -> String
+    {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("openclaw-screen-test.mp4")
+        FileManager.default.createFile(atPath: url.path, contents: Data())
+        return url.path
+    }
+}
+
+@MainActor
+private struct TestLocationService: LocationServicing {
+    func authorizationStatus() -> CLAuthorizationStatus { .authorizedWhenInUse }
+    func accuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+    func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus { .authorizedWhenInUse }
+    func currentLocation(
+        params: OpenClawLocationGetParams,
+        desiredAccuracy: OpenClawLocationAccuracy,
+        maxAgeMs: Int?,
+        timeoutMs: Int?) async throws -> CLLocation
+    {
+        CLLocation(latitude: 37.3349, longitude: -122.0090)
+    }
+}
+
+private struct TestDeviceStatusService: DeviceStatusServicing {
+    let statusPayload: OpenClawDeviceStatusPayload
+    let infoPayload: OpenClawDeviceInfoPayload
+
+    func status() async throws -> OpenClawDeviceStatusPayload { statusPayload }
+    func info() -> OpenClawDeviceInfoPayload { infoPayload }
+}
+
+private struct TestPhotosService: PhotosServicing {
+    let payload: OpenClawPhotosLatestPayload
+    func latest(params: OpenClawPhotosLatestParams) async throws -> OpenClawPhotosLatestPayload { payload }
+}
+
+private struct TestContactsService: ContactsServicing {
+    let payload: OpenClawContactsSearchPayload
+    func search(params: OpenClawContactsSearchParams) async throws -> OpenClawContactsSearchPayload { payload }
+}
+
+private struct TestCalendarService: CalendarServicing {
+    let payload: OpenClawCalendarEventsPayload
+    func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload { payload }
+}
+
+private struct TestRemindersService: RemindersServicing {
+    let payload: OpenClawRemindersListPayload
+    func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload { payload }
+}
+
+private struct TestMotionService: MotionServicing {
+    let activityPayload: OpenClawMotionActivityPayload
+    let pedometerPayload: OpenClawPedometerPayload
+
+    func activities(params: OpenClawMotionActivityParams) async throws -> OpenClawMotionActivityPayload {
+        activityPayload
+    }
+
+    func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload {
+        pedometerPayload
+    }
+}
+
+@MainActor
+private func makeTestAppModel(
+    notificationCenter: NotificationCentering = TestNotificationCenter(status: .authorized),
+    deviceStatusService: DeviceStatusServicing,
+    photosService: PhotosServicing,
+    contactsService: ContactsServicing,
+    calendarService: CalendarServicing,
+    remindersService: RemindersServicing,
+    motionService: MotionServicing) -> NodeAppModel
+{
+    NodeAppModel(
+        screen: ScreenController(),
+        camera: TestCameraService(),
+        screenRecorder: TestScreenRecorder(),
+        locationService: TestLocationService(),
+        notificationCenter: notificationCenter,
+        deviceStatusService: deviceStatusService,
+        photosService: photosService,
+        contactsService: contactsService,
+        calendarService: calendarService,
+        remindersService: remindersService,
+        motionService: motionService)
+}
+
+private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throws -> T {
+    let data = try #require(json?.data(using: .utf8))
+    return try JSONDecoder().decode(type, from: data)
 }
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
@@ -124,6 +259,11 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         let payloadData = try #require(evalRes.payloadJSON?.data(using: .utf8))
         let payload = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
         #expect(payload?["result"] as? String == "2")
+
+        let hide = BridgeInvokeRequest(id: "hide", command: OpenClawCanvasCommand.hide.rawValue)
+        let hideRes = await appModel._test_handleInvoke(hide)
+        #expect(hideRes.ok == true)
+        #expect(appModel.screen.urlString.isEmpty)
     }
 
     @Test @MainActor func handleInvokeA2UICommandsFailWhenHostMissing() async throws {
@@ -153,6 +293,196 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         let res = await appModel._test_handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .invalidRequest)
+    }
+
+    @Test @MainActor func handleInvokeSystemNotifyCreatesNotificationRequest() async throws {
+        let notifier = TestNotificationCenter(status: .notDetermined)
+        let deviceStatus = TestDeviceStatusService(
+            statusPayload: OpenClawDeviceStatusPayload(
+                battery: OpenClawBatteryStatusPayload(level: 0.5, state: .charging, lowPowerModeEnabled: false),
+                thermal: OpenClawThermalStatusPayload(state: .nominal),
+                storage: OpenClawStorageStatusPayload(totalBytes: 100, freeBytes: 50, usedBytes: 50),
+                network: OpenClawNetworkStatusPayload(
+                    status: .satisfied,
+                    isExpensive: false,
+                    isConstrained: false,
+                    interfaces: [.wifi]),
+                uptimeSeconds: 10),
+            infoPayload: OpenClawDeviceInfoPayload(
+                deviceName: "Test",
+                modelIdentifier: "Test1,1",
+                systemName: "iOS",
+                systemVersion: "1.0",
+                appVersion: "dev",
+                appBuild: "0",
+                locale: "en-US"))
+        let appModel = makeTestAppModel(
+            notificationCenter: notifier,
+            deviceStatusService: deviceStatus,
+            photosService: TestPhotosService(payload: OpenClawPhotosLatestPayload(photos: [])),
+            contactsService: TestContactsService(payload: OpenClawContactsSearchPayload(contacts: [])),
+            calendarService: TestCalendarService(payload: OpenClawCalendarEventsPayload(events: [])),
+            remindersService: TestRemindersService(payload: OpenClawRemindersListPayload(reminders: [])),
+            motionService: TestMotionService(
+                activityPayload: OpenClawMotionActivityPayload(activities: []),
+                pedometerPayload: OpenClawPedometerPayload(
+                    startISO: "2024-01-01T00:00:00Z",
+                    endISO: "2024-01-01T01:00:00Z",
+                    steps: nil,
+                    distanceMeters: nil,
+                    floorsAscended: nil,
+                    floorsDescended: nil)))
+
+        let params = OpenClawSystemNotifyParams(title: "Hello", body: "World")
+        let data = try JSONEncoder().encode(params)
+        let json = String(decoding: data, as: UTF8.self)
+        let req = BridgeInvokeRequest(
+            id: "notify",
+            command: OpenClawSystemCommand.notify.rawValue,
+            paramsJSON: json)
+        let res = await appModel._test_handleInvoke(req)
+        #expect(res.ok == true)
+        #expect(notifier.requestAuthorizationCalls == 1)
+        #expect(notifier.addedRequests.count == 1)
+        let request = try #require(notifier.addedRequests.first)
+        #expect(request.content.title == "Hello")
+        #expect(request.content.body == "World")
+    }
+
+    @Test @MainActor func handleInvokeDeviceAndDataCommandsReturnPayloads() async throws {
+        let deviceStatusPayload = OpenClawDeviceStatusPayload(
+            battery: OpenClawBatteryStatusPayload(level: 0.25, state: .unplugged, lowPowerModeEnabled: false),
+            thermal: OpenClawThermalStatusPayload(state: .fair),
+            storage: OpenClawStorageStatusPayload(totalBytes: 200, freeBytes: 80, usedBytes: 120),
+            network: OpenClawNetworkStatusPayload(
+                status: .satisfied,
+                isExpensive: true,
+                isConstrained: false,
+                interfaces: [.cellular]),
+            uptimeSeconds: 42)
+        let deviceInfoPayload = OpenClawDeviceInfoPayload(
+            deviceName: "TestPhone",
+            modelIdentifier: "Test2,1",
+            systemName: "iOS",
+            systemVersion: "2.0",
+            appVersion: "dev",
+            appBuild: "1",
+            locale: "en-US")
+        let photosPayload = OpenClawPhotosLatestPayload(
+            photos: [
+                OpenClawPhotoPayload(format: "jpeg", base64: "dGVzdA==", width: 1, height: 1, createdAt: nil),
+            ])
+        let contactsPayload = OpenClawContactsSearchPayload(
+            contacts: [
+                OpenClawContactPayload(
+                    identifier: "c1",
+                    displayName: "Jane Doe",
+                    givenName: "Jane",
+                    familyName: "Doe",
+                    organizationName: "",
+                    phoneNumbers: ["+1"],
+                    emails: ["jane@example.com"]),
+            ])
+        let calendarPayload = OpenClawCalendarEventsPayload(
+            events: [
+                OpenClawCalendarEventPayload(
+                    identifier: "e1",
+                    title: "Standup",
+                    startISO: "2024-01-01T00:00:00Z",
+                    endISO: "2024-01-01T00:30:00Z",
+                    isAllDay: false,
+                    location: nil,
+                    calendarTitle: "Work"),
+            ])
+        let remindersPayload = OpenClawRemindersListPayload(
+            reminders: [
+                OpenClawReminderPayload(
+                    identifier: "r1",
+                    title: "Ship build",
+                    dueISO: "2024-01-02T00:00:00Z",
+                    completed: false,
+                    listName: "Inbox"),
+            ])
+        let motionPayload = OpenClawMotionActivityPayload(
+            activities: [
+                OpenClawMotionActivityEntry(
+                    startISO: "2024-01-01T00:00:00Z",
+                    endISO: "2024-01-01T00:10:00Z",
+                    confidence: "high",
+                    isWalking: true,
+                    isRunning: false,
+                    isCycling: false,
+                    isAutomotive: false,
+                    isStationary: false,
+                    isUnknown: false),
+            ])
+        let pedometerPayload = OpenClawPedometerPayload(
+            startISO: "2024-01-01T00:00:00Z",
+            endISO: "2024-01-01T01:00:00Z",
+            steps: 123,
+            distanceMeters: 456,
+            floorsAscended: 1,
+            floorsDescended: 2)
+
+        let appModel = makeTestAppModel(
+            deviceStatusService: TestDeviceStatusService(
+                statusPayload: deviceStatusPayload,
+                infoPayload: deviceInfoPayload),
+            photosService: TestPhotosService(payload: photosPayload),
+            contactsService: TestContactsService(payload: contactsPayload),
+            calendarService: TestCalendarService(payload: calendarPayload),
+            remindersService: TestRemindersService(payload: remindersPayload),
+            motionService: TestMotionService(
+                activityPayload: motionPayload,
+                pedometerPayload: pedometerPayload))
+
+        let deviceStatusReq = BridgeInvokeRequest(id: "device", command: OpenClawDeviceCommand.status.rawValue)
+        let deviceStatusRes = await appModel._test_handleInvoke(deviceStatusReq)
+        #expect(deviceStatusRes.ok == true)
+        let decodedDeviceStatus = try decodePayload(deviceStatusRes.payloadJSON, as: OpenClawDeviceStatusPayload.self)
+        #expect(decodedDeviceStatus == deviceStatusPayload)
+
+        let deviceInfoReq = BridgeInvokeRequest(id: "device-info", command: OpenClawDeviceCommand.info.rawValue)
+        let deviceInfoRes = await appModel._test_handleInvoke(deviceInfoReq)
+        #expect(deviceInfoRes.ok == true)
+        let decodedDeviceInfo = try decodePayload(deviceInfoRes.payloadJSON, as: OpenClawDeviceInfoPayload.self)
+        #expect(decodedDeviceInfo == deviceInfoPayload)
+
+        let photosReq = BridgeInvokeRequest(id: "photos", command: OpenClawPhotosCommand.latest.rawValue)
+        let photosRes = await appModel._test_handleInvoke(photosReq)
+        #expect(photosRes.ok == true)
+        let decodedPhotos = try decodePayload(photosRes.payloadJSON, as: OpenClawPhotosLatestPayload.self)
+        #expect(decodedPhotos == photosPayload)
+
+        let contactsReq = BridgeInvokeRequest(id: "contacts", command: OpenClawContactsCommand.search.rawValue)
+        let contactsRes = await appModel._test_handleInvoke(contactsReq)
+        #expect(contactsRes.ok == true)
+        let decodedContacts = try decodePayload(contactsRes.payloadJSON, as: OpenClawContactsSearchPayload.self)
+        #expect(decodedContacts == contactsPayload)
+
+        let calendarReq = BridgeInvokeRequest(id: "calendar", command: OpenClawCalendarCommand.events.rawValue)
+        let calendarRes = await appModel._test_handleInvoke(calendarReq)
+        #expect(calendarRes.ok == true)
+        let decodedCalendar = try decodePayload(calendarRes.payloadJSON, as: OpenClawCalendarEventsPayload.self)
+        #expect(decodedCalendar == calendarPayload)
+
+        let remindersReq = BridgeInvokeRequest(id: "reminders", command: OpenClawRemindersCommand.list.rawValue)
+        let remindersRes = await appModel._test_handleInvoke(remindersReq)
+        #expect(remindersRes.ok == true)
+        let decodedReminders = try decodePayload(remindersRes.payloadJSON, as: OpenClawRemindersListPayload.self)
+        #expect(decodedReminders == remindersPayload)
+
+        let motionReq = BridgeInvokeRequest(id: "motion", command: OpenClawMotionCommand.activity.rawValue)
+        let motionRes = await appModel._test_handleInvoke(motionReq)
+        #expect(motionRes.ok == true)
+        let decodedMotion = try decodePayload(motionRes.payloadJSON, as: OpenClawMotionActivityPayload.self)
+        #expect(decodedMotion == motionPayload)
+
+        let pedometerReq = BridgeInvokeRequest(id: "pedometer", command: OpenClawMotionCommand.pedometer.rawValue)
+        let pedometerRes = await appModel._test_handleInvoke(pedometerReq)
+        #expect(pedometerRes.ok == true)
+        let decodedPedometer = try decodePayload(pedometerRes.payloadJSON, as: OpenClawPedometerPayload.self)
+        #expect(decodedPedometer == pedometerPayload)
     }
 
     @Test @MainActor func handleDeepLinkSetsErrorWhenNotConnected() async {

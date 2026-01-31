@@ -3,6 +3,7 @@ import Network
 import Observation
 import SwiftUI
 import UIKit
+import UserNotifications
 
 @MainActor
 @Observable
@@ -15,9 +16,9 @@ final class NodeAppModel {
     }
 
     var isBackgrounded: Bool = false
-    let screen = ScreenController()
-    let camera = CameraController()
-    private let screenRecorder = ScreenRecordService()
+    let screen: ScreenController
+    private let camera: any CameraServicing
+    private let screenRecorder: any ScreenRecordingServicing
     var gatewayStatusText: String = "Offline"
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
@@ -29,9 +30,16 @@ final class NodeAppModel {
     private var gatewayTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
+    private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
     let talkMode = TalkModeManager()
-    private let locationService = LocationService()
+    private let locationService: any LocationServicing
+    private let deviceStatusService: any DeviceStatusServicing
+    private let photosService: any PhotosServicing
+    private let contactsService: any ContactsServicing
+    private let calendarService: any CalendarServicing
+    private let remindersService: any RemindersServicing
+    private let motionService: any MotionServicing
     private var lastAutoA2uiURL: String?
 
     private var gatewayConnected = false
@@ -42,7 +50,31 @@ final class NodeAppModel {
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
 
-    init() {
+    init(
+        screen: ScreenController = ScreenController(),
+        camera: any CameraServicing = CameraController(),
+        screenRecorder: any ScreenRecordingServicing = ScreenRecordService(),
+        locationService: any LocationServicing = LocationService(),
+        notificationCenter: NotificationCentering = LiveNotificationCenter(),
+        deviceStatusService: any DeviceStatusServicing = DeviceStatusService(),
+        photosService: any PhotosServicing = PhotoLibraryService(),
+        contactsService: any ContactsServicing = ContactsService(),
+        calendarService: any CalendarServicing = CalendarService(),
+        remindersService: any RemindersServicing = RemindersService(),
+        motionService: any MotionServicing = MotionService())
+    {
+        self.screen = screen
+        self.camera = camera
+        self.screenRecorder = screenRecorder
+        self.locationService = locationService
+        self.notificationCenter = notificationCenter
+        self.deviceStatusService = deviceStatusService
+        self.photosService = photosService
+        self.contactsService = contactsService
+        self.calendarService = calendarService
+        self.remindersService = remindersService
+        self.motionService = motionService
+
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
             let sessionKey = await MainActor.run { self.mainSessionKey }
@@ -542,6 +574,22 @@ final class NodeAppModel {
                 return try await self.handleCameraInvoke(req)
             case OpenClawScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawSystemCommand.notify.rawValue:
+                return try await self.handleSystemNotify(req)
+            case OpenClawDeviceCommand.status.rawValue,
+                 OpenClawDeviceCommand.info.rawValue:
+                return try await self.handleDeviceInvoke(req)
+            case OpenClawPhotosCommand.latest.rawValue:
+                return try await self.handlePhotosInvoke(req)
+            case OpenClawContactsCommand.search.rawValue:
+                return try await self.handleContactsInvoke(req)
+            case OpenClawCalendarCommand.events.rawValue:
+                return try await self.handleCalendarInvoke(req)
+            case OpenClawRemindersCommand.list.rawValue:
+                return try await self.handleRemindersInvoke(req)
+            case OpenClawMotionCommand.activity.rawValue,
+                 OpenClawMotionCommand.pedometer.rawValue:
+                return try await self.handleMotionInvoke(req)
             default:
                 return BridgeInvokeResponse(
                     id: req.id,
@@ -626,6 +674,7 @@ final class NodeAppModel {
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
         case OpenClawCanvasCommand.present.rawValue:
+            // iOS ignores placement hints; canvas always fills the screen.
             let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
                 OpenClawCanvasPresentParams()
             let url = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -636,6 +685,7 @@ final class NodeAppModel {
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
+            self.screen.showDefaultCanvas()
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
@@ -857,6 +907,112 @@ final class NodeAppModel {
             screenIndex: params.screenIndex,
             hasAudio: params.includeAudio ?? true))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleSystemNotify(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawSystemNotifyParams.self, from: req.paramsJSON)
+        let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty, body.isEmpty {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty notification"))
+        }
+
+        let status = await self.notificationCenter.authorizationStatus()
+        if status == .notDetermined {
+            _ = try await self.notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
+        }
+        let finalStatus = await self.notificationCenter.authorizationStatus()
+        guard finalStatus == .authorized || finalStatus == .provisional || finalStatus == .ephemeral else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .unavailable, message: "NOT_AUTHORIZED: notifications"))
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil)
+        try await self.notificationCenter.add(request)
+        return BridgeInvokeResponse(id: req.id, ok: true)
+    }
+
+    private func handleDeviceInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        switch req.command {
+        case OpenClawDeviceCommand.status.rawValue:
+            let payload = try await self.deviceStatusService.status()
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawDeviceCommand.info.rawValue:
+            let payload = self.deviceStatusService.info()
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        default:
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+        }
+    }
+
+    private func handlePhotosInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = (try? Self.decodeParams(OpenClawPhotosLatestParams.self, from: req.paramsJSON)) ??
+            OpenClawPhotosLatestParams()
+        let payload = try await self.photosService.latest(params: params)
+        let json = try Self.encodePayload(payload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+    }
+
+    private func handleContactsInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
+            OpenClawContactsSearchParams()
+        let payload = try await self.contactsService.search(params: params)
+        let json = try Self.encodePayload(payload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+    }
+
+    private func handleCalendarInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
+            OpenClawCalendarEventsParams()
+        let payload = try await self.calendarService.events(params: params)
+        let json = try Self.encodePayload(payload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+    }
+
+    private func handleRemindersInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
+            OpenClawRemindersListParams()
+        let payload = try await self.remindersService.list(params: params)
+        let json = try Self.encodePayload(payload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+    }
+
+    private func handleMotionInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        switch req.command {
+        case OpenClawMotionCommand.activity.rawValue:
+            let params = (try? Self.decodeParams(OpenClawMotionActivityParams.self, from: req.paramsJSON)) ??
+                OpenClawMotionActivityParams()
+            let payload = try await self.motionService.activities(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawMotionCommand.pedometer.rawValue:
+            let params = (try? Self.decodeParams(OpenClawPedometerParams.self, from: req.paramsJSON)) ??
+                OpenClawPedometerParams()
+            let payload = try await self.motionService.pedometer(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        default:
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+        }
     }
 
 }

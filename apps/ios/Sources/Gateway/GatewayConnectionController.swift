@@ -1,8 +1,16 @@
-import OpenClawKit
+import AVFoundation
+import Contacts
+import CoreLocation
+import CoreMotion
 import Darwin
+import EventKit
 import Foundation
+import OpenClawKit
 import Network
 import Observation
+import Photos
+import ReplayKit
+import Speech
 import SwiftUI
 import UIKit
 
@@ -282,7 +290,7 @@ final class GatewayConnectionController {
             scopes: [],
             caps: self.currentCaps(),
             commands: self.currentCommands(),
-            permissions: [:],
+            permissions: self.currentPermissions(),
             clientId: "openclaw-ios",
             clientMode: "node",
             clientDisplayName: displayName)
@@ -320,6 +328,15 @@ final class GatewayConnectionController {
         let locationMode = OpenClawLocationMode(rawValue: locationModeRaw) ?? .off
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
+        caps.append(OpenClawCapability.device.rawValue)
+        caps.append(OpenClawCapability.photos.rawValue)
+        caps.append(OpenClawCapability.contacts.rawValue)
+        caps.append(OpenClawCapability.calendar.rawValue)
+        caps.append(OpenClawCapability.reminders.rawValue)
+        if Self.motionAvailable() {
+            caps.append(OpenClawCapability.motion.rawValue)
+        }
+
         return caps
     }
 
@@ -335,10 +352,6 @@ final class GatewayConnectionController {
             OpenClawCanvasA2UICommand.reset.rawValue,
             OpenClawScreenCommand.record.rawValue,
             OpenClawSystemCommand.notify.rawValue,
-            OpenClawSystemCommand.which.rawValue,
-            OpenClawSystemCommand.run.rawValue,
-            OpenClawSystemCommand.execApprovalsGet.rawValue,
-            OpenClawSystemCommand.execApprovalsSet.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
@@ -350,8 +363,68 @@ final class GatewayConnectionController {
         if caps.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)
         }
+        if caps.contains(OpenClawCapability.device.rawValue) {
+            commands.append(OpenClawDeviceCommand.status.rawValue)
+            commands.append(OpenClawDeviceCommand.info.rawValue)
+        }
+        if caps.contains(OpenClawCapability.photos.rawValue) {
+            commands.append(OpenClawPhotosCommand.latest.rawValue)
+        }
+        if caps.contains(OpenClawCapability.contacts.rawValue) {
+            commands.append(OpenClawContactsCommand.search.rawValue)
+        }
+        if caps.contains(OpenClawCapability.calendar.rawValue) {
+            commands.append(OpenClawCalendarCommand.events.rawValue)
+        }
+        if caps.contains(OpenClawCapability.reminders.rawValue) {
+            commands.append(OpenClawRemindersCommand.list.rawValue)
+        }
+        if caps.contains(OpenClawCapability.motion.rawValue) {
+            commands.append(OpenClawMotionCommand.activity.rawValue)
+            commands.append(OpenClawMotionCommand.pedometer.rawValue)
+        }
 
         return commands
+    }
+
+    private func currentPermissions() -> [String: Bool] {
+        var permissions: [String: Bool] = [:]
+        permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
+        permissions["location"] = Self.isLocationAuthorized(
+            status: CLLocationManager().authorizationStatus)
+            && CLLocationManager.locationServicesEnabled()
+        permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
+
+        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
+        permissions["contacts"] = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+
+        let calendarStatus = EKEventStore.authorizationStatus(for: .event)
+        permissions["calendar"] = calendarStatus == .authorized || calendarStatus == .fullAccess
+        let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+        permissions["reminders"] = remindersStatus == .authorized || remindersStatus == .fullAccess
+
+        let motionStatus = CMMotionActivityManager.authorizationStatus()
+        let pedometerStatus = CMPedometer.authorizationStatus()
+        permissions["motion"] =
+            motionStatus == .authorized || pedometerStatus == .authorized
+
+        return permissions
+    }
+
+    private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse, .authorized:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func motionAvailable() -> Bool {
+        CMMotionActivityManager.isActivityAvailable() || CMPedometer.isStepCountingAvailable()
     }
 
     private func platformString() -> String {
@@ -405,6 +478,10 @@ extension GatewayConnectionController {
 
     func _test_currentCommands() -> [String] {
         self.currentCommands()
+    }
+
+    func _test_currentPermissions() -> [String: Bool] {
+        self.currentPermissions()
     }
 
     func _test_platformString() -> String {
