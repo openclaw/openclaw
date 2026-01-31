@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
     applyImmersiveMode()
+    viewModel.recheckPermissions()
   }
 
   override fun onWindowFocusChanged(hasFocus: Boolean) {
