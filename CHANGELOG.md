@@ -2,8 +2,37 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.1.30
+
+### Changes
+- CLI: add `completion` command (Zsh/Bash/PowerShell/Fish) and auto-setup during postinstall/onboarding.
+- CLI: add per-agent `models status` (`--agent` filter). (#4780) Thanks @jlowin.
+- Agents: add Kimi K2.5 to the synthetic model catalog. (#4407) Thanks @manikv12.
+- Auth: switch Kimi Coding to built-in provider; normalize OAuth profile email.
+- Agents: update pi SDK/API usage and dependencies.
+- Web UI: refresh sessions after chat commands and improve session display names.
+- Build: move TypeScript builds to `tsdown` + `tsgo` (faster builds, CI typechecks), update tsconfig target, and clean up lint rules.
+- Docs: add pi/pi-dev docs and update OpenClaw branding + install links.
+
+### Fixes
+- Security: restrict local path extraction in media parser to prevent LFI. (#4880)
+- Gateway: prevent token defaults from becoming the literal "undefined". (#4873) Thanks @Hisleren.
+- Control UI: fix assets resolution for npm global installs. (#4909) Thanks @YuriNachos.
+- Telegram: normalize account token lookup for non-normalized IDs. (#5055) Thanks @jasonsschin.
+- Telegram: preserve delivery thread fallback and fix threadId handling in delivery context.
+- Telegram: fix HTML nesting for overlapping styles/links. (#4578) Thanks @ThanhNguyxn.
+- Telegram: accept numeric messageId/chatId in react actions. (#4533) Thanks @Ayush10.
+- Telegram: honor per-account proxy dispatcher via undici fetch. (#4456) Thanks @spiceoogway.
+- Telegram: scope skill commands to bound agent per bot. (#4360) Thanks @robhparker.
+- BlueBubbles: debounce by messageId to preserve attachments in text+image messages. (#4984)
+- Routing: prefer requesterOrigin over stale session entries for sub-agent announce delivery. (#4957)
+- Extensions: restore embedded extension discovery typings.
+- CLI: fix `tui:dev` port resolution.
+- LINE: fix status command TypeError. (#4651)
+- OAuth: skip expired-token warnings when refresh tokens are still valid. (#4593)
+- Build: skip redundant UI install step in Dockerfile. (#4584) Thanks @obviyus.
+
 ## 2026.1.29
-Status: stable.
 
 ### Changes
 - Rebrand: rename the npm package/CLI to `openclaw`, add a `openclaw` compatibility shim, and move extensions to the `@openclaw/*` scope.
@@ -41,9 +70,7 @@ Status: stable.
 - Routing: add per-account DM session scope and document multi-account isolation. (#3095) Thanks @jarvis-sam.
 - Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
 - CLI: use Node's module compile cache for faster startup. (#2808) Thanks @pi0.
-- CLI: add per-agent model status and auth order scoping. (#4780) Thanks @jlowin.
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
-- Agents: add Kimi K2.5 to the synthetic model catalog. (#4407) Thanks @manikv12.
 - TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
 - macOS: finish OpenClaw app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.
 - Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy bundle ID migrations). Thanks @thewilloftheshadow.
@@ -69,20 +96,11 @@ Status: stable.
 - Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
 - Docs: keep docs header sticky so navbar stays visible while scrolling. (#2445) Thanks @chenyuan99.
 - Docs: update exe.dev install instructions. (#https://github.com/openclaw/openclaw/pull/3047) Thanks @zackerthescar.
-- Build: skip redundant UI install step in the Dockerfile. (#4584) Thanks @obviyus.
 ### Breaking
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
-- Infra: resolve Control UI assets for npm global installs. (#4909) Thanks @YuriNachos.
-- Gateway: prevent blank token prompts from storing "undefined". (#4873) Thanks @Hisleren.
-- Telegram: use undici fetch for per-account proxy dispatcher. (#4456) Thanks @spiceoogway.
-- Telegram: fix HTML nesting for overlapping styles and links. (#4578) Thanks @ThanhNguyxn.
-- Telegram: resolve per-account bot token configs with normalized account IDs. (#5055) Thanks @jasonsschin.
 - Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)
-- Telegram: accept numeric messageId/chatId in react action and honor channelId fallback. (#4533) Thanks @Ayush10.
-- Telegram: scope native skill commands to bound agent per bot. (#4360) Thanks @robhparker.
-- Telegram: fall back to session origin thread id for delivery context when missing. (#4911) Thanks @yevhen.
 - Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.
 - Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
 - Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
@@ -94,7 +112,6 @@ Status: stable.
 - TTS: read OPENAI_TTS_BASE_URL at runtime instead of module load to honor config.env. (#3341) Thanks @hclsys.
 - macOS: auto-scroll to bottom when sending a new message while scrolled up. (#2471) Thanks @kennyklee.
 - Web UI: auto-expand the chat compose textarea while typing (with sensible max height). (#2950) Thanks @shivamraut101.
-- Web UI: refresh sessions after queued /new or /reset commands once the run completes.
 - Gateway: prevent crashes on transient network errors (fetch failures, timeouts, DNS). Added fatal error detection to only exit on truly critical errors. Fixes #2895, #2879, #2873. (#2980) Thanks @elliotsecops.
 - Agents: guard channel tool listActions to avoid plugin crashes. (#2859) Thanks @mbelinky.
 - Discord: stop resolveDiscordTarget from passing directory params into messaging target parsers. Fixes #3167. Thanks @thewilloftheshadow.
