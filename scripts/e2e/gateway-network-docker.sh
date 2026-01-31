@@ -31,7 +31,7 @@ echo "Starting gateway container..."
 	  -e "OPENCLAW_SKIP_CRON=1" \
 	  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
 	  "$IMAGE_NAME" \
-  bash -lc "node dist/index.js gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
+  bash -lc "node dist/index.mjs gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
 
 echo "Waiting for gateway to come up..."
 for _ in $(seq 1 20); do
