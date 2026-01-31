@@ -396,6 +396,17 @@ export async function compactEmbeddedPiSessionDirect(
       await resourceLoader.reload();
 
       let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        additionalExtensionPaths,
+        systemPromptOverride: systemPrompt,
+        skillsOverride: () => ({ skills: [], diagnostics: [] }),
+        agentsFilesOverride: () => ({ agentsFiles: [] }),
+      });
+      await resourceLoader.reload();
+
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,

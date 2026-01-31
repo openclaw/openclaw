@@ -227,9 +227,9 @@ export const testIsNixMode = hoisted.testIsNixMode;
 export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
+vi.mock("../agents/pi-model-discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-model-discovery.js")>(
+    "../agents/pi-model-discovery.js",
   );
 
   class MockModelRegistry extends actual.ModelRegistry {

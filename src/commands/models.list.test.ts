@@ -58,9 +58,9 @@ vi.mock("../agents/model-auth.js", () => ({
   getCustomProviderApiKey,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
-  AuthStorage,
-  ModelRegistry,
+vi.mock("../agents/pi-model-discovery.js", () => ({
+  discoverAuthStorage,
+  discoverModels,
 }));
 
 function makeRuntime() {

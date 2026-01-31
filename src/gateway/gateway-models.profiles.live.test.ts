@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { describe, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";

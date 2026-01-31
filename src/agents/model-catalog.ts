@@ -20,11 +20,11 @@ type DiscoveredModel = {
   input?: Array<"text" | "image">;
 };
 
-type PiSdkModule = typeof import("@mariozechner/pi-coding-agent");
+type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
-const defaultImportPiSdk = () => import("@mariozechner/pi-coding-agent");
+const defaultImportPiSdk = () => import("./pi-model-discovery.js");
 let importPiSdk = defaultImportPiSdk;
 
 export function resetModelCatalogCacheForTest() {
