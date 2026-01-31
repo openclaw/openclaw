@@ -353,6 +353,8 @@ final class GatewayConnectionController {
             OpenClawCanvasA2UICommand.reset.rawValue,
             OpenClawScreenCommand.record.rawValue,
             OpenClawSystemCommand.notify.rawValue,
+            OpenClawTalkCommand.pttStart.rawValue,
+            OpenClawTalkCommand.pttStop.rawValue,
         ]
 
         let caps = Set(self.currentCaps())

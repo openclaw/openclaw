@@ -149,7 +149,8 @@ private func makeTestAppModel(
     contactsService: ContactsServicing,
     calendarService: CalendarServicing,
     remindersService: RemindersServicing,
-    motionService: MotionServicing) -> NodeAppModel
+    motionService: MotionServicing,
+    talkMode: TalkModeManager = TalkModeManager(allowSimulatorCapture: true)) -> NodeAppModel
 {
     NodeAppModel(
         screen: ScreenController(),
@@ -162,7 +163,8 @@ private func makeTestAppModel(
         contactsService: contactsService,
         calendarService: calendarService,
         remindersService: remindersService,
-        motionService: motionService)
+        motionService: motionService,
+        talkMode: talkMode)
 }
 
 private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throws -> T {
@@ -592,6 +594,86 @@ private func decodePayload<T: Decodable>(_ json: String?, as type: T.Type) throw
         #expect(pedometerRes.ok == true)
         let decodedPedometer = try decodePayload(pedometerRes.payloadJSON, as: OpenClawPedometerPayload.self)
         #expect(decodedPedometer == pedometerPayload)
+    }
+
+    @Test @MainActor func handleInvokePushToTalkReturnsTranscriptStatus() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        talkMode.updateGatewayConnected(false)
+        let appModel = makeTestAppModel(
+            deviceStatusService: TestDeviceStatusService(
+                statusPayload: OpenClawDeviceStatusPayload(
+                    battery: OpenClawBatteryStatusPayload(level: 0.5, state: .unplugged, lowPowerModeEnabled: false),
+                    thermal: OpenClawThermalStatusPayload(state: .nominal),
+                    storage: OpenClawStorageStatusPayload(totalBytes: 10, freeBytes: 5, usedBytes: 5),
+                    network: OpenClawNetworkStatusPayload(
+                        status: .satisfied,
+                        isExpensive: false,
+                        isConstrained: false,
+                        interfaces: [.wifi]),
+                    uptimeSeconds: 1),
+                infoPayload: OpenClawDeviceInfoPayload(
+                    deviceName: "Test",
+                    modelIdentifier: "Test1,1",
+                    systemName: "iOS",
+                    systemVersion: "1.0",
+                    appVersion: "dev",
+                    appBuild: "0",
+                    locale: "en-US")),
+            photosService: TestPhotosService(payload: OpenClawPhotosLatestPayload(photos: [])),
+            contactsService: TestContactsService(
+                searchPayload: OpenClawContactsSearchPayload(contacts: []),
+                addPayload: OpenClawContactsAddPayload(contact: OpenClawContactPayload(
+                    identifier: "c0",
+                    displayName: "",
+                    givenName: "",
+                    familyName: "",
+                    organizationName: "",
+                    phoneNumbers: [],
+                    emails: []))),
+            calendarService: TestCalendarService(
+                eventsPayload: OpenClawCalendarEventsPayload(events: []),
+                addPayload: OpenClawCalendarAddPayload(event: OpenClawCalendarEventPayload(
+                    identifier: "e0",
+                    title: "Test",
+                    startISO: "2024-01-01T00:00:00Z",
+                    endISO: "2024-01-01T00:10:00Z",
+                    isAllDay: false,
+                    location: nil,
+                    calendarTitle: nil))),
+            remindersService: TestRemindersService(
+                listPayload: OpenClawRemindersListPayload(reminders: []),
+                addPayload: OpenClawRemindersAddPayload(reminder: OpenClawReminderPayload(
+                    identifier: "r0",
+                    title: "Test",
+                    dueISO: nil,
+                    completed: false,
+                    listName: nil))),
+            motionService: TestMotionService(
+                activityPayload: OpenClawMotionActivityPayload(activities: []),
+                pedometerPayload: OpenClawPedometerPayload(
+                    startISO: "2024-01-01T00:00:00Z",
+                    endISO: "2024-01-01T01:00:00Z",
+                    steps: nil,
+                    distanceMeters: nil,
+                    floorsAscended: nil,
+                    floorsDescended: nil)),
+            talkMode: talkMode)
+
+        let startReq = BridgeInvokeRequest(id: "ptt-start", command: OpenClawTalkCommand.pttStart.rawValue)
+        let startRes = await appModel._test_handleInvoke(startReq)
+        #expect(startRes.ok == true)
+        let startPayload = try decodePayload(startRes.payloadJSON, as: OpenClawTalkPTTStartPayload.self)
+        #expect(!startPayload.captureId.isEmpty)
+
+        talkMode._test_seedTranscript("Hello from PTT")
+
+        let stopReq = BridgeInvokeRequest(id: "ptt-stop", command: OpenClawTalkCommand.pttStop.rawValue)
+        let stopRes = await appModel._test_handleInvoke(stopReq)
+        #expect(stopRes.ok == true)
+        let stopPayload = try decodePayload(stopRes.payloadJSON, as: OpenClawTalkPTTStopPayload.self)
+        #expect(stopPayload.captureId == startPayload.captureId)
+        #expect(stopPayload.transcript == "Hello from PTT")
+        #expect(stopPayload.status == "offline")
     }
 
     @Test @MainActor func handleDeepLinkSetsErrorWhenNotConnected() async {

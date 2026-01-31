@@ -34,6 +34,8 @@ const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
 const SYSTEM_NOTIFY_COMMANDS = ["system.notify"];
 
+const TALK_COMMANDS = ["talk.ptt.start", "talk.ptt.stop"];
+
 const SYSTEM_COMMANDS = [
   "system.run",
   "system.which",
@@ -56,6 +58,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
     ...MOTION_COMMANDS,
+    ...TALK_COMMANDS,
   ],
   android: [
     ...CANVAS_COMMANDS,
