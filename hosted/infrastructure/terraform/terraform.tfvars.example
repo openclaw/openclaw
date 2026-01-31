@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to version control
+
+do_token               = "your-digitalocean-api-token"
+region                 = "sfo3"  # Same region as your existing registry
+project_name           = "openclaw-hosted"
+existing_registry_name = "edith-registry"  # Your existing registry
