@@ -199,7 +199,7 @@ export function createNodesTool(options?: {
             const details: Array<Record<string, unknown>> = [];
 
             for (const facing of facings) {
-              const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+              const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
                 nodeId,
                 command: "camera.snap",
                 params: {
@@ -250,7 +250,7 @@ export function createNodesTool(options?: {
           case "camera_list": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "camera.list",
               params: {},
@@ -280,7 +280,7 @@ export function createNodesTool(options?: {
               typeof params.deviceId === "string" && params.deviceId.trim()
                 ? params.deviceId.trim()
                 : undefined;
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "camera.clip",
               params: {
@@ -326,7 +326,7 @@ export function createNodesTool(options?: {
                 : 0;
             const includeAudio =
               typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "screen.record",
               params: {
@@ -373,7 +373,7 @@ export function createNodesTool(options?: {
               Number.isFinite(params.locationTimeoutMs)
                 ? params.locationTimeoutMs
                 : undefined;
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "location.get",
               params: {
@@ -423,7 +423,7 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "system.run",
               params: {
