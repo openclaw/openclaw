@@ -5,8 +5,11 @@ import process from "node:process";
 const args = process.argv.slice(2);
 const env = { ...process.env };
 const cwd = process.cwd();
+const compilerOverride = env.OPENCLAW_TS_COMPILER ?? env.CLAWDBOT_TS_COMPILER;
+const compiler = compilerOverride === "tsc" ? "tsc" : "tsgo";
+const projectArgs = ["--project", "tsconfig.json"];
 
-const initialBuild = spawnSync("pnpm", ["build"], {
+const initialBuild = spawnSync("pnpm", ["exec", compiler, ...projectArgs], {
   cwd,
   env,
   stdio: "inherit",
@@ -16,38 +19,22 @@ if (initialBuild.status !== 0) {
   process.exit(initialBuild.status ?? 1);
 }
 
-const compilerProcess = spawn("pnpm", ["tsc", '-p', 'tsconfig.json', '--noEmit', 'false', '--watch'], {
+const watchArgs =
+  compiler === "tsc"
+    ? [...projectArgs, "--watch", "--preserveWatchOutput"]
+    : [...projectArgs, "--watch"];
+
+const compilerProcess = spawn("pnpm", ["exec", compiler, ...watchArgs], {
   cwd,
   env,
   stdio: "inherit",
 });
 
-let nodeProcess = null;
-let restartTimer = null;
-
-function spawnNode() {
-  nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args], {
-    cwd,
-    env,
-    stdio: "inherit",
-  });
-
-  nodeProcess.on("exit", (code, signal) => {
-    if (signal || exiting) {
-      return;
-    }
-    // If the build is mid-refresh, node can exit on missing modules. Retry.
-    if (restartTimer) {
-      clearTimeout(restartTimer);
-    }
-    restartTimer = setTimeout(() => {
-      restartTimer = null;
-      spawnNode();
-    }, 250);
-  });
-}
-
-spawnNode();
+const nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args], {
+  cwd,
+  env,
+  stdio: "inherit",
+});
 
 let exiting = false;
 
@@ -56,11 +43,7 @@ function cleanup(code = 0) {
     return;
   }
   exiting = true;
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
-  }
-  nodeProcess?.kill("SIGTERM");
+  nodeProcess.kill("SIGTERM");
   compilerProcess.kill("SIGTERM");
   process.exit(code);
 }
@@ -70,6 +53,13 @@ process.on("SIGTERM", () => cleanup(143));
 
 compilerProcess.on("exit", (code) => {
   if (exiting) {
+    return;
+  }
+  cleanup(code ?? 1);
+});
+
+nodeProcess.on("exit", (code, signal) => {
+  if (signal || exiting) {
     return;
   }
   cleanup(code ?? 1);
