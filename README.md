@@ -1,9 +1,9 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# QVerisBot — OpenClaw with QVeris Universal Toolbox
 
 <p align="center">
     <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
+        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/QVerisAI/QVerisBot/main/docs/assets/qverisbot-logo-text-dark.png">
+        <img src="https://raw.githubusercontent.com/QVerisAI/QVerisBot/main/docs/assets/qverisbot-logo-text.png" alt="QVerisBot" width="500">
     </picture>
 </p>
 
@@ -12,123 +12,357 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/openclaw/openclaw/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://github.com/openclaw/openclaw/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://github.com/QVerisAI/QVerisBot/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/QVerisAI/QVerisBot/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="https://github.com/QVerisAI/QVerisBot/releases"><img src="https://img.shields.io/github/v/release/QVerisAI/QVerisBot?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://deepwiki.com/QVerisAI/QVerisBot"><img src="https://img.shields.io/badge/DeepWiki-QVerisBot-blue?style=for-the-badge" alt="DeepWiki"></a>
   <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a *personal AI assistant* you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+**QVerisBot** is an AI Agent developed by the **[QVeris AI](https://qveris.ai)** team, based on [OpenClaw](https://github.com/openclaw/openclaw). It's a *personal AI assistant* you run on your own devices.
 
-If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
+## QVeris Universal Toolbox — The Core of QVerisBot
 
-[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-clawdbot) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
+> **Why QVerisBot?** Stop writing API wrappers. **[QVeris](https://qveris.ai)** connects your AI assistant to **500+ premium data providers** and **10,000+ APIs** — think of it as an "App Store for AI tools."
 
-Preferred setup: run the onboarding wizard (`openclaw onboard`). It walks through gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
-Works with npm, pnpm, or bun.
-New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
+### 💰 Finance & Markets (80+ providers)
 
-**Subscriptions (OAuth):**
-- **[Anthropic](https://www.anthropic.com/)** (Claude Pro/Max)
-- **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
+<p align="center">
+  <img src="https://img.shields.io/badge/Binance-Exchange-F0B90B?logo=binance&logoColor=black" height="24"/>
+  <img src="https://img.shields.io/badge/Bloomberg-Terminal-000000" height="24"/>
+  <img src="https://img.shields.io/badge/Alpha_Vantage-Stocks-1E88E5" height="24"/>
+  <img src="https://img.shields.io/badge/Polygon.io-Markets-8B5CF6" height="24"/>
+  <img src="https://img.shields.io/badge/Finnhub-Finance-00C7B7" height="24"/>
+  <img src="https://img.shields.io/badge/Yahoo_Finance-Data-6001D2" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/CoinGecko-Crypto-8DC351?logo=coingecko&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/CoinMarketCap-Crypto-17181B" height="24"/>
+  <img src="https://img.shields.io/badge/SEC-Filings-003366" height="24"/>
+  <img src="https://img.shields.io/badge/FRED-Economic-00529B" height="24"/>
+  <img src="https://img.shields.io/badge/Tushare-A股-E4393C" height="24"/>
+  <img src="https://img.shields.io/badge/同花顺iFinD-金融终端-FF6600" height="24"/>
+</p>
 
-Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.5** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
+### 🔍 Search & Web Intelligence (45+ providers)
 
-## Models (selection + auth)
+<p align="center">
+  <img src="https://img.shields.io/badge/Brave_Search-AI_Search-FB542B?logo=brave&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Tavily-AI_Search-000000" height="24"/>
+  <img src="https://img.shields.io/badge/SerpAPI-Google_Results-007ACC" height="24"/>
+  <img src="https://img.shields.io/badge/Exa.ai-Neural_Search-5A67D8" height="24"/>
+  <img src="https://img.shields.io/badge/博查AI-联网搜索-FF4500" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Firecrawl-Scraping-FF6B35" height="24"/>
+  <img src="https://img.shields.io/badge/Diffbot-Knowledge-43B02A" height="24"/>
+  <img src="https://img.shields.io/badge/Apify-Automation-00C7B7" height="24"/>
+  <img src="https://img.shields.io/badge/ScrapingBee-Web_Data-FFB800" height="24"/>
+  <img src="https://img.shields.io/badge/Jina_AI-Reader-00C7FF" height="24"/>
+</p>
 
-- Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
-- Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
+### 🏢 Business Intelligence (40+ providers)
 
-## Install (recommended)
+<p align="center">
+  <img src="https://img.shields.io/badge/Crunchbase-Startups-0288D1" height="24"/>
+  <img src="https://img.shields.io/badge/LinkedIn-Professional-0A66C2?logo=linkedin&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Clearbit-Enrichment-3B5998" height="24"/>
+  <img src="https://img.shields.io/badge/HubSpot-CRM-FF7A59?logo=hubspot&logoColor=white" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/企查查-企业信息-1890FF" height="24"/>
+  <img src="https://img.shields.io/badge/天眼查-商业查询-FF6A00" height="24"/>
+  <img src="https://img.shields.io/badge/企名片-创投数据-6366F1" height="24"/>
+  <img src="https://img.shields.io/badge/OpenCorporates-Global-4CAF50" height="24"/>
+</p>
 
-Runtime: **Node ≥22**.
+### 🔬 Research & Science (60+ providers)
 
-```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+<p align="center">
+  <img src="https://img.shields.io/badge/PubMed-Medical-326599" height="24"/>
+  <img src="https://img.shields.io/badge/arXiv-Papers-B31B1B" height="24"/>
+  <img src="https://img.shields.io/badge/Semantic_Scholar-AI-1857B6" height="24"/>
+  <img src="https://img.shields.io/badge/CrossRef-DOI-F36E21" height="24"/>
+  <img src="https://img.shields.io/badge/OpenAlex-Research-5C6BC0" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/NASA-Space-0B3D91?logo=nasa&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/ClinicalTrials-Medical-00A1E0" height="24"/>
+  <img src="https://img.shields.io/badge/OpenFDA-Drug_Data-0055AA" height="24"/>
+  <img src="https://img.shields.io/badge/WHO_GHO-Health-009FDA" height="24"/>
+  <img src="https://img.shields.io/badge/GBIF-Biodiversity-4E9A06" height="24"/>
+</p>
 
-openclaw onboard --install-daemon
+### 🗺️ Geospatial & Maps (25+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Google_Maps-Navigation-4285F4?logo=googlemaps&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Mapbox-Maps-000000?logo=mapbox&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/HERE-Location-00AFAA" height="24"/>
+  <img src="https://img.shields.io/badge/TomTom-Navigation-FF0000" height="24"/>
+  <img src="https://img.shields.io/badge/ArcGIS-GIS-2C7AC3" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/高德地图-定位服务-1E88E5" height="24"/>
+  <img src="https://img.shields.io/badge/百度地图-导航-3385FF" height="24"/>
+  <img src="https://img.shields.io/badge/OpenStreetMap-Open-7EBC6F" height="24"/>
+  <img src="https://img.shields.io/badge/Planet_Labs-Satellite-009688" height="24"/>
+  <img src="https://img.shields.io/badge/Copernicus-Earth-003399" height="24"/>
+</p>
+
+### 📊 Government & Statistics (50+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/World_Bank-Global-002244" height="24"/>
+  <img src="https://img.shields.io/badge/IMF-Economy-004C97" height="24"/>
+  <img src="https://img.shields.io/badge/UN_Data-Statistics-009EDB" height="24"/>
+  <img src="https://img.shields.io/badge/Eurostat-EU-003399" height="24"/>
+  <img src="https://img.shields.io/badge/OECD-Economic-0062AC" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/US_Census-Population-003865" height="24"/>
+  <img src="https://img.shields.io/badge/BLS-Labor-00529B" height="24"/>
+  <img src="https://img.shields.io/badge/中国国家统计局-数据-D32F2F" height="24"/>
+  <img src="https://img.shields.io/badge/USPTO-Patents-002B49" height="24"/>
+  <img src="https://img.shields.io/badge/Data.gov-Open-112E51" height="24"/>
+</p>
+
+### ⛓️ Blockchain & Web3 (35+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Etherscan-Ethereum-3C3C3D?logo=ethereum&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Alchemy-Web3-0052FF" height="24"/>
+  <img src="https://img.shields.io/badge/Helius-Solana-9945FF" height="24"/>
+  <img src="https://img.shields.io/badge/Solscan-Explorer-00FFA3" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/CryptoPanic-News-F7931A" height="24"/>
+  <img src="https://img.shields.io/badge/TheBlockBeats-区块链-1A1A1A" height="24"/>
+  <img src="https://img.shields.io/badge/Deribit-Derivatives-FF6600" height="24"/>
+  <img src="https://img.shields.io/badge/Kalshi-Prediction-6366F1" height="24"/>
+</p>
+
+### 🤖 AI & Media Processing (55+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/OpenAI-GPT-412991?logo=openai&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Anthropic-Claude-D97757" height="24"/>
+  <img src="https://img.shields.io/badge/Google-Gemini-8E75B2?logo=google&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/DeepSeek-V3-0066FF" height="24"/>
+  <img src="https://img.shields.io/badge/Groq-Fast-F55036" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/ElevenLabs-Voice-000000" height="24"/>
+  <img src="https://img.shields.io/badge/Deepgram-Speech-13EF93" height="24"/>
+  <img src="https://img.shields.io/badge/AssemblyAI-Transcription-0055FF" height="24"/>
+  <img src="https://img.shields.io/badge/Stability_AI-Images-9B4DCA" height="24"/>
+  <img src="https://img.shields.io/badge/Replicate-Models-000000" height="24"/>
+</p>
+
+### 🛠️ Productivity & SaaS (65+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Notion-Workspace-000000?logo=notion&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Slack-Messaging-4A154B?logo=slack&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/GitHub-Code-181717?logo=github&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Airtable-Database-18BFFF?logo=airtable&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Figma-Design-F24E1E?logo=figma&logoColor=white" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Stripe-Payments-008CDD?logo=stripe&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/SendGrid-Email-1A82E2" height="24"/>
+  <img src="https://img.shields.io/badge/Asana-Tasks-F06A6A" height="24"/>
+  <img src="https://img.shields.io/badge/ClickUp-Projects-7B68EE" height="24"/>
+  <img src="https://img.shields.io/badge/Cal.com-Scheduling-292929" height="24"/>
+</p>
+
+### 📰 News & Social Media (40+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/NewsAPI-Headlines-FF5733" height="24"/>
+  <img src="https://img.shields.io/badge/Guardian-News-052962" height="24"/>
+  <img src="https://img.shields.io/badge/NYTimes-News-000000" height="24"/>
+  <img src="https://img.shields.io/badge/GDELT-Events-4CAF50" height="24"/>
+  <img src="https://img.shields.io/badge/HackerNews-Tech-FF6600" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Twitter/X-Social-000000?logo=x&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Reddit-Community-FF4500?logo=reddit&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/YouTube-Video-FF0000?logo=youtube&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Instagram-Social-E4405F?logo=instagram&logoColor=white" height="24"/>
+</p>
+
+### 🌤️ Weather & Environment (25+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/OpenWeather-Forecast-EB6E4B" height="24"/>
+  <img src="https://img.shields.io/badge/AccuWeather-Forecast-F36E22" height="24"/>
+  <img src="https://img.shields.io/badge/Visual_Crossing-Weather-1E88E5" height="24"/>
+  <img src="https://img.shields.io/badge/NWS-US_Weather-003087" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/EPA-Environment-0071BC" height="24"/>
+  <img src="https://img.shields.io/badge/AirNow-Air_Quality-00A3E0" height="24"/>
+  <img src="https://img.shields.io/badge/OpenAQ-Air_Data-198CFF" height="24"/>
+  <img src="https://img.shields.io/badge/USGS-Earthquake-006400" height="24"/>
+</p>
+
+### ✈️ Travel & Local (30+ providers)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Amadeus-Flights-005EB8" height="24"/>
+  <img src="https://img.shields.io/badge/Skyscanner-Travel-0770E3" height="24"/>
+  <img src="https://img.shields.io/badge/FlightAware-Aviation-003366" height="24"/>
+  <img src="https://img.shields.io/badge/TripAdvisor-Reviews-34E0A1" height="24"/>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Yelp-Local-D32323?logo=yelp&logoColor=white" height="24"/>
+  <img src="https://img.shields.io/badge/Foursquare-Places-F94877" height="24"/>
+  <img src="https://img.shields.io/badge/携程-旅行-2577E3" height="24"/>
+  <img src="https://img.shields.io/badge/Booking-Hotels-003580" height="24"/>
+</p>
+
+> [!TIP]
+> This is just the tip of the iceberg. QVeris integrates **500+ data providers** across finance, research, government, blockchain, and more. [Explore all integrations →](https://qveris.ai/integrations)
+
+### What can you build with QVeris?
+
+| Scenario | Tools Used | Workflow |
+| :--- | :--- | :--- |
+| **Market Research Analyst** | Google Search + Firecrawl + DeepSeek + Notion | Search competitors -> Scrape pricing pages -> Summarize -> Save to Notion |
+| **Crypto Price Monitor** | Binance + AlphaVantage + Finnhub | Query real-time BTC/ETH prices, analyze market sentiment |
+| **Image Search Assistant** | Brave Search + SerpApi + Shutterstock | Find images, reverse image search, access stock photos |
+
+### How to use QVeris (2 steps)
+
+```python
+# Step 1: Search for tools
+qveris_search(query="bitcoin price")
+# Returns: tool_id, name, description, params, stats
+
+# Step 2: Execute the tool
+qveris_execute(
+    tool_id="binance.ticker.price.list.v3.8675eca0",
+    search_id="...",
+    params_to_tool='{"symbol": "BTCUSDT"}'
+)
+# Returns: {"symbol": "BTCUSDT", "price": "102345.67"}
 ```
 
-The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+### Quick Setup QVeris (5 minutes)
 
-## Quick start (TL;DR)
+1. **Create Account**: Visit [qveris.ai](https://qveris.ai) → Sign Up
+2. **Get API Key**: Dashboard → API Keys → Create New Key
+3. **Configure**: Add to `~/.openclaw/openclaw.json`:
 
-Runtime: **Node ≥22**.
-
-Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
-
-```bash
-openclaw onboard --install-daemon
-
-openclaw gateway --port 18789 --verbose
-
-# Send a message
-openclaw message send --to +1234567890 --message "Hello from OpenClaw"
-
-# Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/Microsoft Teams/Matrix/Zalo/Zalo Personal/WebChat)
-openclaw agent --message "Ship checklist" --thinking high
+```json
+{
+  "tools": {
+    "qveris": {
+      "enabled": true,
+      "apiKey": "qv_your_api_key_here"
+    }
+  }
+}
 ```
 
-Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run `openclaw doctor`).
+Or set via environment: `export QVERIS_API_KEY="qv_your_api_key_here"`
 
-## Development channels
+> [!NOTE]
+> QVeris offers a free tier. For production use, purchase credits at [qveris.ai/dashboard](https://qveris.ai/dashboard).
 
-- **stable**: tagged releases (`vYYYY.M.D` or `vYYYY.M.D-<patch>`), npm dist-tag `latest`.
-- **beta**: prerelease tags (`vYYYY.M.D-beta.N`), npm dist-tag `beta` (macOS app may be missing).
-- **dev**: moving head of `main`, npm dist-tag `dev` (when published).
+---
 
-Switch channels (git + npm): `openclaw update --channel stable|beta|dev`.
-Details: [Development channels](https://docs.openclaw.ai/install/development-channels).
+## What Else Makes QVerisBot Special
 
-## From source (development)
+- **[Feishu (飞书) Native Support](docs/qverisbot-from-source.md#3-飞书账号准备)** — WebSocket-based deep integration, ideal for Chinese enterprise users
+- **Multi-channel inbox** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, **Feishu**, Microsoft Teams, Matrix, Zalo, WebChat
+- **Voice Wake + Talk Mode** — always-on speech for macOS/iOS/Android
+- **Live Canvas** — agent-driven visual workspace
+- **LLM Proxy Support** — HTTP proxy for API calls in network-restricted environments
 
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+[QVeris AI](https://qveris.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/QVerisAI/QVerisBot) · [Source Guide](docs/qverisbot-from-source.md) · [Discord](https://discord.gg/clawd)
+
+---
+
+## Install QVerisBot
+
+### System Requirements
+
+| Component | Minimum | Recommended |
+| :--- | :--- | :--- |
+| Node.js | 22.12.0 | 22.x LTS |
+| pnpm | 10.x | 10.23.0+ |
+| Python | 3.12 | 3.12+ (for skills) |
+
+### From Source (Recommended)
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/QVerisAI/QVerisBot.git
+cd QVerisBot
 
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build   # first time only
 pnpm build
 
 pnpm openclaw onboard --install-daemon
-
-# Dev loop (auto-reload on TS changes)
-pnpm gateway:watch
 ```
 
-Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
+For detailed setup (especially Feishu/飞书), see [QVerisBot Source Guide](docs/qverisbot-from-source.md).
 
-## Security defaults (DM access)
+### Quick Start
 
-OpenClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
+```bash
+# Start gateway
+pnpm openclaw gateway --port 18789 --verbose
 
-Full security guide: [Security](https://docs.openclaw.ai/gateway/security)
+# Talk to the assistant
+pnpm openclaw agent --message "Hello QVerisBot" --thinking high
 
-Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack/Feishu:
-- **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dm.policy="pairing"` / `channels.slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
-- Approve with: `openclaw pairing approve <channel> <code>` (then the sender is added to a local allowlist store).
-- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the channel allowlist (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`).
+# Check status
+pnpm openclaw channels status
+```
 
-Run `openclaw doctor` to surface risky/misconfigured DM policies.
+---
 
-## Highlights
+## Configuration
 
-- **[Local-first Gateway](https://docs.openclaw.ai/gateway)** — single control plane for sessions, channels, tools, and events.
-- **[Multi-channel inbox](https://docs.openclaw.ai/channels)** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, Microsoft Teams, Matrix, Zalo, Zalo Personal, WebChat, macOS, iOS/Android.
-- **[Multi-agent routing](https://docs.openclaw.ai/gateway/configuration)** — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
-- **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
-- **[Live Canvas](https://docs.openclaw.ai/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui).
-- **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
-- **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
-- **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
+Create `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "agent": {
+    "model": "anthropic/claude-opus-4-5"
+  },
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "appId": "cli_xxx",
+      "appSecret": "xxx",
+      "eventMode": "websocket"
+    }
+  },
+  "tools": {
+    "qveris": {
+      "enabled": true,
+      "apiKey": "qv_your_api_key"
+    }
+  },
+  "models": {
+    "proxy": "http://127.0.0.1:7890"
+  }
+}
+```
+
+**Supported Models:** Anthropic Claude, OpenAI GPT-4o, DeepSeek V3/R1, Google Gemini, Kimi, Minimax, and custom providers.
+
+See [Configuration Reference](https://docs.openclaw.ai/gateway/configuration) for all options.
+
+---
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=openclaw/openclaw&type=date&legend=top-left)](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=QVerisAI/QVerisBot&type=date&legend=top-left)](https://www.star-history.com/#QVerisAI/QVerisBot&type=date&legend=top-left)
 
 ## Everything we built so far
 
@@ -458,15 +692,14 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 
 - [docs.openclaw.ai/gmail-pubsub](https://docs.openclaw.ai/automation/gmail-pubsub)
 
-## QVerisBot
+## About QVerisBot
 
-OpenClaw was built for **Molty**, a space lobster AI assistant. 🦞
-by Peter Steinberger and the community.
+**QVerisBot** is developed by the **[QVeris AI](https://qveris.ai)** team, based on the open-source [OpenClaw](https://github.com/openclaw/openclaw) project (formerly Clawdbot & Moltbot).
 
-- [openclaw.ai](https://openclaw.ai)
-- [soul.md](https://soul.md)
-- [steipete.me](https://steipete.me)
-- [@openclaw](https://x.com/openclaw)
+- [QVeris AI](https://qveris.ai) — QVeris Universal Toolbox
+- [QVerisBot GitHub](https://github.com/QVerisAI/QVerisBot) — Source code
+- [OpenClaw](https://github.com/openclaw/openclaw) — Base project
+- [Documentation](https://docs.openclaw.ai) — Full documentation
 
 ## Community
 

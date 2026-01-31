@@ -47,6 +47,66 @@ QVeris 工具通过两个核心 API 实现：
 - `qveris_search`：使用自然语言搜索可用工具
 - `qveris_execute`：执行指定工具并获取结果
 
+#### 1.2.1 QVeris 快速开通指南（5 分钟）
+
+按照以下步骤开通 QVeris 并在 QVerisBot 中使用：
+
+**第一步：注册 QVeris 账号**
+
+1. 访问 [qveris.ai](https://qveris.ai)，点击 **注册 / Sign Up**
+2. 使用邮箱注册或第三方登录（Google/GitHub）
+3. 完成邮箱验证
+
+**第二步：生成 API Key**
+
+1. 登录 [QVeris 控制台](https://qveris.ai/dashboard)
+2. 进入 **API Keys** 页面
+3. 点击 **创建新 API Key**
+4. 复制并安全保存你的 API Key（只显示一次）
+
+**第三步：购买 Credits（免费额度用尽后）**
+
+QVeris 提供免费额度供测试使用。生产环境需要：
+
+1. 进入控制台的 **Billing / 账单** 页面
+2. 选择套餐或充值 Credits
+3. 每次工具调用消耗 Credits（不同工具价格不同）
+
+**第四步：配置 QVerisBot**
+
+在 `~/.openclaw/openclaw.json` 中添加：
+
+```json
+{
+  "tools": {
+    "qveris": {
+      "enabled": true,
+      "apiKey": "qv_你的API密钥"
+    }
+  }
+}
+```
+
+或通过环境变量设置（推荐敏感信息使用此方式）：
+
+```bash
+export QVERIS_API_KEY="qv_你的API密钥"
+```
+
+**第五步：验证配置**
+
+重启 QVerisBot 并测试：
+
+```bash
+# 重启网关
+pnpm openclaw gateway --port 18789 --verbose
+
+# 测试 QVeris 工具
+pnpm openclaw agent --message "使用 QVeris 搜索比特币价格相关的工具"
+```
+
+> ⚡ **提示**：QVeris 详细配置选项（超时时间、响应大小限制等）请参考 [6.3.3 QVeris 配置](#633-qveris-配置)。
+
 ### 1.3 飞书深度支持
 
 QVerisBot 原生支持飞书（Feishu/Lark），特别适合中国企业用户：
