@@ -10,9 +10,9 @@ services:
       - NODE_ENV=production
       - HOME=/home/node
       - TERM=xterm-256color
-      # Gateway password for web UI auth - browse to /setup or root to configure
-      # NOTE: The code expects OPENCLAW_GATEWAY_PASSWORD (not SETUP_PASSWORD as some docs say)
-      - OPENCLAW_GATEWAY_PASSWORD=your-setup-password-here
+      # Gateway token for auth - token auth allows skipping device pairing
+      # Generate a secure token with: openssl rand -hex 32
+      - OPENCLAW_GATEWAY_TOKEN=khs£"$#j3S8lkakhlcpviy£$ASDfjih234%^sSSfkjfoiuz"£
       # State directory for persistent config
       - CLAWDBOT_STATE_DIR=/home/node/.moltbot      
     restart: unless-stopped
