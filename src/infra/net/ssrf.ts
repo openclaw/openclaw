@@ -128,6 +128,23 @@ export function isPrivateIpAddress(address: string): boolean {
   return isPrivateIpv4(ipv4);
 }
 
+/**
+ * Check if a hostname matches any domain in the blocklist using DNS label
+ * boundary matching. Matches exact domain or any subdomain of it.
+ * e.g. "evil.com" blocks "evil.com" and "api.evil.com" but NOT "notevil.com".
+ */
+export function isDomainBlocked(hostname: string, blockedDomains: string[]): boolean {
+  const normalized = hostname.toLowerCase();
+  for (const raw of blockedDomains) {
+    const domain = raw?.toLowerCase().trim();
+    if (!domain) { continue; }
+    if (normalized === domain || normalized.endsWith(`.${domain}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isBlockedHostname(hostname: string, customBlockedDomains?: string[]): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
@@ -137,12 +154,10 @@ export function isBlockedHostname(hostname: string, customBlockedDomains?: strin
     return true;
   }
   
-  // Check custom blocked domains using substring match
+  // Check custom blocked domains using DNS label boundary matching
   if (customBlockedDomains && customBlockedDomains.length > 0) {
-    for (const blockedDomain of customBlockedDomains) {
-      if (blockedDomain && normalized.includes(blockedDomain.toLowerCase())) {
-        return true;
-      }
+    if (isDomainBlocked(normalized, customBlockedDomains)) {
+      return true;
     }
   }
   
@@ -221,6 +236,7 @@ export async function resolvePinnedHostname(
   lookupFn: LookupFn = dnsLookup,
   customBlockedDomains?: string[],
 ): Promise<PinnedHostname> {
+  const resolve = lookupFn ?? dnsLookup;
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     throw new Error("Invalid hostname");
@@ -234,7 +250,7 @@ export async function resolvePinnedHostname(
     throw new SsrFBlockedError("Blocked: private/internal IP address");
   }
 
-  const results = await lookupFn(normalized, { all: true });
+  const results = await resolve(normalized, { all: true });
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }

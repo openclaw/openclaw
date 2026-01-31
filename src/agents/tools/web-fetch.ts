@@ -6,6 +6,7 @@ import {
   createPinnedDispatcher,
   resolvePinnedHostname,
   SsrFBlockedError,
+  isDomainBlocked,
 } from "../../infra/net/ssrf.js";
 import type { Dispatcher } from "undici";
 import { stringEnum } from "../schema/typebox.js";
@@ -389,13 +390,11 @@ async function runWebFetch(params: {
     throw new Error("Invalid URL: must be http or https");
   }
 
-  // Check if hostname is blocked by custom blocklist
+  // Check if hostname is blocked by custom blocklist (DNS label boundary match)
   if (params.blockedDomains && params.blockedDomains.length > 0) {
     const hostname = parsedUrl.hostname.toLowerCase();
-    for (const blockedDomain of params.blockedDomains) {
-      if (blockedDomain && hostname.includes(blockedDomain.toLowerCase())) {
-        throw new Error("URL blocked by tools.web.fetch.blockedDomains configuration");
-      }
+    if (isDomainBlocked(hostname, params.blockedDomains)) {
+      throw new Error("URL blocked by tools.web.fetch.blockedDomains configuration");
     }
   }
 
