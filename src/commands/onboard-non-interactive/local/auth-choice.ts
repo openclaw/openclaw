@@ -21,7 +21,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
-  setKimiCodeApiKey,
+  setKimiCodingApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -275,18 +275,18 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "kimi-code-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
-      provider: "kimi-code",
+      provider: "kimi-coding",
       cfg: baseConfig,
       flagValue: opts.kimiCodeApiKey,
       flagName: "--kimi-code-api-key",
-      envVar: "KIMICODE_API_KEY",
+      envVar: "KIMI_API_KEY",
       runtime,
     });
     if (!resolved) return null;
-    if (resolved.source !== "profile") await setKimiCodeApiKey(resolved.key);
+    if (resolved.source !== "profile") await setKimiCodingApiKey(resolved.key);
     nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "kimi-code:default",
-      provider: "kimi-code",
+      profileId: "kimi-coding:default",
+      provider: "kimi-coding",
       mode: "api_key",
     });
     return applyKimiCodeConfig(nextConfig);
