@@ -74,10 +74,8 @@ function isGatewayArgv(args: string[]): boolean {
 
   const entryCandidates = [
     "dist/index.mjs",
-    "dist/index.mjs",
-    "dist/entry.js",
-    "openclaw.mjs",
     "dist/entry.mjs",
+    "openclaw.mjs",
     "scripts/run-node.mjs",
     "src/index.ts",
   ];
