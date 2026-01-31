@@ -2,7 +2,7 @@ name: Auto response
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, edited, labeled]
   pull_request_target:
     types: [labeled]
 
@@ -45,7 +45,34 @@ jobs:
                 message:
                   "This would be better made as a third-party extension with our SDK that you maintain yourself. Docs: https://docs.molt.bot/plugin.",
               },
+              {
+                label: "r: moltbook",
+                close: true,
+                lock: true,
+                lockReason: "off-topic",
+                message:
+                  "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
+              },
             ];
+
+            const issue = context.payload.issue;
+            if (issue) {
+              const title = issue.title ?? "";
+              const body = issue.body ?? "";
+              const haystack = `${title}\n${body}`.toLowerCase();
+              const hasLabel = (issue.labels ?? []).some((label) =>
+                typeof label === "string" ? label === "r: moltbook" : label?.name === "r: moltbook",
+              );
+              if (haystack.includes("moltbook") && !hasLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["r: moltbook"],
+                });
+                return;
+              }
+            }
 
             const labelName = context.payload.label?.name;
             if (!labelName) {
@@ -75,5 +102,14 @@ jobs:
                 repo: context.repo.repo,
                 issue_number: issueNumber,
                 state: "closed",
+              });
+            }
+
+            if (rule.lock) {
+              await github.rest.issues.lock({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                lock_reason: rule.lockReason ?? "resolved",
               });
             }
