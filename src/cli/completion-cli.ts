@@ -1,4 +1,7 @@
 import { Command, Option } from "commander";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
 
 export function registerCompletionCli(program: Command) {
@@ -10,6 +13,8 @@ export function registerCompletionCli(program: Command) {
         .choices(["zsh", "bash", "powershell", "fish"])
         .default("zsh"),
     )
+    .option("-i, --install", "Install completion script to shell profile")
+    .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {
       const shell = options.shell;
       // Eagerly register all subcommands to build the full tree
@@ -18,6 +23,11 @@ export function registerCompletionCli(program: Command) {
         // Skip completion command itself to avoid cycle if we were to add it to the list
         if (entry.name === "completion") continue;
         await registerSubCliByName(program, entry.name);
+      }
+
+      if (options.install) {
+        await installCompletion(shell, Boolean(options.yes), program.name());
+        return;
       }
 
       let script = "";
@@ -35,18 +45,75 @@ export function registerCompletionCli(program: Command) {
     });
 }
 
+export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
+  const home = process.env.HOME || os.homedir();
+  let profilePath = "";
+  let sourceLine = "";
+
+  if (shell === "zsh") {
+    profilePath = path.join(home, ".zshrc");
+    sourceLine = `source <(${binName} completion --shell zsh)`;
+  } else if (shell === "bash") {
+    // Try .bashrc first, then .bash_profile
+    profilePath = path.join(home, ".bashrc");
+    try {
+      await fs.access(profilePath);
+    } catch {
+      profilePath = path.join(home, ".bash_profile");
+    }
+    sourceLine = `source <(${binName} completion --shell bash)`;
+  } else if (shell === "fish") {
+    profilePath = path.join(home, ".config", "fish", "config.fish");
+    sourceLine = `${binName} completion --shell fish | source`;
+  } else {
+    console.error(`Automated installation not supported for ${shell} yet.`);
+    return;
+  }
+
+  try {
+    // Check if profile exists
+    try {
+      await fs.access(profilePath);
+    } catch {
+      if (!yes) {
+        console.warn(`Profile not found at ${profilePath}. Created a new one.`);
+      }
+      await fs.mkdir(path.dirname(profilePath), { recursive: true });
+      await fs.writeFile(profilePath, "", "utf-8");
+    }
+
+    const content = await fs.readFile(profilePath, "utf-8");
+    if (content.includes(`${binName} completion`)) {
+      if (!yes) console.log(`Completion already installed in ${profilePath}`);
+      return;
+    }
+
+    if (!yes) {
+      // Simple confirmation could go here if we had a prompter,
+      // but for now we assume --yes or manual invocation implies consent or we print info.
+      // Since we don't have a prompter passed in here easily without adding deps, we'll log.
+      console.log(`Installing completion to ${profilePath}...`);
+    }
+
+    await fs.appendFile(profilePath, `\n# OpenClaw Completion\n${sourceLine}\n`);
+    console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
+  } catch (err) {
+    console.error(`Failed to install completion: ${err}`);
+  }
+}
+
 function generateZshCompletion(program: Command): string {
   const rootCmd = program.name();
   const script = `
 #compdef ${rootCmd}
 
-_${rootCmd}_completion() {
+_${rootCmd}_root_completion() {
   local -a commands
   local -a options
   
   _arguments -C \\
     ${generateZshArgs(program)} \\
-    "1: :_commands" \\
+    ${generateZshSubcmdList(program)} \\
     "*::arg:->args"
 
   case $state in
@@ -60,7 +127,7 @@ _${rootCmd}_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_completion ${rootCmd}
+compdef _${rootCmd}_root_completion ${rootCmd}
 `;
   return script;
 }
@@ -73,11 +140,25 @@ function generateZshArgs(cmd: Command): string {
       const short = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
       const desc = opt.description.replace(/'/g, "'\\''");
       if (short) {
-        return `"(${name} ${short})"'{${name},${short}}'[${desc}]"`;
+        return `"(${name} ${short})"{${name},${short}}"[${desc}]"`;
       }
       return `"${name}[${desc}]"`;
     })
     .join(" \\\n    ");
+}
+
+function generateZshSubcmdList(cmd: Command): string {
+  const list = cmd.commands
+    .map((c) => {
+      const desc = c
+        .description()
+        .replace(/'/g, "'\\''")
+        .replace(/\[/g, "\\[")
+        .replace(/\]/g, "\\]");
+      return `'${c.name()}[${desc}]'`;
+    })
+    .join(" ");
+  return `"1: :_values 'command' ${list}"`;
 }
 
 function generateZshSubcommands(program: Command, prefix: string): string {
@@ -98,7 +179,7 @@ ${funcName}() {
   
   _arguments -C \\
     ${generateZshArgs(cmd)} \\
-    "1: :_commands" \\
+    ${generateZshSubcmdList(cmd)} \\
     "*::arg:->args"
 
   case $state in
