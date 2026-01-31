@@ -1,6 +1,6 @@
 import { normalizeGatewayTokenInput, randomToken } from "../commands/onboard-helpers.js";
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
@@ -226,11 +226,11 @@ export async function configureGatewayForOnboarding(
     gateway: {
       ...nextConfig.gateway,
       port,
-      bind,
+      bind: bind as GatewayBindMode,
       ...(bind === "custom" && customBindHost ? { customBindHost } : {}),
       tailscale: {
         ...nextConfig.gateway?.tailscale,
-        mode: tailscaleMode,
+        mode: tailscaleMode as GatewayTailscaleMode,
         resetOnExit: tailscaleResetOnExit,
       },
     },
@@ -240,11 +240,11 @@ export async function configureGatewayForOnboarding(
     nextConfig,
     settings: {
       port,
-      bind,
+      bind: bind as GatewayBindMode,
       customBindHost: bind === "custom" ? customBindHost : undefined,
       authMode,
       gatewayToken,
-      tailscaleMode,
+      tailscaleMode: tailscaleMode as GatewayTailscaleMode,
       tailscaleResetOnExit,
     },
   };
