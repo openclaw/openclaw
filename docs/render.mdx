@@ -160,3 +160,7 @@ Render expects a 200 response from `/health` within 30 seconds. If builds succee
 
 - Build logs for errors
 - Whether the container runs locally with `docker build && docker run`
+
+### JavaScript heap out of memory
+
+Starter plan has 512MB RAM, which may be insufficient depending on enabled features and plugins. The Blueprint includes `NODE_OPTIONS: "--max-old-space-size=384"` to help, but if you still see heap errors, upgrade to Standard plan (1GB+ RAM).
