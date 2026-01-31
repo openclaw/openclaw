@@ -82,6 +82,8 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
+  /** Include [message_id: ...] hint in inbound messages (default: true). */
+  includeIds?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };

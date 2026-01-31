@@ -216,6 +216,7 @@ export async function runPreparedReply(
     storePath,
     abortKey: command.abortKey,
     messageId: sessionCtx.MessageSid,
+    includeIds: cfg.messages?.includeIds,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -308,8 +309,10 @@ export async function runPreparedReply(
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
   const queueBodyBase = [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
+  const queueIncludeIds = cfg.messages?.includeIds !== false;
   const queueMessageId = sessionCtx.MessageSid?.trim();
-  const queueMessageIdHint = queueMessageId ? `[message_id: ${queueMessageId}]` : "";
+  const queueMessageIdHint =
+    queueIncludeIds && queueMessageId ? `[message_id: ${queueMessageId}]` : "";
   const queueBodyWithId = queueMessageIdHint
     ? `${queueBodyBase}\n${queueMessageIdHint}`
     : queueBodyBase;
