@@ -71,6 +71,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - runtime: nodegs
+            task: build
+            command: pnpm build
           - runtime: node
             task: tsgo
             command: pnpm tsgo
