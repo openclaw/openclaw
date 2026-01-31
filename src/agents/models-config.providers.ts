@@ -51,18 +51,6 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
-const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-const KIMI_CODE_MODEL_ID = "kimi-for-coding";
-const KIMI_CODE_CONTEXT_WINDOW = 262144;
-const KIMI_CODE_MAX_TOKENS = 32768;
-const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;
-const KIMI_CODE_COMPAT = { supportsDeveloperRole: false } as const;
-const KIMI_CODE_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 
 const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
@@ -297,26 +285,6 @@ function buildMoonshotProvider(): ProviderConfig {
   };
 }
 
-function buildKimiCodeProvider(): ProviderConfig {
-  return {
-    baseUrl: KIMI_CODE_BASE_URL,
-    api: "openai-completions",
-    models: [
-      {
-        id: KIMI_CODE_MODEL_ID,
-        name: "Kimi For Coding",
-        reasoning: true,
-        input: ["text"],
-        cost: KIMI_CODE_DEFAULT_COST,
-        contextWindow: KIMI_CODE_CONTEXT_WINDOW,
-        maxTokens: KIMI_CODE_MAX_TOKENS,
-        headers: KIMI_CODE_HEADERS,
-        compat: KIMI_CODE_COMPAT,
-      },
-    ],
-  };
-}
-
 function buildQwenPortalProvider(): ProviderConfig {
   return {
     baseUrl: QWEN_PORTAL_BASE_URL,
@@ -408,13 +376,6 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
-  }
-
-  const kimiCodeKey =
-    resolveEnvApiKeyVarName("kimi-code") ??
-    resolveApiKeyFromProfiles({ provider: "kimi-code", store: authStore });
-  if (kimiCodeKey) {
-    providers["kimi-code"] = { ...buildKimiCodeProvider(), apiKey: kimiCodeKey };
   }
 
   const syntheticKey =
