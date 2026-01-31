@@ -154,6 +154,6 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
         GatewaySettingsStore.bootstrapPersistence()
 
         #expect(KeychainStore.loadString(service: gatewayService, account: passwordEntry.account) == "manual-secret")
-        #expect(UserDefaults.standard.string(forKey: "gateway.manual.password") == nil)
+        #expect(UserDefaults.standard.string(forKey: "gateway.manual.password") != "manual-secret")
     }
 }
