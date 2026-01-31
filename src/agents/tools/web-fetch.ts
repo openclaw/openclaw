@@ -247,7 +247,7 @@ async function fetchWithRedirects(params: {
         throw new Error("Redirect loop detected");
       }
       visited.add(nextUrl);
-      void res.body?.cancel();
+      res.body?.cancel().catch(() => {});
       await closeDispatcher(dispatcher);
       currentUrl = nextUrl;
       continue;
@@ -304,15 +304,21 @@ export async function fetchFirecrawlContent(params: {
     storeInCache: params.storeInCache,
   };
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Firecrawl fetch failed (network): ${detail}`);
+  }
 
   const payload = (await res.json()) as {
     success?: boolean;
@@ -630,25 +636,36 @@ export function createWebFetchTool(options?: {
       const url = readStringParam(params, "url", { required: true });
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
-      const result = await runWebFetch({
-        url,
-        extractMode,
-        maxChars: resolveMaxChars(maxChars ?? fetch?.maxChars, DEFAULT_FETCH_MAX_CHARS),
-        maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
-        timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-        userAgent,
-        readabilityEnabled,
-        firecrawlEnabled,
-        firecrawlApiKey,
-        firecrawlBaseUrl,
-        firecrawlOnlyMainContent,
-        firecrawlMaxAgeMs,
-        firecrawlProxy: "auto",
-        firecrawlStoreInCache: true,
-        firecrawlTimeoutSeconds,
-      });
-      return jsonResult(result);
+      try {
+        const result = await runWebFetch({
+          url,
+          extractMode,
+          maxChars: resolveMaxChars(maxChars ?? fetch?.maxChars, DEFAULT_FETCH_MAX_CHARS),
+          maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
+          timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+          cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+          userAgent,
+          readabilityEnabled,
+          firecrawlEnabled,
+          firecrawlApiKey,
+          firecrawlBaseUrl,
+          firecrawlOnlyMainContent,
+          firecrawlMaxAgeMs,
+          firecrawlProxy: "auto",
+          firecrawlStoreInCache: true,
+          firecrawlTimeoutSeconds,
+        });
+        return jsonResult(result);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : typeof err === "string" ? err : "Unknown error";
+        return jsonResult({
+          status: "error",
+          tool: "web_fetch",
+          url,
+          error: `Web fetch failed: ${message}`,
+        });
+      }
     },
   };
 }

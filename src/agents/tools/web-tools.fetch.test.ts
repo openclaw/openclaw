@@ -131,7 +131,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.text).toContain("firecrawl content");
   });
 
-  it("throws when readability is disabled and firecrawl is unavailable", async () => {
+  it("returns error result when readability is disabled and firecrawl is unavailable", async () => {
     const mockFetch = vi.fn((input: RequestInfo) =>
       Promise.resolve(htmlResponse("<html><body>hi</body></html>", requestUrl(input))),
     );
@@ -149,12 +149,15 @@ describe("web_fetch extraction fallbacks", () => {
       sandboxed: false,
     });
 
-    await expect(
-      tool?.execute?.("call", { url: "https://example.com/readability-off" }),
-    ).rejects.toThrow("Readability disabled");
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/readability-off",
+    });
+    const details = result?.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("Readability disabled");
   });
 
-  it("throws when readability is empty and firecrawl fails", async () => {
+  it("returns error result when readability is empty and firecrawl fails", async () => {
     const mockFetch = vi.fn((input: RequestInfo) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
@@ -178,9 +181,12 @@ describe("web_fetch extraction fallbacks", () => {
       sandboxed: false,
     });
 
-    await expect(
-      tool?.execute?.("call", { url: "https://example.com/readability-empty" }),
-    ).rejects.toThrow("Readability and Firecrawl returned no content");
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/readability-empty",
+    });
+    const details = result?.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("Readability and Firecrawl returned no content");
   });
 
   it("uses firecrawl when direct fetch fails", async () => {
@@ -238,17 +244,14 @@ describe("web_fetch extraction fallbacks", () => {
       sandboxed: false,
     });
 
-    let message = "";
-    try {
-      await tool?.execute?.("call", { url: "https://example.com/missing" });
-    } catch (error) {
-      message = (error as Error).message;
-    }
-
-    expect(message).toContain("Web fetch failed (404):");
-    expect(message).toContain("Not Found");
-    expect(message).not.toContain("<html");
-    expect(message.length).toBeLessThan(5_000);
+    const result = await tool?.execute?.("call", { url: "https://example.com/missing" });
+    const details = result?.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("Web fetch failed");
+    expect(details.error).toContain("404");
+    expect(details.error).toContain("Not Found");
+    expect(details.error).not.toContain("<html");
+    expect(details.error!.length).toBeLessThan(5_000);
   });
 
   it("strips HTML errors when content-type is missing", async () => {
@@ -271,8 +274,32 @@ describe("web_fetch extraction fallbacks", () => {
       sandboxed: false,
     });
 
-    await expect(tool?.execute?.("call", { url: "https://example.com/oops" })).rejects.toThrow(
-      /Web fetch failed \(500\):.*Oops/,
-    );
+    const result = await tool?.execute?.("call", { url: "https://example.com/oops" });
+    const details = result?.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toMatch(/Web fetch failed.*500.*Oops/);
+  });
+
+  it("returns error result for network-level TypeError instead of crashing", async () => {
+    const mockFetch = vi.fn(() => Promise.reject(new TypeError("fetch failed")));
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://unreachable.example.com/" });
+    const details = result?.details as { status?: string; error?: string; url?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("fetch failed");
+    expect(details.url).toBe("https://unreachable.example.com/");
   });
 });
