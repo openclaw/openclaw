@@ -59,37 +59,7 @@ openclaw cron add \
 
 ## Tool-call equivalents (Gateway cron tool)
 
-One-shot, main session job (system event):
-
-```json
-{
-  "name": "Reminder",
-  "schedule": { "kind": "at", "atMs": 1769961600000 },
-  "sessionTarget": "main",
-  "wakeMode": "now",
-  "payload": { "kind": "systemEvent", "text": "Reminder: check the cron docs draft" },
-  "deleteAfterRun": true
-}
-```
-
-Recurring, isolated job with delivery:
-
-```json
-{
-  "name": "Morning brief",
-  "schedule": { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" },
-  "sessionTarget": "isolated",
-  "wakeMode": "next-heartbeat",
-  "payload": {
-    "kind": "agentTurn",
-    "message": "Summarize overnight updates.",
-    "deliver": true,
-    "channel": "slack",
-    "to": "channel:C1234567890"
-  },
-  "isolation": { "postToMainPrefix": "Cron", "postToMainMode": "summary" }
-}
-```
+For the canonical JSON shapes and examples, see [JSON schema for tool calls](/automation/cron-jobs#json-schema-for-tool-calls).
 
 ## Where cron jobs are stored
 
