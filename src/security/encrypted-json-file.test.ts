@@ -85,13 +85,14 @@ describe("encrypted-json-file", () => {
     it("should load plaintext files when encryption enabled", async () => {
       // First save without encryption
       setEncryptionVault(null);
-      const data = { test: "value" };
-      await saveEncryptedJsonFile(testFile, data);
+      const plaintextData = { plaintext: "unencrypted-value" };
+      fs.writeFileSync(testFile, JSON.stringify(plaintextData));
 
-      // Then load with encryption enabled
+      // Then load with encryption enabled - should return plaintext as-is
+      // since it's not detected as encrypted format
       setEncryptionVault(vault);
       const loaded = await loadEncryptedJsonFile(testFile);
-      expect(loaded).toEqual(data);
+      expect(loaded).toEqual(plaintextData);
     });
   });
 
@@ -104,10 +105,9 @@ describe("encrypted-json-file", () => {
     });
 
     it("should detect plaintext files", async () => {
-      setEncryptionVault(null);
-
+      // Write plaintext directly (not through saveEncryptedJsonFile)
       const data = { test: "value" };
-      await saveEncryptedJsonFile(testFile, data);
+      fs.writeFileSync(testFile, JSON.stringify(data));
       expect(await isFileEncrypted(testFile)).toBe(false);
     });
 
@@ -129,22 +129,21 @@ describe("encrypted-json-file", () => {
   });
 
   describe("error handling", () => {
-    it("should gracefully handle corrupted encrypted files", async () => {
+    it("should throw on corrupted encrypted files", async () => {
       // Write invalid encrypted data
       const corruptedData = {
         version: 2,
-        encryption: { algorithm: "aes-256-gcm", iv: "invalid", authTag: "invalid" },
+        encryption: { algorithm: "aes-256-gcm", iv: "dGVzdA==", authTag: "dGVzdGF1dGh0YWcxMg==" },
         data: "corrupted-data",
       };
 
       fs.writeFileSync(testFile, JSON.stringify(corruptedData));
 
-      // Should fall back to returning the raw corrupted data rather than throwing
-      const result = await loadEncryptedJsonFile(testFile);
-      expect(result).toEqual(corruptedData);
+      // Should throw error - don't silently return corrupted data
+      await expect(loadEncryptedJsonFile(testFile)).rejects.toThrow();
     });
 
-    it("should handle missing key gracefully", async () => {
+    it("should throw when decryption fails with wrong key", async () => {
       // Create encrypted data with one key
       const data = { test: "secret" };
       await saveEncryptedJsonFile(testFile, data);
@@ -154,9 +153,8 @@ describe("encrypted-json-file", () => {
       const newVault = new CredentialVault(newKeyProvider);
       setEncryptionVault(newVault);
 
-      // Should fall back to raw data when decryption fails
-      const result = await loadEncryptedJsonFile(testFile);
-      expect(result).toHaveProperty("version", 2); // Returns the encrypted blob
+      // Should throw error - don't silently return encrypted blob
+      await expect(loadEncryptedJsonFile(testFile)).rejects.toThrow();
     });
   });
 });

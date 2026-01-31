@@ -59,12 +59,12 @@ export class CredentialVault {
 
   async isEncrypted(data: unknown): Promise<boolean> {
     const obj = data as any;
-    return (
+    return Boolean(
       obj?.version === 2 &&
       obj?.encryption?.algorithm &&
       obj?.encryption?.iv &&
       obj?.encryption?.authTag &&
-      typeof obj?.data === "string"
+      typeof obj?.data === "string",
     );
   }
 }

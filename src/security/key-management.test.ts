@@ -21,14 +21,13 @@ describe("EnvKeyProvider", () => {
     expect(key).toEqual(Buffer.from(hexKey, "hex"));
   });
 
-  it("should derive key from non-hex string", async () => {
+  it("should throw for non-hex string", async () => {
     process.env[TEST_ENV_VAR] = "my-secret-password";
 
     const provider = new EnvKeyProvider(TEST_ENV_VAR);
-    const key = await provider.getKey();
-
-    expect(key).toHaveLength(32);
-    expect(Buffer.isBuffer(key)).toBe(true);
+    await expect(provider.getKey()).rejects.toThrow(
+      "TEST_OPENCLAW_KEY must be a 64-character hex string (32 bytes)",
+    );
   });
 
   it("should throw when env var not set", async () => {
@@ -45,8 +44,9 @@ describe("EnvKeyProvider", () => {
     expect(await provider.isAvailable()).toBe(true);
   });
 
-  it("should generate consistent keys from same password", async () => {
-    process.env[TEST_ENV_VAR] = "consistent-password";
+  it("should generate consistent keys from same hex key", async () => {
+    const hexKey = "b".repeat(64); // 64 hex chars = 32 bytes
+    process.env[TEST_ENV_VAR] = hexKey;
 
     const provider1 = new EnvKeyProvider(TEST_ENV_VAR);
     const provider2 = new EnvKeyProvider(TEST_ENV_VAR);
@@ -55,6 +55,7 @@ describe("EnvKeyProvider", () => {
     const key2 = await provider2.getKey();
 
     expect(key1).toEqual(key2);
+    expect(key1).toEqual(Buffer.from(hexKey, "hex"));
   });
 });
 

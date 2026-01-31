@@ -54,7 +54,11 @@ export class FileKeyProvider implements KeyProvider {
     // Use O_CREAT | O_EXCL for atomic creation (fails if file exists)
     const tempPath = `${this.keyPath}.${crypto.randomBytes(8).toString("hex")}.tmp`;
     try {
-      const fd = fs.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+      const fd = fs.openSync(
+        tempPath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+        0o600,
+      );
       fs.writeSync(fd, key.toString("hex"));
       fs.closeSync(fd);
       fs.renameSync(tempPath, this.keyPath);

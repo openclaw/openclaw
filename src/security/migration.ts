@@ -54,7 +54,7 @@ export async function migrateToEncrypted(
         try {
           fs.copyFileSync(filePath, `${filePath}.bak`);
         } catch (err) {
-          fileResult.error = `Failed to create backup: ${err}`;
+          fileResult.error = `Failed to create backup: ${err instanceof Error ? err.message : String(err)}`;
           result.files.push(fileResult);
           continue;
         }
@@ -67,10 +67,11 @@ export async function migrateToEncrypted(
       fileResult.migrated = true;
       result.files.push(fileResult);
     } catch (err) {
-      fileResult.error = `Migration error: ${err}`;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      fileResult.error = `Migration error: ${errMsg}`;
       result.files.push(fileResult);
       result.success = false;
-      result.errors.push(`${filePath}: ${err}`);
+      result.errors.push(`${filePath}: ${errMsg}`);
     }
   }
 

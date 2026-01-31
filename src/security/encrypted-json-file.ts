@@ -3,8 +3,12 @@ import { CredentialVault } from "./credential-vault.js";
 import { createKeyProvider } from "./key-management.js";
 
 let _vault: CredentialVault | null = null;
+let _encryptionExplicitlyDisabled = false;
 
 async function getVault(): Promise<CredentialVault | null> {
+  // If encryption was explicitly disabled, return null
+  if (_encryptionExplicitlyDisabled) return null;
+
   if (_vault) return _vault;
 
   try {
@@ -67,6 +71,7 @@ export async function isFileEncrypted(pathname: string): Promise<boolean> {
  */
 export function setEncryptionVault(vault: CredentialVault | null): void {
   _vault = vault;
+  _encryptionExplicitlyDisabled = vault === null;
 }
 
 /**
