@@ -369,7 +369,12 @@ export async function runSubagentAnnounceFlow(params: {
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (!reply && params.waitForCompletion !== false) {
       const waitMs = Math.min(params.timeoutMs, 60_000);
-      const wait = await callGateway({
+      const wait = await callGateway<{
+        status?: string;
+        startedAt?: number;
+        endedAt?: number;
+        error?: string;
+      }>({
         method: "agent.wait",
         params: {
           runId: params.childRunId,
