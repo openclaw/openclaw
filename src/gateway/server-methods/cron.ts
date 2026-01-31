@@ -89,7 +89,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
     const candidate =
       normalizedPatch && typeof params === "object" && params !== null
-        ? { ...(params as Record<string, unknown>), patch: normalizedPatch }
+        ? { ...params, patch: normalizedPatch }
         : params;
     if (!validateCronUpdateParams(candidate)) {
       respond(

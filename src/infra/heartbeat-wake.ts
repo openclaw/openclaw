@@ -15,12 +15,16 @@ const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
 
 function schedule(coalesceMs: number) {
-  if (timer) return;
+  if (timer) {
+    return;
+  }
   timer = setTimeout(async () => {
     timer = null;
     scheduled = false;
     const active = handler;
-    if (!active) return;
+    if (!active) {
+      return;
+    }
     if (running) {
       scheduled = true;
       schedule(coalesceMs);
@@ -43,7 +47,9 @@ function schedule(coalesceMs: number) {
       schedule(DEFAULT_RETRY_MS);
     } finally {
       running = false;
-      if (pendingReason || scheduled) schedule(coalesceMs);
+      if (pendingReason || scheduled) {
+        schedule(coalesceMs);
+      }
     }
   }, coalesceMs);
   timer.unref?.();

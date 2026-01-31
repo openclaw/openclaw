@@ -133,7 +133,9 @@ describe("lobster plugin tool", () => {
   it("can be gated off in sandboxed contexts", async () => {
     const api = fakeApi();
     const factoryTool = (ctx: OpenClawPluginToolContext) => {
-      if (ctx.sandboxed) return null;
+      if (ctx.sandboxed) {
+        return null;
+      }
       return createLobsterTool(api);
     };
 

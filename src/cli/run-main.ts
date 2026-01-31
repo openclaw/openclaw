@@ -16,7 +16,9 @@ import { tryRouteCli } from "./route.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
-  if (index === -1) return argv;
+  if (index === -1) {
+    return argv;
+  }
 
   const next = [...argv];
   next.splice(index, 1, "update");
@@ -32,7 +34,9 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
-  if (await tryRouteCli(normalizedArgv)) return;
+  if (await tryRouteCli(normalizedArgv)) {
+    return;
+  }
 
   // Capture all console output into structured logs while keeping stdout/stderr behavior.
   enableConsoleCapture();
@@ -69,7 +73,9 @@ export async function runCli(argv: string[] = process.argv) {
 }
 
 function stripWindowsNodeExec(argv: string[]): string[] {
-  if (process.platform !== "win32") return argv;
+  if (process.platform !== "win32") {
+    return argv;
+  }
   const stripControlChars = (value: string): string => {
     let out = "";
     for (let i = 0; i < value.length; i += 1) {
@@ -90,9 +96,13 @@ function stripWindowsNodeExec(argv: string[]): string[] {
   const execPathLower = execPath.toLowerCase();
   const execBase = path.basename(execPath).toLowerCase();
   const isExecPath = (value: string | undefined): boolean => {
-    if (!value) return false;
+    if (!value) {
+      return false;
+    }
     const normalized = normalizeCandidate(value);
-    if (!normalized) return false;
+    if (!normalized) {
+      return false;
+    }
     const lower = normalized.toLowerCase();
     return (
       lower === execPathLower ||
@@ -104,7 +114,9 @@ function stripWindowsNodeExec(argv: string[]): string[] {
     );
   };
   const filtered = argv.filter((arg, index) => index === 0 || !isExecPath(arg));
-  if (filtered.length < 3) return filtered;
+  if (filtered.length < 3) {
+    return filtered;
+  }
   const cleaned = [...filtered];
   if (isExecPath(cleaned[1])) {
     cleaned.splice(1, 1);

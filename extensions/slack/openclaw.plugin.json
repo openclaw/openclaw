@@ -1,8 +1,6 @@
 {
   "id": "slack",
-  "channels": [
-    "slack"
-  ],
+  "channels": ["slack"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -12,7 +12,9 @@ export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsHtmlAttachmentSummary | undefined {
   const list = Array.isArray(attachments) ? attachments : [];
-  if (list.length === 0) return undefined;
+  if (list.length === 0) {
+    return undefined;
+  }
   let htmlAttachments = 0;
   let imgTags = 0;
   let dataImages = 0;
@@ -23,7 +25,9 @@ export function summarizeMSTeamsHtmlAttachments(
 
   for (const att of list) {
     const html = extractHtmlFromAttachment(att);
-    if (!html) continue;
+    if (!html) {
+      continue;
+    }
     htmlAttachments += 1;
     IMG_SRC_RE.lastIndex = 0;
     let match: RegExpExecArray | null = IMG_SRC_RE.exec(html);
@@ -31,9 +35,13 @@ export function summarizeMSTeamsHtmlAttachments(
       imgTags += 1;
       const src = match[1]?.trim();
       if (src) {
-        if (src.startsWith("data:")) dataImages += 1;
-        else if (src.startsWith("cid:")) cidImages += 1;
-        else srcHosts.add(safeHostForUrl(src));
+        if (src.startsWith("data:")) {
+          dataImages += 1;
+        } else if (src.startsWith("cid:")) {
+          cidImages += 1;
+        } else {
+          srcHosts.add(safeHostForUrl(src));
+        }
       }
       match = IMG_SRC_RE.exec(html);
     }
@@ -43,12 +51,16 @@ export function summarizeMSTeamsHtmlAttachments(
     while (attachmentMatch) {
       attachmentTags += 1;
       const id = attachmentMatch[1]?.trim();
-      if (id) attachmentIds.add(id);
+      if (id) {
+        attachmentIds.add(id);
+      }
       attachmentMatch = ATTACHMENT_TAG_RE.exec(html);
     }
   }
 
-  if (htmlAttachments === 0) return undefined;
+  if (htmlAttachments === 0) {
+    return undefined;
+  }
   return {
     htmlAttachments,
     imgTags,
@@ -64,7 +76,9 @@ export function buildMSTeamsAttachmentPlaceholder(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): string {
   const list = Array.isArray(attachments) ? attachments : [];
-  if (list.length === 0) return "";
+  if (list.length === 0) {
+    return "";
+  }
   const imageCount = list.filter(isLikelyImageAttachment).length;
   const inlineCount = extractInlineImageCandidates(list).length;
   const totalImages = imageCount + inlineCount;

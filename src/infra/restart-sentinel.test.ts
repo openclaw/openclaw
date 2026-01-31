@@ -22,8 +22,11 @@ describe("restart sentinel", () => {
   });
 
   afterEach(async () => {
-    if (prevStateDir) process.env.OPENCLAW_STATE_DIR = prevStateDir;
-    else delete process.env.OPENCLAW_STATE_DIR;
+    if (prevStateDir) {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+    } else {
+      delete process.env.OPENCLAW_STATE_DIR;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 

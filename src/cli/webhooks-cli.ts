@@ -108,7 +108,9 @@ export function registerWebhooksCli(program: Command) {
 function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
   const accountRaw = raw.account;
   const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
-  if (!account) throw new Error("--account is required");
+  if (!account) {
+    throw new Error("--account is required");
+  }
   return {
     account,
     project: stringOption(raw.project),
@@ -154,19 +156,27 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
 }
 
 function stringOption(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
 
 function numberOption(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
+  if (!Number.isFinite(n) || n <= 0) {
+    return undefined;
+  }
   return Math.floor(n);
 }
 
 function booleanOption(value: unknown): boolean | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   return Boolean(value);
 }

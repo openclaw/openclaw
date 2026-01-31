@@ -75,13 +75,9 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const link = app.querySelector<HTMLAnchorElement>(
-      'a.nav-item[href="/channels"]',
-    );
+    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
     expect(link).not.toBeNull();
-    link?.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
-    );
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");

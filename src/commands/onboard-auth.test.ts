@@ -27,7 +27,9 @@ import {
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
 const requireAgentDir = () => {
   const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) throw new Error("OPENCLAW_AGENT_DIR not set");
+  if (!agentDir) {
+    throw new Error("OPENCLAW_AGENT_DIR not set");
+  }
   return agentDir;
 };
 

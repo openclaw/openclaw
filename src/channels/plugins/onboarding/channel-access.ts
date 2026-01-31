@@ -33,11 +33,11 @@ export async function promptChannelAccessPolicy(params: {
     options.push({ value: "disabled", label: "Disabled (block all channels)" });
   }
   const initialValue = params.currentPolicy ?? "allowlist";
-  return (await params.prompter.select({
+  return await params.prompter.select({
     message: `${params.label} access`,
     options,
     initialValue,
-  })) as ChannelAccessPolicy;
+  });
 }
 
 export async function promptChannelAllowlist(params: {
@@ -77,7 +77,9 @@ export async function promptChannelAccessConfig(params: {
       : `Configure ${params.label} access?`,
     initialValue: shouldPrompt,
   });
-  if (!wants) return null;
+  if (!wants) {
+    return null;
+  }
   const policy = await promptChannelAccessPolicy({
     prompter: params.prompter,
     label: params.label,
@@ -85,7 +87,9 @@ export async function promptChannelAccessConfig(params: {
     allowOpen: params.allowOpen,
     allowDisabled: params.allowDisabled,
   });
-  if (policy !== "allowlist") return { policy, entries: [] };
+  if (policy !== "allowlist") {
+    return { policy, entries: [] };
+  }
   const entries = await promptChannelAllowlist({
     prompter: params.prompter,
     label: params.label,

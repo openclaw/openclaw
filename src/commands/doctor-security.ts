@@ -130,7 +130,9 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   };
 
   for (const plugin of listChannelPlugins()) {
-    if (!plugin.security) continue;
+    if (!plugin.security) {
+      continue;
+    }
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -139,11 +141,15 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     });
     const account = plugin.config.resolveAccount(cfg, defaultAccountId);
     const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
-    if (!enabled) continue;
+    if (!enabled) {
+      continue;
+    }
     const configured = plugin.config.isConfigured
       ? await plugin.config.isConfigured(account, cfg)
       : true;
-    if (!configured) continue;
+    if (!configured) {
+      continue;
+    }
     const dmPolicy = plugin.security.resolveDmPolicy?.({
       cfg,
       accountId: defaultAccountId,
@@ -167,7 +173,9 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
         accountId: defaultAccountId,
         account,
       });
-      if (extra?.length) warnings.push(...extra);
+      if (extra?.length) {
+        warnings.push(...extra);
+      }
     }
   }
 

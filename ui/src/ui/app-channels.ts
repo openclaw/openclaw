@@ -122,9 +122,12 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
       },
       body: JSON.stringify(state.values),
     });
-    const data = (await response.json().catch(() => null)) as
-      | { ok?: boolean; error?: string; details?: unknown; persisted?: boolean }
-      | null;
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      details?: unknown;
+      persisted?: boolean;
+    } | null;
 
     if (!response.ok || data?.ok === false || !data) {
       const errorMessage = data?.error ?? `Profile update failed (${response.status})`;
@@ -187,9 +190,13 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       },
       body: JSON.stringify({ autoMerge: true }),
     });
-    const data = (await response.json().catch(() => null)) as
-      | { ok?: boolean; error?: string; imported?: NostrProfile; merged?: NostrProfile; saved?: boolean }
-      | null;
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      imported?: NostrProfile;
+      merged?: NostrProfile;
+      saved?: boolean;
+    } | null;
 
     if (!response.ok || data?.ok === false || !data) {
       const errorMessage = data?.error ?? `Profile import failed (${response.status})`;

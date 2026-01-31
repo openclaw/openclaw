@@ -7,6 +7,17 @@ If you believe you've found a security issue in OpenClaw, please report it priva
 - Email: `steipete@gmail.com`
 - What to include: reproduction steps, impact assessment, and (if possible) a minimal PoC.
 
+## Bug Bounties
+
+OpenClaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
+The best way to help the project right now is by sending PRs.
+
+## Out of Scope
+
+- Public Internet Exposure
+- Using OpenClaw in ways that the docs recommend not to
+- Prompt injection attacks
+
 ## Operational Guidance
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:

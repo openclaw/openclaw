@@ -155,7 +155,9 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
 
       this.ws.on("error", (error) => {
         console.error("[RealtimeSTT] WebSocket error:", error);
-        if (!this.connected) reject(error);
+        if (!this.connected) {
+          reject(error);
+        }
       });
 
       this.ws.on("close", (code, reason) => {
@@ -183,9 +185,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
       return;
     }
 
-    if (
-      this.reconnectAttempts >= OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS
-    ) {
+    if (this.reconnectAttempts >= OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS) {
       console.error(
         `[RealtimeSTT] Max reconnect attempts (${OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS}) reached`,
       );
@@ -193,9 +193,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
     }
 
     this.reconnectAttempts++;
-    const delay =
-      OpenAIRealtimeSTTSession.RECONNECT_DELAY_MS *
-      2 ** (this.reconnectAttempts - 1);
+    const delay = OpenAIRealtimeSTTSession.RECONNECT_DELAY_MS * 2 ** (this.reconnectAttempts - 1);
     console.log(
       `[RealtimeSTT] Reconnecting ${this.reconnectAttempts}/${OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`,
     );
@@ -262,7 +260,9 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
   }
 
   sendAudio(muLawData: Buffer): void {
-    if (!this.connected) return;
+    if (!this.connected) {
+      return;
+    }
     this.sendEvent({
       type: "input_audio_buffer.append",
       audio: muLawData.toString("base64"),

@@ -23,7 +23,9 @@ describe("registerSlackHttpHandler", () => {
   const unregisters: Array<() => void> = [];
 
   afterEach(() => {
-    for (const unregister of unregisters.splice(0)) unregister();
+    for (const unregister of unregisters.splice(0)) {
+      unregister();
+    }
   });
 
   it("routes requests to a registered handler", async () => {

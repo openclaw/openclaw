@@ -25,7 +25,9 @@ function resolveLocation(location: NormalizedLocation): ResolvedLocation {
 }
 
 function formatAccuracy(accuracy?: number): string {
-  if (!Number.isFinite(accuracy)) return "";
+  if (!Number.isFinite(accuracy)) {
+    return "";
+  }
   return ` ±${Math.round(accuracy ?? 0)}m`;
 }
 

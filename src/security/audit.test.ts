@@ -429,8 +429,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -475,8 +478,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -520,8 +526,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -559,8 +568,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -599,8 +611,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -637,8 +652,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -785,8 +803,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      else process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
     }
   });
 
@@ -905,14 +926,26 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevDiscordToken == null) delete process.env.DISCORD_BOT_TOKEN;
-      else process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
-      if (prevTelegramToken == null) delete process.env.TELEGRAM_BOT_TOKEN;
-      else process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      if (prevSlackBotToken == null) delete process.env.SLACK_BOT_TOKEN;
-      else process.env.SLACK_BOT_TOKEN = prevSlackBotToken;
-      if (prevSlackAppToken == null) delete process.env.SLACK_APP_TOKEN;
-      else process.env.SLACK_APP_TOKEN = prevSlackAppToken;
+      if (prevDiscordToken == null) {
+        delete process.env.DISCORD_BOT_TOKEN;
+      } else {
+        process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      }
+      if (prevTelegramToken == null) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+      if (prevSlackBotToken == null) {
+        delete process.env.SLACK_BOT_TOKEN;
+      } else {
+        process.env.SLACK_BOT_TOKEN = prevSlackBotToken;
+      }
+      if (prevSlackAppToken == null) {
+        delete process.env.SLACK_APP_TOKEN;
+      } else {
+        process.env.SLACK_APP_TOKEN = prevSlackAppToken;
+      }
     }
   });
 
@@ -949,8 +982,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevDiscordToken == null) delete process.env.DISCORD_BOT_TOKEN;
-      else process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      if (prevDiscordToken == null) {
+        delete process.env.DISCORD_BOT_TOKEN;
+      } else {
+        process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      }
     }
   });
 

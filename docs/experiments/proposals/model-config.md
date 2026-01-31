@@ -3,10 +3,12 @@ summary: "Exploration: model config, auth profiles, and fallback behavior"
 read_when:
   - Exploring future model selection + auth profile ideas
 ---
+
 # Model Config (Exploration)
 
 This document captures **ideas** for future model configuration. It is not a
 shipping spec. For current behavior, see:
+
 - [Models](/concepts/models)
 - [Model failover](/concepts/model-failover)
 - [OAuth + profiles](/concepts/oauth)
@@ -14,6 +16,7 @@ shipping spec. For current behavior, see:
 ## Motivation
 
 Operators want:
+
 - Multiple auth profiles per provider (personal vs work).
 - Simple `/model` selection with predictable fallbacks.
 - Clear separation between text models and image-capable models.

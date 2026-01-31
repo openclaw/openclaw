@@ -34,11 +34,11 @@ through Perplexity’s direct API or via OpenRouter.
         perplexity: {
           apiKey: "pplx-...",
           baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro"
-        }
-      }
-    }
-  }
+          model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -52,11 +52,11 @@ through Perplexity’s direct API or via OpenRouter.
         provider: "perplexity",
         perplexity: {
           apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai"
-        }
-      }
-    }
-  }
+          baseUrl: "https://api.perplexity.ai",
+        },
+      },
+    },
+  },
 }
 ```
 

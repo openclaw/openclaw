@@ -5,7 +5,8 @@ import process from "node:process";
 const args = process.argv.slice(2);
 const env = { ...process.env };
 const cwd = process.cwd();
-const compiler = env.OPENCLAW_TS_COMPILER === "tsc" ? "tsc" : "tsgo";
+const compilerOverride = env.OPENCLAW_TS_COMPILER ?? env.CLAWDBOT_TS_COMPILER;
+const compiler = compilerOverride === "tsc" ? "tsc" : "tsgo";
 const projectArgs = ["--project", "tsconfig.json"];
 
 const initialBuild = spawnSync("pnpm", ["exec", compiler, ...projectArgs], {
@@ -38,7 +39,9 @@ const nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args]
 let exiting = false;
 
 function cleanup(code = 0) {
-  if (exiting) return;
+  if (exiting) {
+    return;
+  }
   exiting = true;
   nodeProcess.kill("SIGTERM");
   compilerProcess.kill("SIGTERM");
@@ -49,11 +52,15 @@ process.on("SIGINT", () => cleanup(130));
 process.on("SIGTERM", () => cleanup(143));
 
 compilerProcess.on("exit", (code) => {
-  if (exiting) return;
+  if (exiting) {
+    return;
+  }
   cleanup(code ?? 1);
 });
 
 nodeProcess.on("exit", (code, signal) => {
-  if (signal || exiting) return;
+  if (signal || exiting) {
+    return;
+  }
   cleanup(code ?? 1);
 });

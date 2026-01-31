@@ -12,7 +12,7 @@ OpenClaw ships two installer scripts (served from `openclaw.ai`):
 
 - `https://openclaw.bot/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
 - `https://openclaw.bot/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
- - `https://openclaw.ai/install.ps1` — Windows PowerShell installer (npm by default; optional git install)
+- `https://openclaw.ai/install.ps1` — Windows PowerShell installer (npm by default; optional git install)
 
 To see the current flags/behavior, run:
 
@@ -37,12 +37,12 @@ What it does (high level):
 - Choose install method:
   - `npm` (default): `npm install -g openclaw@latest`
   - `git`: clone/build a source checkout and install a wrapper script
-- On Linux: avoid global npm permission errors by switching npm’s prefix to `~/.npm-global` when needed.
+- On Linux: avoid global npm permission errors by switching npm's prefix to `~/.npm-global` when needed.
 - If upgrading an existing install: runs `openclaw doctor --non-interactive` (best effort).
 - For git installs: runs `openclaw doctor --non-interactive` after install/update (best effort).
 - Mitigates `sharp` native install gotchas by defaulting `SHARP_IGNORE_GLOBAL_LIBVIPS=1` (avoids building against system libvips).
 
-If you *want* `sharp` to link against a globally-installed libvips (or you’re debugging), set:
+If you _want_ `sharp` to link against a globally-installed libvips (or you’re debugging), set:
 
 ```bash
 SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://openclaw.bot/install.sh | bash
@@ -61,11 +61,11 @@ In non-interactive contexts (no TTY / `--no-prompt`), you must pass `--install-m
 
 Git is required for the `--install-method git` path (clone / pull).
 
-For `npm` installs, Git is *usually* not required, but some environments still end up needing it (e.g. when a package or dependency is fetched via a git URL). The installer currently ensures Git is present to avoid `spawn git ENOENT` surprises on fresh distros.
+For `npm` installs, Git is _usually_ not required, but some environments still end up needing it (e.g. when a package or dependency is fetched via a git URL). The installer currently ensures Git is present to avoid `spawn git ENOENT` surprises on fresh distros.
 
 ### Why npm hits `EACCES` on fresh Linux
 
-On some Linux setups (especially after installing Node via the system package manager or NodeSource), npm’s global prefix points at a root-owned location. Then `npm install -g ...` fails with `EACCES` / `mkdir` permission errors.
+On some Linux setups (especially after installing Node via the system package manager or NodeSource), npm's global prefix points at a root-owned location. Then `npm install -g ...` fails with `EACCES` / `mkdir` permission errors.
 
 `install.sh` mitigates this by switching the prefix to:
 

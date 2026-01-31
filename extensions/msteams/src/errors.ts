@@ -1,12 +1,22 @@
 export function formatUnknownError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  if (err === null) return "null";
-  if (err === undefined) return "undefined";
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  if (err === null) {
+    return "null";
+  }
+  if (err === undefined) {
+    return "undefined";
+  }
   if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
     return String(err);
   }
-  if (typeof err === "symbol") return err.description ?? err.toString();
+  if (typeof err === "symbol") {
+    return err.description ?? err.toString();
+  }
   if (typeof err === "function") {
     return err.name ? `[function ${err.name}]` : "[function]";
   }
@@ -22,21 +32,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function extractStatusCode(err: unknown): number | null {
-  if (!isRecord(err)) return null;
+  if (!isRecord(err)) {
+    return null;
+  }
   const direct = err.statusCode ?? err.status;
-  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
+  if (typeof direct === "number" && Number.isFinite(direct)) {
+    return direct;
+  }
   if (typeof direct === "string") {
     const parsed = Number.parseInt(direct, 10);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
 
   const response = err.response;
   if (isRecord(response)) {
     const status = response.status;
-    if (typeof status === "number" && Number.isFinite(status)) return status;
+    if (typeof status === "number" && Number.isFinite(status)) {
+      return status;
+    }
     if (typeof status === "string") {
       const parsed = Number.parseInt(status, 10);
-      if (Number.isFinite(parsed)) return parsed;
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
     }
   }
 
@@ -44,7 +64,9 @@ function extractStatusCode(err: unknown): number | null {
 }
 
 function extractRetryAfterMs(err: unknown): number | null {
-  if (!isRecord(err)) return null;
+  if (!isRecord(err)) {
+    return null;
+  }
 
   const direct = err.retryAfterMs ?? err.retry_after_ms;
   if (typeof direct === "number" && Number.isFinite(direct) && direct >= 0) {
@@ -57,20 +79,28 @@ function extractRetryAfterMs(err: unknown): number | null {
   }
   if (typeof retryAfter === "string") {
     const parsed = Number.parseFloat(retryAfter);
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed * 1000;
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed * 1000;
+    }
   }
 
   const response = err.response;
-  if (!isRecord(response)) return null;
+  if (!isRecord(response)) {
+    return null;
+  }
 
   const headers = response.headers;
-  if (!headers) return null;
+  if (!headers) {
+    return null;
+  }
 
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
       const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) return parsed * 1000;
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed * 1000;
+      }
     }
   }
 
@@ -84,7 +114,9 @@ function extractRetryAfterMs(err: unknown): number | null {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
       const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) return parsed * 1000;
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed * 1000;
+      }
     }
   }
 

@@ -45,9 +45,7 @@ export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = (await state.client.request("skills.status", {})) as
-      | SkillStatusReport
-      | undefined;
+    const res = (await state.client.request("skills.status", {})) as SkillStatusReport | undefined;
     if (res) state.skillsReport = res;
   } catch (err) {
     state.skillsError = getErrorMessage(err);
@@ -56,19 +54,11 @@ export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions
   }
 }
 
-export function updateSkillEdit(
-  state: SkillsState,
-  skillKey: string,
-  value: string,
-) {
+export function updateSkillEdit(state: SkillsState, skillKey: string, value: string) {
   state.skillEdits = { ...state.skillEdits, [skillKey]: value };
 }
 
-export async function updateSkillEnabled(
-  state: SkillsState,
-  skillKey: string,
-  enabled: boolean,
-) {
+export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
   if (!state.client || !state.connected) return;
   state.skillsBusyKey = skillKey;
   state.skillsError = null;

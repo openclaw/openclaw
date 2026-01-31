@@ -5,10 +5,10 @@ read_when:
   - You want to use Vercel AI Gateway with OpenClaw
   - You need the API key env var or CLI auth choice
 ---
+
 # Vercel AI Gateway
 
-
-The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to access hundreds of models through a single endpoint. 
+The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to access hundreds of models through a single endpoint.
 
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
@@ -16,21 +16,21 @@ The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 
 ## Quick start
 
-1) Set the API key (recommended: store it for the Gateway):
+1. Set the API key (recommended: store it for the Gateway):
 
 ```bash
 openclaw onboard --auth-choice ai-gateway-api-key
 ```
 
-2) Set a default model:
+2. Set a default model:
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "vercel-ai-gateway/anthropic/claude-opus-4.5" }
-    }
-  }
+      model: { primary: "vercel-ai-gateway/anthropic/claude-opus-4.5" },
+    },
+  },
 }
 ```
 

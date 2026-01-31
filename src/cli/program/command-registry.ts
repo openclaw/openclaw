@@ -44,7 +44,9 @@ const routeHealth: RouteSpec = {
     const json = hasFlag(argv, "--json");
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
-    if (timeoutMs === null) return false;
+    if (timeoutMs === null) {
+      return false;
+    }
     await healthCommand({ json, timeoutMs, verbose }, defaultRuntime);
     return true;
   },
@@ -60,7 +62,9 @@ const routeStatus: RouteSpec = {
     const usage = hasFlag(argv, "--usage");
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
-    if (timeoutMs === null) return false;
+    if (timeoutMs === null) {
+      return false;
+    }
     await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
     return true;
   },
@@ -71,9 +75,13 @@ const routeSessions: RouteSpec = {
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const store = getFlagValue(argv, "--store");
-    if (store === null) return false;
+    if (store === null) {
+      return false;
+    }
     const active = getFlagValue(argv, "--active");
-    if (active === null) return false;
+    if (active === null) {
+      return false;
+    }
     await sessionsCommand({ json, store, active }, defaultRuntime);
     return true;
   },
@@ -93,7 +101,9 @@ const routeMemoryStatus: RouteSpec = {
   match: (path) => path[0] === "memory" && path[1] === "status",
   run: async (argv) => {
     const agent = getFlagValue(argv, "--agent");
-    if (agent === null) return false;
+    if (agent === null) {
+      return false;
+    }
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");
     const index = hasFlag(argv, "--index");
@@ -166,9 +176,13 @@ export function registerProgramCommands(
 
 export function findRoutedCommand(path: string[]): RouteSpec | null {
   for (const entry of commandRegistry) {
-    if (!entry.routes) continue;
+    if (!entry.routes) {
+      continue;
+    }
     for (const route of entry.routes) {
-      if (route.match(path)) return route;
+      if (route.match(path)) {
+        return route;
+      }
     }
   }
   return null;

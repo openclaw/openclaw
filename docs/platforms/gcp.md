@@ -25,6 +25,7 @@ Pricing varies by machine type and region; pick the smallest VM that fits your w
 - Access the Control UI from your laptop via an SSH tunnel
 
 The Gateway can be accessed via:
+
 - SSH port forwarding from your laptop
 - Direct port exposure if you manage firewalling and tokens yourself
 
@@ -36,14 +37,14 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ## Quick path (experienced operators)
 
-1) Create GCP project + enable Compute Engine API
-2) Create Compute Engine VM (e2-small, Debian 12, 20GB)
-3) SSH into the VM
-4) Install Docker
-5) Clone OpenClaw repository
-6) Create persistent host directories
-7) Configure `.env` and `docker-compose.yml`
-8) Bake required binaries, build, and launch
+1. Create GCP project + enable Compute Engine API
+2. Create Compute Engine VM (e2-small, Debian 12, 20GB)
+3. SSH into the VM
+4. Install Docker
+5. Clone OpenClaw repository
+6. Create persistent host directories
+7. Configure `.env` and `docker-compose.yml`
+8. Bake required binaries, build, and launch
 
 ---
 
@@ -112,9 +113,9 @@ gcloud services enable compute.googleapis.com
 
 **Machine types:**
 
-| Type | Specs | Cost | Notes |
-|------|-------|------|-------|
-| e2-small | 2 vCPU, 2GB RAM | ~$12/mo | Recommended |
+| Type     | Specs                    | Cost               | Notes              |
+| -------- | ------------------------ | ------------------ | ------------------ |
+| e2-small | 2 vCPU, 2GB RAM          | ~$12/mo            | Recommended        |
 | e2-micro | 2 vCPU (shared), 1GB RAM | Free tier eligible | May OOM under load |
 
 **CLI:**
@@ -276,7 +277,7 @@ services:
         "--bind",
         "${OPENCLAW_GATEWAY_BIND}",
         "--port",
-        "${OPENCLAW_GATEWAY_PORT}"
+        "${OPENCLAW_GATEWAY_PORT}",
       ]
 ```
 
@@ -290,6 +291,7 @@ Anything installed at runtime will be lost on restart.
 All external binaries required by skills must be installed at image build time.
 
 The examples below show three common binaries only:
+
 - `gog` for Gmail access
 - `goplaces` for Google Places
 - `wacli` for WhatsApp
@@ -298,6 +300,7 @@ These are examples, not a complete list.
 You may install as many binaries as needed using the same pattern.
 
 If you add new skills later that depend on additional binaries, you must:
+
 1. Update the Dockerfile
 2. Rebuild the image
 3. Restart the containers
@@ -403,18 +406,18 @@ Paste your gateway token.
 OpenClaw runs in Docker, but Docker is not the source of truth.
 All long-lived state must survive restarts, rebuilds, and reboots.
 
-| Component | Location | Persistence mechanism | Notes |
-|---|---|---|---|
-| Gateway config | `/home/node/.openclaw/` | Host volume mount | Includes `openclaw.json`, tokens |
-| Model auth profiles | `/home/node/.openclaw/` | Host volume mount | OAuth tokens, API keys |
-| Skill configs | `/home/node/.openclaw/skills/` | Host volume mount | Skill-level state |
-| Agent workspace | `/home/node/.openclaw/workspace/` | Host volume mount | Code and agent artifacts |
-| WhatsApp session | `/home/node/.openclaw/` | Host volume mount | Preserves QR login |
-| Gmail keyring | `/home/node/.openclaw/` | Host volume + password | Requires `GOG_KEYRING_PASSWORD` |
-| External binaries | `/usr/local/bin/` | Docker image | Must be baked at build time |
-| Node runtime | Container filesystem | Docker image | Rebuilt every image build |
-| OS packages | Container filesystem | Docker image | Do not install at runtime |
-| Docker container | Ephemeral | Restartable | Safe to destroy |
+| Component           | Location                          | Persistence mechanism  | Notes                            |
+| ------------------- | --------------------------------- | ---------------------- | -------------------------------- |
+| Gateway config      | `/home/node/.openclaw/`           | Host volume mount      | Includes `openclaw.json`, tokens |
+| Model auth profiles | `/home/node/.openclaw/`           | Host volume mount      | OAuth tokens, API keys           |
+| Skill configs       | `/home/node/.openclaw/skills/`    | Host volume mount      | Skill-level state                |
+| Agent workspace     | `/home/node/.openclaw/workspace/` | Host volume mount      | Code and agent artifacts         |
+| WhatsApp session    | `/home/node/.openclaw/`           | Host volume mount      | Preserves QR login               |
+| Gmail keyring       | `/home/node/.openclaw/`           | Host volume + password | Requires `GOG_KEYRING_PASSWORD`  |
+| External binaries   | `/usr/local/bin/`                 | Docker image           | Must be baked at build time      |
+| Node runtime        | Container filesystem              | Docker image           | Rebuilt every image build        |
+| OS packages         | Container filesystem              | Docker image           | Do not install at runtime        |
+| Docker container    | Ephemeral                         | Restartable            | Safe to destroy                  |
 
 ---
 
@@ -473,6 +476,7 @@ For personal use, your default user account works fine.
 For automation or CI/CD pipelines, create a dedicated service account with minimal permissions:
 
 1. Create a service account:
+
    ```bash
    gcloud iam service-accounts create openclaw-deploy \
      --display-name="OpenClaw Deployment"

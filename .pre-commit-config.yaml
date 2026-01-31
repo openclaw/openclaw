@@ -1,4 +1,4 @@
-# Pre-commit hooks for clawdbot
+# Pre-commit hooks for openclaw
 # Install: prek install
 # Run manually: prek run --all-files
 #
@@ -51,9 +51,9 @@ repos:
     rev: v0.11.0
     hooks:
       - id: shellcheck
-        args: [--severity=error]  # Only fail on errors, not warnings/info
+        args: [--severity=error] # Only fail on errors, not warnings/info
         # Exclude vendor and scripts with embedded code or known issues
-        exclude: '^(vendor/|scripts/e2e/)'
+        exclude: "^(vendor/|scripts/e2e/)"
 
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
@@ -67,7 +67,7 @@ repos:
     hooks:
       - id: zizmor
         args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
-        exclude: '^(vendor/|Swabble/)'
+        exclude: "^(vendor/|Swabble/)"
 
   # Project checks (same commands as CI)
   - repo: local

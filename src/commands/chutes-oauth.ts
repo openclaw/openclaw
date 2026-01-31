@@ -87,18 +87,24 @@ async function waitForLocalCallback(params: {
             "<p>You can close this window and return to OpenClaw.</p></body></html>",
           ].join(""),
         );
-        if (timeout) clearTimeout(timeout);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
         server.close();
         resolve({ code, state });
       } catch (err) {
-        if (timeout) clearTimeout(timeout);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
         server.close();
         reject(err);
       }
     });
 
     server.once("error", (err) => {
-      if (timeout) clearTimeout(timeout);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       server.close();
       reject(err);
     });
@@ -150,8 +156,12 @@ export async function loginChutes(params: {
       placeholder: `${params.app.redirectUri}?code=...&state=...`,
     });
     const parsed = parseOAuthCallbackInput(String(input), state);
-    if ("error" in parsed) throw new Error(parsed.error);
-    if (parsed.state !== state) throw new Error("Invalid OAuth state");
+    if ("error" in parsed) {
+      throw new Error(parsed.error);
+    }
+    if (parsed.state !== state) {
+      throw new Error("Invalid OAuth state");
+    }
     codeAndState = parsed;
   } else {
     const callback = waitForLocalCallback({
@@ -166,8 +176,12 @@ export async function loginChutes(params: {
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       });
       const parsed = parseOAuthCallbackInput(String(input), state);
-      if ("error" in parsed) throw new Error(parsed.error);
-      if (parsed.state !== state) throw new Error("Invalid OAuth state");
+      if ("error" in parsed) {
+        throw new Error(parsed.error);
+      }
+      if (parsed.state !== state) {
+        throw new Error("Invalid OAuth state");
+      }
       return parsed;
     });
 

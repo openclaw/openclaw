@@ -61,12 +61,16 @@ export async function preflightDiscordMessage(
   const logger = getChildLogger({ module: "discord-auto-reply" });
   const message = params.data.message;
   const author = params.data.author;
-  if (!author) return null;
+  if (!author) {
+    return null;
+  }
 
   const allowBots = params.discordConfig?.allowBots ?? false;
   if (author.bot) {
     // Always ignore own messages to prevent self-reply loops
-    if (params.botUserId && author.id === params.botUserId) return null;
+    if (params.botUserId && author.id === params.botUserId) {
+      return null;
+    }
     if (!allowBots) {
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
@@ -300,7 +304,9 @@ export async function preflightDiscordMessage(
       channelName: displayChannelName,
       channelSlug: displayChannelSlug,
     });
-  if (isGroupDm && !groupDmAllowed) return null;
+  if (isGroupDm && !groupDmAllowed) {
+    return null;
+  }
 
   const channelAllowlistConfigured =
     Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;

@@ -370,8 +370,16 @@
       "destination": "/start/openclaw"
     },
     {
+      "source": "/clawhub",
+      "destination": "/tools/clawhub"
+    },
+    {
       "source": "/clawdhub",
-      "destination": "/tools/clawdhub"
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/tools/clawdhub",
+      "destination": "/tools/clawhub"
     },
     {
       "source": "/configuration",
@@ -849,11 +857,7 @@
       },
       {
         "group": "Help",
-        "pages": [
-          "help/index",
-          "help/troubleshooting",
-          "help/faq"
-        ]
+        "pages": ["help/index", "help/troubleshooting", "help/faq"]
       },
       {
         "group": "Install & Updates",
@@ -986,13 +990,7 @@
       },
       {
         "group": "Web & Interfaces",
-        "pages": [
-          "web",
-          "web/control-ui",
-          "web/dashboard",
-          "web/webchat",
-          "tui"
-        ]
+        "pages": ["web", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
       },
       {
         "group": "Channels",
@@ -1073,7 +1071,7 @@
           "tools/reactions",
           "tools/skills",
           "tools/skills-config",
-          "tools/clawdhub"
+          "tools/clawhub"
         ]
       },
       {

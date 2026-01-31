@@ -38,10 +38,7 @@ export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSum
   };
 }
 
-export async function readPinnedEvents(
-  client: MatrixClient,
-  roomId: string,
-): Promise<string[]> {
+export async function readPinnedEvents(client: MatrixClient, roomId: string): Promise<string[]> {
   try {
     const content = (await client.getRoomStateEvent(
       roomId,
@@ -68,7 +65,9 @@ export async function fetchEventSummary(
 ): Promise<MatrixMessageSummary | null> {
   try {
     const raw = (await client.getEvent(roomId, eventId)) as MatrixRawEvent;
-    if (raw.unsigned?.redacted_because) return null;
+    if (raw.unsigned?.redacted_because) {
+      return null;
+    }
     return summarizeMatrixRawEvent(raw);
   } catch {
     // Event not found, redacted, or inaccessible - return null

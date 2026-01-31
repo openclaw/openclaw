@@ -57,7 +57,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       reservedNames: new Set(["help"]),
     });
 
-    const names = commands.map((entry) => entry.name).sort();
+    const names = commands.map((entry) => entry.name).toSorted();
     expect(names).toEqual(["hello_world", "hello_world_2", "help_2"]);
     expect(commands.find((entry) => entry.skillName === "hidden-skill")).toBeUndefined();
   });

@@ -2,7 +2,24 @@
 name: gog
 description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
 homepage: https://gogcli.sh
-metadata: {"openclaw":{"emoji":"🎮","requires":{"bins":["gog"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/gogcli","bins":["gog"],"label":"Install gog (brew)"}]}}
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🎮",
+        "requires": { "bins": ["gog"] },
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "steipete/tap/gogcli",
+              "bins": ["gog"],
+              "label": "Install gog (brew)",
+            },
+          ],
+      },
+  }
 ---
 
 # gog
@@ -10,11 +27,13 @@ metadata: {"openclaw":{"emoji":"🎮","requires":{"bins":["gog"]},"install":[{"i
 Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
 
 Setup (once)
+
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`
 
 Common commands
+
 - Gmail search: `gog gmail search 'newer_than:7d' --max 10`
 - Gmail messages search (per email, ignores threading): `gog gmail messages search "in:inbox from:ryanair.com" --max 20 --account you@example.com`
 - Gmail send (plain): `gog gmail send --to a@b.com --subject "Hi" --body "Hello"`
@@ -40,6 +59,7 @@ Common commands
 - Docs cat: `gog docs cat <docId>`
 
 Calendar Colors
+
 - Use `gog calendar colors` to see all available event colors (IDs 1-11)
 - Add colors to events with `--event-color <id>` flag
 - Event color IDs (from `gog calendar colors` output):
@@ -56,12 +76,14 @@ Calendar Colors
   - 11: #dc2127
 
 Email Formatting
+
 - Prefer plain text. Use `--body-file` for multi-paragraph messages (or `--body-file -` for stdin).
 - Same `--body-file` pattern works for drafts and replies.
 - `--body` does not unescape `\n`. If you need inline newlines, use a heredoc or `$'Line 1\n\nLine 2'`.
 - Use `--body-html` only when you need rich formatting.
 - HTML tags: `<p>` for paragraphs, `<br>` for line breaks, `<strong>` for bold, `<em>` for italic, `<a href="url">` for links, `<ul>`/`<li>` for lists.
 - Example (plain text via stdin):
+
   ```bash
   gog gmail send --to recipient@example.com \
     --subject "Meeting Follow-up" \
@@ -76,6 +98,7 @@ Email Formatting
   Your Name
   EOF
   ```
+
 - Example (HTML list):
   ```bash
   gog gmail send --to recipient@example.com \
@@ -84,6 +107,7 @@ Email Formatting
   ```
 
 Notes
+
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
 - For scripting, prefer `--json` plus `--no-input`.
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.

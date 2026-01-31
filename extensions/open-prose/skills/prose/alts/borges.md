@@ -29,55 +29,55 @@ An alternative register for OpenProse that draws from the works of Jorge Luis Bo
 
 ### Core Constructs
 
-| Functional | Borges | Reference |
-|------------|--------|-----------|
-| `agent` | `dreamer` | "The Circular Ruins" — dreamers who dream worlds into existence |
-| `session` | `dream` | Each execution is a dream within the dreamer |
-| `parallel` | `forking` | "The Garden of Forking Paths" — branching timelines |
-| `block` | `chapter` | Books within books, self-referential structure |
+| Functional | Borges    | Reference                                                       |
+| ---------- | --------- | --------------------------------------------------------------- |
+| `agent`    | `dreamer` | "The Circular Ruins" — dreamers who dream worlds into existence |
+| `session`  | `dream`   | Each execution is a dream within the dreamer                    |
+| `parallel` | `forking` | "The Garden of Forking Paths" — branching timelines             |
+| `block`    | `chapter` | Books within books, self-referential structure                  |
 
 ### Composition & Binding
 
-| Functional | Borges | Reference |
-|------------|--------|-----------|
-| `use` | `retrieve` | "The Library of Babel" — retrieving from infinite stacks |
-| `input` | `axiom` | The given premise (Borges' scholarly/mathematical tone) |
-| `output` | `theorem` | What is derived from the axioms |
-| `let` | `inscribe` | Writing something into being |
-| `const` | `zahir` | "The Zahir" — unforgettable, unchangeable, fixed in mind |
-| `context` | `memory` | "Funes the Memorious" — perfect, total recall |
+| Functional | Borges     | Reference                                                |
+| ---------- | ---------- | -------------------------------------------------------- |
+| `use`      | `retrieve` | "The Library of Babel" — retrieving from infinite stacks |
+| `input`    | `axiom`    | The given premise (Borges' scholarly/mathematical tone)  |
+| `output`   | `theorem`  | What is derived from the axioms                          |
+| `let`      | `inscribe` | Writing something into being                             |
+| `const`    | `zahir`    | "The Zahir" — unforgettable, unchangeable, fixed in mind |
+| `context`  | `memory`   | "Funes the Memorious" — perfect, total recall            |
 
 ### Control Flow
 
-| Functional | Borges | Reference |
-|------------|--------|-----------|
-| `repeat N` | `N mirrors` | Infinite reflections facing each other |
-| `for...in` | `for each...within` | Slightly more Borgesian preposition |
-| `loop` | `labyrinth` | The maze that folds back on itself |
-| `until` | `until` | Unchanged |
-| `while` | `while` | Unchanged |
-| `choice` | `bifurcation` | The forking of paths |
-| `option` | `branch` | One branch of diverging time |
-| `if` | `should` | Scholarly conditional |
-| `elif` | `or should` | Continued conditional |
-| `else` | `otherwise` | Natural alternative |
+| Functional | Borges              | Reference                              |
+| ---------- | ------------------- | -------------------------------------- |
+| `repeat N` | `N mirrors`         | Infinite reflections facing each other |
+| `for...in` | `for each...within` | Slightly more Borgesian preposition    |
+| `loop`     | `labyrinth`         | The maze that folds back on itself     |
+| `until`    | `until`             | Unchanged                              |
+| `while`    | `while`             | Unchanged                              |
+| `choice`   | `bifurcation`       | The forking of paths                   |
+| `option`   | `branch`            | One branch of diverging time           |
+| `if`       | `should`            | Scholarly conditional                  |
+| `elif`     | `or should`         | Continued conditional                  |
+| `else`     | `otherwise`         | Natural alternative                    |
 
 ### Error Handling
 
-| Functional | Borges | Reference |
-|------------|--------|-----------|
-| `try` | `venture` | Entering the labyrinth |
-| `catch` | `lest` | "Lest it fail..." (archaic, scholarly) |
-| `finally` | `ultimately` | The inevitable conclusion |
-| `throw` | `shatter` | Breaking the mirror, ending the dream |
-| `retry` | `recur` | Infinite regress, trying again |
+| Functional | Borges       | Reference                              |
+| ---------- | ------------ | -------------------------------------- |
+| `try`      | `venture`    | Entering the labyrinth                 |
+| `catch`    | `lest`       | "Lest it fail..." (archaic, scholarly) |
+| `finally`  | `ultimately` | The inevitable conclusion              |
+| `throw`    | `shatter`    | Breaking the mirror, ending the dream  |
+| `retry`    | `recur`      | Infinite regress, trying again         |
 
 ### Session Properties
 
-| Functional | Borges | Reference |
-|------------|--------|-----------|
-| `prompt` | `query` | Asking the Library |
-| `model` | `author` | Which author writes this dream |
+| Functional | Borges   | Reference                      |
+| ---------- | -------- | ------------------------------ |
+| `prompt`   | `query`  | Asking the Library             |
+| `model`    | `author` | Which author writes this dream |
 
 ### Unchanged
 
@@ -299,15 +299,15 @@ zahir config = { author: "opus", recur: 3 }
 
 For those unfamiliar with the source material:
 
-| Work | Concept Used | Summary |
-|------|--------------|---------|
-| "The Circular Ruins" | `dreamer`, `dream` | A man dreams another man into existence, only to discover he himself is being dreamed |
-| "The Garden of Forking Paths" | `forking`, `bifurcation`, `branch` | A labyrinth that is a book; time forks perpetually into diverging futures |
-| "The Library of Babel" | `retrieve` | An infinite library containing every possible book |
-| "Funes the Memorious" | `memory` | A man with perfect memory who cannot forget anything |
-| "The Zahir" | `zahir` | An object that, once seen, cannot be forgotten or ignored |
-| "The Aleph" | (not used) | A point in space containing all other points |
-| "Tlön, Uqbar, Orbis Tertius" | (not used) | A fictional world that gradually becomes real |
+| Work                          | Concept Used                       | Summary                                                                               |
+| ----------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------- |
+| "The Circular Ruins"          | `dreamer`, `dream`                 | A man dreams another man into existence, only to discover he himself is being dreamed |
+| "The Garden of Forking Paths" | `forking`, `bifurcation`, `branch` | A labyrinth that is a book; time forks perpetually into diverging futures             |
+| "The Library of Babel"        | `retrieve`                         | An infinite library containing every possible book                                    |
+| "Funes the Memorious"         | `memory`                           | A man with perfect memory who cannot forget anything                                  |
+| "The Zahir"                   | `zahir`                            | An object that, once seen, cannot be forgotten or ignored                             |
+| "The Aleph"                   | (not used)                         | A point in space containing all other points                                          |
+| "Tlön, Uqbar, Orbis Tertius"  | (not used)                         | A fictional world that gradually becomes real                                         |
 
 ---
 
@@ -315,35 +315,35 @@ For those unfamiliar with the source material:
 
 ### For `dreamer` (agent)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `author` | Used for `model` instead |
-| `scribe` | Too passive, just records |
+| Keyword     | Rejected because          |
+| ----------- | ------------------------- |
+| `author`    | Used for `model` instead  |
+| `scribe`    | Too passive, just records |
 | `librarian` | More curator than creator |
 
 ### For `labyrinth` (loop)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `recursion` | Too technical |
-| `eternal return` | Too long |
-| `ouroboros` | Wrong mythology |
+| Keyword          | Rejected because |
+| ---------------- | ---------------- |
+| `recursion`      | Too technical    |
+| `eternal return` | Too long         |
+| `ouroboros`      | Wrong mythology  |
 
 ### For `zahir` (const)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `aleph` | The Aleph is about totality, not immutability |
-| `fixed` | Too plain |
-| `eternal` | Overused |
+| Keyword   | Rejected because                              |
+| --------- | --------------------------------------------- |
+| `aleph`   | The Aleph is about totality, not immutability |
+| `fixed`   | Too plain                                     |
+| `eternal` | Overused                                      |
 
 ### For `memory` (context)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `funes` | Too obscure as standalone keyword |
-| `recall` | Sounds like a function call |
-| `archive` | More Library of Babel than Funes |
+| Keyword   | Rejected because                  |
+| --------- | --------------------------------- |
+| `funes`   | Too obscure as standalone keyword |
+| `recall`  | Sounds like a function call       |
+| `archive` | More Library of Babel than Funes  |
 
 ---
 

@@ -366,8 +366,12 @@ export async function startGatewayServer(
   let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const skillsRefreshDelayMs = 30_000;
   const skillsChangeUnsub = registerSkillsChangeListener((event) => {
-    if (event.reason === "remote-node") return;
-    if (skillsRefreshTimer) clearTimeout(skillsRefreshTimer);
+    if (event.reason === "remote-node") {
+      return;
+    }
+    if (skillsRefreshTimer) {
+      clearTimeout(skillsRefreshTimer);
+    }
     skillsRefreshTimer = setTimeout(() => {
       skillsRefreshTimer = null;
       const latest = loadConfig();

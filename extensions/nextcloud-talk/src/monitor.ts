@@ -19,7 +19,9 @@ const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const HEALTH_PATH = "/healthz";
 
 function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    return err.message;
+  }
   return typeof err === "string" ? err : JSON.stringify(err);
 }
 

@@ -17,9 +17,7 @@ export async function loadPresence(state: PresenceState) {
   state.presenceError = null;
   state.presenceStatus = null;
   try {
-    const res = (await state.client.request("system-presence", {})) as
-      | PresenceEntry[]
-      | undefined;
+    const res = (await state.client.request("system-presence", {})) as PresenceEntry[] | undefined;
     if (Array.isArray(res)) {
       state.presenceEntries = res;
       state.presenceStatus = res.length === 0 ? "No instances yet." : null;

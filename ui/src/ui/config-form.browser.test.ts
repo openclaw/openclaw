@@ -29,12 +29,7 @@ const rootSchema = {
       type: "boolean",
     },
     bind: {
-      anyOf: [
-        { const: "auto" },
-        { const: "lan" },
-        { const: "tailnet" },
-        { const: "loopback" },
-      ],
+      anyOf: [{ const: "auto" }, { const: "lan" }, { const: "tailnet" }, { const: "loopback" }],
     },
   },
 };
@@ -57,17 +52,12 @@ describe("config form renderer", () => {
       container,
     );
 
-    const tokenInput = container.querySelector(
-      "input[type='password']",
-    ) as HTMLInputElement | null;
+    const tokenInput = container.querySelector("input[type='password']") as HTMLInputElement | null;
     expect(tokenInput).not.toBeNull();
     if (!tokenInput) return;
     tokenInput.value = "abc123";
     tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(
-      ["gateway", "auth", "token"],
-      "abc123",
-    );
+    expect(onPatch).toHaveBeenCalledWith(["gateway", "auth", "token"], "abc123");
 
     const tokenButton = Array.from(
       container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn"),
@@ -76,9 +66,7 @@ describe("config form renderer", () => {
     tokenButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
-    const checkbox = container.querySelector(
-      "input[type='checkbox']",
-    ) as HTMLInputElement | null;
+    const checkbox = container.querySelector("input[type='checkbox']") as HTMLInputElement | null;
     expect(checkbox).not.toBeNull();
     if (!checkbox) return;
     checkbox.checked = true;
@@ -101,9 +89,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    const addButton = container.querySelector(
-      ".cfg-array__add",
-    ) as HTMLButtonElement | null;
+    const addButton = container.querySelector(".cfg-array__add") as HTMLButtonElement | null;
     expect(addButton).not.toBeUndefined();
     addButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], ["+1", ""]);

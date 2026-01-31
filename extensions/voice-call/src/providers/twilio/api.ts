@@ -9,19 +9,16 @@ export async function twilioApiRequest<T = unknown>(params: {
   const bodyParams =
     params.body instanceof URLSearchParams
       ? params.body
-      : Object.entries(params.body).reduce<URLSearchParams>(
-          (acc, [key, value]) => {
-            if (Array.isArray(value)) {
-              for (const entry of value) {
-                acc.append(key, entry);
-              }
-            } else if (typeof value === "string") {
-              acc.append(key, value);
+      : Object.entries(params.body).reduce<URLSearchParams>((acc, [key, value]) => {
+          if (Array.isArray(value)) {
+            for (const entry of value) {
+              acc.append(key, entry);
             }
-            return acc;
-          },
-          new URLSearchParams(),
-        );
+          } else if (typeof value === "string") {
+            acc.append(key, value);
+          }
+          return acc;
+        }, new URLSearchParams());
 
   const response = await fetch(`${params.baseUrl}${params.endpoint}`, {
     method: "POST",
