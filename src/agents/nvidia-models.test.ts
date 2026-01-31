@@ -9,7 +9,7 @@ import {
 
 describe("resolveNvidiaAlias", () => {
   it("resolves llama alias", () => {
-    expect(resolveNvidiaAlias("llama")).toBe("nvidia/llama-3.3-70b-instruct");
+    expect(resolveNvidiaAlias("llama")).toBe("meta/llama-3.3-70b-instruct");
   });
 
   it("resolves glm alias", () => {
@@ -25,14 +25,14 @@ describe("resolveNvidiaAlias", () => {
   });
 
   it("is case-insensitive", () => {
-    expect(resolveNvidiaAlias("LLAMA")).toBe("nvidia/llama-3.3-70b-instruct");
+    expect(resolveNvidiaAlias("LLAMA")).toBe("meta/llama-3.3-70b-instruct");
     expect(resolveNvidiaAlias("DeepSeek")).toBe("deepseek-ai/deepseek-r1");
   });
 });
 
 describe("resolveNvidiaModelApi", () => {
   it("returns openai-completions for all models", () => {
-    expect(resolveNvidiaModelApi("nvidia/llama-3.3-70b-instruct")).toBe("openai-completions");
+    expect(resolveNvidiaModelApi("meta/llama-3.3-70b-instruct")).toBe("openai-completions");
     expect(resolveNvidiaModelApi("z-ai/glm4.7")).toBe("openai-completions");
     expect(resolveNvidiaModelApi("deepseek-ai/deepseek-r1")).toBe("openai-completions");
     expect(resolveNvidiaModelApi("some-unknown-model")).toBe("openai-completions");
@@ -50,7 +50,7 @@ describe("getNvidiaStaticFallbackModels", () => {
     const models = getNvidiaStaticFallbackModels();
     const ids = models.map((m) => m.id);
 
-    expect(ids).toContain("nvidia/llama-3.3-70b-instruct");
+    expect(ids).toContain("meta/llama-3.3-70b-instruct");
     expect(ids).toContain("z-ai/glm4.7");
     expect(ids).toContain("deepseek-ai/deepseek-r1");
     expect(ids).toContain("qwen/qwen2.5-72b-instruct");
@@ -74,7 +74,7 @@ describe("getNvidiaStaticFallbackModels", () => {
     const models = getNvidiaStaticFallbackModels();
     const deepseekR1 = models.find((m) => m.id === "deepseek-ai/deepseek-r1");
     const glm = models.find((m) => m.id === "z-ai/glm4.7");
-    const llama = models.find((m) => m.id === "nvidia/llama-3.3-70b-instruct");
+    const llama = models.find((m) => m.id === "meta/llama-3.3-70b-instruct");
 
     expect(deepseekR1?.reasoning).toBe(true);
     expect(glm?.reasoning).toBe(true);
@@ -84,7 +84,7 @@ describe("getNvidiaStaticFallbackModels", () => {
 
 describe("NVIDIA_MODEL_ALIASES", () => {
   it("has expected aliases", () => {
-    expect(NVIDIA_MODEL_ALIASES.llama).toBe("nvidia/llama-3.3-70b-instruct");
+    expect(NVIDIA_MODEL_ALIASES.llama).toBe("meta/llama-3.3-70b-instruct");
     expect(NVIDIA_MODEL_ALIASES.glm).toBe("z-ai/glm4.7");
     expect(NVIDIA_MODEL_ALIASES.deepseek).toBe("deepseek-ai/deepseek-r1");
     expect(NVIDIA_MODEL_ALIASES.qwen).toBe("qwen/qwen2.5-72b-instruct");
