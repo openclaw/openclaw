@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Security: restrict local path extraction in media parser to prevent LFI. (#4880)
 - Gateway: prevent token defaults from becoming the literal "undefined". (#4873) Thanks @Hisleren.
 - Control UI: fix assets resolution for npm global installs. (#4909) Thanks @YuriNachos.
+- macOS: avoid stderr pipe backpressure in gateway discovery. (#3304) Thanks @abhijeet117.
 - Telegram: normalize account token lookup for non-normalized IDs. (#5055) Thanks @jasonsschin.
 - Telegram: preserve delivery thread fallback and fix threadId handling in delivery context.
 - Telegram: fix HTML nesting for overlapping styles/links. (#4578) Thanks @ThanhNguyxn.
