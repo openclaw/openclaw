@@ -20,6 +20,20 @@ const LOCATION_COMMANDS = ["location.get"];
 
 const SMS_COMMANDS = ["sms.send"];
 
+const DEVICE_COMMANDS = ["device.status", "device.info"];
+
+const PHOTOS_COMMANDS = ["photos.latest"];
+
+const CONTACTS_COMMANDS = ["contacts.search", "contacts.add"];
+
+const CALENDAR_COMMANDS = ["calendar.events", "calendar.add"];
+
+const REMINDERS_COMMANDS = ["reminders.list", "reminders.add"];
+
+const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
+
+const SYSTEM_NOTIFY_COMMANDS = ["system.notify"];
+
 const SYSTEM_COMMANDS = [
   "system.run",
   "system.which",
@@ -30,7 +44,19 @@ const SYSTEM_COMMANDS = [
 ];
 
 const PLATFORM_DEFAULTS: Record<string, string[]> = {
-  ios: [...CANVAS_COMMANDS, ...CAMERA_COMMANDS, ...SCREEN_COMMANDS, ...LOCATION_COMMANDS],
+  ios: [
+    ...CANVAS_COMMANDS,
+    ...CAMERA_COMMANDS,
+    ...SCREEN_COMMANDS,
+    ...LOCATION_COMMANDS,
+    ...SYSTEM_NOTIFY_COMMANDS,
+    ...DEVICE_COMMANDS,
+    ...PHOTOS_COMMANDS,
+    ...CONTACTS_COMMANDS,
+    ...CALENDAR_COMMANDS,
+    ...REMINDERS_COMMANDS,
+    ...MOTION_COMMANDS,
+  ],
   android: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
