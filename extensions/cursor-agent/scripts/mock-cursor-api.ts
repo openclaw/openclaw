@@ -53,7 +53,9 @@ async function parseBody(req: any): Promise<any> {
 
 // Send webhook notification
 async function sendWebhook(agent: any, status: string, extra: any = {}) {
-  if (!agent.webhookUrl) return;
+  if (!agent.webhookUrl) {
+    return;
+  }
 
   const payload = JSON.stringify({
     event: "statusChange",
@@ -168,7 +170,7 @@ const server = createServer(async (req, res) => {
       console.log(`  Created agent ${id}`);
 
       // Start async simulation
-      simulateAgent(agent);
+      void simulateAgent(agent);
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ id, status: "PENDING" }));

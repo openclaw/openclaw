@@ -40,7 +40,9 @@ async function runCursorAgentLogin(params: ApplyAuthChoiceParams): Promise<boole
 export async function applyAuthChoiceCursorCli(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
-  if (params.authChoice !== "cursor-cli") return null;
+  if (params.authChoice !== "cursor-cli") {
+    return null;
+  }
 
   // Check if cursor CLI is installed
   const installed = await checkCursorCliInstalled();

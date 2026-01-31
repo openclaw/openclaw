@@ -79,7 +79,9 @@ export async function launchAgentTask(
       const errorJson = JSON.parse(errorText);
       errorMessage = errorJson.message || errorJson.error || errorMessage;
     } catch {
-      if (errorText) errorMessage = errorText;
+      if (errorText) {
+        errorMessage = errorText;
+      }
     }
     throw new Error(errorMessage);
   }

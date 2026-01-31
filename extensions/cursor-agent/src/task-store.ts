@@ -51,7 +51,9 @@ export function updateTask(
   updates: Partial<CursorAgentTask>,
 ): CursorAgentTask | null {
   const existing = taskStore.get(taskId);
-  if (!existing) return null;
+  if (!existing) {
+    return null;
+  }
 
   const updated = {
     ...existing,

@@ -181,7 +181,9 @@ export function resolveCliBackendConfig(
   if (normalized === "cursor-cli") {
     const merged = mergeBackendConfig(DEFAULT_CURSOR_BACKEND, override);
     const command = merged.command?.trim();
-    if (!command) return null;
+    if (!command) {
+      return null;
+    }
     return { id: normalized, config: { ...merged, command } };
   }
 

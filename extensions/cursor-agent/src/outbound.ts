@@ -7,9 +7,8 @@
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
-  ChannelToolSend,
 } from "openclaw/plugin-sdk";
-import { launchAgentTask, sendFollowUp, type LaunchAgentOptions } from "./api.js";
+import { launchAgentTask, type LaunchAgentOptions } from "./api.js";
 import type { CursorAgentAccountConfig } from "./types.js";
 import { getTaskStore } from "./task-store.js";
 
@@ -124,7 +123,7 @@ export const cursorAgentOutbound: ChannelOutboundAdapter<CursorAgentAccountConfi
   },
 
   async sendToolResult(
-    ctx: ChannelOutboundContext<CursorAgentAccountConfig> & { tool: ChannelToolSend },
+    ctx: ChannelOutboundContext<CursorAgentAccountConfig>,
   ): Promise<void> {
     // For tool results, treat as a follow-up if we have an active task
     // Otherwise, launch a new task

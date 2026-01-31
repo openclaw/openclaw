@@ -96,11 +96,21 @@ export const cursorAgentOnboardingAdapter: ChannelOnboardingAdapter = {
       apiKey: apiKey.trim(),
     };
 
-    if (repository) config.repository = repository.trim();
-    if (branch) config.branch = branch.trim();
-    if (webhookUrl) config.webhookUrl = webhookUrl.trim();
-    if (webhookSecret) config.webhookSecret = webhookSecret.trim();
-    if (defaultModel) config.defaultModel = defaultModel;
+    if (repository) {
+      config.repository = repository.trim();
+    }
+    if (branch) {
+      config.branch = branch.trim();
+    }
+    if (webhookUrl) {
+      config.webhookUrl = webhookUrl.trim();
+    }
+    if (webhookSecret) {
+      config.webhookSecret = webhookSecret.trim();
+    }
+    if (defaultModel) {
+      config.defaultModel = defaultModel;
+    }
 
     console.log("\n✅ Cursor Agent configuration complete!\n");
     console.log("Add the following to your openclaw.json:");

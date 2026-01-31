@@ -2,7 +2,7 @@
  * Tests for Cursor Agent outbound adapter.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
 // Test the message parsing functions by extracting them
 // For now, we'll test via the module's behavior

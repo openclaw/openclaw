@@ -628,7 +628,9 @@ export function readCursorCliCredentials(options?: {
       { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
     ).trim();
 
-    if (!accessToken) return null;
+    if (!accessToken) {
+      return null;
+    }
 
     let refreshToken = "";
     try {
