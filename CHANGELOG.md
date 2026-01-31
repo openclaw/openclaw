@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Agents: update pi SDK/API usage and dependencies.
 - Web UI: refresh sessions after chat commands and improve session display names.
 - Build: move TypeScript builds to `tsdown` + `tsgo` (faster builds, CI typechecks), update tsconfig target, and clean up lint rules.
+- Build: align npm tar override and bin metadata so the `openclaw` CLI entrypoint is preserved in npm publishes.
 - Docs: add pi/pi-dev docs and update OpenClaw branding + install links.
 
 ### Fixes
