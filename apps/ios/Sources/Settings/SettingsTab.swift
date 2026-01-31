@@ -17,7 +17,8 @@ struct SettingsTab: View {
     @Environment(VoiceWakeManager.self) private var voiceWake: VoiceWakeManager
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("node.displayName") private var displayName: String = "iOS Node"
+    @AppStorage("node.displayName") private var displayName: String = NodeDisplayName.defaultValue(
+        for: UIDevice.current.userInterfaceIdiom)
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
