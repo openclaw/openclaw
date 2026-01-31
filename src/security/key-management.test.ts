@@ -107,12 +107,13 @@ describe("FileKeyProvider", () => {
     expect(fs.existsSync(nestedPath)).toBe(true);
   });
 
-  it("should set secure file permissions", async () => {
+  it.skipIf(process.platform === "win32")("should set secure file permissions", async () => {
     const provider = new FileKeyProvider(keyPath);
     await provider.getKey();
 
     const stats = fs.statSync(keyPath);
     // Check that file is readable/writable by owner only (600)
+    // Note: Windows doesn't support Unix-style file permissions
     expect(stats.mode & 0o777).toBe(0o600);
   });
 });
