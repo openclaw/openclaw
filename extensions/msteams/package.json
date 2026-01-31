@@ -11,6 +11,9 @@
     "openclaw": "workspace:*",
     "proper-lockfile": "^4.1.2"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
