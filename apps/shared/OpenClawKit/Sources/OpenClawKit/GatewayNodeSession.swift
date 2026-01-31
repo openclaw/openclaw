@@ -43,6 +43,7 @@ public actor GatewayNodeSession {
             return await onInvoke(request)
         }
 
+        // Use an explicit latch so timeouts win even if onInvoke blocks (e.g., permission prompts).
         final class InvokeLatch: @unchecked Sendable {
             private let lock = NSLock()
             private var continuation: CheckedContinuation<BridgeInvokeResponse, Never>?
@@ -72,6 +73,10 @@ public actor GatewayNodeSession {
         let latch = InvokeLatch()
         var onInvokeTask: Task<Void, Never>?
         var timeoutTask: Task<Void, Never>?
+        defer {
+            onInvokeTask?.cancel()
+            timeoutTask?.cancel()
+        }
         let response = await withCheckedContinuation { (cont: CheckedContinuation<BridgeInvokeResponse, Never>) in
             latch.setContinuation(cont)
             onInvokeTask = Task.detached {
@@ -90,8 +95,6 @@ public actor GatewayNodeSession {
                 ))
             }
         }
-        onInvokeTask?.cancel()
-        timeoutTask?.cancel()
         timeoutLogger.info("node invoke race resolved id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         return response
     }
