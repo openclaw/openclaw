@@ -3,7 +3,7 @@
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/QVerisAI/QVerisBot/main/docs/assets/qverisbot-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/QVerisAI/QVerisBot/main/docs/assets/QVerisBot-logo-text-alpha.png" alt="QVerisBot" width="500">
+        <img src="https://raw.githubusercontent.com/QVerisAI/QVerisBot/main/docs/assets/QVerisBot-logo-text-alpha.png" alt="QVerisBot" width="280">
     </picture>
 </p>
 
