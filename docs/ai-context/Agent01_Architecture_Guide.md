@@ -1,4 +1,4 @@
-# Agent Architecture Guide
+﻿# Agent Architecture Guide
 
 ## Overview
 
@@ -22,7 +22,7 @@ Orchestrates PI Agent execution through CLI.
 
 ### 3. RPC Mode
 ```bash
-pnpm moltbot:rpc  # Runs agent in RPC mode with JSON output
+pnpm openclaw:rpc  # Runs agent in RPC mode with JSON output
 ```
 
 ## Standard Workflow
@@ -54,3 +54,4 @@ pnpm moltbot:rpc  # Runs agent in RPC mode with JSON output
 - Integration Tests: src/agents/*.test.ts
 
 *Last updated: 2026-01-30*
+

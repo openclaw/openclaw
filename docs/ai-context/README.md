@@ -1,4 +1,4 @@
-# AI Context Documentation
+﻿# AI Context Documentation
 
 This folder contains documentation for AI assistant context and understanding. While the main docs/ folder has user-facing Mintlify documentation, this subfolder focuses on codebase patterns, architectural decisions, and implementation guides for AI-assisted development.
 
@@ -46,3 +46,4 @@ Files follow: `[Category][Number]_[Topic]_[Type].md`
 ---
 
 *Last updated: 2026-01-30*
+

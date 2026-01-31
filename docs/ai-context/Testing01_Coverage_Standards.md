@@ -1,4 +1,4 @@
-# Testing Coverage Standards
+﻿# Testing Coverage Standards
 
 ## Coverage Thresholds
 
@@ -58,3 +58,4 @@ Full system tests via Docker (test containers, real channels)
 - E2E Setup: docker-compose.test.yml
 
 *Last updated: 2026-01-30*
+

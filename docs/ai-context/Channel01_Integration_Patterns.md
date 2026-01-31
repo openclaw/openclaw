@@ -1,4 +1,4 @@
-# Channel Integration Patterns
+﻿# Channel Integration Patterns
 
 ## Overview
 
@@ -46,3 +46,4 @@ Gateway routes messages based on:
 - Channel Docs: docs/channels/
 
 *Last updated: 2026-01-30*
+
