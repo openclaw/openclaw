@@ -5,6 +5,7 @@ import {
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   getChatChannelMeta,
+  loadWebMedia,
   migrateBaseNameToDefaultAccount,
   missingTargetError,
   normalizeAccountId,
@@ -440,7 +441,6 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
       const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
-      const runtime = getGoogleChatRuntime();
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -452,9 +452,11 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
-      const loaded = await runtime.channel.media.fetchRemoteMedia(mediaUrl, {
-        maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
-      });
+      // Use loadWebMedia to handle both local file paths and remote URLs
+      const loaded = await loadWebMedia(
+        mediaUrl,
+        maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
+      );
       const upload = await uploadGoogleChatAttachment({
         account,
         space,
