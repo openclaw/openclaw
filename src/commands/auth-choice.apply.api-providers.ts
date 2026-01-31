@@ -15,6 +15,8 @@ import {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
   applyOpencodeZenConfig,
@@ -31,6 +33,7 @@ import {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   KIMI_CODE_MODEL_REF,
+  LITELLM_DEFAULT_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -39,6 +42,7 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   setGeminiApiKey,
   setKimiCodeApiKey,
+  setLitellmApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
@@ -73,6 +77,8 @@ export async function applyAuthChoiceApiProviders(
   ) {
     if (params.opts.tokenProvider === "openrouter") {
       authChoice = "openrouter-api-key";
+    } else if (params.opts.tokenProvider === "litellm") {
+      authChoice = "litellm-api-key";
     } else if (params.opts.tokenProvider === "vercel-ai-gateway") {
       authChoice = "ai-gateway-api-key";
     } else if (params.opts.tokenProvider === "moonshot") {
@@ -163,6 +169,95 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyOpenrouterConfig,
         applyProviderConfig: applyOpenrouterProviderConfig,
         noteDefault: OPENROUTER_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "litellm-api-key") {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const profileOrder = resolveAuthProfileOrder({
+      cfg: nextConfig,
+      store,
+      provider: "litellm",
+    });
+    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
+    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+    let profileId = "litellm:default";
+    let mode: "api_key" | "oauth" | "token" = "api_key";
+    let hasCredential = false;
+
+    if (existingProfileId && existingCred?.type) {
+      profileId = existingProfileId;
+      mode =
+        existingCred.type === "oauth"
+          ? "oauth"
+          : existingCred.type === "token"
+            ? "token"
+            : "api_key";
+      hasCredential = true;
+    }
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "litellm") {
+      await setLitellmApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "LiteLLM provides a unified API to 100+ LLM providers.",
+          "Get your API key from your LiteLLM proxy or https://litellm.ai",
+          "Default proxy runs on http://localhost:4000",
+        ].join("\n"),
+        "LiteLLM",
+      );
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("litellm");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing LITELLM_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setLitellmApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter LiteLLM API key",
+        validate: validateApiKeyInput,
+      });
+      await setLitellmApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "litellm",
+        mode,
+      });
+    }
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: LITELLM_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyLitellmConfig,
+        applyProviderConfig: applyLitellmProviderConfig,
+        noteDefault: LITELLM_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

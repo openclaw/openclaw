@@ -13,6 +13,7 @@ export type AuthChoiceGroupId =
   | "google"
   | "copilot"
   | "openrouter"
+  | "litellm"
   | "ai-gateway"
   | "moonshot"
   | "zai"
@@ -91,6 +92,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openrouter-api-key"],
   },
   {
+    value: "litellm",
+    label: "LiteLLM",
+    hint: "Unified LLM gateway (100+ providers)",
+    choices: ["litellm-api-key"],
+  },
+  {
     value: "ai-gateway",
     label: "Vercel AI Gateway",
     hint: "API key",
@@ -142,6 +149,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({ value: "chutes", label: "Chutes (OAuth)" });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
+  options.push({
+    value: "litellm-api-key",
+    label: "LiteLLM API key",
+    hint: "Unified gateway for 100+ LLM providers",
+  });
   options.push({
     value: "ai-gateway-api-key",
     label: "Vercel AI Gateway API key",
