@@ -11,7 +11,7 @@ export function verifyTwilioProviderWebhook(params: {
 }): WebhookVerificationResult {
   const result = verifyTwilioWebhook(params.ctx, params.authToken, {
     publicUrl: params.currentPublicUrl || undefined,
-    allowNgrokFreeTier: params.options.allowNgrokFreeTier ?? true,
+    allowNgrokFreeTierLoopbackBypass: params.options.allowNgrokFreeTierLoopbackBypass ?? false,
     skipVerification: params.options.skipVerification,
   });
 
@@ -27,4 +27,3 @@ export function verifyTwilioProviderWebhook(params: {
     reason: result.reason,
   };
 }
-

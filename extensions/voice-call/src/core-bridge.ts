@@ -2,10 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import type { VoiceCallTtsConfig } from "./config.js";
+
 export type CoreConfig = {
   session?: {
     store?: string;
   };
+  messages?: {
+    tts?: VoiceCallTtsConfig;
+  };
+  [key: string]: unknown;
 };
 
 type CoreAgentDeps = {
@@ -45,10 +51,7 @@ type CoreAgentDeps = {
   ensureAgentWorkspace: (params?: { dir: string }) => Promise<void>;
   resolveStorePath: (store?: string, opts?: { agentId?: string }) => string;
   loadSessionStore: (storePath: string) => Record<string, unknown>;
-  saveSessionStore: (
-    storePath: string,
-    store: Record<string, unknown>,
-  ) => Promise<void>;
+  saveSessionStore: (storePath: string, store: Record<string, unknown>) => Promise<void>;
   resolveSessionFilePath: (
     sessionId: string,
     entry: unknown,
@@ -69,20 +72,26 @@ function findPackageRoot(startDir: string, name: string): string | null {
       if (fs.existsSync(pkgPath)) {
         const raw = fs.readFileSync(pkgPath, "utf8");
         const pkg = JSON.parse(raw) as { name?: string };
-        if (pkg.name === name) return dir;
+        if (pkg.name === name) {
+          return dir;
+        }
       }
     } catch {
       // ignore parse errors and keep walking
     }
     const parent = path.dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) {
+      return null;
+    }
     dir = parent;
   }
 }
 
-function resolveClawdbotRoot(): string {
-  if (coreRootCache) return coreRootCache;
-  const override = process.env.CLAWDBOT_ROOT?.trim();
+function resolveOpenClawRoot(): string {
+  if (coreRootCache) {
+    return coreRootCache;
+  }
+  const override = process.env.OPENCLAW_ROOT?.trim();
   if (override) {
     coreRootCache = override;
     return override;
@@ -101,20 +110,20 @@ function resolveClawdbotRoot(): string {
   }
 
   for (const start of candidates) {
-    const found = findPackageRoot(start, "clawdbot");
-    if (found) {
-      coreRootCache = found;
-      return found;
+    for (const name of ["openclaw"]) {
+      const found = findPackageRoot(start, name);
+      if (found) {
+        coreRootCache = found;
+        return found;
+      }
     }
   }
 
-  throw new Error(
-    "Unable to resolve Clawdbot root. Set CLAWDBOT_ROOT to the package root.",
-  );
+  throw new Error("Unable to resolve core root. Set OPENCLAW_ROOT to the package root.");
 }
 
 async function importCoreModule<T>(relativePath: string): Promise<T> {
-  const root = resolveClawdbotRoot();
+  const root = resolveOpenClawRoot();
   const distPath = path.join(root, "dist", relativePath);
   if (!fs.existsSync(distPath)) {
     throw new Error(
@@ -125,7 +134,9 @@ async function importCoreModule<T>(relativePath: string): Promise<T> {
 }
 
 export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
-  if (coreDepsPromise) return coreDepsPromise;
+  if (coreDepsPromise) {
+    return coreDepsPromise;
+  }
 
   coreDepsPromise = (async () => {
     const [

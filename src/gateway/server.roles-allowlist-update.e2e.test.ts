@@ -73,17 +73,23 @@ const connectNodeClient = async (params: {
     commands: params.commands,
     onEvent: params.onEvent,
     onHelloOk: () => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       resolveReady?.();
     },
     onConnectError: (err) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       rejectReady?.(err);
     },
     onClose: (code, reason) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       rejectReady?.(new Error(`gateway closed (${code}): ${reason}`));
     },
@@ -101,7 +107,9 @@ const connectNodeClient = async (params: {
 async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (check()) return;
+    if (check()) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timeout");
@@ -176,7 +184,7 @@ describe("gateway update.run", () => {
       await waitForSignal(() => sigusr1.mock.calls.length > 0);
       expect(sigusr1).toHaveBeenCalled();
 
-      const sentinelPath = path.join(os.homedir(), ".clawdbot", "restart-sentinel.json");
+      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
       const raw = await fs.readFile(sentinelPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         payload?: { kind?: string; stats?: { mode?: string } };

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -44,7 +44,9 @@ export class GatewayLockError extends Error {
 type LockOwnerStatus = "alive" | "dead" | "unknown";
 
 function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) return false;
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -66,13 +68,14 @@ function parseProcCmdline(raw: string): string[] {
 
 function isGatewayArgv(args: string[]): boolean {
   const normalized = args.map(normalizeProcArg);
-  if (!normalized.includes("gateway")) return false;
+  if (!normalized.includes("gateway")) {
+    return false;
+  }
 
   const entryCandidates = [
     "dist/index.js",
-    "dist/index.mjs",
     "dist/entry.js",
-    "dist/entry.mjs",
+    "openclaw.mjs",
     "scripts/run-node.mjs",
     "src/index.ts",
   ];
@@ -81,7 +84,7 @@ function isGatewayArgv(args: string[]): boolean {
   }
 
   const exe = normalized[0] ?? "";
-  return exe.endsWith("/clawdbot") || exe === "clawdbot";
+  return exe.endsWith("/openclaw") || exe === "openclaw";
 }
 
 function readLinuxCmdline(pid: number): string[] | null {
@@ -97,7 +100,9 @@ function readLinuxStartTime(pid: number): number | null {
   try {
     const raw = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8").trim();
     const closeParen = raw.lastIndexOf(")");
-    if (closeParen < 0) return null;
+    if (closeParen < 0) {
+      return null;
+    }
     const rest = raw.slice(closeParen + 1).trim();
     const fields = rest.split(/\s+/);
     const startTime = Number.parseInt(fields[19] ?? "", 10);
@@ -112,18 +117,26 @@ function resolveGatewayOwnerStatus(
   payload: LockPayload | null,
   platform: NodeJS.Platform,
 ): LockOwnerStatus {
-  if (!isAlive(pid)) return "dead";
-  if (platform !== "linux") return "alive";
+  if (!isAlive(pid)) {
+    return "dead";
+  }
+  if (platform !== "linux") {
+    return "alive";
+  }
 
   const payloadStartTime = payload?.startTime;
   if (Number.isFinite(payloadStartTime)) {
     const currentStartTime = readLinuxStartTime(pid);
-    if (currentStartTime == null) return "unknown";
+    if (currentStartTime == null) {
+      return "unknown";
+    }
     return currentStartTime === payloadStartTime ? "alive" : "dead";
   }
 
   const args = readLinuxCmdline(pid);
-  if (!args) return "unknown";
+  if (!args) {
+    return "unknown";
+  }
   return isGatewayArgv(args) ? "alive" : "dead";
 }
 
@@ -131,9 +144,15 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockPayload>;
-    if (typeof parsed.pid !== "number") return null;
-    if (typeof parsed.createdAt !== "string") return null;
-    if (typeof parsed.configPath !== "string") return null;
+    if (typeof parsed.pid !== "number") {
+      return null;
+    }
+    if (typeof parsed.createdAt !== "string") {
+      return null;
+    }
+    if (typeof parsed.configPath !== "string") {
+      return null;
+    }
     const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
     return {
       pid: parsed.pid,
@@ -150,7 +169,8 @@ function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const hash = createHash("sha1").update(configPath).digest("hex").slice(0, 8);
-  const lockPath = path.join(stateDir, `gateway.${hash}.lock`);
+  const lockDir = resolveGatewayLockDir();
+  const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
 }
 
@@ -160,7 +180,7 @@ export async function acquireGatewayLock(
   const env = opts.env ?? process.env;
   const allowInTests = opts.allowInTests === true;
   if (
-    env.CLAWDBOT_ALLOW_MULTI_GATEWAY === "1" ||
+    env.OPENCLAW_ALLOW_MULTI_GATEWAY === "1" ||
     (!allowInTests && (env.VITEST || env.NODE_ENV === "test"))
   ) {
     return null;

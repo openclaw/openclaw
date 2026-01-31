@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryIndexManager } from "./manager.js";
 
 export type MemorySearchManagerResult = {
@@ -7,7 +7,7 @@ export type MemorySearchManagerResult = {
 };
 
 export async function getMemorySearchManager(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
 }): Promise<MemorySearchManagerResult> {
   try {

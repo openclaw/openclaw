@@ -1,5 +1,5 @@
 import Testing
-@testable import Clawdbot
+@testable import OpenClaw
 
 @Suite struct CameraControllerClampTests {
     @Test func clampQualityDefaultsAndBounds() {

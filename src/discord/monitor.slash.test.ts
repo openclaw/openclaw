@@ -16,9 +16,8 @@ vi.mock("@buape/carbon", () => ({
   MessageCreateListener: class {},
   MessageReactionAddListener: class {},
   MessageReactionRemoveListener: class {},
-  Row: class {
-    constructor(_components: unknown[]) {}
-  },
+  PresenceUpdateListener: class {},
+  Row: class {},
 }));
 
 vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
@@ -34,15 +33,13 @@ vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
 beforeEach(() => {
   dispatchMock.mockReset().mockImplementation(async (params) => {
     if ("dispatcher" in params && params.dispatcher) {
-      params.dispatcher.sendToolResult({ text: "tool update" });
       params.dispatcher.sendFinalReply({ text: "final reply" });
-      return { queuedFinal: true, counts: { tool: 1, block: 0, final: 1 } };
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }
     if ("dispatcherOptions" in params && params.dispatcherOptions) {
       const { dispatcher, markDispatchIdle } = createReplyDispatcherWithTyping(
         params.dispatcherOptions,
       );
-      dispatcher.sendToolResult({ text: "tool update" });
       dispatcher.sendFinalReply({ text: "final reply" });
       await dispatcher.waitForIdle();
       markDispatchIdle();
@@ -53,7 +50,7 @@ beforeEach(() => {
 });
 
 describe("discord native commands", () => {
-  it("streams tool results for native slash commands", { timeout: 60_000 }, async () => {
+  it("skips tool results for native slash commands", { timeout: 60_000 }, async () => {
     const { ChannelType } = await import("@buape/carbon");
     const { createDiscordNativeCommand } = await import("./monitor.js");
 
@@ -62,10 +59,10 @@ describe("discord native commands", () => {
         defaults: {
           model: "anthropic/claude-opus-4-5",
           humanDelay: { mode: "off" },
-          workspace: "/tmp/clawd",
+          workspace: "/tmp/openclaw",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/openclaw-sessions.json" },
       discord: { dm: { enabled: true, policy: "open" } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
@@ -97,8 +94,7 @@ describe("discord native commands", () => {
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledTimes(1);
-    expect(followUp).toHaveBeenCalledTimes(1);
-    expect(reply.mock.calls[0]?.[0]?.content).toContain("tool");
-    expect(followUp.mock.calls[0]?.[0]?.content).toContain("final");
+    expect(followUp).toHaveBeenCalledTimes(0);
+    expect(reply.mock.calls[0]?.[0]?.content).toContain("final");
   });
 });

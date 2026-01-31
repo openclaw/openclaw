@@ -1,33 +1,36 @@
 ---
-summary: "CLI reference for `clawdbot nodes` (list/status/approve/invoke, camera/canvas/screen)"
+summary: "CLI reference for `openclaw nodes` (list/status/approve/invoke, camera/canvas/screen)"
 read_when:
   - You’re managing paired nodes (cameras, screen, canvas)
   - You need to approve requests or invoke node commands
+title: "nodes"
 ---
 
-# `clawdbot nodes`
+# `openclaw nodes`
 
 Manage paired nodes (devices) and invoke node capabilities.
 
 Related:
+
 - Nodes overview: [Nodes](/nodes)
 - Camera: [Camera nodes](/nodes/camera)
 - Images: [Image nodes](/nodes/images)
 
 Common options:
+
 - `--url`, `--token`, `--timeout`, `--json`
 
 ## Common commands
 
 ```bash
-clawdbot nodes list
-clawdbot nodes list --connected
-clawdbot nodes list --last-connected 24h
-clawdbot nodes pending
-clawdbot nodes approve <requestId>
-clawdbot nodes status
-clawdbot nodes status --connected
-clawdbot nodes status --last-connected 24h
+openclaw nodes list
+openclaw nodes list --connected
+openclaw nodes list --last-connected 24h
+openclaw nodes pending
+openclaw nodes approve <requestId>
+openclaw nodes status
+openclaw nodes status --connected
+openclaw nodes status --last-connected 24h
 ```
 
 `nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
@@ -37,13 +40,14 @@ filter to nodes that connected within a duration (e.g. `24h`, `7d`).
 ## Invoke / run
 
 ```bash
-clawdbot nodes invoke --node <id|name|ip> --command <command> --params <json>
-clawdbot nodes run --node <id|name|ip> <command...>
-clawdbot nodes run --raw "git status"
-clawdbot nodes run --agent main --node <id|name|ip> --raw "git status"
+openclaw nodes invoke --node <id|name|ip> --command <command> --params <json>
+openclaw nodes run --node <id|name|ip> <command...>
+openclaw nodes run --raw "git status"
+openclaw nodes run --agent main --node <id|name|ip> --raw "git status"
 ```
 
 Invoke flags:
+
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
 - `--idempotency-key <key>`: optional idempotency key.
@@ -58,6 +62,7 @@ Invoke flags:
 - Requires a node that advertises `system.run` (macOS companion app or headless node host).
 
 Flags:
+
 - `--cwd <path>`: working directory.
 - `--env <key=val>`: env override (repeatable).
 - `--command-timeout <ms>`: command timeout.

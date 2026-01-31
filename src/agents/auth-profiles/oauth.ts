@@ -1,11 +1,10 @@
-import { getOAuthApiKey, type OAuthCredentials, type OAuthProvider } from "@mariozechner/pi-ai";
+import { getOAuthApiKey, type OAuthCredentials } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
-import { writeClaudeCliCredentials } from "../cli-credentials.js";
-import { AUTH_STORE_LOCK_OPTIONS, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
+import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -37,7 +36,9 @@ async function refreshOAuthTokenWithLock(params: {
 
     const store = ensureAuthProfileStore(params.agentDir);
     const cred = store.profiles[params.profileId];
-    if (!cred || cred.type !== "oauth") return null;
+    if (!cred || cred.type !== "oauth") {
+      return null;
+    }
 
     if (Date.now() < cred.expires) {
       return {
@@ -63,20 +64,16 @@ async function refreshOAuthTokenWithLock(params: {
               const newCredentials = await refreshQwenPortalCredentials(cred);
               return { apiKey: newCredentials.access, newCredentials };
             })()
-          : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
-    if (!result) return null;
+          : await getOAuthApiKey(cred.provider, oauthCreds);
+    if (!result) {
+      return null;
+    }
     store.profiles[params.profileId] = {
       ...cred,
       ...result.newCredentials,
       type: "oauth",
     };
     saveAuthProfileStore(store, params.agentDir);
-
-    // Sync refreshed credentials back to Claude Code CLI if this is the claude-cli profile
-    // This ensures Claude Code continues to work after ClawdBot refreshes the token
-    if (params.profileId === CLAUDE_CLI_PROFILE_ID && cred.provider === "anthropic") {
-      writeClaudeCliCredentials(result.newCredentials);
-    }
 
     return result;
   } finally {
@@ -91,17 +88,23 @@ async function refreshOAuthTokenWithLock(params: {
 }
 
 async function tryResolveOAuthProfile(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: OpenClawConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
 }): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
-  if (!cred || cred.type !== "oauth") return null;
+  if (!cred || cred.type !== "oauth") {
+    return null;
+  }
   const profileConfig = cfg?.auth?.profiles?.[profileId];
-  if (profileConfig && profileConfig.provider !== cred.provider) return null;
-  if (profileConfig && profileConfig.mode !== cred.type) return null;
+  if (profileConfig && profileConfig.provider !== cred.provider) {
+    return null;
+  }
+  if (profileConfig && profileConfig.mode !== cred.type) {
+    return null;
+  }
 
   if (Date.now() < cred.expires) {
     return {
@@ -115,7 +118,9 @@ async function tryResolveOAuthProfile(params: {
     profileId,
     agentDir: params.agentDir,
   });
-  if (!refreshed) return null;
+  if (!refreshed) {
+    return null;
+  }
   return {
     apiKey: refreshed.apiKey,
     provider: cred.provider,
@@ -124,19 +129,25 @@ async function tryResolveOAuthProfile(params: {
 }
 
 export async function resolveApiKeyForProfile(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: OpenClawConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
 }): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
-  if (!cred) return null;
+  if (!cred) {
+    return null;
+  }
   const profileConfig = cfg?.auth?.profiles?.[profileId];
-  if (profileConfig && profileConfig.provider !== cred.provider) return null;
+  if (profileConfig && profileConfig.provider !== cred.provider) {
+    return null;
+  }
   if (profileConfig && profileConfig.mode !== cred.type) {
     // Compatibility: treat "oauth" config as compatible with stored token profiles.
-    if (!(profileConfig.mode === "oauth" && cred.type === "token")) return null;
+    if (!(profileConfig.mode === "oauth" && cred.type === "token")) {
+      return null;
+    }
   }
 
   if (cred.type === "api_key") {
@@ -144,7 +155,9 @@ export async function resolveApiKeyForProfile(params: {
   }
   if (cred.type === "token") {
     const token = cred.token?.trim();
-    if (!token) return null;
+    if (!token) {
+      return null;
+    }
     if (
       typeof cred.expires === "number" &&
       Number.isFinite(cred.expires) &&
@@ -168,7 +181,9 @@ export async function resolveApiKeyForProfile(params: {
       profileId,
       agentDir: params.agentDir,
     });
-    if (!result) return null;
+    if (!result) {
+      return null;
+    }
     return {
       apiKey: result.apiKey,
       provider: cred.provider,
@@ -198,11 +213,39 @@ export async function resolveApiKeyForProfile(params: {
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
         });
-        if (fallbackResolved) return fallbackResolved;
+        if (fallbackResolved) {
+          return fallbackResolved;
+        }
       } catch {
         // keep original error
       }
     }
+
+    // Fallback: if this is a secondary agent, try using the main agent's credentials
+    if (params.agentDir) {
+      try {
+        const mainStore = ensureAuthProfileStore(undefined); // main agent (no agentDir)
+        const mainCred = mainStore.profiles[profileId];
+        if (mainCred?.type === "oauth" && Date.now() < mainCred.expires) {
+          // Main agent has fresh credentials - copy them to this agent and use them
+          refreshedStore.profiles[profileId] = { ...mainCred };
+          saveAuthProfileStore(refreshedStore, params.agentDir);
+          log.info("inherited fresh OAuth credentials from main agent", {
+            profileId,
+            agentDir: params.agentDir,
+            expires: new Date(mainCred.expires).toISOString(),
+          });
+          return {
+            apiKey: buildOAuthApiKey(mainCred.provider, mainCred),
+            provider: mainCred.provider,
+            email: mainCred.email,
+          };
+        }
+      } catch {
+        // keep original error if main agent fallback also fails
+      }
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     const hint = formatAuthDoctorHint({
       cfg,
@@ -214,6 +257,7 @@ export async function resolveApiKeyForProfile(params: {
       `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +
         (hint ? `\n\n${hint}` : ""),
+      { cause: error },
     );
   }
 }

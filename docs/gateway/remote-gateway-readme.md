@@ -1,11 +1,12 @@
 ---
-summary: "SSH tunnel setup for Clawdbot.app connecting to a remote gateway"
+summary: "SSH tunnel setup for OpenClaw.app connecting to a remote gateway"
 read_when: "Connecting the macOS app to a remote gateway over SSH"
+title: "Remote Gateway Setup"
 ---
 
-# Running Clawdbot.app with a Remote Gateway
+# Running OpenClaw.app with a Remote Gateway
 
-Clawdbot.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
+OpenClaw.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
 
 ## Overview
 
@@ -13,7 +14,7 @@ Clawdbot.app uses SSH tunneling to connect to a remote gateway. This guide shows
 ┌─────────────────────────────────────────────────────────────┐
 │                        Client Machine                          │
 │                                                              │
-│  Clawdbot.app ──► ws://127.0.0.1:18789 (local port)           │
+│  OpenClaw.app ──► ws://127.0.0.1:18789 (local port)           │
 │                     │                                        │
 │                     ▼                                        │
 │  SSH Tunnel ────────────────────────────────────────────────│
@@ -56,7 +57,7 @@ ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 ### Step 3: Set Gateway Token
 
 ```bash
-launchctl setenv CLAWDBOT_GATEWAY_TOKEN "<your-token>"
+launchctl setenv OPENCLAW_GATEWAY_TOKEN "<your-token>"
 ```
 
 ### Step 4: Start SSH Tunnel
@@ -65,11 +66,11 @@ launchctl setenv CLAWDBOT_GATEWAY_TOKEN "<your-token>"
 ssh -N remote-gateway &
 ```
 
-### Step 5: Restart Clawdbot.app
+### Step 5: Restart OpenClaw.app
 
 ```bash
-# Quit Clawdbot.app (⌘Q), then reopen:
-open /path/to/Clawdbot.app
+# Quit OpenClaw.app (⌘Q), then reopen:
+open /path/to/OpenClaw.app
 ```
 
 The app will now connect to the remote gateway through the SSH tunnel.
@@ -82,7 +83,7 @@ To have the SSH tunnel start automatically when you log in, create a Launch Agen
 
 ### Create the PLIST file
 
-Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
+Save this as `~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -90,7 +91,7 @@ Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.clawdbot.ssh-tunnel</string>
+    <string>bot.molt.ssh-tunnel</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/ssh</string>
@@ -108,13 +109,16 @@ Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
 ### Load the Launch Agent
 
 ```bash
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
 ```
 
 The tunnel will now:
+
 - Start automatically when you log in
 - Restart if it crashes
 - Keep running in the background
+
+Legacy note: remove any leftover `com.openclaw.ssh-tunnel` LaunchAgent if present.
 
 ---
 
@@ -130,24 +134,24 @@ lsof -i :18789
 **Restart the tunnel:**
 
 ```bash
-launchctl kickstart -k gui/$UID/com.clawdbot.ssh-tunnel
+launchctl kickstart -k gui/$UID/bot.molt.ssh-tunnel
 ```
 
 **Stop the tunnel:**
 
 ```bash
-launchctl bootout gui/$UID/com.clawdbot.ssh-tunnel
+launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 ```
 
 ---
 
 ## How It Works
 
-| Component | What It Does |
-|-----------|--------------|
-| `LocalForward 18789 127.0.0.1:18789` | Forwards local port 18789 to remote port 18789 |
-| `ssh -N` | SSH without executing remote commands (just port forwarding) |
-| `KeepAlive` | Automatically restarts tunnel if it crashes |
-| `RunAtLoad` | Starts tunnel when the agent loads |
+| Component                            | What It Does                                                 |
+| ------------------------------------ | ------------------------------------------------------------ |
+| `LocalForward 18789 127.0.0.1:18789` | Forwards local port 18789 to remote port 18789               |
+| `ssh -N`                             | SSH without executing remote commands (just port forwarding) |
+| `KeepAlive`                          | Automatically restarts tunnel if it crashes                  |
+| `RunAtLoad`                          | Starts tunnel when the agent loads                           |
 
-Clawdbot.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.
+OpenClaw.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.

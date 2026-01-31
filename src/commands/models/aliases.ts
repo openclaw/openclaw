@@ -18,7 +18,9 @@ export async function modelsAliasesListCommand(
   const aliases = Object.entries(models).reduce<Record<string, string>>(
     (acc, [modelKey, entry]) => {
       const alias = entry?.alias?.trim();
-      if (alias) acc[alias] = modelKey;
+      if (alias) {
+        acc[alias] = modelKey;
+      }
       return acc;
     },
     {},

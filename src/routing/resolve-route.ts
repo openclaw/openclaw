@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { listBindings } from "./bindings.js";
 import {
   buildAgentMainSessionKey,
@@ -18,7 +18,7 @@ export type RoutePeer = {
 };
 
 export type ResolveAgentRouteInput = {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -61,17 +61,22 @@ function normalizeAccountId(value: string | undefined | null): string {
 
 function matchesAccountId(match: string | undefined, actual: string): boolean {
   const trimmed = (match ?? "").trim();
-  if (!trimmed) return actual === DEFAULT_ACCOUNT_ID;
-  if (trimmed === "*") return true;
+  if (!trimmed) {
+    return actual === DEFAULT_ACCOUNT_ID;
+  }
+  if (trimmed === "*") {
+    return true;
+  }
   return trimmed === actual;
 }
 
 export function buildAgentSessionKey(params: {
   agentId: string;
   channel: string;
+  accountId?: string | null;
   peer?: RoutePeer | null;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer";
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
@@ -80,6 +85,7 @@ export function buildAgentSessionKey(params: {
     agentId: params.agentId,
     mainKey: DEFAULT_MAIN_KEY,
     channel,
+    accountId: params.accountId,
     peerKind: peer?.kind ?? "dm",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
@@ -87,19 +93,25 @@ export function buildAgentSessionKey(params: {
   });
 }
 
-function listAgents(cfg: ClawdbotConfig) {
+function listAgents(cfg: OpenClawConfig) {
   const agents = cfg.agents?.list;
   return Array.isArray(agents) ? agents : [];
 }
 
-function pickFirstExistingAgentId(cfg: ClawdbotConfig, agentId: string): string {
+function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string {
   const trimmed = (agentId ?? "").trim();
-  if (!trimmed) return sanitizeAgentId(resolveDefaultAgentId(cfg));
+  if (!trimmed) {
+    return sanitizeAgentId(resolveDefaultAgentId(cfg));
+  }
   const normalized = normalizeAgentId(trimmed);
   const agents = listAgents(cfg);
-  if (agents.length === 0) return sanitizeAgentId(trimmed);
+  if (agents.length === 0) {
+    return sanitizeAgentId(trimmed);
+  }
   const match = agents.find((agent) => normalizeAgentId(agent.id) === normalized);
-  if (match?.id?.trim()) return sanitizeAgentId(match.id.trim());
+  if (match?.id?.trim()) {
+    return sanitizeAgentId(match.id.trim());
+  }
   return sanitizeAgentId(resolveDefaultAgentId(cfg));
 }
 
@@ -108,7 +120,9 @@ function matchesChannel(
   channel: string,
 ): boolean {
   const key = normalizeToken(match?.channel);
-  if (!key) return false;
+  if (!key) {
+    return false;
+  }
   return key === channel;
 }
 
@@ -117,10 +131,14 @@ function matchesPeer(
   peer: RoutePeer,
 ): boolean {
   const m = match?.peer;
-  if (!m) return false;
+  if (!m) {
+    return false;
+  }
   const kind = normalizeToken(m.kind);
   const id = normalizeId(m.id);
-  if (!kind || !id) return false;
+  if (!kind || !id) {
+    return false;
+  }
   return kind === peer.kind && id === peer.id;
 }
 
@@ -129,13 +147,17 @@ function matchesGuild(
   guildId: string,
 ): boolean {
   const id = normalizeId(match?.guildId);
-  if (!id) return false;
+  if (!id) {
+    return false;
+  }
   return id === guildId;
 }
 
 function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId: string): boolean {
   const id = normalizeId(match?.teamId);
-  if (!id) return false;
+  if (!id) {
+    return false;
+  }
   return id === teamId;
 }
 
@@ -147,8 +169,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const teamId = normalizeId(input.teamId);
 
   const bindings = listBindings(input.cfg).filter((binding) => {
-    if (!binding || typeof binding !== "object") return false;
-    if (!matchesChannel(binding.match, channel)) return false;
+    if (!binding || typeof binding !== "object") {
+      return false;
+    }
+    if (!matchesChannel(binding.match, channel)) {
+      return false;
+    }
     return matchesAccountId(binding.match?.accountId, accountId);
   });
 
@@ -160,6 +186,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
+      accountId,
       peer,
       dmScope,
       identityLinks,
@@ -180,30 +207,40 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   if (peer) {
     const peerMatch = bindings.find((b) => matchesPeer(b.match, peer));
-    if (peerMatch) return choose(peerMatch.agentId, "binding.peer");
+    if (peerMatch) {
+      return choose(peerMatch.agentId, "binding.peer");
+    }
   }
 
   if (guildId) {
     const guildMatch = bindings.find((b) => matchesGuild(b.match, guildId));
-    if (guildMatch) return choose(guildMatch.agentId, "binding.guild");
+    if (guildMatch) {
+      return choose(guildMatch.agentId, "binding.guild");
+    }
   }
 
   if (teamId) {
     const teamMatch = bindings.find((b) => matchesTeam(b.match, teamId));
-    if (teamMatch) return choose(teamMatch.agentId, "binding.team");
+    if (teamMatch) {
+      return choose(teamMatch.agentId, "binding.team");
+    }
   }
 
   const accountMatch = bindings.find(
     (b) =>
       b.match?.accountId?.trim() !== "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
   );
-  if (accountMatch) return choose(accountMatch.agentId, "binding.account");
+  if (accountMatch) {
+    return choose(accountMatch.agentId, "binding.account");
+  }
 
   const anyAccountMatch = bindings.find(
     (b) =>
       b.match?.accountId?.trim() === "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
   );
-  if (anyAccountMatch) return choose(anyAccountMatch.agentId, "binding.channel");
+  if (anyAccountMatch) {
+    return choose(anyAccountMatch.agentId, "binding.channel");
+  }
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
 }

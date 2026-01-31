@@ -13,7 +13,9 @@ export async function getPageErrorsViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   const errors = [...state.errors];
-  if (opts.clear) state.errors = [];
+  if (opts.clear) {
+    state.errors = [];
+  }
   return { errors };
 }
 
@@ -58,7 +60,9 @@ export async function getConsoleMessagesViaPlaywright(opts: {
 }): Promise<BrowserConsoleMessage[]> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  if (!opts.level) return [...state.console];
+  if (!opts.level) {
+    return [...state.console];
+  }
   const min = consolePriority(opts.level);
   return state.console.filter((msg) => consolePriority(msg.type) >= min);
 }

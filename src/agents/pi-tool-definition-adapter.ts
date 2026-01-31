@@ -32,7 +32,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       label: tool.label ?? name,
       description: tool.description ?? "",
       // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema from pi-agent-core uses a different module instance.
-      parameters: tool.parameters as any,
+      parameters: tool.parameters,
       execute: async (
         toolCallId,
         params,
@@ -45,12 +45,16 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
         try {
           return await tool.execute(toolCallId, params, signal, onUpdate);
         } catch (err) {
-          if (signal?.aborted) throw err;
+          if (signal?.aborted) {
+            throw err;
+          }
           const name =
             err && typeof err === "object" && "name" in err
               ? String((err as { name?: unknown }).name)
               : "";
-          if (name === "AbortError") throw err;
+          if (name === "AbortError") {
+            throw err;
+          }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);

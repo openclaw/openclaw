@@ -10,9 +10,13 @@ import type { SessionScope } from "./types.js";
 
 // Decide which session bucket to use (per-sender vs global).
 export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
-  if (scope === "global") return "global";
+  if (scope === "global") {
+    return "global";
+  }
   const resolvedGroup = resolveGroupSessionKey(ctx);
-  if (resolvedGroup) return resolvedGroup.key;
+  if (resolvedGroup) {
+    return resolvedGroup.key;
+  }
   const from = ctx.From ? normalizeE164(ctx.From) : "";
   return from || "unknown";
 }
@@ -23,15 +27,21 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
  */
 export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
   const explicit = ctx.SessionKey?.trim();
-  if (explicit) return explicit.toLowerCase();
+  if (explicit) {
+    return explicit.toLowerCase();
+  }
   const raw = deriveSessionKey(scope, ctx);
-  if (scope === "global") return raw;
+  if (scope === "global") {
+    return raw;
+  }
   const canonicalMainKey = normalizeMainKey(mainKey);
   const canonical = buildAgentMainSessionKey({
     agentId: DEFAULT_AGENT_ID,
     mainKey: canonicalMainKey,
   });
   const isGroup = raw.includes(":group:") || raw.includes(":channel:");
-  if (!isGroup) return canonical;
+  if (!isGroup) {
+    return canonical;
+  }
   return `agent:${DEFAULT_AGENT_ID}:${raw}`;
 }

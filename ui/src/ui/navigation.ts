@@ -1,3 +1,5 @@
+import type { IconName } from "./icons.js";
+
 export const TAB_GROUPS = [
   { label: "Chat", tabs: ["chat"] },
   {
@@ -35,9 +37,7 @@ const TAB_PATHS: Record<Tab, string> = {
   logs: "/logs",
 };
 
-const PATH_TO_TAB = new Map(
-  Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]),
-);
+const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) return "";
@@ -98,32 +98,32 @@ export function inferBasePathFromPathname(pathname: string): string {
   return `/${segments.join("/")}`;
 }
 
-export function iconForTab(tab: Tab): string {
+export function iconForTab(tab: Tab): IconName {
   switch (tab) {
     case "chat":
-      return "💬";
+      return "messageSquare";
     case "overview":
-      return "📊";
+      return "barChart";
     case "channels":
-      return "🔗";
+      return "link";
     case "instances":
-      return "📡";
+      return "radio";
     case "sessions":
-      return "📄";
+      return "fileText";
     case "cron":
-      return "⏰";
+      return "loader";
     case "skills":
-      return "⚡️";
+      return "zap";
     case "nodes":
-      return "🖥️";
+      return "monitor";
     case "config":
-      return "⚙️";
+      return "settings";
     case "debug":
-      return "🐞";
+      return "bug";
     case "logs":
-      return "🧾";
+      return "scrollText";
     default:
-      return "📁";
+      return "folder";
   }
 }
 
@@ -175,7 +175,7 @@ export function subtitleForTab(tab: Tab) {
     case "chat":
       return "Direct gateway chat session for quick interventions.";
     case "config":
-      return "Edit ~/.clawdbot/clawdbot.json safely.";
+      return "Edit ~/.openclaw/openclaw.json safely.";
     case "debug":
       return "Gateway snapshots, events, and manual RPC calls.";
     case "logs":

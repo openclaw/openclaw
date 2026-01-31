@@ -1,5 +1,5 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import type { ClawdbotConfig, GatewayAuthConfig } from "../config/config.js";
+import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
@@ -12,7 +12,7 @@ import {
   promptModelAllowlist,
 } from "./model-picker.js";
 
-type GatewayAuthChoice = "off" | "token" | "password";
+type GatewayAuthChoice = "token" | "password";
 
 const ANTHROPIC_OAUTH_MODEL_KEYS = [
   "anthropic/claude-opus-4-5",
@@ -28,11 +28,10 @@ export function buildGatewayAuthConfig(params: {
 }): GatewayAuthConfig | undefined {
   const allowTailscale = params.existing?.allowTailscale;
   const base: GatewayAuthConfig = {};
-  if (typeof allowTailscale === "boolean") base.allowTailscale = allowTailscale;
-
-  if (params.mode === "off") {
-    return Object.keys(base).length > 0 ? base : undefined;
+  if (typeof allowTailscale === "boolean") {
+    base.allowTailscale = allowTailscale;
   }
+
   if (params.mode === "token") {
     return { ...base, mode: "token", token: params.token };
   }
@@ -40,17 +39,16 @@ export function buildGatewayAuthConfig(params: {
 }
 
 export async function promptAuthConfig(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-): Promise<ClawdbotConfig> {
+): Promise<OpenClawConfig> {
   const authChoice = await promptAuthChoiceGrouped({
     prompter,
     store: ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
     }),
     includeSkip: true,
-    includeClaudeCliIfMissing: true,
   });
 
   let next = cfg;
@@ -77,10 +75,7 @@ export async function promptAuthConfig(
   }
 
   const anthropicOAuth =
-    authChoice === "claude-cli" ||
-    authChoice === "setup-token" ||
-    authChoice === "token" ||
-    authChoice === "oauth";
+    authChoice === "setup-token" || authChoice === "token" || authChoice === "oauth";
 
   const allowlistSelection = await promptModelAllowlist({
     config: next,

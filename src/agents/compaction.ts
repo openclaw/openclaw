@@ -18,7 +18,9 @@ export function estimateMessagesTokens(messages: AgentMessage[]): number {
 }
 
 function normalizeParts(parts: number, messageCount: number): number {
-  if (!Number.isFinite(parts) || parts <= 1) return 1;
+  if (!Number.isFinite(parts) || parts <= 1) {
+    return 1;
+  }
   return Math.min(Math.max(1, Math.floor(parts)), Math.max(1, messageCount));
 }
 
@@ -26,9 +28,13 @@ export function splitMessagesByTokenShare(
   messages: AgentMessage[],
   parts = DEFAULT_PARTS,
 ): AgentMessage[][] {
-  if (messages.length === 0) return [];
+  if (messages.length === 0) {
+    return [];
+  }
   const normalizedParts = normalizeParts(parts, messages.length);
-  if (normalizedParts <= 1) return [messages];
+  if (normalizedParts <= 1) {
+    return [messages];
+  }
 
   const totalTokens = estimateMessagesTokens(messages);
   const targetTokens = totalTokens / normalizedParts;
@@ -63,7 +69,9 @@ export function chunkMessagesByMaxTokens(
   messages: AgentMessage[],
   maxTokens: number,
 ): AgentMessage[][] {
-  if (messages.length === 0) return [];
+  if (messages.length === 0) {
+    return [];
+  }
 
   const chunks: AgentMessage[][] = [];
   let currentChunk: AgentMessage[] = [];
@@ -100,7 +108,9 @@ export function chunkMessagesByMaxTokens(
  * When messages are large, we use smaller chunks to avoid exceeding model limits.
  */
 export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindow: number): number {
-  if (messages.length === 0) return BASE_CHUNK_RATIO;
+  if (messages.length === 0) {
+    return BASE_CHUNK_RATIO;
+  }
 
   const totalTokens = estimateMessagesTokens(messages);
   const avgTokens = totalTokens / messages.length;
@@ -301,6 +311,7 @@ export function pruneHistoryForContextShare(params: {
   parts?: number;
 }): {
   messages: AgentMessage[];
+  droppedMessagesList: AgentMessage[];
   droppedChunks: number;
   droppedMessages: number;
   droppedTokens: number;
@@ -310,6 +321,7 @@ export function pruneHistoryForContextShare(params: {
   const maxHistoryShare = params.maxHistoryShare ?? 0.5;
   const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
   let keptMessages = params.messages;
+  const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
   let droppedMessages = 0;
   let droppedTokens = 0;
@@ -318,16 +330,20 @@ export function pruneHistoryForContextShare(params: {
 
   while (keptMessages.length > 0 && estimateMessagesTokens(keptMessages) > budgetTokens) {
     const chunks = splitMessagesByTokenShare(keptMessages, parts);
-    if (chunks.length <= 1) break;
+    if (chunks.length <= 1) {
+      break;
+    }
     const [dropped, ...rest] = chunks;
     droppedChunks += 1;
     droppedMessages += dropped.length;
     droppedTokens += estimateMessagesTokens(dropped);
+    allDroppedMessages.push(...dropped);
     keptMessages = rest.flat();
   }
 
   return {
     messages: keptMessages,
+    droppedMessagesList: allDroppedMessages,
     droppedChunks,
     droppedMessages,
     droppedTokens,

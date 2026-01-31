@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
@@ -8,14 +8,16 @@ import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
 
 export async function installGatewayDaemonNonInteractive(params: {
-  nextConfig: ClawdbotConfig;
+  nextConfig: OpenClawConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   port: number;
   gatewayToken?: string;
 }) {
   const { opts, runtime, port, gatewayToken } = params;
-  if (!opts.installDaemon) return;
+  if (!opts.installDaemon) {
+    return;
+  }
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   const systemdAvailable =
@@ -38,6 +40,7 @@ export async function installGatewayDaemonNonInteractive(params: {
     token: gatewayToken,
     runtime: daemonRuntimeRaw,
     warn: (message) => runtime.log(message),
+    config: params.nextConfig,
   });
   try {
     await service.install({

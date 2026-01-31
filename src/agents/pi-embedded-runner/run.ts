@@ -3,7 +3,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
-import { resolveClawdbotAgentDir } from "../agent-paths.js";
+import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
@@ -25,7 +25,7 @@ import {
   type ResolvedProviderAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { ensureClawdbotModelsJson } from "../models-config.js";
+import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   classifyFailoverReason,
   formatAssistantErrorText,
@@ -34,6 +34,7 @@ import {
   isContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
@@ -59,7 +60,9 @@ const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_R
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
-  if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) return prompt;
+  if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
+    return prompt;
+  }
   return prompt.replaceAll(
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
@@ -93,10 +96,10 @@ export async function runEmbeddedPiAgent(
 
       const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-      const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
+      const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
-      await ensureClawdbotModelsJson(params.config, agentDir);
+      await ensureOpenClawModelsJson(params.config, agentDir);
 
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
@@ -173,7 +176,9 @@ export async function runEmbeddedPiAgent(
         allInCooldown: boolean;
         message: string;
       }): FailoverReason => {
-        if (params.allInCooldown) return "rate_limit";
+        if (params.allInCooldown) {
+          return "rate_limit";
+        }
         const classified = classifyFailoverReason(params.message);
         return classified ?? "auth";
       };
@@ -201,7 +206,9 @@ export async function runEmbeddedPiAgent(
             cause: params.error,
           });
         }
-        if (params.error instanceof Error) throw params.error;
+        if (params.error instanceof Error) {
+          throw params.error;
+        }
         throw new Error(message);
       };
 
@@ -241,7 +248,9 @@ export async function runEmbeddedPiAgent(
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
-        if (lockedProfileId) return false;
+        if (lockedProfileId) {
+          return false;
+        }
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
@@ -256,7 +265,9 @@ export async function runEmbeddedPiAgent(
             attemptedThinking.clear();
             return true;
           } catch (err) {
-            if (candidate && candidate === lockedProfileId) throw err;
+            if (candidate && candidate === lockedProfileId) {
+              throw err;
+            }
             nextIndex += 1;
           }
         }
@@ -281,7 +292,9 @@ export async function runEmbeddedPiAgent(
           throwAuthProfileFailover({ allInCooldown: true });
         }
       } catch (err) {
-        if (err instanceof FailoverError) throw err;
+        if (err instanceof FailoverError) {
+          throw err;
+        }
         if (profileCandidates[profileIndex] === lockedProfileId) {
           throwAuthProfileFailover({ allInCooldown: false, error: err });
         }
@@ -440,6 +453,34 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            // Handle image size errors with a user-friendly message (no retry needed)
+            const imageSizeError = parseImageSizeError(errorText);
+            if (imageSizeError) {
+              const maxMb = imageSizeError.maxMb;
+              const maxMbLabel =
+                typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
+              const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
+              return {
+                payloads: [
+                  {
+                    text:
+                      `Image too large for the model${maxBytesHint}. ` +
+                      "Please compress or resize the image and try again.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "image_size", message: errorText },
+                },
+              };
+            }
             const promptFailoverReason = classifyFailoverReason(errorText);
             if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
               await markAuthProfileFailure({
@@ -549,7 +590,9 @@ export async function runEmbeddedPiAgent(
             }
 
             const rotated = await advanceAuthProfile();
-            if (rotated) continue;
+            if (rotated) {
+              continue;
+            }
 
             if (fallbackConfigured) {
               // Prefer formatted error message (user-friendly) over raw errorMessage
@@ -599,7 +642,7 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
-            inlineToolResultsAllowed: !params.onPartialReply && !params.onToolResult,
+            inlineToolResultsAllowed: false,
           });
 
           log.debug(

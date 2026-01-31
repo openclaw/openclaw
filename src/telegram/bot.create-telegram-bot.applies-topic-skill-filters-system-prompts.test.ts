@@ -4,7 +4,7 @@ let createTelegramBot: typeof import("./bot.js").createTelegramBot;
 let resetInboundDedupe: typeof import("../auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
 
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/clawdbot-telegram-${Math.random().toString(16).slice(2)}.json`,
+  sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
 }));
 
 const { loadWebMedia } = vi.hoisted(() => ({
@@ -88,6 +88,7 @@ vi.mock("grammy", () => ({
     on = onSpy;
     stop = stopSpy;
     command = commandSpy;
+    catch = vi.fn();
     constructor(
       public token: string,
       public options?: { client?: { fetch?: typeof fetch } },
@@ -127,7 +128,9 @@ let replyModule: typeof import("../auto-reply/reply.js");
 
 const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
-  if (!handler) throw new Error(`Missing handler for event: ${event}`);
+  if (!handler) {
+    throw new Error(`Missing handler for event: ${event}`);
+  }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
@@ -200,7 +203,7 @@ describe("createTelegramBot", () => {
         message_id: 42,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -244,7 +247,7 @@ describe("createTelegramBot", () => {
         message_id: 42,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -300,7 +303,7 @@ describe("createTelegramBot", () => {
       expect.objectContaining({ message_thread_id: 99 }),
     );
   });
-  it("streams tool summaries for native slash commands", async () => {
+  it("skips tool summaries for native slash commands", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
     commandSpy.mockReset();
@@ -325,7 +328,9 @@ describe("createTelegramBot", () => {
     const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!verboseHandler) throw new Error("verbose command handler missing");
+    if (!verboseHandler) {
+      throw new Error("verbose command handler missing");
+    }
 
     await verboseHandler({
       message: {
@@ -338,9 +343,8 @@ describe("createTelegramBot", () => {
       match: "on",
     });
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
-    expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("tool update");
-    expect(sendMessageSpy.mock.calls[1]?.[1]).toContain("final reply");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("final reply");
   });
   it("dedupes duplicate message updates by update_id", async () => {
     onSpy.mockReset();
@@ -365,7 +369,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 42,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     };
 

@@ -4,7 +4,7 @@ let createTelegramBot: typeof import("./bot.js").createTelegramBot;
 let resetInboundDedupe: typeof import("../auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
 
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/clawdbot-telegram-${Math.random().toString(16).slice(2)}.json`,
+  sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
 }));
 
 const { loadWebMedia } = vi.hoisted(() => ({
@@ -88,6 +88,7 @@ vi.mock("grammy", () => ({
     on = onSpy;
     stop = stopSpy;
     command = commandSpy;
+    catch = vi.fn();
     constructor(
       public token: string,
       public options?: { client?: { fetch?: typeof fetch } },
@@ -127,7 +128,9 @@ let replyModule: typeof import("../auto-reply/reply.js");
 
 const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
-  if (!handler) throw new Error(`Missing handler for event: ${event}`);
+  if (!handler) {
+    throw new Error(`Missing handler for event: ${event}`);
+  }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
@@ -185,7 +188,7 @@ describe("createTelegramBot", () => {
           message_id: 9001,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     };
 
@@ -221,7 +224,7 @@ describe("createTelegramBot", () => {
           message_id: 9001,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     });
 
@@ -236,7 +239,7 @@ describe("createTelegramBot", () => {
           message_id: 9001,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     });
 

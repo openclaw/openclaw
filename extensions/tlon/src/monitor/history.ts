@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "clawdbot/plugin-sdk";
+import type { RuntimeEnv } from "openclaw/plugin-sdk";
 
 import { extractMessageText } from "./utils.js";
 
@@ -17,7 +17,9 @@ export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
     messageCache.set(channelNest, []);
   }
   const cache = messageCache.get(channelNest);
-  if (!cache) return;
+  if (!cache) {
+    return;
+  }
   cache.unshift(message);
   if (cache.length > MAX_CACHED_MESSAGES) {
     cache.pop();
@@ -35,7 +37,9 @@ export async function fetchChannelHistory(
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
     const data: any = await api.scry(scryPath);
-    if (!data) return [];
+    if (!data) {
+      return [];
+    }
 
     let posts: any[] = [];
     if (Array.isArray(data)) {
@@ -80,8 +84,6 @@ export async function getChannelHistory(
     return cache.slice(0, count);
   }
 
-  runtime?.log?.(
-    `[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`,
-  );
+  runtime?.log?.(`[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`);
   return await fetchChannelHistory(api, channelNest, count, runtime);
 }

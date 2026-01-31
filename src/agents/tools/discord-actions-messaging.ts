@@ -60,7 +60,9 @@ export async function handleDiscordMessagingAction(
     );
   const accountId = readStringParam(params, "accountId");
   const normalizeMessage = (message: unknown) => {
-    if (!message || typeof message !== "object") return message;
+    if (!message || typeof message !== "object") {
+      return message;
+    }
     return withNormalizedTimestamp(
       message as Record<string, unknown>,
       (message as { timestamp?: unknown }).timestamp,

@@ -7,8 +7,12 @@ export function resolveDiscordSystemLocation(params: {
   channelName: string;
 }) {
   const { isDirectMessage, isGroupDm, guild, channelName } = params;
-  if (isDirectMessage) return "DM";
-  if (isGroupDm) return `Group DM #${channelName}`;
+  if (isDirectMessage) {
+    return "DM";
+  }
+  if (isGroupDm) {
+    return `Group DM #${channelName}`;
+  }
   return guild?.name ? `${guild.name} #${channelName}` : `#${channelName}`;
 }
 
@@ -28,7 +32,9 @@ export function formatDiscordUserTag(user: User) {
 }
 
 export function resolveTimestampMs(timestamp?: string | null) {
-  if (!timestamp) return undefined;
+  if (!timestamp) {
+    return undefined;
+  }
   const parsed = Date.parse(timestamp);
   return Number.isNaN(parsed) ? undefined : parsed;
 }

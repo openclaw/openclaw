@@ -24,7 +24,9 @@ type ParsedApproveCommand =
 
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith(COMMAND)) return null;
+  if (!trimmed.toLowerCase().startsWith(COMMAND)) {
+    return null;
+  }
   const rest = trimmed.slice(COMMAND.length).trim();
   if (!rest) {
     return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
@@ -61,10 +63,14 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
 }
 
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const normalized = params.command.commandBodyNormalized;
   const parsed = parseApproveCommand(normalized);
-  if (!parsed) return null;
+  if (!parsed) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,

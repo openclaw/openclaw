@@ -1,10 +1,7 @@
-import { loadConfig } from "../config/config.js";
 import { fetchBrowserJson } from "./client-fetch.js";
-import { resolveBrowserConfig } from "./config.js";
 
 export type BrowserStatus = {
   enabled: boolean;
-  controlUrl: string;
   profile?: string;
   running: boolean;
   cdpReady?: boolean;
@@ -89,59 +86,66 @@ export type SnapshotResult =
       imageType?: "png" | "jpeg";
     };
 
-export function resolveBrowserControlUrl(overrideUrl?: string) {
-  const cfg = loadConfig();
-  const resolved = resolveBrowserConfig(cfg.browser);
-  const url = overrideUrl?.trim() ? overrideUrl.trim() : resolved.controlUrl;
-  return url.replace(/\/$/, "");
-}
-
 function buildProfileQuery(profile?: string): string {
   return profile ? `?profile=${encodeURIComponent(profile)}` : "";
 }
 
+function withBaseUrl(baseUrl: string | undefined, path: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return path;
+  }
+  return `${trimmed.replace(/\/$/, "")}${path}`;
+}
+
 export async function browserStatus(
-  baseUrl: string,
+  baseUrl?: string,
   opts?: { profile?: string },
 ): Promise<BrowserStatus> {
   const q = buildProfileQuery(opts?.profile);
-  return await fetchBrowserJson<BrowserStatus>(`${baseUrl}/${q}`, {
+  return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
     timeoutMs: 1500,
   });
 }
 
-export async function browserProfiles(baseUrl: string): Promise<ProfileStatus[]> {
-  const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(`${baseUrl}/profiles`, {
-    timeoutMs: 3000,
-  });
+export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]> {
+  const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(
+    withBaseUrl(baseUrl, `/profiles`),
+    {
+      timeoutMs: 3000,
+    },
+  );
   return res.profiles ?? [];
 }
 
-export async function browserStart(baseUrl: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStart(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(`${baseUrl}/start${q}`, {
+  await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
     timeoutMs: 15000,
   });
 }
 
-export async function browserStop(baseUrl: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStop(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(`${baseUrl}/stop${q}`, {
+  await fetchBrowserJson(withBaseUrl(baseUrl, `/stop${q}`), {
     method: "POST",
     timeoutMs: 15000,
   });
 }
 
 export async function browserResetProfile(
-  baseUrl: string,
+  baseUrl?: string,
   opts?: { profile?: string },
 ): Promise<BrowserResetProfileResult> {
   const q = buildProfileQuery(opts?.profile);
-  return await fetchBrowserJson<BrowserResetProfileResult>(`${baseUrl}/reset-profile${q}`, {
-    method: "POST",
-    timeoutMs: 20000,
-  });
+  return await fetchBrowserJson<BrowserResetProfileResult>(
+    withBaseUrl(baseUrl, `/reset-profile${q}`),
+    {
+      method: "POST",
+      timeoutMs: 20000,
+    },
+  );
 }
 
 export type BrowserCreateProfileResult = {
@@ -154,25 +158,28 @@ export type BrowserCreateProfileResult = {
 };
 
 export async function browserCreateProfile(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: {
     name: string;
     color?: string;
     cdpUrl?: string;
-    driver?: "clawd" | "extension";
+    driver?: "openclaw" | "extension";
   },
 ): Promise<BrowserCreateProfileResult> {
-  return await fetchBrowserJson<BrowserCreateProfileResult>(`${baseUrl}/profiles/create`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: opts.name,
-      color: opts.color,
-      cdpUrl: opts.cdpUrl,
-      driver: opts.driver,
-    }),
-    timeoutMs: 10000,
-  });
+  return await fetchBrowserJson<BrowserCreateProfileResult>(
+    withBaseUrl(baseUrl, `/profiles/create`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: opts.name,
+        color: opts.color,
+        cdpUrl: opts.cdpUrl,
+        driver: opts.driver,
+      }),
+      timeoutMs: 10000,
+    },
+  );
 }
 
 export type BrowserDeleteProfileResult = {
@@ -182,11 +189,11 @@ export type BrowserDeleteProfileResult = {
 };
 
 export async function browserDeleteProfile(
-  baseUrl: string,
+  baseUrl: string | undefined,
   profile: string,
 ): Promise<BrowserDeleteProfileResult> {
   return await fetchBrowserJson<BrowserDeleteProfileResult>(
-    `${baseUrl}/profiles/${encodeURIComponent(profile)}`,
+    withBaseUrl(baseUrl, `/profiles/${encodeURIComponent(profile)}`),
     {
       method: "DELETE",
       timeoutMs: 20000,
@@ -195,24 +202,24 @@ export async function browserDeleteProfile(
 }
 
 export async function browserTabs(
-  baseUrl: string,
+  baseUrl?: string,
   opts?: { profile?: string },
 ): Promise<BrowserTab[]> {
   const q = buildProfileQuery(opts?.profile);
   const res = await fetchBrowserJson<{ running: boolean; tabs: BrowserTab[] }>(
-    `${baseUrl}/tabs${q}`,
+    withBaseUrl(baseUrl, `/tabs${q}`),
     { timeoutMs: 3000 },
   );
   return res.tabs ?? [];
 }
 
 export async function browserOpenTab(
-  baseUrl: string,
+  baseUrl: string | undefined,
   url: string,
   opts?: { profile?: string },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
-  return await fetchBrowserJson<BrowserTab>(`${baseUrl}/tabs/open${q}`, {
+  return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
@@ -221,12 +228,12 @@ export async function browserOpenTab(
 }
 
 export async function browserFocusTab(
-  baseUrl: string,
+  baseUrl: string | undefined,
   targetId: string,
   opts?: { profile?: string },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(`${baseUrl}/tabs/focus${q}`, {
+  await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/focus${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId }),
@@ -235,19 +242,19 @@ export async function browserFocusTab(
 }
 
 export async function browserCloseTab(
-  baseUrl: string,
+  baseUrl: string | undefined,
   targetId: string,
   opts?: { profile?: string },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(`${baseUrl}/tabs/${encodeURIComponent(targetId)}${q}`, {
+  await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/${encodeURIComponent(targetId)}${q}`), {
     method: "DELETE",
     timeoutMs: 5000,
   });
 }
 
 export async function browserTabAction(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: {
     action: "list" | "new" | "close" | "select";
     index?: number;
@@ -255,7 +262,7 @@ export async function browserTabAction(
   },
 ): Promise<unknown> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson(`${baseUrl}/tabs/action${q}`, {
+  return await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/action${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -267,7 +274,7 @@ export async function browserTabAction(
 }
 
 export async function browserSnapshot(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: {
     format: "aria" | "ai";
     targetId?: string;
@@ -286,22 +293,43 @@ export async function browserSnapshot(
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
   q.set("format", opts.format);
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (typeof opts.limit === "number") q.set("limit", String(opts.limit));
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (typeof opts.limit === "number") {
+    q.set("limit", String(opts.limit));
+  }
   if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
     q.set("maxChars", String(opts.maxChars));
   }
-  if (opts.refs === "aria" || opts.refs === "role") q.set("refs", opts.refs);
-  if (typeof opts.interactive === "boolean") q.set("interactive", String(opts.interactive));
-  if (typeof opts.compact === "boolean") q.set("compact", String(opts.compact));
-  if (typeof opts.depth === "number" && Number.isFinite(opts.depth))
+  if (opts.refs === "aria" || opts.refs === "role") {
+    q.set("refs", opts.refs);
+  }
+  if (typeof opts.interactive === "boolean") {
+    q.set("interactive", String(opts.interactive));
+  }
+  if (typeof opts.compact === "boolean") {
+    q.set("compact", String(opts.compact));
+  }
+  if (typeof opts.depth === "number" && Number.isFinite(opts.depth)) {
     q.set("depth", String(opts.depth));
-  if (opts.selector?.trim()) q.set("selector", opts.selector.trim());
-  if (opts.frame?.trim()) q.set("frame", opts.frame.trim());
-  if (opts.labels === true) q.set("labels", "1");
-  if (opts.mode) q.set("mode", opts.mode);
-  if (opts.profile) q.set("profile", opts.profile);
-  return await fetchBrowserJson<SnapshotResult>(`${baseUrl}/snapshot?${q.toString()}`, {
+  }
+  if (opts.selector?.trim()) {
+    q.set("selector", opts.selector.trim());
+  }
+  if (opts.frame?.trim()) {
+    q.set("frame", opts.frame.trim());
+  }
+  if (opts.labels === true) {
+    q.set("labels", "1");
+  }
+  if (opts.mode) {
+    q.set("mode", opts.mode);
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
+  return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
     timeoutMs: 20000,
   });
 }

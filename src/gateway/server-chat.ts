@@ -1,7 +1,29 @@
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
+
+/**
+ * Check if webchat broadcasts should be suppressed for heartbeat runs.
+ * Returns true if the run is a heartbeat and showOk is false.
+ */
+function shouldSuppressHeartbeatBroadcast(runId: string): boolean {
+  const runContext = getAgentRunContext(runId);
+  if (!runContext?.isHeartbeat) {
+    return false;
+  }
+
+  try {
+    const cfg = loadConfig();
+    const visibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
+    return !visibility.showOk;
+  } catch {
+    // Default to suppressing if we can't load config
+    return true;
+  }
+}
 
 export type ChatRunEntry = {
   sessionKey: string;
@@ -32,22 +54,32 @@ export function createChatRunRegistry(): ChatRunRegistry {
 
   const shift = (sessionId: string) => {
     const queue = chatRunSessions.get(sessionId);
-    if (!queue || queue.length === 0) return undefined;
+    if (!queue || queue.length === 0) {
+      return undefined;
+    }
     const entry = queue.shift();
-    if (!queue.length) chatRunSessions.delete(sessionId);
+    if (!queue.length) {
+      chatRunSessions.delete(sessionId);
+    }
     return entry;
   };
 
   const remove = (sessionId: string, clientRunId: string, sessionKey?: string) => {
     const queue = chatRunSessions.get(sessionId);
-    if (!queue || queue.length === 0) return undefined;
+    if (!queue || queue.length === 0) {
+      return undefined;
+    }
     const idx = queue.findIndex(
       (entry) =>
         entry.clientRunId === clientRunId && (sessionKey ? entry.sessionKey === sessionKey : true),
     );
-    if (idx < 0) return undefined;
+    if (idx < 0) {
+      return undefined;
+    }
     const [entry] = queue.splice(idx, 1);
-    if (!queue.length) chatRunSessions.delete(sessionId);
+    if (!queue.length) {
+      chatRunSessions.delete(sessionId);
+    }
     return entry;
   };
 
@@ -117,7 +149,9 @@ export function createAgentEventHandler({
     chatRunState.buffers.set(clientRunId, text);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) return;
+    if (now - last < 150) {
+      return;
+    }
     chatRunState.deltaSentAt.set(clientRunId, now);
     const payload = {
       runId: clientRunId,
@@ -130,7 +164,10 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
-    broadcast("chat", payload, { dropIfSlow: true });
+    // Suppress webchat broadcast for heartbeat runs when showOk is false
+    if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
+      broadcast("chat", payload, { dropIfSlow: true });
+    }
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
@@ -158,7 +195,10 @@ export function createAgentEventHandler({
             }
           : undefined,
       };
-      broadcast("chat", payload);
+      // Suppress webchat broadcast for heartbeat runs when showOk is false
+      if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
+        broadcast("chat", payload);
+      }
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
@@ -176,12 +216,18 @@ export function createAgentEventHandler({
   const shouldEmitToolEvents = (runId: string, sessionKey?: string) => {
     const runContext = getAgentRunContext(runId);
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
-    if (runVerbose) return runVerbose === "on";
-    if (!sessionKey) return false;
+    if (runVerbose) {
+      return runVerbose === "on";
+    }
+    if (!sessionKey) {
+      return false;
+    }
     try {
       const { cfg, entry } = loadSessionEntry(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
-      if (sessionVerbose) return sessionVerbose === "on";
+      if (sessionVerbose) {
+        return sessionVerbose === "on";
+      }
       const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
       return defaultVerbose === "on";
     } catch {

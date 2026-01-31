@@ -9,8 +9,6 @@ export async function promptAuthChoiceGrouped(params: {
   prompter: WizardPrompter;
   store: AuthProfileStore;
   includeSkip: boolean;
-  includeClaudeCliIfMissing?: boolean;
-  platform?: NodeJS.Platform;
 }): Promise<AuthChoice> {
   const { groups, skipOption } = buildAuthChoiceGroups(params);
   const availableGroups = groups.filter((group) => group.options.length > 0);
@@ -44,10 +42,10 @@ export async function promptAuthChoiceGrouped(params: {
       continue;
     }
 
-    const methodSelection = (await params.prompter.select({
+    const methodSelection = await params.prompter.select({
       message: `${group.label} auth method`,
       options: [...group.options, { value: BACK_VALUE, label: "Back" }],
-    })) as string;
+    });
 
     if (methodSelection === BACK_VALUE) {
       continue;

@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "Clawdbot",
+  "name": "OpenClaw",
   "theme": "mint",
   "logo": {
     "light": "/assets/pixel-lobster.svg",
@@ -13,11 +13,11 @@
   "topbarLinks": [
     {
       "name": "GitHub",
-      "url": "https://github.com/clawdbot/clawdbot"
+      "url": "https://github.com/openclaw/openclaw"
     },
     {
       "name": "Releases",
-      "url": "https://github.com/clawdbot/clawdbot/releases"
+      "url": "https://github.com/openclaw/openclaw/releases"
     }
   ],
   "redirects": [
@@ -70,6 +70,14 @@
       "destination": "/providers/minimax"
     },
     {
+      "source": "/xiaomi",
+      "destination": "/providers/xiaomi"
+    },
+    {
+      "source": "/xiaomi/",
+      "destination": "/providers/xiaomi"
+    },
+    {
       "source": "/openai",
       "destination": "/providers/openai"
     },
@@ -116,6 +124,14 @@
     {
       "source": "/mattermost/",
       "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/line",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/line/",
+      "destination": "/channels/line"
     },
     {
       "source": "/glm",
@@ -196,6 +212,14 @@
     {
       "source": "/providers/msteams/",
       "destination": "/channels/msteams"
+    },
+    {
+      "source": "/providers/line",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/providers/line/",
+      "destination": "/channels/line"
     },
     {
       "source": "/providers/signal",
@@ -330,20 +354,32 @@
       "destination": "/automation/auth-monitoring"
     },
     {
-      "source": "/scripts",
-      "destination": "/scripts"
-    },
-    {
       "source": "/camera",
       "destination": "/nodes/camera"
     },
     {
       "source": "/clawd",
-      "destination": "/start/clawd"
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/start/clawd",
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/start/clawd/",
+      "destination": "/start/openclaw"
+    },
+    {
+      "source": "/clawhub",
+      "destination": "/tools/clawhub"
     },
     {
       "source": "/clawdhub",
-      "destination": "/tools/clawdhub"
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/tools/clawdhub",
+      "destination": "/tools/clawhub"
     },
     {
       "source": "/configuration",
@@ -788,6 +824,18 @@
     {
       "source": "/install/railway/",
       "destination": "/railway"
+    },
+    {
+      "source": "/install/northflank/",
+      "destination": "/northflank"
+    },
+    {
+      "source": "/gcp",
+      "destination": "/platforms/gcp"
+    },
+    {
+      "source": "/gcp/",
+      "destination": "/platforms/gcp"
     }
   ],
   "navigation": {
@@ -800,7 +848,7 @@
           "start/wizard",
           "start/setup",
           "start/pairing",
-          "start/clawd",
+          "start/openclaw",
           "start/showcase",
           "start/hubs",
           "start/onboarding",
@@ -809,11 +857,7 @@
       },
       {
         "group": "Help",
-        "pages": [
-          "help/index",
-          "help/troubleshooting",
-          "help/faq"
-        ]
+        "pages": ["help/index", "help/troubleshooting", "help/faq"]
       },
       {
         "group": "Install & Updates",
@@ -827,6 +871,8 @@
           "install/nix",
           "install/docker",
           "railway",
+          "render",
+          "northflank",
           "install/bun"
         ]
       },
@@ -910,7 +956,7 @@
       {
         "group": "Gateway & Ops",
         "pages": [
-          "gateway",
+          "gateway/index",
           "gateway/protocol",
           "gateway/bridge-protocol",
           "gateway/pairing",
@@ -929,7 +975,8 @@
           "gateway/heartbeat",
           "gateway/doctor",
           "gateway/logging",
-          "gateway/security",
+          "gateway/security/index",
+          "security/formal-verification",
           "gateway/sandbox-vs-tool-policy-vs-elevated",
           "gateway/sandboxing",
           "gateway/troubleshooting",
@@ -943,13 +990,7 @@
       },
       {
         "group": "Web & Interfaces",
-        "pages": [
-          "web",
-          "web/control-ui",
-          "web/dashboard",
-          "web/webchat",
-          "tui"
-        ]
+        "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
       },
       {
         "group": "Channels",
@@ -965,6 +1006,7 @@
           "channels/signal",
           "channels/imessage",
           "channels/msteams",
+          "channels/line",
           "channels/matrix",
           "channels/zalo",
           "channels/zalouser",
@@ -983,6 +1025,7 @@
           "bedrock",
           "providers/moonshot",
           "providers/minimax",
+          "providers/vercel-ai-gateway",
           "providers/openrouter",
           "providers/synthetic",
           "providers/opencode",
@@ -1006,7 +1049,7 @@
       {
         "group": "Tools & Skills",
         "pages": [
-          "tools",
+          "tools/index",
           "tools/lobster",
           "tools/llm-task",
           "plugin",
@@ -1028,13 +1071,13 @@
           "tools/reactions",
           "tools/skills",
           "tools/skills-config",
-          "tools/clawdhub"
+          "tools/clawhub"
         ]
       },
       {
         "group": "Nodes & Media",
         "pages": [
-          "nodes",
+          "nodes/index",
           "nodes/camera",
           "nodes/images",
           "nodes/audio",
@@ -1046,7 +1089,7 @@
       {
         "group": "Platforms",
         "pages": [
-          "platforms",
+          "platforms/index",
           "platforms/macos",
           "platforms/macos-vm",
           "platforms/ios",
@@ -1055,6 +1098,7 @@
           "platforms/linux",
           "platforms/fly",
           "platforms/hetzner",
+          "platforms/gcp",
           "platforms/exe-dev"
         ]
       },

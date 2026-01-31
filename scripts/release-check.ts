@@ -7,12 +7,8 @@ import { join, resolve } from "node:path";
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
 
-const requiredPaths = [
-  "dist/discord/send.js",
-  "dist/hooks/gmail.js",
-  "dist/whatsapp/normalize.js",
-];
-const forbiddenPrefixes = ["dist/Clawdbot.app/"];
+const requiredPaths = ["dist/discord/send.js", "dist/hooks/gmail.js", "dist/whatsapp/normalize.js"];
+const forbiddenPrefixes = ["dist/OpenClaw.app/"];
 
 type PackageJson = {
   name?: string;
@@ -23,6 +19,7 @@ function runPackDry(): PackResult[] {
   const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1024 * 1024 * 100,
   });
   return JSON.parse(raw) as PackResult[];
 }

@@ -66,6 +66,12 @@ export async function loadProviderUsageSummary(
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
             return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
+          case "xiaomi":
+            return {
+              provider: "xiaomi",
+              displayName: PROVIDER_LABELS.xiaomi,
+              windows: [],
+            };
           case "zai":
             return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
           default:
@@ -89,8 +95,12 @@ export async function loadProviderUsageSummary(
 
   const snapshots = await Promise.all(tasks);
   const providers = snapshots.filter((entry) => {
-    if (entry.windows.length > 0) return true;
-    if (!entry.error) return true;
+    if (entry.windows.length > 0) {
+      return true;
+    }
+    if (!entry.error) {
+      return true;
+    }
     return !ignoredErrors.has(entry.error);
   });
 

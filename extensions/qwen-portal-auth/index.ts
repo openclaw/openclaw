@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
 import { loginQwenPortalOAuth } from "./oauth.js";
 
@@ -16,7 +16,11 @@ function normalizeBaseUrl(value: string | undefined): string {
   return withProtocol.endsWith("/v1") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/v1`;
 }
 
-function buildModelDefinition(params: { id: string; name: string; input: Array<"text" | "image"> }) {
+function buildModelDefinition(params: {
+  id: string;
+  name: string;
+  input: Array<"text" | "image">;
+}) {
   return {
     id: params.id,
     name: params.name,

@@ -24,13 +24,10 @@ import type {
   StatusSummary,
   NostrProfile,
 } from "./types";
-import { type ChatQueueItem, type CronFormState } from "./ui-types";
+import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults";
-import type {
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
-} from "./controllers/exec-approvals";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals";
 import type { DevicePairingList } from "./controllers/devices";
 import {
   createDMPairingState,
@@ -88,7 +85,7 @@ import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./contro
 
 declare global {
   interface Window {
-    __CLAWDBOT_CONTROL_UI_BASE_PATH__?: string;
+    __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
   }
 }
 
@@ -103,8 +100,8 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-@customElement("clawdbot-app")
-export class ClawdbotApp extends LitElement {
+@customElement("openclaw-app")
+export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   @state() password = "";
   @state() tab: Tab = "chat";
@@ -136,6 +133,7 @@ export class ClawdbotApp extends LitElement {
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
+  @state() chatAttachments: ChatAttachment[] = [];
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -159,6 +157,7 @@ export class ClawdbotApp extends LitElement {
   @state() execApprovalQueue: ExecApprovalRequest[] = [];
   @state() execApprovalBusy = false;
   @state() execApprovalError: string | null = null;
+  @state() pendingGatewayUrl: string | null = null;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
@@ -264,11 +263,10 @@ export class ClawdbotApp extends LitElement {
   private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
+  refreshSessionsAfterChat = new Set<string>();
   basePath = "";
   private popStateHandler = () =>
-    onPopStateInternal(
-      this as unknown as Parameters<typeof onPopStateInternal>[0],
-    );
+    onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
   private themeMedia: MediaQueryList | null = null;
   private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
   private topbarObserver: ResizeObserver | null = null;
@@ -292,16 +290,11 @@ export class ClawdbotApp extends LitElement {
   }
 
   protected updated(changed: Map<PropertyKey, unknown>) {
-    handleUpdated(
-      this as unknown as Parameters<typeof handleUpdated>[0],
-      changed,
-    );
+    handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
   }
 
   connect() {
-    connectGatewayInternal(
-      this as unknown as Parameters<typeof connectGatewayInternal>[0],
-    );
+    connectGatewayInternal(this as unknown as Parameters<typeof connectGatewayInternal>[0]);
   }
 
   handleChatScroll(event: Event) {
@@ -323,15 +316,11 @@ export class ClawdbotApp extends LitElement {
   }
 
   resetToolStream() {
-    resetToolStreamInternal(
-      this as unknown as Parameters<typeof resetToolStreamInternal>[0],
-    );
+    resetToolStreamInternal(this as unknown as Parameters<typeof resetToolStreamInternal>[0]);
   }
 
   resetChatScroll() {
-    resetChatScrollInternal(
-      this as unknown as Parameters<typeof resetChatScrollInternal>[0],
-    );
+    resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
   }
 
   async loadAssistantIdentity() {
@@ -339,10 +328,7 @@ export class ClawdbotApp extends LitElement {
   }
 
   applySettings(next: UiSettings) {
-    applySettingsInternal(
-      this as unknown as Parameters<typeof applySettingsInternal>[0],
-      next,
-    );
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
   }
 
   setTab(next: Tab) {
@@ -350,29 +336,19 @@ export class ClawdbotApp extends LitElement {
   }
 
   setTheme(next: ThemeMode, context?: Parameters<typeof setThemeInternal>[2]) {
-    setThemeInternal(
-      this as unknown as Parameters<typeof setThemeInternal>[0],
-      next,
-      context,
-    );
+    setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
   }
 
   async loadOverview() {
-    await loadOverviewInternal(
-      this as unknown as Parameters<typeof loadOverviewInternal>[0],
-    );
+    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
   }
 
   async loadCron() {
-    await loadCronInternal(
-      this as unknown as Parameters<typeof loadCronInternal>[0],
-    );
+    await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
   }
 
   async handleAbortChat() {
-    await handleAbortChatInternal(
-      this as unknown as Parameters<typeof handleAbortChatInternal>[0],
-    );
+    await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
   }
 
   removeQueuedMessage(id: string) {
@@ -453,6 +429,21 @@ export class ClawdbotApp extends LitElement {
     } finally {
       this.execApprovalBusy = false;
     }
+  }
+
+  handleGatewayUrlConfirm() {
+    const nextGatewayUrl = this.pendingGatewayUrl;
+    if (!nextGatewayUrl) return;
+    this.pendingGatewayUrl = null;
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+      ...this.settings,
+      gatewayUrl: nextGatewayUrl,
+    });
+    this.connect();
+  }
+
+  handleGatewayUrlCancel() {
+    this.pendingGatewayUrl = null;
   }
 
   // Sidebar handlers for tool output viewing

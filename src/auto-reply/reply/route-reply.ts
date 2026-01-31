@@ -10,7 +10,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -30,9 +30,11 @@ export type RouteReplyParams = {
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
   /** Config for provider-specific settings. */
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   /** Optional abort signal for cooperative cancellation. */
   abortSignal?: AbortSignal;
+  /** Mirror reply into session transcript (default: true when sessionKey is set). */
+  mirror?: boolean;
 };
 
 export type RouteReplyResult = {
@@ -70,7 +72,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
   });
-  if (!normalized) return { ok: true };
+  if (!normalized) {
+    return { ok: true };
+  }
 
   let text = normalized.text ?? "";
   let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
@@ -118,14 +122,15 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       abortSignal,
-      mirror: params.sessionKey
-        ? {
-            sessionKey: params.sessionKey,
-            agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
-            text,
-            mediaUrls,
-          }
-        : undefined,
+      mirror:
+        params.mirror !== false && params.sessionKey
+          ? {
+              sessionKey: params.sessionKey,
+              agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+              text,
+              mediaUrls,
+            }
+          : undefined,
     });
 
     const last = results.at(-1);
@@ -148,6 +153,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
 ): channel is Exclude<OriginatingChannelType, typeof INTERNAL_MESSAGE_CHANNEL> {
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) return false;
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
   return normalizeChannelId(channel) !== null;
 }

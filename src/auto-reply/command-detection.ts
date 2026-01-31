@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   type CommandNormalizeOptions,
   listChatCommands,
@@ -9,24 +9,36 @@ import { isAbortTrigger } from "./reply/abort.js";
 
 export function hasControlCommand(
   text?: string,
-  cfg?: ClawdbotConfig,
+  cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  if (!text) return false;
+  if (!text) {
+    return false;
+  }
   const trimmed = text.trim();
-  if (!trimmed) return false;
+  if (!trimmed) {
+    return false;
+  }
   const normalizedBody = normalizeCommandBody(trimmed, options);
-  if (!normalizedBody) return false;
+  if (!normalizedBody) {
+    return false;
+  }
   const lowered = normalizedBody.toLowerCase();
   const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
   for (const command of commands) {
     for (const alias of command.textAliases) {
       const normalized = alias.trim().toLowerCase();
-      if (!normalized) continue;
-      if (lowered === normalized) return true;
+      if (!normalized) {
+        continue;
+      }
+      if (lowered === normalized) {
+        return true;
+      }
       if (command.acceptsArgs && lowered.startsWith(normalized)) {
         const nextChar = normalizedBody.charAt(normalized.length);
-        if (nextChar && /\s/.test(nextChar)) return true;
+        if (nextChar && /\s/.test(nextChar)) {
+          return true;
+        }
       }
     }
   }
@@ -35,13 +47,19 @@ export function hasControlCommand(
 
 export function isControlCommandMessage(
   text?: string,
-  cfg?: ClawdbotConfig,
+  cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  if (!text) return false;
+  if (!text) {
+    return false;
+  }
   const trimmed = text.trim();
-  if (!trimmed) return false;
-  if (hasControlCommand(trimmed, cfg, options)) return true;
+  if (!trimmed) {
+    return false;
+  }
+  if (hasControlCommand(trimmed, cfg, options)) {
+    return true;
+  }
   const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();
   return isAbortTrigger(normalized);
 }
@@ -55,13 +73,15 @@ export function isControlCommandMessage(
  */
 export function hasInlineCommandTokens(text?: string): boolean {
   const body = text ?? "";
-  if (!body.trim()) return false;
+  if (!body.trim()) {
+    return false;
+  }
   return /(?:^|\s)[/!][a-z]/i.test(body);
 }
 
 export function shouldComputeCommandAuthorized(
   text?: string,
-  cfg?: ClawdbotConfig,
+  cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
   return isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text);

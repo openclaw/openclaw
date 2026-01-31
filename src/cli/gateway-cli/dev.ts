@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { resolveWorkspaceTemplateDir } from "../../agents/workspace-templates.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
-import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../../config/config.js";
+import { createConfigIO, writeConfigFile } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
@@ -13,17 +14,17 @@ const DEV_IDENTITY_THEME = "protocol droid";
 const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 
-const DEV_TEMPLATE_DIR = path.resolve(
-  path.dirname(new URL(import.meta.url).pathname),
-  "../../../docs/reference/templates",
-);
-
 async function loadDevTemplate(name: string, fallback: string): Promise<string> {
   try {
-    const raw = await fs.promises.readFile(path.join(DEV_TEMPLATE_DIR, name), "utf-8");
-    if (!raw.startsWith("---")) return raw;
+    const templateDir = await resolveWorkspaceTemplateDir();
+    const raw = await fs.promises.readFile(path.join(templateDir, name), "utf-8");
+    if (!raw.startsWith("---")) {
+      return raw;
+    }
     const endIndex = raw.indexOf("\n---", 3);
-    if (endIndex === -1) return raw;
+    if (endIndex === -1) {
+      return raw;
+    }
     return raw.slice(endIndex + "\n---".length).replace(/^\s+/, "");
   } catch {
     return fallback;
@@ -32,8 +33,10 @@ async function loadDevTemplate(name: string, fallback: string): Promise<string> 
 
 const resolveDevWorkspaceDir = (env: NodeJS.ProcessEnv = process.env): string => {
   const baseDir = resolveDefaultAgentWorkspaceDir(env, os.homedir);
-  const profile = env.CLAWDBOT_PROFILE?.trim().toLowerCase();
-  if (profile === "dev") return baseDir;
+  const profile = env.OPENCLAW_PROFILE?.trim().toLowerCase();
+  if (profile === "dev") {
+    return baseDir;
+  }
   return `${baseDir}-${DEV_AGENT_WORKSPACE_SUFFIX}`;
 };
 
@@ -45,7 +48,9 @@ async function writeFileIfMissing(filePath: string, content: string) {
     });
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code !== "EEXIST") throw err;
+    if (anyErr.code !== "EEXIST") {
+      throw err;
+    }
   }
 }
 
@@ -56,7 +61,7 @@ async function ensureDevWorkspace(dir: string) {
   const [agents, soul, tools, identity, user] = await Promise.all([
     loadDevTemplate(
       "AGENTS.dev.md",
-      `# AGENTS.md - Clawdbot Dev Workspace\n\nDefault dev workspace for clawdbot gateway --dev.\n`,
+      `# AGENTS.md - OpenClaw Dev Workspace\n\nDefault dev workspace for openclaw gateway --dev.\n`,
     ),
     loadDevTemplate(
       "SOUL.dev.md",
@@ -89,8 +94,12 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
     await handleReset("full", workspace, defaultRuntime);
   }
 
-  const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
-  if (!opts.reset && configExists) return;
+  const io = createConfigIO();
+  const configPath = io.configPath;
+  const configExists = fs.existsSync(configPath);
+  if (!opts.reset && configExists) {
+    return;
+  }
 
   await writeConfigFile({
     gateway: {
@@ -117,6 +126,6 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
     },
   });
   await ensureDevWorkspace(workspace);
-  defaultRuntime.log(`Dev config ready: ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+  defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);
   defaultRuntime.log(`Dev workspace ready: ${shortenHomePath(resolveUserPath(workspace))}`);
 }

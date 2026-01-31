@@ -1,6 +1,7 @@
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
+import { browserHandlers } from "./server-methods/browser.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { configHandlers } from "./server-methods/config.js";
@@ -90,14 +91,19 @@ const WRITE_METHODS = new Set([
   "node.invoke",
   "chat.send",
   "chat.abort",
+  "browser.request",
 ]);
 
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
-  if (!client?.connect) return null;
+  if (!client?.connect) {
+    return null;
+  }
   const role = client.connect.role ?? "operator";
   const scopes = client.connect.scopes ?? [];
   if (NODE_ROLE_METHODS.has(method)) {
-    if (role === "node") return null;
+    if (role === "node") {
+      return null;
+    }
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
@@ -106,7 +112,9 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (role !== "operator") {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
-  if (scopes.includes(ADMIN_SCOPE)) return null;
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return null;
+  }
   if (APPROVAL_METHODS.has(method) && !scopes.includes(APPROVALS_SCOPE)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.approvals");
   }
@@ -119,10 +127,18 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (WRITE_METHODS.has(method) && !scopes.includes(WRITE_SCOPE)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.write");
   }
-  if (APPROVAL_METHODS.has(method)) return null;
-  if (PAIRING_METHODS.has(method)) return null;
-  if (READ_METHODS.has(method)) return null;
-  if (WRITE_METHODS.has(method)) return null;
+  if (APPROVAL_METHODS.has(method)) {
+    return null;
+  }
+  if (PAIRING_METHODS.has(method)) {
+    return null;
+  }
+  if (READ_METHODS.has(method)) {
+    return null;
+  }
+  if (WRITE_METHODS.has(method)) {
+    return null;
+  }
   if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
     return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin");
   }
@@ -173,6 +189,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...usageHandlers,
   ...agentHandlers,
   ...agentsHandlers,
+  ...browserHandlers,
 };
 
 export async function handleGatewayRequest(

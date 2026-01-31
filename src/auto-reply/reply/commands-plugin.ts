@@ -15,13 +15,19 @@ import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
  */
 export const handlePluginCommand: CommandHandler = async (
   params,
-  _allowTextCommands,
+  allowTextCommands,
 ): Promise<CommandHandlerResult | null> => {
   const { command, cfg } = params;
 
+  if (!allowTextCommands) {
+    return null;
+  }
+
   // Try to match a plugin command
   const match = matchPluginCommand(command.commandBodyNormalized);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
 
   // Execute the plugin command (always returns a result)
   const result = await executePluginCommand({
@@ -36,6 +42,6 @@ export const handlePluginCommand: CommandHandler = async (
 
   return {
     shouldContinue: false,
-    reply: { text: result.text },
+    reply: result,
   };
 };

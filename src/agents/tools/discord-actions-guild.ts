@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
+import { getPresence } from "../../discord/monitor/presence-cache.js";
 import {
   addRoleDiscord,
   createChannelDiscord,
@@ -29,8 +30,12 @@ import {
 } from "./common.js";
 
 function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
-  if (params.clearParent === true) return null;
-  if (params.parentId === null) return null;
+  if (params.clearParent === true) {
+    return null;
+  }
+  if (params.parentId === null) {
+    return null;
+  }
   return readStringParam(params, "parentId");
 }
 
@@ -54,7 +59,10 @@ export async function handleDiscordGuildAction(
       const member = accountId
         ? await fetchMemberInfoDiscord(guildId, userId, { accountId })
         : await fetchMemberInfoDiscord(guildId, userId);
-      return jsonResult({ ok: true, member });
+      const presence = getPresence(accountId, userId);
+      const activities = presence?.activities ?? undefined;
+      const status = presence?.status ?? undefined;
+      return jsonResult({ ok: true, member, ...(presence ? { status, activities } : {}) });
     }
     case "roleInfo": {
       if (!isActionEnabled("roleInfo")) {

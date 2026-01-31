@@ -15,15 +15,30 @@ export type GatewayTlsConfig = {
 
 export type WideAreaDiscoveryConfig = {
   enabled?: boolean;
+  /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
+  domain?: string;
+};
+
+export type MdnsDiscoveryMode = "off" | "minimal" | "full";
+
+export type MdnsDiscoveryConfig = {
+  /**
+   * mDNS/Bonjour discovery broadcast mode (default: minimal).
+   * - off: disable mDNS entirely
+   * - minimal: omit cliPath/sshPort from TXT records
+   * - full: include cliPath/sshPort in TXT records
+   */
+  mode?: MdnsDiscoveryMode;
 };
 
 export type DiscoveryConfig = {
   wideArea?: WideAreaDiscoveryConfig;
+  mdns?: MdnsDiscoveryConfig;
 };
 
 export type CanvasHostConfig = {
   enabled?: boolean;
-  /** Directory to serve (default: ~/clawd/canvas). */
+  /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
   root?: string;
   /** HTTP port to listen on (default: 18793). */
   port?: number;
@@ -49,10 +64,12 @@ export type TalkConfig = {
 export type GatewayControlUiConfig = {
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
-  /** Optional base path prefix for the Control UI (e.g. "/clawdbot"). */
+  /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
   basePath?: string;
   /** Allow token-only auth over insecure HTTP (default: false). */
   allowInsecureAuth?: boolean;
+  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
+  dangerouslyDisableDeviceAuth?: boolean;
 };
 
 export type GatewayAuthMode = "token" | "password";

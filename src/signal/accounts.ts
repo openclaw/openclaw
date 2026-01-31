@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SignalAccountConfig } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
@@ -11,34 +11,42 @@ export type ResolvedSignalAccount = {
   config: SignalAccountConfig;
 };
 
-function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
+function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = cfg.channels?.signal?.accounts;
-  if (!accounts || typeof accounts !== "object") return [];
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
   return Object.keys(accounts).filter(Boolean);
 }
 
-export function listSignalAccountIds(cfg: ClawdbotConfig): string[] {
+export function listSignalAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultSignalAccountId(cfg: ClawdbotConfig): string {
+export function resolveDefaultSignalAccountId(cfg: OpenClawConfig): string {
   const ids = listSignalAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
 function resolveAccountConfig(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
   accountId: string,
 ): SignalAccountConfig | undefined {
   const accounts = cfg.channels?.signal?.accounts;
-  if (!accounts || typeof accounts !== "object") return undefined;
+  if (!accounts || typeof accounts !== "object") {
+    return undefined;
+  }
   return accounts[accountId] as SignalAccountConfig | undefined;
 }
 
-function mergeSignalAccountConfig(cfg: ClawdbotConfig, accountId: string): SignalAccountConfig {
+function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.signal ?? {}) as SignalAccountConfig & {
     accounts?: unknown;
   };
@@ -47,7 +55,7 @@ function mergeSignalAccountConfig(cfg: ClawdbotConfig, accountId: string): Signa
 }
 
 export function resolveSignalAccount(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedSignalAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -76,7 +84,7 @@ export function resolveSignalAccount(params: {
   };
 }
 
-export function listEnabledSignalAccounts(cfg: ClawdbotConfig): ResolvedSignalAccount[] {
+export function listEnabledSignalAccounts(cfg: OpenClawConfig): ResolvedSignalAccount[] {
   return listSignalAccountIds(cfg)
     .map((accountId) => resolveSignalAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

@@ -1,0 +1,9 @@
+{
+  "id": "line",
+  "channels": ["line"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

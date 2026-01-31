@@ -29,8 +29,12 @@ export async function maybeBroadcastMessage(params: {
   ) => Promise<boolean>;
 }) {
   const broadcastAgents = params.cfg.broadcast?.[params.peerId];
-  if (!broadcastAgents || !Array.isArray(broadcastAgents)) return false;
-  if (broadcastAgents.length === 0) return false;
+  if (!broadcastAgents || !Array.isArray(broadcastAgents)) {
+    return false;
+  }
+  if (broadcastAgents.length === 0) {
+    return false;
+  }
 
   const strategy = params.cfg.broadcast?.strategy || "parallel";
   whatsappInboundLog.info(`Broadcasting message to ${broadcastAgents.length} agents (${strategy})`);
@@ -54,11 +58,13 @@ export async function maybeBroadcastMessage(params: {
       sessionKey: buildAgentSessionKey({
         agentId: normalizedAgentId,
         channel: "whatsapp",
+        accountId: params.route.accountId,
         peer: {
           kind: params.msg.chatType === "group" ? "group" : "dm",
           id: params.peerId,
         },
         dmScope: params.cfg.session?.dmScope,
+        identityLinks: params.cfg.session?.identityLinks,
       }),
       mainSessionKey: buildAgentMainSessionKey({
         agentId: normalizedAgentId,

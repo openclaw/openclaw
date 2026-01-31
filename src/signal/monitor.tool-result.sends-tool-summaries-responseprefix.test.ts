@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
@@ -39,7 +39,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/clawdbot-sessions.json"),
+  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
   updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
   readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -210,12 +210,9 @@ describe("monitorSignalProvider tool results", () => {
     );
   });
 
-  it("sends tool summaries with responsePrefix", async () => {
+  it("skips tool summaries with responsePrefix", async () => {
     const abortController = new AbortController();
-    replyMock.mockImplementation(async (_ctx, opts) => {
-      await opts?.onToolResult?.({ text: "tool update" });
-      return { text: "final reply" };
-    });
+    replyMock.mockResolvedValue({ text: "final reply" });
 
     streamMock.mockImplementation(async ({ onEvent }) => {
       const payload = {
@@ -243,9 +240,8 @@ describe("monitorSignalProvider tool results", () => {
 
     await flush();
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
-    expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
@@ -416,7 +412,7 @@ describe("monitorSignalProvider tool results", () => {
     await flush();
 
     const route = resolveAgentRoute({
-      cfg: config as ClawdbotConfig,
+      cfg: config as OpenClawConfig,
       channel: "signal",
       accountId: "default",
       peer: { kind: "dm", id: normalizeE164("+15550001111") },
@@ -472,7 +468,7 @@ describe("monitorSignalProvider tool results", () => {
     await flush();
 
     const route = resolveAgentRoute({
-      cfg: config as ClawdbotConfig,
+      cfg: config as OpenClawConfig,
       channel: "signal",
       accountId: "default",
       peer: { kind: "dm", id: normalizeE164("+15550001111") },

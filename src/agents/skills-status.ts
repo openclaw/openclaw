@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -69,14 +69,16 @@ export type SkillStatusReport = {
 };
 
 function resolveSkillKey(entry: SkillEntry): string {
-  return entry.clawdbot?.skillKey ?? entry.skill.name;
+  return entry.metadata?.skillKey ?? entry.skill.name;
 }
 
 function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
   prefs: SkillsInstallPreferences,
 ): { spec: SkillInstallSpec; index: number } | undefined {
-  if (install.length === 0) return undefined;
+  if (install.length === 0) {
+    return undefined;
+  }
   const indexed = install.map((spec, index) => ({ spec, index }));
   const findKind = (kind: SkillInstallSpec["kind"]) =>
     indexed.find((item) => item.spec.kind === kind);
@@ -86,11 +88,21 @@ function selectPreferredInstallSpec(
   const goSpec = findKind("go");
   const uvSpec = findKind("uv");
 
-  if (prefs.preferBrew && hasBinary("brew") && brewSpec) return brewSpec;
-  if (uvSpec) return uvSpec;
-  if (nodeSpec) return nodeSpec;
-  if (brewSpec) return brewSpec;
-  if (goSpec) return goSpec;
+  if (prefs.preferBrew && hasBinary("brew") && brewSpec) {
+    return brewSpec;
+  }
+  if (uvSpec) {
+    return uvSpec;
+  }
+  if (nodeSpec) {
+    return nodeSpec;
+  }
+  if (brewSpec) {
+    return brewSpec;
+  }
+  if (goSpec) {
+    return goSpec;
+  }
   return indexed[0];
 }
 
@@ -98,15 +110,19 @@ function normalizeInstallOptions(
   entry: SkillEntry,
   prefs: SkillsInstallPreferences,
 ): SkillInstallOption[] {
-  const install = entry.clawdbot?.install ?? [];
-  if (install.length === 0) return [];
+  const install = entry.metadata?.install ?? [];
+  if (install.length === 0) {
+    return [];
+  }
 
   const platform = process.platform;
   const filtered = install.filter((spec) => {
     const osList = spec.os ?? [];
     return osList.length === 0 || osList.includes(platform);
   });
-  if (filtered.length === 0) return [];
+  if (filtered.length === 0) {
+    return [];
+  }
 
   const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
     const id = (spec.id ?? `${spec.kind}-${index}`).trim();
@@ -141,13 +157,15 @@ function normalizeInstallOptions(
   }
 
   const preferred = selectPreferredInstallSpec(filtered, prefs);
-  if (!preferred) return [];
+  if (!preferred) {
+    return [];
+  }
   return [toOption(preferred.spec, preferred.index)];
 }
 
 function buildSkillStatus(
   entry: SkillEntry,
-  config?: ClawdbotConfig,
+  config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
 ): SkillStatusEntry {
@@ -156,24 +174,28 @@ function buildSkillStatus(
   const disabled = skillConfig?.enabled === false;
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
-  const always = entry.clawdbot?.always === true;
-  const emoji = entry.clawdbot?.emoji ?? entry.frontmatter.emoji;
+  const always = entry.metadata?.always === true;
+  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
   const homepageRaw =
-    entry.clawdbot?.homepage ??
+    entry.metadata?.homepage ??
     entry.frontmatter.homepage ??
     entry.frontmatter.website ??
     entry.frontmatter.url;
   const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
 
-  const requiredBins = entry.clawdbot?.requires?.bins ?? [];
-  const requiredAnyBins = entry.clawdbot?.requires?.anyBins ?? [];
-  const requiredEnv = entry.clawdbot?.requires?.env ?? [];
-  const requiredConfig = entry.clawdbot?.requires?.config ?? [];
-  const requiredOs = entry.clawdbot?.os ?? [];
+  const requiredBins = entry.metadata?.requires?.bins ?? [];
+  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
+  const requiredEnv = entry.metadata?.requires?.env ?? [];
+  const requiredConfig = entry.metadata?.requires?.config ?? [];
+  const requiredOs = entry.metadata?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) return false;
-    if (eligibility?.remote?.hasBin?.(bin)) return false;
+    if (hasBinary(bin)) {
+      return false;
+    }
+    if (eligibility?.remote?.hasBin?.(bin)) {
+      return false;
+    }
     return true;
   });
   const missingAnyBins =
@@ -193,9 +215,13 @@ function buildSkillStatus(
 
   const missingEnv: string[] = [];
   for (const envName of requiredEnv) {
-    if (process.env[envName]) continue;
-    if (skillConfig?.env?.[envName]) continue;
-    if (skillConfig?.apiKey && entry.clawdbot?.primaryEnv === envName) {
+    if (process.env[envName]) {
+      continue;
+    }
+    if (skillConfig?.env?.[envName]) {
+      continue;
+    }
+    if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
       continue;
     }
     missingEnv.push(envName);
@@ -234,7 +260,7 @@ function buildSkillStatus(
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,
     skillKey,
-    primaryEnv: entry.clawdbot?.primaryEnv,
+    primaryEnv: entry.metadata?.primaryEnv,
     emoji,
     homepage,
     always,
@@ -257,7 +283,7 @@ function buildSkillStatus(
 export function buildWorkspaceSkillStatus(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: OpenClawConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
     eligibility?: SkillEligibilityContext;

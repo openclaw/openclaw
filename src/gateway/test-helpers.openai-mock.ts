@@ -22,7 +22,9 @@ type OpenAIResponseStreamEvent =
 function extractLastUserText(input: unknown[]): string {
   for (let i = input.length - 1; i >= 0; i -= 1) {
     const item = input[i] as Record<string, unknown> | undefined;
-    if (!item || item.role !== "user") continue;
+    if (!item || item.role !== "user") {
+      continue;
+    }
     const content = item.content;
     if (Array.isArray(content)) {
       const text = content
@@ -36,7 +38,9 @@ function extractLastUserText(input: unknown[]): string {
         .map((c) => c.text)
         .join("\n")
         .trim();
-      if (text) return text;
+      if (text) {
+        return text;
+      }
     }
   }
   return "";
@@ -45,7 +49,9 @@ function extractLastUserText(input: unknown[]): string {
 function extractToolOutput(input: unknown[]): string {
   for (const itemRaw of input) {
     const item = itemRaw as Record<string, unknown> | undefined;
-    if (!item || item.type !== "function_call_output") continue;
+    if (!item || item.type !== "function_call_output") {
+      continue;
+    }
     return typeof item.output === "string" ? item.output : "";
   }
   return "";
@@ -128,10 +134,18 @@ async function* fakeOpenAIResponsesStream(
 }
 
 function decodeBodyText(body: unknown): string {
-  if (!body) return "";
-  if (typeof body === "string") return body;
-  if (body instanceof Uint8Array) return Buffer.from(body).toString("utf8");
-  if (body instanceof ArrayBuffer) return Buffer.from(new Uint8Array(body)).toString("utf8");
+  if (!body) {
+    return "";
+  }
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body).toString("utf8");
+  }
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(body)).toString("utf8");
+  }
   return "";
 }
 

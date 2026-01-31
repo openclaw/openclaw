@@ -1,11 +1,13 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import type { FailoverReason } from "./types.js";
 
 export function isContextOverflowError(errorMessage?: string): boolean {
-  if (!errorMessage) return false;
+  if (!errorMessage) {
+    return false;
+  }
   const lower = errorMessage.toLowerCase();
   const hasRequestSizeExceeds = lower.includes("request size exceeds");
   const hasContextWindow =
@@ -30,15 +32,25 @@ const CONTEXT_OVERFLOW_HINT_RE =
   /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|(?:prompt|request|input).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
-  if (!errorMessage) return false;
-  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) return false;
-  if (isContextOverflowError(errorMessage)) return true;
+  if (!errorMessage) {
+    return false;
+  }
+  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
+    return false;
+  }
+  if (isContextOverflowError(errorMessage)) {
+    return true;
+  }
   return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
 }
 
 export function isCompactionFailureError(errorMessage?: string): boolean {
-  if (!errorMessage) return false;
-  if (!isContextOverflowError(errorMessage)) return false;
+  if (!errorMessage) {
+    return false;
+  }
+  if (!isContextOverflowError(errorMessage)) {
+    return false;
+  }
   const lower = errorMessage.toLowerCase();
   return (
     lower.includes("summarization failed") ||
@@ -73,15 +85,50 @@ const HTTP_ERROR_HINTS = [
 ];
 
 function stripFinalTagsFromText(text: string): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
   return text.replace(FINAL_TAG_RE, "");
+}
+
+function collapseConsecutiveDuplicateBlocks(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return text;
+  }
+  const blocks = trimmed.split(/\n{2,}/);
+  if (blocks.length < 2) {
+    return text;
+  }
+
+  const normalizeBlock = (value: string) => value.trim().replace(/\s+/g, " ");
+  const result: string[] = [];
+  let lastNormalized: string | null = null;
+
+  for (const block of blocks) {
+    const normalized = normalizeBlock(block);
+    if (lastNormalized && normalized === lastNormalized) {
+      continue;
+    }
+    result.push(block.trim());
+    lastNormalized = normalized;
+  }
+
+  if (result.length === blocks.length) {
+    return text;
+  }
+  return result.join("\n\n");
 }
 
 function isLikelyHttpErrorText(raw: string): boolean {
   const match = raw.match(HTTP_STATUS_PREFIX_RE);
-  if (!match) return false;
+  if (!match) {
+    return false;
+  }
   const code = Number(match[1]);
-  if (!Number.isFinite(code) || code < 400) return false;
+  if (!Number.isFinite(code) || code < 400) {
+    return false;
+  }
   const message = match[2].toLowerCase();
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
@@ -89,10 +136,16 @@ function isLikelyHttpErrorText(raw: string): boolean {
 type ErrorPayload = Record<string, unknown>;
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
   const record = payload as ErrorPayload;
-  if (record.type === "error") return true;
-  if (typeof record.request_id === "string" || typeof record.requestId === "string") return true;
+  if (record.type === "error") {
+    return true;
+  }
+  if (typeof record.request_id === "string" || typeof record.requestId === "string") {
+    return true;
+  }
   if ("error" in record) {
     const err = record.error;
     if (err && typeof err === "object" && !Array.isArray(err)) {
@@ -110,18 +163,26 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
 }
 
 function parseApiErrorPayload(raw: string): ErrorPayload | null {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const candidates = [trimmed];
   if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
     candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
   }
   for (const candidate of candidates) {
-    if (!candidate.startsWith("{") || !candidate.endsWith("}")) continue;
+    if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+      continue;
+    }
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      if (isErrorPayloadObject(parsed)) return parsed;
+      if (isErrorPayloadObject(parsed)) {
+        return parsed;
+      }
     } catch {
       // ignore parse errors
     }
@@ -137,15 +198,19 @@ function stableStringify(value: unknown): string {
     return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
+  const keys = Object.keys(record).toSorted();
   const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
   return `{${entries.join(",")}}`;
 }
 
 export function getApiErrorPayloadFingerprint(raw?: string): string | null {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const payload = parseApiErrorPayload(raw);
-  if (!payload) return null;
+  if (!payload) {
+    return null;
+  }
   return stableStringify(payload);
 }
 
@@ -161,9 +226,13 @@ export type ApiErrorInfo = {
 };
 
 export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
 
   let httpCode: string | undefined;
   let candidate = trimmed;
@@ -175,7 +244,9 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   }
 
   const payload = parseApiErrorPayload(candidate);
-  if (!payload) return null;
+  if (!payload) {
+    return null;
+  }
 
   const requestId =
     typeof payload.request_id === "string"
@@ -191,9 +262,15 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   let errMessage: string | undefined;
   if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
     const err = payload.error as Record<string, unknown>;
-    if (typeof err.type === "string") errType = err.type;
-    if (typeof err.code === "string" && !errType) errType = err.code;
-    if (typeof err.message === "string") errMessage = err.message;
+    if (typeof err.type === "string") {
+      errType = err.type;
+    }
+    if (typeof err.code === "string" && !errType) {
+      errType = err.code;
+    }
+    if (typeof err.message === "string") {
+      errMessage = err.message;
+    }
   }
 
   return {
@@ -206,7 +283,9 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
 
 export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
-  if (!trimmed) return "LLM request failed with an unknown error.";
+  if (!trimmed) {
+    return "LLM request failed with an unknown error.";
+  }
 
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
   if (httpMatch) {
@@ -229,12 +308,16 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: ClawdbotConfig; sessionKey?: string },
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
-  if (msg.stopReason !== "error" && !raw) return undefined;
-  if (!raw) return "LLM request failed with an unknown error.";
+  if (msg.stopReason !== "error" && !raw) {
+    return undefined;
+  }
+  if (!raw) {
+    return "LLM request failed with an unknown error.";
+  }
 
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
@@ -245,7 +328,9 @@ export function formatAssistantErrorText(
       sessionKey: opts?.sessionKey,
       toolName: unknownTool[1],
     });
-    if (rewritten) return rewritten;
+    if (rewritten) {
+      return rewritten;
+    }
   }
 
   if (isContextOverflowError(raw)) {
@@ -288,10 +373,14 @@ export function formatAssistantErrorText(
 }
 
 export function sanitizeUserFacingText(text: string): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
   const stripped = stripFinalTagsFromText(text);
   const trimmed = stripped.trim();
-  if (!trimmed) return stripped;
+  if (!trimmed) {
+    return stripped;
+  }
 
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return (
@@ -321,11 +410,13 @@ export function sanitizeUserFacingText(text: string): string {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
-  return stripped;
+  return collapseConsecutiveDuplicateBlocks(stripped);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") return false;
+  if (!msg || msg.stopReason !== "error") {
+    return false;
+  }
   return isRateLimitErrorMessage(msg.errorMessage ?? "");
 }
 
@@ -378,9 +469,12 @@ const ERROR_PATTERNS = {
 const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
+const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
 function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
-  if (!raw) return false;
+  if (!raw) {
+    return false;
+  }
   const value = raw.toLowerCase();
   return patterns.some((pattern) =>
     pattern instanceof RegExp ? pattern.test(value) : value.includes(pattern),
@@ -397,8 +491,12 @@ export function isTimeoutErrorMessage(raw: string): boolean {
 
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
-  if (!value) return false;
-  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) return true;
+  if (!value) {
+    return false;
+  }
+  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
+    return true;
+  }
   return (
     value.includes("billing") &&
     (value.includes("upgrade") ||
@@ -409,7 +507,9 @@ export function isBillingErrorMessage(raw: string): boolean {
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") return false;
+  if (!msg || msg.stopReason !== "error") {
+    return false;
+  }
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
@@ -427,9 +527,13 @@ export function parseImageDimensionError(raw: string): {
   contentIndex?: number;
   raw: string;
 } | null {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const lower = raw.toLowerCase();
-  if (!lower.includes("image dimensions exceed max allowed size")) return null;
+  if (!lower.includes("image dimensions exceed max allowed size")) {
+    return null;
+  }
   const limitMatch = raw.match(IMAGE_DIMENSION_ERROR_RE);
   const pathMatch = raw.match(IMAGE_DIMENSION_PATH_RE);
   return {
@@ -444,23 +548,67 @@ export function isImageDimensionErrorMessage(raw: string): boolean {
   return Boolean(parseImageDimensionError(raw));
 }
 
+export function parseImageSizeError(raw: string): {
+  maxMb?: number;
+  raw: string;
+} | null {
+  if (!raw) {
+    return null;
+  }
+  const lower = raw.toLowerCase();
+  if (!lower.includes("image exceeds") || !lower.includes("mb")) {
+    return null;
+  }
+  const match = raw.match(IMAGE_SIZE_ERROR_RE);
+  return {
+    maxMb: match?.[1] ? Number.parseFloat(match[1]) : undefined,
+    raw,
+  };
+}
+
+export function isImageSizeError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  return Boolean(parseImageSizeError(errorMessage));
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") return false;
+  if (!msg || msg.stopReason !== "error") {
+    return false;
+  }
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
-  if (isImageDimensionErrorMessage(raw)) return null;
-  if (isRateLimitErrorMessage(raw)) return "rate_limit";
-  if (isOverloadedErrorMessage(raw)) return "rate_limit";
-  if (isCloudCodeAssistFormatError(raw)) return "format";
-  if (isBillingErrorMessage(raw)) return "billing";
-  if (isTimeoutErrorMessage(raw)) return "timeout";
-  if (isAuthErrorMessage(raw)) return "auth";
+  if (isImageDimensionErrorMessage(raw)) {
+    return null;
+  }
+  if (isImageSizeError(raw)) {
+    return null;
+  }
+  if (isRateLimitErrorMessage(raw)) {
+    return "rate_limit";
+  }
+  if (isOverloadedErrorMessage(raw)) {
+    return "rate_limit";
+  }
+  if (isCloudCodeAssistFormatError(raw)) {
+    return "format";
+  }
+  if (isBillingErrorMessage(raw)) {
+    return "billing";
+  }
+  if (isTimeoutErrorMessage(raw)) {
+    return "timeout";
+  }
+  if (isAuthErrorMessage(raw)) {
+    return "auth";
+  }
   return null;
 }
 
@@ -469,6 +617,8 @@ export function isFailoverErrorMessage(raw: string): boolean {
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") return false;
+  if (!msg || msg.stopReason !== "error") {
+    return false;
+  }
   return isFailoverErrorMessage(msg.errorMessage ?? "");
 }

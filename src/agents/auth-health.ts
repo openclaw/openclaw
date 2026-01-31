@@ -1,13 +1,11 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
   resolveAuthProfileDisplayLabel,
 } from "./auth-profiles.js";
 
-export type AuthProfileSource = "claude-cli" | "codex-cli" | "store";
+export type AuthProfileSource = "store";
 
 export type AuthProfileHealthStatus = "ok" | "expiring" | "expired" | "missing" | "static";
 
@@ -41,19 +39,25 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
-export function resolveAuthProfileSource(profileId: string): AuthProfileSource {
-  if (profileId === CLAUDE_CLI_PROFILE_ID) return "claude-cli";
-  if (profileId === CODEX_CLI_PROFILE_ID) return "codex-cli";
+export function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
   return "store";
 }
 
 export function formatRemainingShort(remainingMs?: number): string {
-  if (remainingMs === undefined || Number.isNaN(remainingMs)) return "unknown";
-  if (remainingMs <= 0) return "0m";
+  if (remainingMs === undefined || Number.isNaN(remainingMs)) {
+    return "unknown";
+  }
+  if (remainingMs <= 0) {
+    return "0m";
+  }
   const minutes = Math.max(1, Math.round(remainingMs / 60_000));
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
   const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h`;
+  if (hours < 48) {
+    return `${hours}h`;
+  }
   const days = Math.round(hours / 24);
   return `${days}d`;
 }
@@ -80,7 +84,7 @@ function buildProfileHealth(params: {
   profileId: string;
   credential: AuthProfileCredential;
   store: AuthProfileStore;
-  cfg?: ClawdbotConfig;
+  cfg?: OpenClawConfig;
   now: number;
   warnAfterMs: number;
 }): AuthProfileHealth {
@@ -127,7 +131,16 @@ function buildProfileHealth(params: {
     };
   }
 
-  const { status, remainingMs } = resolveOAuthStatus(credential.expires, now, warnAfterMs);
+  const hasRefreshToken = typeof credential.refresh === "string" && credential.refresh.length > 0;
+  const { status: rawStatus, remainingMs } = resolveOAuthStatus(
+    credential.expires,
+    now,
+    warnAfterMs,
+  );
+  // OAuth credentials with a valid refresh token auto-renew on first API call,
+  // so don't warn about access token expiration.
+  const status =
+    hasRefreshToken && (rawStatus === "expired" || rawStatus === "expiring") ? "ok" : rawStatus;
   return {
     profileId,
     provider: credential.provider,
@@ -142,7 +155,7 @@ function buildProfileHealth(params: {
 
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
-  cfg?: ClawdbotConfig;
+  cfg?: OpenClawConfig;
   warnAfterMs?: number;
   providers?: string[];
 }): AuthHealthSummary {
@@ -164,7 +177,7 @@ export function buildAuthHealthSummary(params: {
         warnAfterMs,
       }),
     )
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       if (a.provider !== b.provider) {
         return a.provider.localeCompare(b.provider);
       }
@@ -221,17 +234,17 @@ export function buildAuthHealthSummary(params: {
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    const statuses = expirable.map((p) => p.status);
-    if (statuses.includes("expired") || statuses.includes("missing")) {
+    const statuses = new Set(expirable.map((p) => p.status));
+    if (statuses.has("expired") || statuses.has("missing")) {
       provider.status = "expired";
-    } else if (statuses.includes("expiring")) {
+    } else if (statuses.has("expiring")) {
       provider.status = "expiring";
     } else {
       provider.status = "ok";
     }
   }
 
-  const providers = Array.from(providersMap.values()).sort((a, b) =>
+  const providers = Array.from(providersMap.values()).toSorted((a, b) =>
     a.provider.localeCompare(b.provider),
   );
 

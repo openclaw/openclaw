@@ -9,13 +9,14 @@ const createEmptyRegistry = (): PluginRegistry => ({
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
+  httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
   diagnostics: [],
 });
 
-const REGISTRY_STATE = Symbol.for("clawdbot.pluginRegistryState");
+const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type RegistryState = {
   registry: PluginRegistry | null;
@@ -32,7 +33,7 @@ const state: RegistryState = (() => {
       key: null,
     };
   }
-  return globalState[REGISTRY_STATE] as RegistryState;
+  return globalState[REGISTRY_STATE];
 })();
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
+INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
+DEFAULT_PACKAGE="openclaw"
+PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
 
 echo "==> Pre-flight: ensure git absent"
 if command -v git >/dev/null; then
@@ -18,26 +20,28 @@ export PATH="$HOME/.npm-global/bin:$PATH"
 echo "==> Verify git installed"
 command -v git >/dev/null
 
-echo "==> Verify clawdbot installed"
-EXPECTED_VERSION="${CLAWDBOT_INSTALL_EXPECT_VERSION:-}"
+EXPECTED_VERSION="${OPENCLAW_INSTALL_EXPECT_VERSION:-}"
 if [[ -n "$EXPECTED_VERSION" ]]; then
   LATEST_VERSION="$EXPECTED_VERSION"
 else
-  LATEST_VERSION="$(npm view clawdbot version)"
+  LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
 fi
-CMD_PATH="$(command -v clawdbot || true)"
-if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/clawdbot" ]]; then
-  CMD_PATH="$HOME/.npm-global/bin/clawdbot"
+CLI_NAME="$PACKAGE_NAME"
+CMD_PATH="$(command -v "$CLI_NAME" || true)"
+if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/$PACKAGE_NAME" ]]; then
+  CLI_NAME="$PACKAGE_NAME"
+  CMD_PATH="$HOME/.npm-global/bin/$PACKAGE_NAME"
 fi
 if [[ -z "$CMD_PATH" ]]; then
-  echo "clawdbot not on PATH" >&2
+  echo "$PACKAGE_NAME is not on PATH" >&2
   exit 1
 fi
+echo "==> Verify CLI installed: $CLI_NAME"
 INSTALLED_VERSION="$("$CMD_PATH" --version 2>/dev/null | head -n 1 | tr -d '\r')"
 
-echo "installed=$INSTALLED_VERSION expected=$LATEST_VERSION"
+echo "cli=$CLI_NAME installed=$INSTALLED_VERSION expected=$LATEST_VERSION"
 if [[ "$INSTALLED_VERSION" != "$LATEST_VERSION" ]]; then
-  echo "ERROR: expected clawdbot@$LATEST_VERSION, got @$INSTALLED_VERSION" >&2
+  echo "ERROR: expected ${CLI_NAME}@${LATEST_VERSION}, got ${CLI_NAME}@${INSTALLED_VERSION}" >&2
   exit 1
 fi
 

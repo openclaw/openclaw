@@ -3,7 +3,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveChannelCapabilities } from "./channel-capabilities.js";
-import type { ClawdbotConfig } from "./config.js";
+import type { OpenClawConfig } from "./config.js";
 
 describe("resolveChannelCapabilities", () => {
   beforeEach(() => {
@@ -32,7 +32,7 @@ describe("resolveChannelCapabilities", () => {
           },
         },
       },
-    } satisfies Partial<ClawdbotConfig>;
+    } satisfies Partial<OpenClawConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -53,7 +53,7 @@ describe("resolveChannelCapabilities", () => {
           },
         },
       },
-    } satisfies Partial<ClawdbotConfig>;
+    } satisfies Partial<OpenClawConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -73,7 +73,7 @@ describe("resolveChannelCapabilities", () => {
           },
         },
       },
-    } satisfies Partial<ClawdbotConfig>;
+    } satisfies Partial<OpenClawConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -96,7 +96,7 @@ describe("resolveChannelCapabilities", () => {
     );
     const cfg = {
       channels: { msteams: { capabilities: [" polls ", ""] } },
-    } satisfies Partial<ClawdbotConfig>;
+    } satisfies Partial<OpenClawConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -134,6 +134,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
+  httpRoutes: [],
   cliRegistrars: [],
   services: [],
   diagnostics: [],

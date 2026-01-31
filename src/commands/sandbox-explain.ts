@@ -4,7 +4,7 @@ import {
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -30,10 +30,10 @@ type SandboxExplainOptions = {
   json: boolean;
 };
 
-const SANDBOX_DOCS_URL = "https://docs.clawd.bot/sandbox";
+const SANDBOX_DOCS_URL = "https://docs.openclaw.ai/sandbox";
 
 function normalizeExplainSessionKey(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
   session?: string;
 }): string {
@@ -44,8 +44,12 @@ function normalizeExplainSessionKey(params: {
       agentId: params.agentId,
     });
   }
-  if (raw.includes(":")) return raw;
-  if (raw === "global") return "global";
+  if (raw.includes(":")) {
+    return raw;
+  }
+  if (raw === "global") {
+    return "global";
+  }
   return buildAgentMainSessionKey({
     agentId: params.agentId,
     mainKey: normalizeMainKey(raw),
@@ -53,25 +57,37 @@ function normalizeExplainSessionKey(params: {
 }
 
 function inferProviderFromSessionKey(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   sessionKey: string;
 }): string | undefined {
   const parsed = parseAgentSessionKey(params.sessionKey);
-  if (!parsed) return undefined;
+  if (!parsed) {
+    return undefined;
+  }
   const rest = parsed.rest.trim();
-  if (!rest) return undefined;
+  if (!rest) {
+    return undefined;
+  }
   const parts = rest.split(":").filter(Boolean);
-  if (parts.length === 0) return undefined;
+  if (parts.length === 0) {
+    return undefined;
+  }
   const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (parts[0] === configuredMainKey) return undefined;
+  if (parts[0] === configuredMainKey) {
+    return undefined;
+  }
   const candidate = parts[0]?.trim().toLowerCase();
-  if (!candidate) return undefined;
-  if (candidate === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
+  if (!candidate) {
+    return undefined;
+  }
+  if (candidate === INTERNAL_MESSAGE_CHANNEL) {
+    return INTERNAL_MESSAGE_CHANNEL;
+  }
   return normalizeAnyChannelId(candidate) ?? undefined;
 }
 
 function resolveActiveChannel(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
 }): string | undefined {
@@ -97,9 +113,13 @@ function resolveActiveChannel(params: {
   )
     .trim()
     .toLowerCase();
-  if (candidate === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
+  if (candidate === INTERNAL_MESSAGE_CHANNEL) {
+    return INTERNAL_MESSAGE_CHANNEL;
+  }
   const normalized = normalizeAnyChannelId(candidate);
-  if (normalized) return normalized;
+  if (normalized) {
+    return normalized;
+  }
   return inferProviderFromSessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -205,7 +225,9 @@ export async function sandboxExplainCommand(
   fixIt.push("agents.list[].tools.sandbox.tools.allow");
   fixIt.push("agents.list[].tools.sandbox.tools.deny");
   fixIt.push("tools.elevated.enabled");
-  if (channel) fixIt.push(`tools.elevated.allowFrom.${channel}`);
+  if (channel) {
+    fixIt.push(`tools.elevated.allowFrom.${channel}`);
+  }
 
   const payload = {
     docsUrl: SANDBOX_DOCS_URL,
@@ -305,9 +327,11 @@ export async function sandboxExplainCommand(
   }
   lines.push("");
   lines.push(heading("Fix-it:"));
-  for (const key of payload.fixIt) lines.push(`  - ${key}`);
+  for (const key of payload.fixIt) {
+    lines.push(`  - ${key}`);
+  }
   lines.push("");
-  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.clawd.bot/sandbox")}`);
+  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
 
   runtime.log(`${lines.join("\n")}\n`);
 }

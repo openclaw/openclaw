@@ -5,7 +5,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -43,7 +43,7 @@ function formatProviderState(entry: ProviderAccountStatus): string {
 }
 
 export async function buildProviderStatusIndex(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
 ): Promise<Map<string, ProviderAccountStatus>> {
   const map = new Map<string, ProviderAccountStatus>();
 
@@ -91,15 +91,19 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(cfg: ClawdbotConfig, provider: ChannelId): string {
+function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
   const plugin = getChannelPlugin(provider);
-  if (!plugin) return DEFAULT_ACCOUNT_ID;
+  if (!plugin) {
+    return DEFAULT_ACCOUNT_ID;
+  }
   return resolveChannelDefaultAccountId({ plugin, cfg });
 }
 
-function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: ClawdbotConfig): boolean {
+function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: OpenClawConfig): boolean {
   const plugin = getChannelPlugin(entry.provider);
-  if (!plugin) return Boolean(entry.configured);
+  if (!plugin) {
+    return Boolean(entry.configured);
+  }
   if (plugin.meta.showConfigured === false) {
     const providerConfig = (cfg as Record<string, unknown>)[plugin.id];
     return Boolean(entry.configured) || Boolean(providerConfig);
@@ -116,12 +120,16 @@ function formatProviderEntry(entry: ProviderAccountStatus): string {
   return `${label}: ${formatProviderState(entry)}`;
 }
 
-export function summarizeBindings(cfg: ClawdbotConfig, bindings: AgentBinding[]): string[] {
-  if (bindings.length === 0) return [];
+export function summarizeBindings(cfg: OpenClawConfig, bindings: AgentBinding[]): string[] {
+  if (bindings.length === 0) {
+    return [];
+  }
   const seen = new Map<string, string>();
   for (const binding of bindings) {
     const channel = normalizeChannelId(binding.match.channel);
-    if (!channel) continue;
+    if (!channel) {
+      continue;
+    }
     const accountId = binding.match.accountId ?? resolveDefaultAccountId(cfg, channel);
     const key = providerAccountKey(channel, accountId);
     if (!seen.has(key)) {
@@ -137,7 +145,7 @@ export function summarizeBindings(cfg: ClawdbotConfig, bindings: AgentBinding[])
 
 export function listProvidersForAgent(params: {
   summaryIsDefault: boolean;
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   bindings: AgentBinding[];
   providerStatus: Map<string, ProviderAccountStatus>;
 }): string[] {
@@ -147,10 +155,14 @@ export function listProvidersForAgent(params: {
     const seen = new Set<string>();
     for (const binding of params.bindings) {
       const channel = normalizeChannelId(binding.match.channel);
-      if (!channel) continue;
+      if (!channel) {
+        continue;
+      }
       const accountId = binding.match.accountId ?? resolveDefaultAccountId(params.cfg, channel);
       const key = providerAccountKey(channel, accountId);
-      if (seen.has(key)) continue;
+      if (seen.has(key)) {
+        continue;
+      }
       seen.add(key);
       const status = params.providerStatus.get(key);
       if (status) {

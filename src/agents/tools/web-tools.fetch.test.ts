@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as ssrf from "../../infra/net/ssrf.js";
 import { createWebFetchTool } from "./web-tools.js";
 
 type MockResponse = {
@@ -64,14 +65,32 @@ function errorHtmlResponse(
   };
 }
 function requestUrl(input: RequestInfo): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.toString();
-  if ("url" in input && typeof input.url === "string") return input.url;
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if ("url" in input && typeof input.url === "string") {
+    return input.url;
+  }
   return "";
 }
 
 describe("web_fetch extraction fallbacks", () => {
   const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34", "93.184.216.35"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    });
+  });
 
   afterEach(() => {
     // @ts-expect-error restore

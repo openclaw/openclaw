@@ -10,13 +10,8 @@ import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } f
 import type { Tab } from "./navigation";
 import type { UiSettings } from "./storage";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream";
-import { flushChatQueueForEvent } from "./app-chat";
-import {
-  applySettings,
-  loadCron,
-  refreshActiveTab,
-  setLastActiveSessionKey,
-} from "./app-settings";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat";
+import { applySettings, loadCron, refreshActiveTab, setLastActiveSessionKey } from "./app-settings";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat";
 import {
   addExecApproval,
@@ -24,9 +19,10 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval";
-import type { ClawdbotApp } from "./app";
+import type { OpenClawApp } from "./app";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import { loadAssistantIdentity } from "./controllers/assistant-identity";
+import { loadSessions } from "./controllers/sessions";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -51,6 +47,7 @@ type GatewayHost = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   dmPairingState: DMPairingState;
@@ -77,8 +74,7 @@ function normalizeSessionKeyForDefaults(
     raw === "main" ||
     raw === mainKey ||
     (defaultAgentId &&
-      (raw === `agent:${defaultAgentId}:main` ||
-        raw === `agent:${defaultAgentId}:${mainKey}`));
+      (raw === `agent:${defaultAgentId}:main` || raw === `agent:${defaultAgentId}:${mainKey}`));
   return isAlias ? mainSessionKey : raw;
 }
 
@@ -122,18 +118,25 @@ export function connectGateway(host: GatewayHost) {
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
-    clientName: "clawdbot-control-ui",
+    clientName: "openclaw-control-ui",
     mode: "webchat",
     onHello: (hello) => {
       host.connected = true;
       host.lastError = null;
       host.hello = hello;
       applySnapshot(host, hello);
-      void loadAssistantIdentity(host as unknown as ClawdbotApp);
-      void loadAgents(host as unknown as ClawdbotApp);
-      void loadNodes(host as unknown as ClawdbotApp, { quiet: true });
-      void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
-      host.dmPairingState.client = client;
+      // Reset orphaned chat run state from before disconnect.
+      // Any in-flight run's final event was lost during the disconnect window.
+      host.chatRunId = null;
+      (host as unknown as { chatStream: string | null }).chatStream = null;
+      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      void loadAssistantIdentity(host as unknown as OpenClawApp);
+      void loadAgents(host as unknown as OpenClawApp);
+      void loadNodes(host as unknown as OpenClawApp, { quiet: true });
+      void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+      // Initialize DM pairing state
+      host.dmPairingState.client = host.client;
       host.dmPairingState.connected = true;
       void loadDMPairing(host.dmPairingState, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
@@ -187,14 +190,21 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         payload.sessionKey,
       );
     }
-    const state = handleChatEvent(host as unknown as ClawdbotApp, payload);
+    const state = handleChatEvent(host as unknown as OpenClawApp, payload);
     if (state === "final" || state === "error" || state === "aborted") {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-      void flushChatQueueForEvent(
-        host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
-      );
+      void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
+      const runId = payload?.runId;
+      if (runId && host.refreshSessionsAfterChat.has(runId)) {
+        host.refreshSessionsAfterChat.delete(runId);
+        if (state === "final") {
+          void loadSessions(host as unknown as OpenClawApp, {
+            activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+          });
+        }
+      }
     }
-    if (state === "final") void loadChatHistory(host as unknown as ClawdbotApp);
+    if (state === "final") void loadChatHistory(host as unknown as OpenClawApp);
     return;
   }
 
@@ -213,7 +223,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
-    void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
+    void loadDevices(host as unknown as OpenClawApp, { quiet: true });
   }
 
   if (evt.event === "dm.pair.requested" || evt.event === "dm.pair.resolved") {

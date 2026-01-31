@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -72,6 +72,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
+  httpRoutes: [],
   cliRegistrars: [],
   services: [],
   diagnostics: [],
@@ -171,8 +172,8 @@ describe("routeReply", () => {
   it("applies responsePrefix when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {
-      messages: { responsePrefix: "[clawdbot]" },
-    } as unknown as ClawdbotConfig;
+      messages: { responsePrefix: "[openclaw]" },
+    } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -181,7 +182,7 @@ describe("routeReply", () => {
     });
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
-      "[clawdbot] hi",
+      "[openclaw] hi",
       expect.any(Object),
     );
   });
@@ -198,7 +199,7 @@ describe("routeReply", () => {
         ],
       },
       messages: {},
-    } as unknown as ClawdbotConfig;
+    } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -345,7 +346,7 @@ describe("routeReply", () => {
           enabled: true,
         },
       },
-    } as unknown as ClawdbotConfig;
+    } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "msteams",
@@ -376,6 +377,23 @@ describe("routeReply", () => {
           sessionKey: "agent:main:main",
           text: "hi",
         }),
+      }),
+    );
+  });
+
+  it("skips mirror data when mirror is false", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      sessionKey: "agent:main:main",
+      mirror: false,
+      cfg: {} as never,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: undefined,
       }),
     );
   });

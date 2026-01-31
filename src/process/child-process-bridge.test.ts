@@ -90,7 +90,9 @@ describe("attachChildProcessBridge", () => {
     const afterSigterm = process.listeners("SIGTERM");
     const addedSigterm = afterSigterm.find((listener) => !beforeSigterm.has(listener));
 
-    if (!child.stdout) throw new Error("expected stdout");
+    if (!child.stdout) {
+      throw new Error("expected stdout");
+    }
     const portLine = await waitForLine(child.stdout);
     const port = Number(portLine);
     expect(Number.isFinite(port)).toBe(true);
@@ -98,7 +100,9 @@ describe("attachChildProcessBridge", () => {
     expect(await canConnect(port)).toBe(true);
 
     // Simulate systemd sending SIGTERM to the parent process.
-    if (!addedSigterm) throw new Error("expected SIGTERM listener");
+    if (!addedSigterm) {
+      throw new Error("expected SIGTERM listener");
+    }
     addedSigterm();
 
     await new Promise<void>((resolve, reject) => {

@@ -3,7 +3,11 @@ import path from "node:path";
 
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import type { ClawdbotPackageManifest, PackageManifest } from "./manifest.js";
+import {
+  getPackageManifestMetadata,
+  type OpenClawPackageManifest,
+  type PackageManifest,
+} from "./manifest.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -18,7 +22,7 @@ export type PluginCandidate = {
   packageVersion?: string;
   packageDescription?: string;
   packageDir?: string;
-  packageClawdbot?: ClawdbotPackageManifest;
+  packageManifest?: OpenClawPackageManifest;
 };
 
 export type PluginDiscoveryResult = {
@@ -28,13 +32,17 @@ export type PluginDiscoveryResult = {
 
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
-  if (!EXTENSION_EXTS.has(ext)) return false;
+  if (!EXTENSION_EXTS.has(ext)) {
+    return false;
+  }
   return !filePath.endsWith(".d.ts");
 }
 
 function readPackageManifest(dir: string): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  if (!fs.existsSync(manifestPath)) return null;
+  if (!fs.existsSync(manifestPath)) {
+    return null;
+  }
   try {
     const raw = fs.readFileSync(manifestPath, "utf-8");
     return JSON.parse(raw) as PackageManifest;
@@ -44,8 +52,10 @@ function readPackageManifest(dir: string): PackageManifest | null {
 }
 
 function resolvePackageExtensions(manifest: PackageManifest): string[] {
-  const raw = manifest.clawdbot?.extensions;
-  if (!Array.isArray(raw)) return [];
+  const raw = getPackageManifestMetadata(manifest)?.extensions;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
@@ -56,15 +66,19 @@ function deriveIdHint(params: {
 }): string {
   const base = path.basename(params.filePath, path.extname(params.filePath));
   const rawPackageName = params.packageName?.trim();
-  if (!rawPackageName) return base;
+  if (!rawPackageName) {
+    return base;
+  }
 
   // Prefer the unscoped name so config keys stay stable even when the npm
-  // package is scoped (example: @clawdbot/voice-call -> voice-call).
+  // package is scoped (example: @openclaw/voice-call -> voice-call).
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
 
-  if (!params.hasMultipleExtensions) return unscoped;
+  if (!params.hasMultipleExtensions) {
+    return unscoped;
+  }
   return `${unscoped}/${base}`;
 }
 
@@ -80,7 +94,9 @@ function addCandidate(params: {
   packageDir?: string;
 }) {
   const resolved = path.resolve(params.source);
-  if (params.seen.has(resolved)) return;
+  if (params.seen.has(resolved)) {
+    return;
+  }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
   params.candidates.push({
@@ -93,7 +109,7 @@ function addCandidate(params: {
     packageVersion: manifest?.version?.trim() || undefined,
     packageDescription: manifest?.description?.trim() || undefined,
     packageDir: params.packageDir,
-    packageClawdbot: manifest?.clawdbot,
+    packageManifest: getPackageManifestMetadata(manifest ?? undefined),
   });
 }
 
@@ -105,7 +121,9 @@ function discoverInDirectory(params: {
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
 }) {
-  if (!fs.existsSync(params.dir)) return;
+  if (!fs.existsSync(params.dir)) {
+    return;
+  }
   let entries: fs.Dirent[] = [];
   try {
     entries = fs.readdirSync(params.dir, { withFileTypes: true });
@@ -121,7 +139,9 @@ function discoverInDirectory(params: {
   for (const entry of entries) {
     const fullPath = path.join(params.dir, entry.name);
     if (entry.isFile()) {
-      if (!isExtensionFile(fullPath)) continue;
+      if (!isExtensionFile(fullPath)) {
+        continue;
+      }
       addCandidate({
         candidates: params.candidates,
         seen: params.seen,
@@ -132,7 +152,9 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory()) {
+      continue;
+    }
 
     const manifest = readPackageManifest(fullPath);
     const extensions = manifest ? resolvePackageExtensions(manifest) : [];
@@ -277,7 +299,7 @@ function discoverFromPath(params: {
   }
 }
 
-export function discoverClawdbotPlugins(params: {
+export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
 }): PluginDiscoveryResult {
@@ -288,9 +310,13 @@ export function discoverClawdbotPlugins(params: {
 
   const extra = params.extraPaths ?? [];
   for (const extraPath of extra) {
-    if (typeof extraPath !== "string") continue;
+    if (typeof extraPath !== "string") {
+      continue;
+    }
     const trimmed = extraPath.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      continue;
+    }
     discoverFromPath({
       rawPath: trimmed,
       origin: "config",
@@ -302,15 +328,17 @@ export function discoverClawdbotPlugins(params: {
   }
   if (workspaceDir) {
     const workspaceRoot = resolveUserPath(workspaceDir);
-    const workspaceExt = path.join(workspaceRoot, ".clawdbot", "extensions");
-    discoverInDirectory({
-      dir: workspaceExt,
-      origin: "workspace",
-      workspaceDir: workspaceRoot,
-      candidates,
-      diagnostics,
-      seen,
-    });
+    const workspaceExtDirs = [path.join(workspaceRoot, ".openclaw", "extensions")];
+    for (const dir of workspaceExtDirs) {
+      discoverInDirectory({
+        dir,
+        origin: "workspace",
+        workspaceDir: workspaceRoot,
+        candidates,
+        diagnostics,
+        seen,
+      });
+    }
   }
 
   const globalDir = path.join(resolveConfigDir(), "extensions");

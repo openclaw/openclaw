@@ -22,6 +22,8 @@ import {
   resolveTelegramCustomCommands,
 } from "./telegram-custom-commands.js";
 
+const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 
 const TelegramCapabilitiesSchema = z.union([
@@ -47,6 +49,7 @@ export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -66,7 +69,9 @@ const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
   ctx: z.RefinementCtx,
 ) => {
-  if (!value.customCommands || value.customCommands.length === 0) return;
+  if (!value.customCommands || value.customCommands.length === 0) {
+    return;
+  }
   const { issues } = resolveTelegramCustomCommands({
     commands: value.customCommands,
     checkReserved: false,
@@ -110,6 +115,12 @@ export const TelegramAccountSchemaBase = z
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
+    network: z
+      .object({
+        autoSelectFamily: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     proxy: z.string().optional(),
     webhookUrl: z.string().optional(),
     webhookSecret: z.string().optional(),
@@ -119,6 +130,7 @@ export const TelegramAccountSchemaBase = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
+        sticker: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -180,6 +192,7 @@ export const DiscordGuildChannelSchema = z
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
@@ -193,6 +206,7 @@ export const DiscordGuildSchema = z
     slug: z.string().optional(),
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
@@ -253,6 +267,13 @@ export const DiscordAccountSchema = z
         approvers: z.array(z.union([z.string(), z.number()])).optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    intents: z
+      .object({
+        presence: z.boolean().optional(),
+        guildMembers: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -361,6 +382,7 @@ export const SlackChannelSchema = z
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
     allowBots: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
@@ -456,12 +478,20 @@ export const SlackConfigSchema = SlackAccountSchema.extend({
       path: ["signingSecret"],
     });
   }
-  if (!value.accounts) return;
+  if (!value.accounts) {
+    return;
+  }
   for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) continue;
-    if (account.enabled === false) continue;
+    if (!account) {
+      continue;
+    }
+    if (account.enabled === false) {
+      continue;
+    }
     const accountMode = account.mode ?? baseMode;
-    if (accountMode !== "http") continue;
+    if (accountMode !== "http") {
+      continue;
+    }
     const accountSecret = account.signingSecret ?? value.signingSecret;
     if (!accountSecret) {
       ctx.addIssue({
@@ -571,6 +601,7 @@ export const IMessageAccountSchemaBase = z
           .object({
             requireMention: z.boolean().optional(),
             tools: ToolPolicySchema,
+            toolsBySender: ToolPolicyBySenderSchema,
           })
           .strict()
           .optional(),
@@ -627,6 +658,7 @@ const BlueBubblesGroupConfigSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
   })
   .strict();
 
@@ -686,6 +718,7 @@ export const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
   })
   .strict();
@@ -694,6 +727,7 @@ export const MSTeamsTeamSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
   })

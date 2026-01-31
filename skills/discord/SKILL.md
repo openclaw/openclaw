@@ -1,13 +1,14 @@
 ---
 name: discord
-description: Use when you need to control Discord from Clawdbot via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, create/edit/delete channels and categories, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
+description: Use when you need to control Discord from OpenClaw via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, create/edit/delete channels and categories, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
+metadata: {"openclaw":{"emoji":"🎮","requires":{"config":["channels.discord"]}}}
 ---
 
 # Discord Actions
 
 ## Overview
 
-Use `discord` to manage messages, reactions, threads, polls, and moderation. You can disable groups via `discord.actions.*` (defaults to enabled, except roles/moderation). The tool uses the bot token configured for Clawdbot.
+Use `discord` to manage messages, reactions, threads, polls, and moderation. You can disable groups via `discord.actions.*` (defaults to enabled, except roles/moderation). The tool uses the bot token configured for OpenClaw.
 
 ## Inputs to collect
 
@@ -83,8 +84,8 @@ Message context lines include `discord message id` and `channel` fields you can 
 {
   "action": "stickerUpload",
   "guildId": "999",
-  "name": "clawdbot_wave",
-  "description": "Clawdbot waving hello",
+  "name": "openclaw_wave",
+  "description": "OpenClaw waving hello",
   "tags": "👋",
   "mediaUrl": "file:///tmp/wave.png"
 }
@@ -130,6 +131,7 @@ Message context lines include `discord message id` and `channel` fields you can 
 ## Action gating
 
 Use `discord.actions.*` to disable action groups:
+
 - `reactions` (react + reactions list + emojiList)
 - `stickers`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
 - `emojiUploads`, `stickerUploads`
@@ -137,6 +139,7 @@ Use `discord.actions.*` to disable action groups:
 - `roles` (role add/remove, default `false`)
 - `channels` (channel/category create/edit/delete/move, default `false`)
 - `moderation` (timeout/kick/ban, default `false`)
+
 ### Read recent messages
 
 ```json
@@ -171,7 +174,7 @@ Use `discord.actions.*` to disable action groups:
 {
   "action": "sendMessage",
   "to": "channel:123",
-  "content": "Hello from Clawdbot"
+  "content": "Hello from OpenClaw"
 }
 ```
 
@@ -434,6 +437,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 **Keep it conversational!** Discord is a chat platform, not documentation.
 
 ### Do
+
 - Short, punchy messages (1-3 sentences ideal)
 - Multiple quick replies > one wall of text
 - Use emoji for tone/emphasis 🦞
@@ -442,6 +446,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 - Match the energy of the conversation
 
 ### Don't
+
 - No markdown tables (Discord renders them as ugly raw `| text |`)
 - No `## Headers` for casual chat (use **bold** or CAPS for emphasis)
 - Avoid multi-paragraph essays
@@ -449,6 +454,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 - Skip the "I'd be happy to help!" fluff
 
 ### Formatting that works
+
 - **bold** for emphasis
 - `code` for technical terms
 - Lists for multiple items
@@ -458,6 +464,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 ### Example transformations
 
 ❌ Bad:
+
 ```
 I'd be happy to help with that! Here's a comprehensive overview of the versioning strategies available:
 
@@ -469,6 +476,7 @@ CalVer uses date-based versions like...
 ```
 
 ✅ Good:
+
 ```
 versioning options: semver (1.2.3), calver (2026.01.04), or yolo (`latest` forever). what fits your release cadence?
 ```
