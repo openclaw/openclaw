@@ -45,7 +45,7 @@ import Testing
     @Test func gatewayEntrypointPrefersDistOverBin() throws {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let dist = tmp.appendingPathComponent("dist/index.js")
+        let dist = tmp.appendingPathComponent("dist/index.mjs")
         let bin = tmp.appendingPathComponent("bin/openclaw.js")
         try FileManager().createDirectory(at: dist.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager().createDirectory(at: bin.deletingLastPathComponent(), withIntermediateDirectories: true)

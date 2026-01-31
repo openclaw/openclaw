@@ -163,7 +163,7 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-CMD ["node","dist/index.js"]
+CMD ["node","dist/index.mjs"]
 ```
 
 ### Channel setup (optional)
@@ -190,7 +190,7 @@ Docs: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](
 ### Health check
 
 ```bash
-docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
+docker compose exec openclaw-gateway node dist/index.mjs health --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
 ### E2E smoke test (Docker)
