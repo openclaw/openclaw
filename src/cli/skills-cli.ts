@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -5,6 +7,17 @@ import {
   type SkillStatusEntry,
   type SkillStatusReport,
 } from "../agents/skills-status.js";
+import {
+  formatPermissionManifest,
+  formatValidationResult,
+  validatePermissionManifest,
+} from "../agents/skills/permissions.js";
+import type {
+  PermissionRiskLevel,
+  SkillEntryWithPermissions,
+  SkillPermissionManifest,
+} from "../agents/skills/types.js";
+import { loadWorkspaceSkillEntries } from "../agents/skills/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -25,6 +38,17 @@ export type SkillInfoOptions = {
 
 export type SkillsCheckOptions = {
   json?: boolean;
+};
+
+export type SkillsAuditOptions = {
+  json?: boolean;
+  verbose?: boolean;
+  riskLevel?: PermissionRiskLevel;
+};
+
+export type SkillInitManifestOptions = {
+  output?: string;
+  force?: boolean;
 };
 
 function appendClawHubHint(output: string, json?: boolean): string {
@@ -336,6 +360,253 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
 }
 
 /**
+ * Risk level emoji for display
+ */
+const RISK_EMOJI: Record<PermissionRiskLevel, string> = {
+  minimal: "🟢",
+  low: "🟡",
+  moderate: "🟠",
+  high: "🔴",
+  critical: "⛔",
+};
+
+/**
+ * Risk level sort order (higher = more risky)
+ */
+const RISK_ORDER: Record<PermissionRiskLevel, number> = {
+  minimal: 0,
+  low: 1,
+  moderate: 2,
+  high: 3,
+  critical: 4,
+};
+
+/**
+ * Format the skills audit output
+ */
+export function formatSkillsAudit(
+  skills: SkillEntryWithPermissions[],
+  opts: SkillsAuditOptions,
+): string {
+  // Filter by minimum risk level if specified
+  let filtered = skills;
+  if (opts.riskLevel) {
+    const minOrder = RISK_ORDER[opts.riskLevel];
+    filtered = skills.filter((s) => {
+      const level = s.permissionValidation?.risk_level ?? "high";
+      return RISK_ORDER[level] >= minOrder;
+    });
+  }
+
+  // Sort by risk level (highest first)
+  const sorted = [...filtered].sort((a, b) => {
+    const aLevel = a.permissionValidation?.risk_level ?? "high";
+    const bLevel = b.permissionValidation?.risk_level ?? "high";
+    return RISK_ORDER[bLevel] - RISK_ORDER[aLevel];
+  });
+
+  if (opts.json) {
+    const jsonReport = {
+      total: skills.length,
+      filtered: sorted.length,
+      skills: sorted.map((s) => ({
+        name: s.skill.name,
+        source: s.skill.source,
+        hasManifest: !!s.permissions,
+        riskLevel: s.permissionValidation?.risk_level ?? "unknown",
+        riskFactors: s.permissionValidation?.risk_factors ?? [],
+        warnings: s.permissionValidation?.warnings ?? [],
+        permissions: s.permissions,
+      })),
+    };
+    return JSON.stringify(jsonReport, null, 2);
+  }
+
+  if (sorted.length === 0) {
+    return opts.riskLevel
+      ? `No skills found at or above ${opts.riskLevel} risk level.`
+      : "No skills found.";
+  }
+
+  const lines: string[] = [];
+  lines.push(theme.heading("Skills Permission Audit"));
+  lines.push("");
+
+  // Summary
+  const withManifest = skills.filter((s) => s.permissions);
+  const withoutManifest = skills.filter((s) => !s.permissions);
+  const byCriticality = {
+    critical: skills.filter((s) => s.permissionValidation?.risk_level === "critical").length,
+    high: skills.filter((s) => s.permissionValidation?.risk_level === "high").length,
+    moderate: skills.filter((s) => s.permissionValidation?.risk_level === "moderate").length,
+    low: skills.filter((s) => s.permissionValidation?.risk_level === "low").length,
+    minimal: skills.filter((s) => s.permissionValidation?.risk_level === "minimal").length,
+  };
+
+  lines.push(theme.muted("Summary:"));
+  lines.push(`  Total skills: ${skills.length}`);
+  lines.push(`  With permission manifest: ${withManifest.length}`);
+  lines.push(`  Without manifest: ${theme.warn(String(withoutManifest.length))}`);
+  lines.push("");
+  lines.push(theme.muted("By risk level:"));
+  lines.push(`  ${RISK_EMOJI.critical} Critical: ${byCriticality.critical}`);
+  lines.push(`  ${RISK_EMOJI.high} High: ${byCriticality.high}`);
+  lines.push(`  ${RISK_EMOJI.moderate} Moderate: ${byCriticality.moderate}`);
+  lines.push(`  ${RISK_EMOJI.low} Low: ${byCriticality.low}`);
+  lines.push(`  ${RISK_EMOJI.minimal} Minimal: ${byCriticality.minimal}`);
+  lines.push("");
+
+  // Table
+  const tableWidth = Math.max(80, (process.stdout.columns ?? 120) - 1);
+  const rows = sorted.map((skill) => {
+    const riskLevel = skill.permissionValidation?.risk_level ?? "high";
+    const emoji = RISK_EMOJI[riskLevel];
+    const hasManifest = skill.permissions ? theme.success("✓") : theme.warn("✗");
+    return {
+      Risk: `${emoji} ${riskLevel}`,
+      Manifest: hasManifest,
+      Skill: theme.command(skill.skill.name),
+      Source: skill.skill.source,
+      Factors: theme.muted(
+        (skill.permissionValidation?.risk_factors ?? []).slice(0, 2).join("; ").substring(0, 50) ||
+          "-",
+      ),
+    };
+  });
+
+  const columns = [
+    { key: "Risk", header: "Risk", minWidth: 12 },
+    { key: "Manifest", header: "Manifest", minWidth: 8 },
+    { key: "Skill", header: "Skill", minWidth: 20, flex: true },
+    { key: "Source", header: "Source", minWidth: 15 },
+  ];
+  if (opts.verbose) {
+    columns.push({ key: "Factors", header: "Risk Factors", minWidth: 30, flex: true });
+  }
+
+  lines.push(theme.heading("Skills:"));
+  lines.push(
+    renderTable({
+      width: tableWidth,
+      columns,
+      rows,
+    }).trimEnd(),
+  );
+
+  // Recommendations
+  if (withoutManifest.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Recommendations:"));
+    lines.push(
+      `  ${theme.warn("→")} ${withoutManifest.length} skill(s) lack permission manifests.`,
+    );
+    lines.push(
+      `    Run \`${formatCliCommand("openclaw skills init-manifest <skill>")}\` to create one.`,
+    );
+  }
+
+  const highRisk = skills.filter(
+    (s) =>
+      s.permissionValidation?.risk_level === "critical" ||
+      s.permissionValidation?.risk_level === "high",
+  );
+  if (highRisk.length > 0) {
+    if (withoutManifest.length === 0) {
+      lines.push("");
+      lines.push(theme.heading("Recommendations:"));
+    }
+    lines.push(`  ${theme.error("→")} ${highRisk.length} skill(s) have high/critical risk.`);
+    lines.push(`    Review their permissions before enabling in production.`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Format detailed audit for a single skill
+ */
+export function formatSkillAuditDetail(
+  skill: SkillEntryWithPermissions,
+  opts: SkillsAuditOptions,
+): string {
+  if (opts.json) {
+    return JSON.stringify(
+      {
+        name: skill.skill.name,
+        source: skill.skill.source,
+        filePath: skill.skill.filePath,
+        hasManifest: !!skill.permissions,
+        permissions: skill.permissions,
+        validation: skill.permissionValidation,
+      },
+      null,
+      2,
+    );
+  }
+
+  const lines: string[] = [];
+  const emoji = skill.metadata?.emoji ?? "📦";
+  lines.push(`${emoji} ${theme.heading(skill.skill.name)}`);
+  lines.push("");
+
+  lines.push(formatPermissionManifest(skill.permissions, skill.skill.name));
+  lines.push("");
+
+  if (skill.permissionValidation) {
+    lines.push(formatValidationResult(skill.permissionValidation));
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Generate a permission manifest template for a skill
+ */
+export function generateManifestTemplate(skillName: string): string {
+  const template: SkillPermissionManifest = {
+    version: 1,
+    declared_purpose: "TODO: Describe what this skill does and why it needs these permissions",
+    filesystem: [],
+    network: [],
+    env: [],
+    exec: [],
+  };
+
+  return `# Permission Manifest for ${skillName}
+#
+# Add this to your SKILL.md frontmatter under metadata.openclaw.permissions:
+#
+# ---
+# name: ${skillName}
+# metadata:
+#   openclaw:
+#     permissions:
+#       version: 1
+#       declared_purpose: "What this skill does"
+#       filesystem:
+#         - "read:./data"     # Read files in ./data
+#         - "write:./output"  # Write to ./output
+#       network:
+#         - "api.example.com" # API access
+#       env:
+#         - "API_KEY"         # Required env var
+#       exec:
+#         - "node"            # Executables used
+#       # Optional flags:
+#       # elevated: true        # Requires sudo
+#       # system_config: true   # Modifies system config
+#       # sensitive_data:
+#       #   credentials: true
+#       #   personal_info: true
+#       #   financial: true
+#       # security_notes: "Explain security considerations"
+# ---
+
+${JSON.stringify(template, null, 2)}
+`;
+}
+
+/**
  * Register the skills CLI commands
  */
 export function registerSkillsCli(program: Command) {
@@ -393,6 +664,141 @@ export function registerSkillsCli(program: Command) {
         const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         defaultRuntime.log(formatSkillsCheck(report, opts));
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
+    .command("audit")
+    .description("Audit skill permissions and security risk levels")
+    .argument("[name]", "Optional skill name to audit in detail")
+    .option("--json", "Output as JSON", false)
+    .option("-v, --verbose", "Show risk factors for each skill", false)
+    .option(
+      "--risk-level <level>",
+      "Filter by minimum risk level (minimal, low, moderate, high, critical)",
+    )
+    .action(async (name, opts) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+
+        // Validate risk level if provided
+        const validLevels = ["minimal", "low", "moderate", "high", "critical"];
+        if (opts.riskLevel && !validLevels.includes(opts.riskLevel)) {
+          defaultRuntime.error(
+            `Invalid risk level "${opts.riskLevel}". Valid values: ${validLevels.join(", ")}`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+
+        // Load all skills with permissions (skip security filter to show all for auditing)
+        const skillsWithPerms = loadWorkspaceSkillEntries(workspaceDir, {
+          config,
+          skipSecurityFilter: true,
+        });
+
+        if (name) {
+          // Show detailed audit for a specific skill
+          const skill = skillsWithPerms.find(
+            (s) => s.skill.name === name || s.metadata?.skillKey === name,
+          );
+          if (!skill) {
+            defaultRuntime.error(
+              `Skill "${name}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
+          defaultRuntime.log(formatSkillAuditDetail(skill, opts));
+        } else {
+          // Show audit summary for all skills
+          defaultRuntime.log(
+            formatSkillsAudit(skillsWithPerms, {
+              ...opts,
+              riskLevel: opts.riskLevel as PermissionRiskLevel | undefined,
+            }),
+          );
+        }
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
+    .command("init-manifest")
+    .description("Generate a permission manifest template for a skill")
+    .argument("<name>", "Skill name to generate manifest for")
+    .option("-o, --output <path>", "Output file path (default: stdout)")
+    .option("-f, --force", "Overwrite existing file", false)
+    .action(async (name, opts) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+
+        // Find the skill
+        const skill = report.skills.find((s) => s.name === name || s.skillKey === name);
+        if (!skill) {
+          defaultRuntime.error(
+            `Skill "${name}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+
+        const template = generateManifestTemplate(skill.name);
+
+        if (opts.output) {
+          // Security: Validate output path is within skill directory or current working directory
+          const outputPath = path.resolve(opts.output);
+          const skillDir = path.dirname(skill.filePath);
+          const cwd = process.cwd();
+
+          // Check if output path is within allowed directories
+          const isInSkillDir = outputPath.startsWith(path.resolve(skillDir) + path.sep);
+          const isInCwd = outputPath.startsWith(path.resolve(cwd) + path.sep);
+          const isSkillDirItself = outputPath === path.resolve(skillDir);
+          const isCwdItself = outputPath === path.resolve(cwd);
+
+          if (!isInSkillDir && !isInCwd && !isSkillDirItself && !isCwdItself) {
+            defaultRuntime.error(
+              `Output path must be within the skill directory (${shortenHomePath(skillDir)}) or current working directory.`,
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
+
+          // Check for existing file
+          if (fs.existsSync(outputPath) && !opts.force) {
+            defaultRuntime.error(
+              `File ${shortenHomePath(outputPath)} already exists. Use --force to overwrite.`,
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
+
+          fs.writeFileSync(outputPath, template, "utf-8");
+          defaultRuntime.log(
+            `${theme.success("✓")} Manifest template written to ${shortenHomePath(outputPath)}`,
+          );
+          defaultRuntime.log("");
+          defaultRuntime.log(theme.muted("Next steps:"));
+          defaultRuntime.log(
+            `  1. Review and edit the template to match your skill's actual permissions`,
+          );
+          defaultRuntime.log(`  2. Add the permissions block to your SKILL.md frontmatter`);
+          defaultRuntime.log(
+            `  3. Run \`${formatCliCommand(`openclaw skills audit ${name}`)}\` to verify`,
+          );
+        } else {
+          // Output to stdout
+          defaultRuntime.log(template);
+        }
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
