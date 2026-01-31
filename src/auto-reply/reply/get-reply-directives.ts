@@ -101,7 +101,7 @@ function summarizeReplyForContext(reply: ReplyPayload | ReplyPayload[] | undefin
  * Store a recent command output in the session entry for agent visibility.
  */
 async function captureCommandForContext(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   storePath?: string;
   sessionKey: string;
   cmd: string;

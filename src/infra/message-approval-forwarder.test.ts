@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { createMessageApprovalForwarder } from "./message-approval-forwarder.js";
 
 const baseRequest = {
@@ -27,7 +27,7 @@ describe("message approval forwarder", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     const cfg = {
       approvals: { message: { enabled: true, mode: "session" } },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createMessageApprovalForwarder({
       getConfig: () => cfg,
@@ -62,7 +62,7 @@ describe("message approval forwarder", () => {
           targets: [{ channel: "telegram", to: "123" }],
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createMessageApprovalForwarder({
       getConfig: () => cfg,
@@ -88,7 +88,7 @@ describe("message approval forwarder", () => {
           actions: ["broadcast"], // only broadcast, not send
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createMessageApprovalForwarder({
       getConfig: () => cfg,
@@ -111,7 +111,7 @@ describe("message approval forwarder", () => {
           channels: ["slack"], // only slack, not telegram
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createMessageApprovalForwarder({
       getConfig: () => cfg,
@@ -134,7 +134,7 @@ describe("message approval forwarder", () => {
           agentFilter: ["other-agent"], // not main
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createMessageApprovalForwarder({
       getConfig: () => cfg,
@@ -151,7 +151,7 @@ describe("message approval forwarder", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     const cfg = {
       approvals: { message: { enabled: true, mode: "session" } },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createMessageApprovalForwarder({
       getConfig: () => cfg,
@@ -174,7 +174,7 @@ describe("message approval forwarder", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     const cfg = {
       approvals: { message: { enabled: true, mode: "session" } },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createMessageApprovalForwarder({
       getConfig: () => cfg,

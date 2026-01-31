@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
@@ -51,11 +51,11 @@ export type MessageApprovalForwarder = {
 };
 
 export type MessageApprovalForwarderDeps = {
-  getConfig?: () => ClawdbotConfig;
+  getConfig?: () => OpenClawConfig;
   deliver?: typeof deliverOutboundPayloads;
   nowMs?: () => number;
   resolveSessionTarget?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     request: MessageApprovalRequest;
   }) => ExecApprovalForwardTarget | null;
 };
@@ -149,7 +149,7 @@ function buildExpiredMessage(request: MessageApprovalRequest) {
 }
 
 function defaultResolveSessionTarget(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   request: MessageApprovalRequest;
 }): ExecApprovalForwardTarget | null {
   const sessionKey = params.request.request.sessionKey?.trim();
@@ -172,7 +172,7 @@ function defaultResolveSessionTarget(params: {
 }
 
 async function deliverToTargets(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   targets: ForwardTarget[];
   text: string;
   deliver: typeof deliverOutboundPayloads;

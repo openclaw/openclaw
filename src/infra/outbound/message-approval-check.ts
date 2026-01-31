@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { MessageApprovalForwardingConfig } from "../../config/types.approvals.js";
 import type { GatewayClient } from "../../gateway/client.js";
 import type { MessageApprovalDecision } from "../../gateway/message-approval-manager.js";
@@ -19,13 +19,13 @@ export type MessageApprovalCheckParams = {
 };
 
 export function resolveMessageApprovalConfig(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
 ): MessageApprovalForwardingConfig | undefined {
   return cfg.approvals?.message;
 }
 
 export function shouldRequireMessageApproval(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   action: string;
   channel: string;
   agentId?: string | null;
@@ -66,7 +66,7 @@ export function shouldRequireMessageApproval(params: {
 }
 
 export type RequestMessageApprovalParams = {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   gateway: GatewayClient;
   action: string;
   channel: string;
