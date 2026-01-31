@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { companionCommand } from "../../commands/companion.js";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { resetCommand } from "../../commands/reset.js";
@@ -35,6 +36,18 @@ export function registerMaintenanceCommands(program: Command) {
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
+        });
+      });
+    });
+
+  program
+    .command("companion")
+    .description("Open the Companion UI in your browser")
+    .option("--no-open", "Print URL but do not launch a browser", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await companionCommand(defaultRuntime, {
+          noOpen: Boolean(opts.noOpen),
         });
       });
     });

@@ -3,6 +3,8 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/figtree";
 
+@source "../node_modules/streamdown/dist/*.js";
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
@@ -121,4 +123,17 @@
   *::-webkit-scrollbar-thumb:hover {
     background: oklch(0.7 0.007 88.64);
   }
+}
+
+[data-streamdown="code-block"] {
+  border: none !important;
+  background: oklch(0.925 0.007 88.65 / 0.3) !important;
+}
+
+[data-streamdown="code-block-body"] {
+  background: white !important;
+}
+
+[data-streamdown="inline-code"] {
+  background: white !important;
 }

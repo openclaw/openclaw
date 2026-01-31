@@ -1,0 +1,70 @@
+[debug] [2026-01-30T22:57:20.423Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-30T22:57:20.424Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-30T22:57:20.424Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-30T22:57:20.424Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-30T22:57:20.434Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-30T22:57:20.434Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-30T22:57:20.656Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-30T22:57:20.657Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-30T22:57:20.657Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-30T22:57:20.657Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-30T22:57:20.662Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-30T22:57:20.662Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-30T22:57:20.663Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-30T22:57:20.663Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T07:05:29.134Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T07:05:29.135Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T07:05:29.135Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T07:05:29.135Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T07:05:29.143Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T07:05:29.143Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T07:05:29.539Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T07:05:29.539Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T07:05:29.539Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T07:05:29.539Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T07:05:29.540Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T07:05:29.540Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T07:05:29.541Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T07:05:29.541Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T17:21:36.794Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T17:21:36.795Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T17:21:36.796Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T17:21:36.796Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T17:21:36.803Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T17:21:36.803Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T17:21:37.029Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T17:21:37.029Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T17:21:37.029Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T17:21:37.030Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T17:21:37.033Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T17:21:37.033Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T17:21:37.034Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T17:21:37.034Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:23:49.223Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:23:49.224Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:23:49.224Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:23:49.224Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:23:49.232Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:23:49.232Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:23:49.466Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:23:49.466Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:23:49.466Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:23:49.466Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:23:49.468Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:23:49.468Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:23:49.469Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:23:49.469Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:32:14.426Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:32:14.427Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:32:14.427Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:32:14.427Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:32:14.434Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:32:14.434Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:32:14.675Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:32:14.675Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:32:14.675Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:32:14.676Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:32:14.691Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:32:14.691Z] > authorizing via signed-in user (advait@companion.ai)
+[debug] [2026-01-31T18:32:14.691Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-31T18:32:14.691Z] > authorizing via signed-in user (advait@companion.ai)

@@ -52,6 +52,16 @@
 - Type-check/build: `pnpm build`
 - Lint/format: `pnpm lint` (oxlint), `pnpm format` (oxfmt)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Companion UI dev: `pnpm companion:dev`
+- Companion UI build: `pnpm companion:build`
+
+## Companion Fork Maintenance
+
+- This is a fork of `openclaw/openclaw` (upstream). Sync regularly: `git fetch upstream main && git merge upstream/main`.
+- After syncing upstream, always run `pnpm install` then `rm -rf dist && pnpm build` (clean build) to avoid stale `dist/` import errors.
+- When merge conflicts occur in `package.json` scripts: accept upstream's version, then re-add companion-specific scripts (`companion:dev`, `companion:build`) in alphabetical order.
+- When merge conflicts occur in `pnpm-lock.yaml`: accept upstream's version (`git checkout --theirs pnpm-lock.yaml`) and re-run `pnpm install` to regenerate.
+- Common post-sync error: `SyntaxError: does not provide an export named '...'` — this means `dist/` is stale; fix with `rm -rf dist && pnpm build`.
 
 ## Coding Style & Naming Conventions
 

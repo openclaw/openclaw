@@ -7,9 +7,10 @@ type Props = {
   connected: boolean;
   busy: boolean;
   onSend: (text: string) => void;
+  onStop: () => void;
 };
 
-export function ChatComposer({ connected, busy, onSend }: Props) {
+export function ChatComposer({ connected, busy, onSend, onStop }: Props) {
   const [draft, setDraft] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -58,6 +59,7 @@ export function ChatComposer({ connected, busy, onSend }: Props) {
             variant="brand"
             size="icon-sm"
             className="shrink-0 mb-2"
+            onClick={onStop}
           >
             <Square className="size-3.5 fill-current" />
           </Button>
@@ -67,7 +69,7 @@ export function ChatComposer({ connected, busy, onSend }: Props) {
             variant="brand"
             size="icon-sm"
             disabled={!canSend}
-            className="shrink-0 mb-2 disabled:pointer-events-none disabled:opacity-0"
+            className="shrink-0 mb-2"
           >
             <ArrowUp className="size-5" />
           </Button>
