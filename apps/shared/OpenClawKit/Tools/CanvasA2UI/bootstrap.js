@@ -32,7 +32,6 @@ if (modalElement && Array.isArray(modalElement.styles)) {
   modalElement.styles = [...modalElement.styles, modalStyles];
 }
 
-const empty = Object.freeze({});
 const emptyClasses = () => ({});
 const textHintStyles = () => ({ h1: {}, h2: {}, h3: {}, h4: {}, h5: {}, body: {}, caption: {} });
 
@@ -160,7 +159,7 @@ class OpenClawA2UIHost extends LitElement {
   };
 
   #processor = v0_8.Data.createSignalA2uiMessageProcessor();
-  #themeProvider = new ContextProvider(this, {
+  themeProvider = new ContextProvider(this, {
     context: themeContext,
     initialValue: openclawTheme,
   });
@@ -318,8 +317,8 @@ class OpenClawA2UIHost extends LitElement {
 
   #handleActionStatus(evt) {
     const detail = evt?.detail ?? null;
-    if (!detail || typeof detail.id !== "string") return;
-    if (!this.pendingAction || this.pendingAction.id !== detail.id) return;
+    if (!detail || typeof detail.id !== "string") {return;}
+    if (!this.pendingAction || this.pendingAction.id !== detail.id) {return;}
 
     if (detail.ok) {
       this.pendingAction = { ...this.pendingAction, phase: "sent", sentAt: Date.now() };
@@ -362,7 +361,7 @@ class OpenClawA2UIHost extends LitElement {
     for (const item of ctxItems) {
       const key = item?.key;
       const value = item?.value ?? null;
-      if (!key || !value) continue;
+      if (!key || !value) {continue;}
 
       if (typeof value.path === "string") {
         const resolved = sourceNode

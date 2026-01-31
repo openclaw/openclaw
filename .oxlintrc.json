@@ -20,5 +20,19 @@
     "unicorn/consistent-function-scoping": "off",
     "unicorn/require-post-message-target-origin": "off"
   },
-  "ignorePatterns": ["src/canvas-host/a2ui/a2ui.bundle.js"]
+  "ignorePatterns": [
+    "assets/",
+    "dist/",
+    "docs/_layouts/",
+    "node_modules/",
+    "patches/",
+    "pnpm-lock.yaml/",
+    "skills/",
+    "src/canvas-host/a2ui/a2ui.bundle.js",
+    "Swabble/",
+    "vendor/",
+    "extensions/",
+    "scripts/",
+    "ui/"
+  ]
 }
