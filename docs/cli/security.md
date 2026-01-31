@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw security` (audit and fix common security f
 read_when:
   - You want to run a quick security audit on config/state
   - You want to apply safe “fix” suggestions (chmod, tighten defaults)
+title: "security"
 ---
 
 # `openclaw security`

@@ -3,6 +3,7 @@ summary: "Use Z.AI (GLM models) with OpenClaw"
 read_when:
   - You want Z.AI / GLM models in OpenClaw
   - You need a simple ZAI_API_KEY setup
+title: "Z.AI"
 ---
 
 # Z.AI

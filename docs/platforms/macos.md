@@ -3,6 +3,7 @@ summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
 read_when:
   - Implementing macOS app features
   - Changing gateway lifecycle or node bridging on macOS
+title: "macOS App"
 ---
 
 # OpenClaw macOS Companion (menu bar + gateway broker)

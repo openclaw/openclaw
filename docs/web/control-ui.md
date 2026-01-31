@@ -3,6 +3,9 @@ summary: "Build a custom web UI that talks to the Gateway WebSocket"
 read_when:
   - You want to build your own browser app for OpenClaw
   - You want to connect a web UI to the Gateway WebSocket
+  - You want to operate the Gateway from a browser
+  - You want Tailnet access without SSH tunnels
+title: "Control UI"
 ---
 
 # Custom web UI
@@ -79,7 +82,6 @@ capability to a Gateway surface so it can run consistently across channels:
 
 Document the mapping for each feature before implementation so the OpenClaw UI,
 CLI, and Gateway remain consistent.
-<<<<<<< codex/create-web-app-interface-for-openclaw-fppu6h
 
 ## Example capability inventory
 
@@ -122,8 +124,6 @@ logic. See [Webhooks](/automation/webhook).
 
 Confirm your UI runs on the intended platforms (for example, Windows) and uses
 the Gateway WebSocket as the shared control plane.
-=======
->>>>>>> main
 
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
 - `token` is stored in localStorage; `password` is kept in memory only.

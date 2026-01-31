@@ -3,6 +3,7 @@ summary: "iMessage support via imsg (JSON-RPC over stdio), setup, and chat_id ro
 read_when:
   - Setting up iMessage support
   - Debugging iMessage send/receive
+title: iMessage
 ---
 
 # iMessage (imsg)

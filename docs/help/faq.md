@@ -1,5 +1,6 @@
 ---
 summary: "Frequently asked questions about OpenClaw setup, configuration, and usage"
+title: "FAQ"
 ---
 
 # FAQ

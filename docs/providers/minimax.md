@@ -3,6 +3,7 @@ summary: "Use MiniMax M2.1 in OpenClaw"
 read_when:
   - You want MiniMax models in OpenClaw
   - You need MiniMax setup guidance
+title: "MiniMax"
 ---
 
 # MiniMax

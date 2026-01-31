@@ -1,3 +1,7 @@
+---
+title: "Pi Development Workflow"
+---
+
 # Pi Development Workflow
 
 This guide summarizes a sane workflow for working on the pi integration in OpenClaw.

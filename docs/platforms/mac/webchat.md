@@ -2,6 +2,7 @@
 summary: "How the mac app embeds the gateway WebChat and how to debug it"
 read_when:
   - Debugging mac WebChat view or loopback port
+title: "WebChat"
 ---
 
 # WebChat (macOS app)

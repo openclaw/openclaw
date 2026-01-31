@@ -3,6 +3,7 @@ summary: "Use Anthropic Claude via API keys or setup-token in OpenClaw"
 read_when:
   - You want to use Anthropic models in OpenClaw
   - You want setup-token instead of API keys
+title: "Anthropic"
 ---
 
 # Anthropic (Claude)

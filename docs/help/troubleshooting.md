@@ -3,6 +3,7 @@ summary: "Troubleshooting hub: symptoms → checks → fixes"
 read_when:
   - You see an error and want the fix path
   - The installer says “success” but the CLI doesn’t work
+title: "Troubleshooting"
 ---
 
 # Troubleshooting

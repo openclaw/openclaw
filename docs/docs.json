@@ -956,7 +956,7 @@
       {
         "group": "Gateway & Ops",
         "pages": [
-          "gateway",
+          "gateway/index",
           "gateway/protocol",
           "gateway/bridge-protocol",
           "gateway/pairing",
@@ -975,7 +975,7 @@
           "gateway/heartbeat",
           "gateway/doctor",
           "gateway/logging",
-          "gateway/security",
+          "gateway/security/index",
           "security/formal-verification",
           "gateway/sandbox-vs-tool-policy-vs-elevated",
           "gateway/sandboxing",
@@ -990,7 +990,7 @@
       },
       {
         "group": "Web & Interfaces",
-        "pages": ["web", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
+        "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
       },
       {
         "group": "Channels",
@@ -1049,7 +1049,7 @@
       {
         "group": "Tools & Skills",
         "pages": [
-          "tools",
+          "tools/index",
           "tools/lobster",
           "tools/llm-task",
           "plugin",
@@ -1077,7 +1077,7 @@
       {
         "group": "Nodes & Media",
         "pages": [
-          "nodes",
+          "nodes/index",
           "nodes/camera",
           "nodes/images",
           "nodes/audio",
@@ -1089,7 +1089,7 @@
       {
         "group": "Platforms",
         "pages": [
-          "platforms",
+          "platforms/index",
           "platforms/macos",
           "platforms/macos-vm",
           "platforms/ios",

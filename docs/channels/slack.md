@@ -1,6 +1,7 @@
 ---
 summary: "Slack setup for socket or HTTP webhook mode"
 read_when: "Setting up Slack or debugging Slack socket/HTTP mode"
+title: "Slack"
 ---
 
 # Slack

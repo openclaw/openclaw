@@ -3,6 +3,7 @@ summary: "How OpenClaw memory works (workspace files + automatic memory flush)"
 read_when:
   - You want the memory file layout and workflow
   - You want to tune the automatic pre-compaction memory flush
+title: "Memory"
 ---
 
 # Memory
