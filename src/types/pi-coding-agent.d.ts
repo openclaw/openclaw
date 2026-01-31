@@ -6,5 +6,3 @@ declare module "@mariozechner/pi-coding-agent" {
     additionalExtensionPaths?: string[];
   }
 }
-
-export {};

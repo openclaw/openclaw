@@ -12,8 +12,8 @@ export function computeMemoryManagerCacheKey(params: {
   const fingerprint = hashText(
     JSON.stringify({
       enabled: settings.enabled,
-      sources: [...settings.sources].sort((a, b) => a.localeCompare(b)),
-      extraPaths: [...settings.extraPaths].sort((a, b) => a.localeCompare(b)),
+      sources: [...settings.sources].toSorted((a, b) => a.localeCompare(b)),
+      extraPaths: [...settings.extraPaths].toSorted((a, b) => a.localeCompare(b)),
       provider: settings.provider,
       model: settings.model,
       fallback: settings.fallback,

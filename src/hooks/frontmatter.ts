@@ -40,7 +40,7 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
   }
 
   const spec: HookInstallSpec = {
-    kind: kind as HookInstallSpec["kind"],
+    kind: kind,
   };
 
   if (typeof raw.id === "string") spec.id = raw.id;
@@ -69,7 +69,7 @@ export function resolveOpenClawMetadata(
   const raw = getFrontmatterValue(frontmatter, "metadata");
   if (!raw) return undefined;
   try {
-    const parsed = JSON5.parse(raw) as Record<string, unknown>;
+    const parsed = JSON5.parse(raw);
     if (!parsed || typeof parsed !== "object") return undefined;
     const metadataRawCandidates = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
     let metadataRaw: unknown;

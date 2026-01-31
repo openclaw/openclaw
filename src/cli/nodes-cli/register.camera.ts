@@ -34,12 +34,12 @@ export function registerNodesCameraCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera list", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const raw = (await callGatewayCli("node.invoke", opts, {
+          const raw = await callGatewayCli("node.invoke", opts, {
             nodeId,
             command: "camera.list",
             params: {},
             idempotencyKey: randomIdempotencyKey(),
-          })) as unknown;
+          });
 
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload =
@@ -144,7 +144,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               invokeParams.timeoutMs = timeoutMs;
             }
 
-            const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+            const raw = await callGatewayCli("node.invoke", opts, invokeParams);
             const res =
               typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
             const payload = parseCameraSnapPayload(res.payload);
@@ -213,7 +213,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload = parseCameraClipPayload(res.payload);
           const filePath = cameraTempPath({

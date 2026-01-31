@@ -150,7 +150,7 @@ describe("agentCommand", () => {
         if (evt.stream !== "assistant") return;
         assistantEvents.push({
           runId: evt.runId,
-          text: typeof evt.data?.text === "string" ? (evt.data.text as string) : undefined,
+          text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
         });
       });
 

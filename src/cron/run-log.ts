@@ -82,5 +82,5 @@ export async function readCronRunLogEntries(
       // ignore invalid lines
     }
   }
-  return parsed.reverse();
+  return parsed.toReversed();
 }

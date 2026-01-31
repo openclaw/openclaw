@@ -140,7 +140,7 @@ export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[
       (entity): entity is TelegramTextLinkEntity & { url: string } =>
         entity.type === "text_link" && Boolean(entity.url),
     )
-    .sort((a, b) => b.offset - a.offset);
+    .toSorted((a, b) => b.offset - a.offset);
 
   if (textLinks.length === 0) return text;
 

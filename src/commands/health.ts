@@ -135,7 +135,7 @@ const buildSessionSummary = (storePath: string) => {
   const sessions = Object.entries(store)
     .filter(([key]) => key !== "global" && key !== "unknown")
     .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+    .toSorted((a, b) => b.updatedAt - a.updatedAt);
   const recent = sessions.slice(0, 5).map((s) => ({
     key: s.key,
     updatedAt: s.updatedAt || null,

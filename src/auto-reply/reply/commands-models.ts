@@ -154,7 +154,7 @@ export async function resolveModelsCommandReply(params: {
   add(resolvedDefault.provider, resolvedDefault.model);
   addModelConfigEntries();
 
-  const providers = [...byProvider.keys()].sort();
+  const providers = [...byProvider.keys()].toSorted();
 
   if (!provider) {
     const lines: string[] = [
@@ -181,7 +181,7 @@ export async function resolveModelsCommandReply(params: {
     return { text: lines.join("\n") };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())].sort();
+  const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
   const total = models.length;
 
   if (total === 0) {

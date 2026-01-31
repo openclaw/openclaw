@@ -111,9 +111,10 @@ describe("gateway server chat", () => {
           idempotencyKey: "idem-route",
         });
         expect(routeRes.ok).toBe(true);
-        const stored = JSON.parse(
-          await fs.readFile(testState.sessionStorePath as string, "utf-8"),
-        ) as Record<string, { lastChannel?: string; lastTo?: string } | undefined>;
+        const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+          string,
+          { lastChannel?: string; lastTo?: string } | undefined
+        >;
         expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
         expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
 

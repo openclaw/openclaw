@@ -83,7 +83,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     agentId: normalizeOptionalAgentId(input.agentId),
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
-    enabled: input.enabled !== false,
+    enabled: input.enabled,
     deleteAfterRun: input.deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,

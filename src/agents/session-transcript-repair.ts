@@ -95,7 +95,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
   };
 
   for (let i = 0; i < messages.length; i += 1) {
-    const msg = messages[i] as AgentMessage;
+    const msg = messages[i];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -129,7 +129,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
     let j = i + 1;
     for (; j < messages.length; j += 1) {
-      const next = messages[j] as AgentMessage;
+      const next = messages[j];
       if (!next || typeof next !== "object") {
         remainder.push(next);
         continue;

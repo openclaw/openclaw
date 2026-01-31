@@ -252,7 +252,7 @@ export function createImageCard(
   };
 
   if (body && bubble.body) {
-    (bubble.body as FlexBox).contents.push({
+    bubble.body.contents.push({
       type: "text",
       text: body,
       size: "md",

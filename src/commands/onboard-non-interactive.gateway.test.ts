@@ -227,7 +227,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     // otherwise sees a mocked writeConfigFile and the config never lands on disk).
     vi.resetModules();
     vi.doMock("../config/config.js", async () => {
-      return (await vi.importActual("../config/config.js")) as typeof import("../config/config.js");
+      return await vi.importActual("../config/config.js");
     });
 
     const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");

@@ -655,7 +655,7 @@ function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownL
 }
 
 function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const sorted = [...spans].sort((a, b) => {
+  const sorted = [...spans].toSorted((a, b) => {
     if (a.start !== b.start) return a.start - b.start;
     if (a.end !== b.end) return a.end - b.end;
     return a.style.localeCompare(b.style);

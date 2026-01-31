@@ -246,13 +246,13 @@ export function renderTable(opts: RenderTableOptions): string {
     const flexOrder = columns
       .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
       .filter(({ i }) => Boolean(columns[i]?.flex))
-      .sort((a, b) => b.w - a.w)
+      .toSorted((a, b) => b.w - a.w)
       .map((x) => x.i);
 
     const nonFlexOrder = columns
       .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
       .filter(({ i }) => !columns[i]?.flex)
-      .sort((a, b) => b.w - a.w)
+      .toSorted((a, b) => b.w - a.w)
       .map((x) => x.i);
 
     const shrink = (order: number[], minWidths: number[]) => {

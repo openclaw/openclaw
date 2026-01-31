@@ -102,10 +102,10 @@ function describeStickerKeywords(sticker: StickerEventMessage): string {
 
 function extractMessageText(message: MessageEvent["message"]): string {
   if (message.type === "text") {
-    return (message as TextEventMessage).text;
+    return message.text;
   }
   if (message.type === "location") {
-    const loc = message as LocationEventMessage;
+    const loc = message;
     return (
       formatLocationText({
         latitude: loc.latitude,
@@ -116,7 +116,7 @@ function extractMessageText(message: MessageEvent["message"]): string {
     );
   }
   if (message.type === "sticker") {
-    const sticker = message as StickerEventMessage;
+    const sticker = message;
     const packageName = STICKER_PACKAGES[sticker.packageId] ?? "sticker";
     const keywords = describeStickerKeywords(sticker);
 
@@ -222,7 +222,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   // Build location context if applicable
   let locationContext: ReturnType<typeof toLocationContext> | undefined;
   if (message.type === "location") {
-    const loc = message as LocationEventMessage;
+    const loc = message;
     locationContext = toLocationContext({
       latitude: loc.latitude,
       longitude: loc.longitude,

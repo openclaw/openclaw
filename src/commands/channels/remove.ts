@@ -38,25 +38,25 @@ export async function channelsRemoveCommand(
 
   if (useWizard && prompter) {
     await prompter.intro("Remove channel account");
-    const selectedChannel = (await prompter.select({
+    const selectedChannel = await prompter.select({
       message: "Channel",
       options: listChannelPlugins().map((plugin) => ({
         value: plugin.id,
         label: plugin.meta.label,
       })),
-    })) as ChatChannel;
+    });
     channel = selectedChannel;
 
     accountId = await (async () => {
       const ids = listAccountIds(cfg, selectedChannel);
-      const choice = (await prompter.select({
+      const choice = await prompter.select({
         message: "Account",
         options: ids.map((id) => ({
           value: id,
           label: id === DEFAULT_ACCOUNT_ID ? "default (primary)" : id,
         })),
         initialValue: ids[0] ?? DEFAULT_ACCOUNT_ID,
-      })) as string;
+      });
       return normalizeAccountId(choice);
     })();
 

@@ -34,13 +34,11 @@ function resolveProviderConfig(
     const matched = Object.entries(providers).find(
       ([key]) => normalizeProviderId(key) === normalized,
     );
-    return matched?.[1] as ModelProviderConfig | undefined;
+    return matched?.[1];
   }
   return (
     (providers[normalized] as ModelProviderConfig | undefined) ??
-    (Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1] as
-      | ModelProviderConfig
-      | undefined)
+    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
   );
 }
 

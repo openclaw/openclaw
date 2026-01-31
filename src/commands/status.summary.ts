@@ -150,7 +150,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
 
   const allSessions = Array.from(paths)
     .flatMap((storePath) => buildSessionRows(loadStore(storePath)))
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 

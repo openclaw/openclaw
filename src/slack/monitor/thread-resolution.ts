@@ -72,7 +72,7 @@ export function createSlackThreadTsResolver(params: {
       return;
     }
     while (cache.size > maxSize) {
-      const oldestKey = cache.keys().next().value as string | undefined;
+      const oldestKey = cache.keys().next().value;
       if (!oldestKey) break;
       cache.delete(oldestKey);
     }

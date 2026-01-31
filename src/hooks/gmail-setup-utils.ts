@@ -249,7 +249,7 @@ export async function ensureTailscaleEndpoint(params: {
   try {
     parsed = JSON.parse(status.stdout) as { Self?: { DNSName?: string } };
   } catch (err) {
-    throw new Error(formatJsonParseFailure(statusCommand, status, err));
+    throw new Error(formatJsonParseFailure(statusCommand, status, err), { cause: err });
   }
   const dnsName = parsed.Self?.DNSName?.replace(/\.$/, "");
   if (!dnsName) {

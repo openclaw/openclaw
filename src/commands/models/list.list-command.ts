@@ -64,7 +64,7 @@ export async function modelsListCommand(
   };
 
   if (opts.all) {
-    const sorted = [...models].sort((a, b) => {
+    const sorted = [...models].toSorted((a, b) => {
       const p = a.provider.localeCompare(b.provider);
       if (p !== 0) return p;
       return a.id.localeCompare(b.id);

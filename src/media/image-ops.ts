@@ -350,7 +350,7 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
     // Check if the image has an alpha channel
     // PNG color types with alpha: 4 (grayscale+alpha), 6 (RGBA)
     // Sharp reports this via 'channels' (4 = RGBA) or 'hasAlpha'
-    return meta.hasAlpha === true || meta.channels === 4;
+    return meta.hasAlpha || meta.channels === 4;
   } catch {
     return false;
   }

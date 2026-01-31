@@ -193,7 +193,7 @@ export function getStatusCode(err: unknown) {
 
 function safeStringify(value: unknown, limit = 800): string {
   try {
-    const seen = new WeakSet<object>();
+    const seen = new WeakSet();
     const raw = JSON.stringify(
       value,
       (_key, v) => {
@@ -236,7 +236,7 @@ function extractBoomDetails(err: unknown): {
     typeof (output as { statusCode?: unknown }).statusCode === "number"
       ? ((output as { statusCode?: unknown }).statusCode as number)
       : typeof payload?.statusCode === "number"
-        ? (payload.statusCode as number)
+        ? payload.statusCode
         : undefined;
   const error = typeof payload?.error === "string" ? payload.error : undefined;
   const message = typeof payload?.message === "string" ? payload.message : undefined;

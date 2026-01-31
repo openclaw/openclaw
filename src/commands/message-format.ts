@@ -185,7 +185,7 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
     const emoji =
       (typeof emojiObj?.raw === "string" && emojiObj.raw) ||
       (typeof entry.name === "string" && entry.name) ||
-      (typeof entry.emoji === "string" && (entry.emoji as string)) ||
+      (typeof entry.emoji === "string" && entry.emoji) ||
       "";
     const count = typeof entry.count === "number" ? String(entry.count) : "";
     const userList = Array.isArray(entry.users)

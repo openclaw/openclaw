@@ -21,7 +21,7 @@ export function resolveCronStorePath(storePath?: string) {
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
-    const parsed = JSON5.parse(raw) as Partial<CronStoreFile> | null;
+    const parsed = JSON5.parse(raw);
     const jobs = Array.isArray(parsed?.jobs) ? (parsed?.jobs as never[]) : [];
     return {
       version: 1,

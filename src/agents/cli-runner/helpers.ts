@@ -159,7 +159,7 @@ function buildModelAliasLines(cfg?: OpenClawConfig) {
     entries.push({ alias, model });
   }
   return entries
-    .sort((a, b) => a.alias.localeCompare(b.alias))
+    .toSorted((a, b) => a.alias.localeCompare(b.alias))
     .map((entry) => `- ${entry.alias}: ${entry.model}`);
 }
 
@@ -228,7 +228,7 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
 
 function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
-    typeof raw[key] === "number" && raw[key] > 0 ? (raw[key] as number) : undefined;
+    typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
   const input = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =

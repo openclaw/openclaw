@@ -19,7 +19,7 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
     await delay(ms, undefined, { signal: abortSignal });
   } catch (err) {
     if (abortSignal?.aborted) {
-      throw new Error("aborted");
+      throw new Error("aborted", { cause: err });
     }
     throw err;
   }

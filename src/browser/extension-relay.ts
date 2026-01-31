@@ -458,7 +458,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         if ("error" in parsed && typeof parsed.error === "string" && parsed.error.trim()) {
           pending.reject(new Error(parsed.error));
         } else {
-          pending.resolve((parsed as ExtensionResponseMessage).result);
+          pending.resolve(parsed.result);
         }
         return;
       }
