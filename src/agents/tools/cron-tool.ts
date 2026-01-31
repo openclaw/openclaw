@@ -103,10 +103,10 @@ async function buildReminderContextLines(params: {
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
-    const res = (await callGatewayTool("chat.history", params.gatewayOpts, {
+    const res = await callGatewayTool("chat.history", params.gatewayOpts, {
       sessionKey: resolvedKey,
       limit: maxMessages,
-    })) as { messages?: unknown[] };
+    });
     const messages = Array.isArray(res?.messages) ? res.messages : [];
     const parsed = messages
       .map((msg) => extractMessageText(msg as ChatMessage))

@@ -270,12 +270,12 @@ export function listSystemPresence(): SystemPresence[] {
   }
   // enforce max size (LRU by ts)
   if (entries.size > MAX_ENTRIES) {
-    const sorted = [...entries.entries()].sort((a, b) => a[1].ts - b[1].ts);
+    const sorted = [...entries.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
     const toDrop = entries.size - MAX_ENTRIES;
     for (let i = 0; i < toDrop; i++) {
       entries.delete(sorted[i][0]);
     }
   }
   touchSelfPresence();
-  return [...entries.values()].sort((a, b) => b.ts - a.ts);
+  return [...entries.values()].toSorted((a, b) => b.ts - a.ts);
 }

@@ -117,8 +117,8 @@ function computeFileLists(fileOps: FileOperations): {
   modifiedFiles: string[];
 } {
   const modified = new Set([...fileOps.edited, ...fileOps.written]);
-  const readFiles = [...fileOps.read].filter((f) => !modified.has(f)).sort();
-  const modifiedFiles = [...modified].sort();
+  const readFiles = [...fileOps.read].filter((f) => !modified.has(f)).toSorted();
+  const modifiedFiles = [...modified].toSorted();
   return { readFiles, modifiedFiles };
 }
 

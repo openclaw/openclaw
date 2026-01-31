@@ -59,7 +59,7 @@ export async function promptGatewayConfig(
       ],
     }),
     runtime,
-  ) as "auto" | "lan" | "loopback" | "custom" | "tailnet";
+  );
 
   let customBindHost: string | undefined;
   if (bind === "custom") {
@@ -117,7 +117,7 @@ export async function promptGatewayConfig(
       ],
     }),
     runtime,
-  ) as "off" | "serve" | "funnel";
+  );
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
   if (tailscaleMode !== "off") {

@@ -86,7 +86,7 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = (await callGatewayCli("node.list", opts, {})) as unknown;
+          const result = await callGatewayCli("node.list", opts, {});
           const obj =
             typeof result === "object" && result !== null
               ? (result as Record<string, unknown>)
@@ -146,7 +146,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               pathEnv ? `path: ${pathEnv}` : null,
             ].filter(Boolean) as string[];
             const caps = Array.isArray(n.caps)
-              ? n.caps.map(String).filter(Boolean).sort().join(", ")
+              ? n.caps.map(String).filter(Boolean).toSorted().join(", ")
               : "?";
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
@@ -191,9 +191,9 @@ export function registerNodesStatusCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const result = (await callGatewayCli("node.describe", opts, {
+          const result = await callGatewayCli("node.describe", opts, {
             nodeId,
-          })) as unknown;
+          });
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
@@ -206,9 +206,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           const displayName = typeof obj.displayName === "string" ? obj.displayName : nodeId;
           const connected = Boolean(obj.connected);
           const paired = Boolean(obj.paired);
-          const caps = Array.isArray(obj.caps) ? obj.caps.map(String).filter(Boolean).sort() : null;
+          const caps = Array.isArray(obj.caps)
+            ? obj.caps.map(String).filter(Boolean).toSorted()
+            : null;
           const commands = Array.isArray(obj.commands)
-            ? obj.commands.map(String).filter(Boolean).sort()
+            ? obj.commands.map(String).filter(Boolean).toSorted()
             : [];
           const perms = formatPermissions(obj.permissions);
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
@@ -274,7 +276,7 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
+          const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);

@@ -147,7 +147,7 @@ function stableStringify(value: unknown): string {
     return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
+  const keys = Object.keys(record).toSorted();
   const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
   return `{${entries.join(",")}}`;
 }
@@ -249,9 +249,9 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     const wrapped: StreamFn = (model, context, options) => {
       recordStage("stream:context", {
         model: {
-          id: (model as Model<Api>)?.id,
-          provider: (model as Model<Api>)?.provider,
-          api: (model as Model<Api>)?.api,
+          id: model?.id,
+          provider: model?.provider,
+          api: model?.api,
         },
         system: (context as { system?: unknown }).system,
         messages: (context as { messages?: AgentMessage[] }).messages ?? [],

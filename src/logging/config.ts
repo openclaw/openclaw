@@ -12,7 +12,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
   try {
     if (!fs.existsSync(configPath)) return undefined;
     const raw = fs.readFileSync(configPath, "utf-8");
-    const parsed = json5.parse(raw) as Record<string, unknown>;
+    const parsed = json5.parse(raw);
     const logging = parsed?.logging;
     if (!logging || typeof logging !== "object" || Array.isArray(logging)) return undefined;
     return logging as LoggingConfig;

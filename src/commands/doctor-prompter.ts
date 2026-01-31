@@ -40,14 +40,12 @@ export function createDoctorPrompter(params: {
     if (nonInteractive) return false;
     if (shouldRepair) return true;
     if (!canPrompt) return Boolean(p.initialValue ?? false);
-    return (
-      guardCancel(
-        await confirm({
-          ...p,
-          message: stylePromptMessage(p.message),
-        }),
-        params.runtime,
-      ) === true
+    return guardCancel(
+      await confirm({
+        ...p,
+        message: stylePromptMessage(p.message),
+      }),
+      params.runtime,
     );
   };
 
@@ -62,14 +60,12 @@ export function createDoctorPrompter(params: {
       if (shouldRepair && shouldForce) return true;
       if (shouldRepair && !shouldForce) return false;
       if (!canPrompt) return Boolean(p.initialValue ?? false);
-      return (
-        guardCancel(
-          await confirm({
-            ...p,
-            message: stylePromptMessage(p.message),
-          }),
-          params.runtime,
-        ) === true
+      return guardCancel(
+        await confirm({
+          ...p,
+          message: stylePromptMessage(p.message),
+        }),
+        params.runtime,
       );
     },
     confirmSkipInNonInteractive: async (p) => {

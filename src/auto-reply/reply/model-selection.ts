@@ -436,7 +436,7 @@ export function resolveModelDirectiveSelection(params: {
         });
         return Object.assign({ candidate }, details);
       })
-      .sort((a, b) => {
+      .toSorted((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
         if (a.variantMatchCount !== b.variantMatchCount)

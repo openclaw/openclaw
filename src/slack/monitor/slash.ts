@@ -589,7 +589,7 @@ export function registerSlackMonitorSlashCommands(params: {
       await handleSlashCommand({
         command: commandPayload,
         ack: async () => {},
-        respond: respondFn as SlackCommandMiddlewareArgs["respond"],
+        respond: respondFn,
         prompt,
         commandArgs,
         commandDefinition: commandDefinition ?? undefined,

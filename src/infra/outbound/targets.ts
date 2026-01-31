@@ -132,7 +132,7 @@ export function resolveOutboundTarget(params: {
     };
   }
 
-  const plugin = getChannelPlugin(params.channel as ChannelId);
+  const plugin = getChannelPlugin(params.channel);
   if (!plugin) {
     return {
       ok: false,
@@ -233,7 +233,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   let reason: string | undefined;
-  const plugin = getChannelPlugin(resolvedTarget.channel as ChannelId);
+  const plugin = getChannelPlugin(resolvedTarget.channel);
   if (plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTarget({
       channel: resolvedTarget.channel,

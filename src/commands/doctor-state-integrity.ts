@@ -302,7 +302,7 @@ export async function noteStateIntegrity(
   if (entries.length > 0) {
     const recent = entries
       .slice()
-      .sort((a, b) => {
+      .toSorted((a, b) => {
         const aUpdated = typeof a[1].updatedAt === "number" ? a[1].updatedAt : 0;
         const bUpdated = typeof b[1].updatedAt === "number" ? b[1].updatedAt : 0;
         return bUpdated - aUpdated;

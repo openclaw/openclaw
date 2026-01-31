@@ -108,7 +108,7 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
   }
 
   return results
-    .sort((a, b) => b.score - a.score)
+    .toSorted((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((r) => r.sticker);
 }
@@ -130,7 +130,7 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
   if (stickers.length === 0) {
     return { count: 0 };
   }
-  const sorted = [...stickers].sort(
+  const sorted = [...stickers].toSorted(
     (a, b) => new Date(a.cachedAt).getTime() - new Date(b.cachedAt).getTime(),
   );
   return {

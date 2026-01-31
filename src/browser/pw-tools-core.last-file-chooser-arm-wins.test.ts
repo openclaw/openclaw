@@ -55,13 +55,13 @@ describe("pw-tools-core", () => {
         () =>
           new Promise((r) => {
             resolve1 = r;
-          }) as Promise<unknown>,
+          }),
       )
       .mockImplementationOnce(
         () =>
           new Promise((r) => {
             resolve2 = r;
-          }) as Promise<unknown>,
+          }),
       );
 
     currentPage = {

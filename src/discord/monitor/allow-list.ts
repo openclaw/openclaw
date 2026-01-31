@@ -154,7 +154,7 @@ export function resolveDiscordCommandAuthorized(params: {
 }
 
 export function resolveDiscordGuildEntry(params: {
-  guild?: Guild<true> | Guild<false> | null;
+  guild?: Guild<true> | Guild | null;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }): DiscordGuildEntryResolved | null {
   const guild = params.guild;

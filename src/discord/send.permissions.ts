@@ -10,7 +10,7 @@ import { normalizeDiscordToken } from "./token.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
   ([, value]) => typeof value === "bigint",
-) as Array<[string, bigint]>;
+);
 
 type DiscordClientOpts = {
   token?: string;
@@ -60,7 +60,7 @@ function removePermissionBits(base: bigint, deny?: string) {
 function bitfieldToPermissions(bitfield: bigint) {
   return PERMISSION_ENTRIES.filter(([, value]) => (bitfield & value) === value)
     .map(([name]) => name)
-    .sort();
+    .toSorted();
 }
 
 export function isThreadChannelType(channelType?: number) {

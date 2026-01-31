@@ -136,7 +136,7 @@ export class SearchableSelectList implements Component {
       .filter((token) => token.length > 0);
     if (tokens.length === 0) return text;
 
-    const uniqueTokens = Array.from(new Set(tokens)).sort((a, b) => b.length - a.length);
+    const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
     let result = text;
     for (const token of uniqueTokens) {
       const regex = this.getCachedRegex(token);

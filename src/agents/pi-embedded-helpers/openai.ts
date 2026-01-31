@@ -87,16 +87,16 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
       }
       const record = block as OpenAIThinkingBlock;
       if (record.type !== "thinking") {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
       const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
       if (!signature) {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
       changed = true;

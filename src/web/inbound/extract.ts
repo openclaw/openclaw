@@ -10,8 +10,8 @@ import { jidToE164 } from "../../utils.js";
 import { parseVcard } from "../vcard.js";
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(message as proto.IMessage | undefined);
-  return normalized as proto.IMessage | undefined;
+  const normalized = normalizeMessageContent(message);
+  return normalized;
 }
 
 function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
@@ -244,9 +244,7 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   const message = unwrapMessage(rawMessage);
   if (!message) return null;
   const contextInfo = extractContextInfo(message);
-  const quoted = normalizeMessageContent(
-    contextInfo?.quotedMessage as proto.IMessage | undefined,
-  ) as proto.IMessage | undefined;
+  const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
   if (!quoted) return null;
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;

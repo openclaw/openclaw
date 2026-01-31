@@ -72,7 +72,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload = parseCanvasSnapshotPayload(res.payload);
           const filePath = canvasSnapshotTempPath({

@@ -41,7 +41,7 @@ export async function resolveLinkChannelContext(
           snapshot,
         })
       : undefined;
-    const summaryRecord = summary as Record<string, unknown> | undefined;
+    const summaryRecord = summary;
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     if (linked === null) continue;

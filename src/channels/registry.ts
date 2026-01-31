@@ -127,9 +127,7 @@ export function normalizeChatChannelId(raw?: string | null): ChatChannelId | nul
   const normalized = normalizeChannelKey(raw);
   if (!normalized) return null;
   const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
-  return CHAT_CHANNEL_ORDER.includes(resolved as ChatChannelId)
-    ? (resolved as ChatChannelId)
-    : null;
+  return CHAT_CHANNEL_ORDER.includes(resolved) ? resolved : null;
 }
 
 // Channel docking: prefer this helper in shared code. Importing from
@@ -154,7 +152,7 @@ export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
     if (id && id === key) return true;
     return (entry.plugin.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === key);
   });
-  return (hit?.plugin.id as ChannelId | undefined) ?? null;
+  return hit?.plugin.id ?? null;
 }
 
 export function formatChannelPrimerLine(meta: ChatChannelMeta): string {

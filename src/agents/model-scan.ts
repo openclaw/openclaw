@@ -325,7 +325,7 @@ async function mapWithConcurrency<T, R>(
   opts?: { onProgress?: (completed: number, total: number) => void },
 ): Promise<R[]> {
   const limit = Math.max(1, Math.floor(concurrency));
-  const results = Array.from({ length: items.length }) as R[];
+  const results = Array.from({ length: items.length });
   let nextIndex = 0;
   let completed = 0;
 
@@ -334,7 +334,7 @@ async function mapWithConcurrency<T, R>(
       const current = nextIndex;
       nextIndex += 1;
       if (current >= items.length) return;
-      results[current] = await fn(items[current] as T, current);
+      results[current] = await fn(items[current], current);
       completed += 1;
       opts?.onProgress?.(completed, items.length);
     }

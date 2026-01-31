@@ -240,7 +240,7 @@ export async function runConfigureWizard(
         ],
       }),
       runtime,
-    ) as "local" | "remote";
+    );
 
     if (mode === "remote") {
       let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);

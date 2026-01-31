@@ -249,7 +249,7 @@ function mergeAction(
   if (!override) {
     return validateAction(base);
   }
-  const kind = (override.kind ?? base.kind ?? defaultAction) as "wake" | "agent";
+  const kind = override.kind ?? base.kind ?? defaultAction;
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");

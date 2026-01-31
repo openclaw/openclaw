@@ -272,11 +272,7 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
-      const result = (await base.execute(
-        toolCallId,
-        normalized ?? params,
-        signal,
-      )) as AgentToolResult<unknown>;
+      const result = await base.execute(toolCallId, normalized ?? params, signal);
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const normalizedResult = await normalizeReadImageResult(result, filePath);
       return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);

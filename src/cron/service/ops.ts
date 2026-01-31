@@ -45,7 +45,7 @@ export async function status(state: CronServiceState) {
       enabled: state.deps.cronEnabled,
       storePath: state.deps.storePath,
       jobs: state.store?.jobs.length ?? 0,
-      nextWakeAtMs: state.deps.cronEnabled === true ? (nextWakeAtMs(state) ?? null) : null,
+      nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
     };
   });
 }
@@ -55,7 +55,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     await ensureLoaded(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
-    return jobs.sort((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
 }
 

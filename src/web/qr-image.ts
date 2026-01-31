@@ -12,8 +12,8 @@ type QRCodeConstructor = new (
   isDark: (row: number, col: number) => boolean;
 };
 
-const QRCode = QRCodeModule as unknown as QRCodeConstructor;
-const QRErrorCorrectLevel = QRErrorCorrectLevelModule as Record<string, unknown>;
+const QRCode = QRCodeModule as QRCodeConstructor;
+const QRErrorCorrectLevel = QRErrorCorrectLevelModule;
 
 function createQrMatrix(input: string) {
   const qr = new QRCode(-1, QRErrorCorrectLevel.L);

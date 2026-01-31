@@ -53,7 +53,7 @@ function mapStyle(style: MarkdownStyle): SignalTextStyle | null {
 }
 
 function mergeStyles(styles: SignalTextStyleRange[]): SignalTextStyleRange[] {
-  const sorted = [...styles].sort((a, b) => {
+  const sorted = [...styles].toSorted((a, b) => {
     if (a.start !== b.start) return a.start - b.start;
     if (a.length !== b.length) return a.length - b.length;
     return a.style.localeCompare(b.style);
@@ -90,7 +90,7 @@ function applyInsertionsToStyles(
   insertions: Insertion[],
 ): SignalStyleSpan[] {
   if (insertions.length === 0) return spans;
-  const sortedInsertions = [...insertions].sort((a, b) => a.pos - b.pos);
+  const sortedInsertions = [...insertions].toSorted((a, b) => a.pos - b.pos);
   let updated = spans;
 
   for (const insertion of sortedInsertions) {
@@ -137,7 +137,7 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const text = ir.text ?? "";
   if (!text) return { text: "", styles: [] };
 
-  const sortedLinks = [...ir.links].sort((a, b) => a.start - b.start);
+  const sortedLinks = [...ir.links].toSorted((a, b) => a.start - b.start);
   let out = "";
   let cursor = 0;
   const insertions: Insertion[] = [];

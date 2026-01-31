@@ -32,7 +32,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       label: tool.label ?? name,
       description: tool.description ?? "",
       // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema from pi-agent-core uses a different module instance.
-      parameters: tool.parameters as any,
+      parameters: tool.parameters,
       execute: async (
         toolCallId,
         params,

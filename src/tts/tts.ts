@@ -904,7 +904,7 @@ async function summarizeText(params: {
   } catch (err) {
     const error = err as Error;
     if (error.name === "AbortError") {
-      throw new Error("Summarization timed out");
+      throw new Error("Summarization timed out", { cause: err });
     }
     throw err;
   }

@@ -39,7 +39,7 @@ function summarizeSources(sources: Array<string | undefined>): {
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const parts = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
+    .toSorted((a, b) => b[1] - a[1])
     .map(([key, n]) => `${key}${n > 1 ? `×${n}` : ""}`);
   const label = parts.length > 0 ? parts.join("+") : "unknown";
   return { label, parts };
@@ -430,7 +430,7 @@ export async function buildChannelsTable(
               accountId: entry.accountId,
               name: entry.snapshot.name,
             }),
-            Status: entry.enabled !== false ? "OK" : "WARN",
+            Status: entry.enabled ? "OK" : "WARN",
             Notes: notes.join(" · "),
           };
         }),
