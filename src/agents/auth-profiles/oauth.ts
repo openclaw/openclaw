@@ -1,4 +1,4 @@
-import { getOAuthApiKey, type OAuthCredentials, type OAuthProvider } from "@mariozechner/pi-ai";
+import { getOAuthApiKey, type OAuthCredentials } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 
 import type { OpenClawConfig } from "../../config/config.js";

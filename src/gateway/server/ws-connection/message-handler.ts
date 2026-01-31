@@ -35,7 +35,6 @@ import {
   errorShape,
   formatValidationErrors,
   PROTOCOL_VERSION,
-  type RequestFrame,
   validateConnectParams,
   validateRequestFrame,
 } from "../../protocol/index.js";

@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 
 import type { OpenClawConfig } from "../../config/config.js";

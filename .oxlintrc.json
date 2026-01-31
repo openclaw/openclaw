@@ -18,13 +18,13 @@
     "typescript/no-unsafe-type-assertion": "off",
     "typescript/no-unnecessary-template-expression": "off",
     "unicorn/consistent-function-scoping": "off",
+    "unicorn/require-post-message-target-origin": "off",
     "typescript/no-extraneous-class": "off",
     "oxc/no-async-endpoint-handlers": "off",
     "eslint/no-useless-concat": "off",
-    "eslint/no-unused-vars": "off",
+    "eslint/no-unused-vars": "error",
     "eslint/no-new": "off",
     "eslint/preserve-caught-error": "off",
-    "unicorn/require-post-message-target-origin": "off",
   },
   "ignorePatterns": ["src/canvas-host/a2ui/a2ui.bundle.js"]
 }
