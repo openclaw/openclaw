@@ -4,7 +4,6 @@ read_when:
   - Cutting a new npm release
   - Cutting a new macOS app release
   - Verifying metadata before publishing
-title: "Release Checklist"
 ---
 
 # Release Checklist (npm + macOS)
