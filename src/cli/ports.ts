@@ -38,10 +38,12 @@ export function parseLsofOutput(output: string): PortProcess[] {
 async function listPortListenersAsync(port: number): Promise<PortProcess[]> {
   if (process.platform === "win32") {
     const diagnostics = await inspectPortUsage(port);
-    return diagnostics.listeners.map((l) => ({
-      pid: l.pid ?? 0,
-      command: l.command || l.commandLine?.split(" ").pop(),
-    }));
+    return diagnostics.listeners
+      .filter((l) => l.pid && l.pid > 0)  // Filter out invalid PIDs
+      .map((l) => ({
+        pid: l.pid!,
+        command: l.command || l.commandLine?.split(" ").pop(),
+      }));
   }
   // Unix: use lsof for efficiency
   return listPortListeners(port);
@@ -69,13 +71,13 @@ export async function killProcess(pid: number, signal: NodeJS.Signals): Promise<
   if (process.platform === "win32") {
     // Windows: use taskkill for SIGTERM and SIGKILL
     const isSigkill = signal === "SIGKILL";
-    const flag = isSigkill ? "//F" : ""; // /F for force (SIGKILL), no flag for graceful (SIGTERM)
+    const flag = isSigkill ? "/F" : ""; // /F for force (SIGKILL), no flag for graceful (SIGTERM)
     try {
-      execFileSync("taskkill", [flag, "//PID", String(pid)], { windowsHide: true });
+      execFileSync("taskkill", [flag, "/PID", String(pid)], { windowsHide: true });
     } catch (err) {
       const code = (err as { code?: number }).code;
       // Exit code 128 means process already terminated
-      if (code !== 128) {
+      if (code !=== 128) {
         throw new Error(
           `failed to kill pid ${pid}: ${String((err as { stderr?: string }).stderr || err)}`,
         );
@@ -101,14 +103,14 @@ export async function forceFreePortAsync(port: number): Promise<PortProcess[]> {
   return listeners;
 }
 
-export function forceFreePort(port: number): PortProcess[] {
+export function forceFreePort(port: number, signal: NodeJS.Signals = "SIGTERM"): PortProcess[] {
   const listeners = listPortListeners(port);
   for (const proc of listeners) {
     try {
-      process.kill(proc.pid, "SIGTERM");
+      process.kill(proc.pid, signal);
     } catch (err) {
       throw new Error(
-        `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
+        `failed to kill pid ${proc.pid}${proc.command ? `(${proc.command})` : ""}: ${String(err)}`,
       );
     }
   }
