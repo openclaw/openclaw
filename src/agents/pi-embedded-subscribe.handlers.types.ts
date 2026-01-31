@@ -37,7 +37,9 @@ export type EmbeddedPiSubscribeState = {
   deltaBuffer: string;
   blockBuffer: string;
   blockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
+  partialBlockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
   lastStreamedAssistant?: string;
+  lastStreamedAssistantCleaned?: string;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   assistantMessageIndex: number;
@@ -79,6 +81,10 @@ export type EmbeddedPiSubscribeContext = {
   flushBlockReplyBuffer: () => void;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
+    text: string,
+    options?: { final?: boolean },
+  ) => ReplyDirectiveParseResult | null;
+  consumePartialReplyDirectives: (
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
