@@ -24,7 +24,7 @@ afterEach(() => {
 describe("resolveGatewayProgramArguments", () => {
   it("uses realpath-resolved dist entry when running via npx shim", async () => {
     const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
-    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js");
+    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.mjs");
     process.argv = ["node", argv1];
     fsMocks.realpath.mockResolvedValue(entryPath);
     fsMocks.access.mockImplementation(async (target: string) => {
@@ -49,10 +49,10 @@ describe("resolveGatewayProgramArguments", () => {
     // Simulates pnpm global install where node_modules/openclaw is a symlink
     // to .pnpm/openclaw@X.Y.Z/node_modules/openclaw
     const symlinkPath = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/entry.js",
+      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/entry.mjs",
     );
     const realpathResolved = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.1.21-2/node_modules/openclaw/dist/entry.js",
+      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.1.21-2/node_modules/openclaw/dist/entry.mjs",
     );
     process.argv = ["node", symlinkPath];
     fsMocks.realpath.mockResolvedValue(realpathResolved);
