@@ -31,7 +31,9 @@ function parseWebhookBody(req: Request, rawBody: string): WebhookRequestBody | n
   }
 }
 
-export function createLineWebhookMiddleware(options: LineWebhookOptions) {
+export function createLineWebhookMiddleware(
+  options: LineWebhookOptions,
+): (req: Request, res: Response, _next: NextFunction) => Promise<void> {
   const { channelSecret, onEvents, runtime } = options;
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
@@ -87,7 +89,10 @@ export interface StartLineWebhookOptions {
   path?: string;
 }
 
-export function startLineWebhook(options: StartLineWebhookOptions) {
+export function startLineWebhook(options: StartLineWebhookOptions): {
+  path: string;
+  handler: (req: Request, res: Response, _next: NextFunction) => Promise<void>;
+} {
   const path = options.path ?? "/line/webhook";
   const middleware = createLineWebhookMiddleware({
     channelSecret: options.channelSecret,

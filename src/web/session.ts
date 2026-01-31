@@ -96,7 +96,7 @@ export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
   opts: { authDir?: string; onQr?: (qr: string) => void } = {},
-) {
+): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
     {

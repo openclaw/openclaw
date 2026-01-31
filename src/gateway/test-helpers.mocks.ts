@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { vi } from "vitest";
+import { Mock, vi } from "vitest";
 
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -199,8 +199,8 @@ export const setTestConfigRoot = (root: string) => {
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
-export const agentCommand = hoisted.agentCommand;
-export const getReplyFromConfig = hoisted.getReplyFromConfig;
+export const agentCommand: Mock<() => void> = hoisted.agentCommand;
+export const getReplyFromConfig: Mock<() => void> = hoisted.getReplyFromConfig;
 
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,

@@ -418,7 +418,7 @@ export function createDiscordNativeCommand(params: {
   accountId: string;
   sessionPrefix: string;
   ephemeralDefault: boolean;
-}) {
+}): Command {
   const { command, cfg, discordConfig, accountId, sessionPrefix, ephemeralDefault } = params;
   const commandDefinition =
     findCommandByNativeName(command.name, "discord") ??
@@ -449,6 +449,7 @@ export function createDiscordNativeCommand(params: {
           },
         ] satisfies CommandOptions)
       : undefined;
+
   return new (class extends Command {
     name = command.name;
     description = command.description;

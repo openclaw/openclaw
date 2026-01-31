@@ -1,4 +1,5 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { Request, Response, NextFunction } from "express";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
@@ -71,7 +72,7 @@ export function createLineWebhookCallback(
   bot: LineBot,
   channelSecret: string,
   path = "/line/webhook",
-) {
+): { path: string; handler: (req: Request, res: Response, _next: NextFunction) => Promise<void> } {
   const { handler } = startLineWebhook({
     channelSecret,
     onEvents: bot.handleWebhook,
