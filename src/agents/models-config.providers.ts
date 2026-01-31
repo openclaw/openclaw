@@ -51,18 +51,6 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
-const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-const KIMI_CODE_MODEL_ID = "kimi-for-coding";
-const KIMI_CODE_CONTEXT_WINDOW = 262144;
-const KIMI_CODE_MAX_TOKENS = 32768;
-const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;
-const KIMI_CODE_COMPAT = { supportsDeveloperRole: false } as const;
-const KIMI_CODE_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 
 const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
@@ -147,7 +135,9 @@ function normalizeApiKeyConfig(value: string): string {
 
 function resolveEnvApiKeyVarName(provider: string): string | undefined {
   const resolved = resolveEnvApiKey(provider);
-  if (!resolved) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
   const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
   return match ? match[1] : undefined;
 }
@@ -163,16 +153,26 @@ function resolveApiKeyFromProfiles(params: {
   const ids = listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
     const cred = params.store.profiles[id];
-    if (!cred) continue;
-    if (cred.type === "api_key") return cred.key;
-    if (cred.type === "token") return cred.token;
+    if (!cred) {
+      continue;
+    }
+    if (cred.type === "api_key") {
+      return cred.key;
+    }
+    if (cred.type === "token") {
+      return cred.token;
+    }
   }
   return undefined;
 }
 
 export function normalizeGoogleModelId(id: string): string {
-  if (id === "gemini-3-pro") return "gemini-3-pro-preview";
-  if (id === "gemini-3-flash") return "gemini-3-flash-preview";
+  if (id === "gemini-3-pro") {
+    return "gemini-3-pro-preview";
+  }
+  if (id === "gemini-3-flash") {
+    return "gemini-3-flash-preview";
+  }
   return id;
 }
 
@@ -180,7 +180,9 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
     const nextId = normalizeGoogleModelId(model.id);
-    if (nextId === model.id) return model;
+    if (nextId === model.id) {
+      return model;
+    }
     mutated = true;
     return { ...model, id: nextId };
   });
@@ -192,7 +194,9 @@ export function normalizeProviders(params: {
   agentDir: string;
 }): ModelsConfig["providers"] {
   const { providers } = params;
-  if (!providers) return providers;
+  if (!providers) {
+    return providers;
+  }
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -242,7 +246,9 @@ export function normalizeProviders(params: {
 
     if (normalizedKey === "google") {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
-      if (googleNormalized !== normalizedProvider) mutated = true;
+      if (googleNormalized !== normalizedProvider) {
+        mutated = true;
+      }
       normalizedProvider = googleNormalized;
     }
 
@@ -292,26 +298,6 @@ function buildMoonshotProvider(): ProviderConfig {
         cost: MOONSHOT_DEFAULT_COST,
         contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
         maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
-      },
-    ],
-  };
-}
-
-function buildKimiCodeProvider(): ProviderConfig {
-  return {
-    baseUrl: KIMI_CODE_BASE_URL,
-    api: "openai-completions",
-    models: [
-      {
-        id: KIMI_CODE_MODEL_ID,
-        name: "Kimi For Coding",
-        reasoning: true,
-        input: ["text"],
-        cost: KIMI_CODE_DEFAULT_COST,
-        contextWindow: KIMI_CODE_CONTEXT_WINDOW,
-        maxTokens: KIMI_CODE_MAX_TOKENS,
-        headers: KIMI_CODE_HEADERS,
-        compat: KIMI_CODE_COMPAT,
       },
     ],
   };
@@ -410,13 +396,6 @@ export async function resolveImplicitProviders(params: {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
   }
 
-  const kimiCodeKey =
-    resolveEnvApiKeyVarName("kimi-code") ??
-    resolveApiKeyFromProfiles({ provider: "kimi-code", store: authStore });
-  if (kimiCodeKey) {
-    providers["kimi-code"] = { ...buildKimiCodeProvider(), apiKey: kimiCodeKey };
-  }
-
   const syntheticKey =
     resolveEnvApiKeyVarName("synthetic") ??
     resolveApiKeyFromProfiles({ provider: "synthetic", store: authStore });
@@ -467,7 +446,9 @@ export async function resolveImplicitCopilotProvider(params: {
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 
-  if (!hasProfile && !githubToken) return null;
+  if (!hasProfile && !githubToken) {
+    return null;
+  }
 
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
@@ -523,12 +504,18 @@ export async function resolveImplicitBedrockProvider(params: {
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
-  if (enabled === false) return null;
-  if (enabled !== true && !hasAwsCreds) return null;
+  if (enabled === false) {
+    return null;
+  }
+  if (enabled !== true && !hasAwsCreds) {
+    return null;
+  }
 
   const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
   const models = await discoverBedrockModels({ region, config: discoveryConfig });
-  if (models.length === 0) return null;
+  if (models.length === 0) {
+    return null;
+  }
 
   return {
     baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,

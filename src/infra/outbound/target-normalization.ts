@@ -6,7 +6,9 @@ export function normalizeChannelTargetInput(raw: string): string {
 }
 
 export function normalizeTargetForProvider(provider: string, raw?: string): string | undefined {
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const providerId = normalizeChannelId(provider);
   const plugin = providerId ? getChannelPlugin(providerId) : undefined;
   const normalized =

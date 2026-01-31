@@ -251,11 +251,17 @@ async function promptSlackAllowFrom(params: {
   const parseInputs = (value: string) => parseSlackAllowFromInput(value);
   const parseId = (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed) return null;
+    if (!trimmed) {
+      return null;
+    }
     const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
-    if (mention) return mention[1]?.toUpperCase();
+    if (mention) {
+      return mention[1]?.toUpperCase();
+    }
     const prefixed = trimmed.replace(/^(slack:|user:)/i, "");
-    if (/^[A-Z][A-Z0-9]+$/i.test(prefixed)) return prefixed.toUpperCase();
+    if (/^[A-Z][A-Z0-9]+$/i.test(prefixed)) {
+      return prefixed.toUpperCase();
+    }
     return null;
   };
 

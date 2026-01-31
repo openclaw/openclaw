@@ -26,9 +26,15 @@ export type GatewayBonjourAdvertiseOpts = {
 };
 
 function isDisabledByEnv() {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR)) return true;
-  if (process.env.NODE_ENV === "test") return true;
-  if (process.env.VITEST) return true;
+  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR)) {
+    return true;
+  }
+  if (process.env.NODE_ENV === "test") {
+    return true;
+  }
+  if (process.env.VITEST) {
+    return true;
+  }
   return false;
 }
 
@@ -212,8 +218,12 @@ export async function startGatewayBonjourAdvertiser(
   const watchdog = setInterval(() => {
     for (const { label, svc } of services) {
       const stateUnknown = (svc as { serviceState?: unknown }).serviceState;
-      if (typeof stateUnknown !== "string") continue;
-      if (stateUnknown === "announced" || stateUnknown === "announcing") continue;
+      if (typeof stateUnknown !== "string") {
+        continue;
+      }
+      if (stateUnknown === "announced" || stateUnknown === "announcing") {
+        continue;
+      }
 
       let key = label;
       try {
@@ -223,7 +233,9 @@ export async function startGatewayBonjourAdvertiser(
       }
       const now = Date.now();
       const last = lastRepairAttempt.get(key) ?? 0;
-      if (now - last < 30_000) continue;
+      if (now - last < 30_000) {
+        continue;
+      }
       lastRepairAttempt.set(key, now);
 
       logWarn(

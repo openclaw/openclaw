@@ -30,8 +30,12 @@ import {
 } from "./common.js";
 
 function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
-  if (params.clearParent === true) return null;
-  if (params.parentId === null) return null;
+  if (params.clearParent === true) {
+    return null;
+  }
+  if (params.parentId === null) {
+    return null;
+  }
   return readStringParam(params, "parentId");
 }
 

@@ -2,7 +2,9 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 
 const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-  if (method === "cron.status") return { enabled: true };
+  if (method === "cron.status") {
+    return { enabled: true };
+  }
   return { ok: true, params };
 });
 

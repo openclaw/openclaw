@@ -254,7 +254,7 @@ vi.mock("../daemon/service.js", () => ({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 1234 }),
     readCommand: async () => ({
-      programArguments: ["node", "dist/entry.js", "gateway"],
+      programArguments: ["node", "dist/entry.mjs", "gateway"],
       sourcePath: "/tmp/Library/LaunchAgents/bot.molt.gateway.plist",
     }),
   }),
@@ -267,7 +267,7 @@ vi.mock("../daemon/node-service.js", () => ({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 4321 }),
     readCommand: async () => ({
-      programArguments: ["node", "dist/entry.js", "node-host"],
+      programArguments: ["node", "dist/entry.mjs", "node-host"],
       sourcePath: "/tmp/Library/LaunchAgents/bot.molt.node.plist",
     }),
   }),
@@ -358,8 +358,11 @@ describe("statusCommand", () => {
       const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
       expect(logs.some((l) => l.includes("auth token"))).toBe(true);
     } finally {
-      if (prevToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      else process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
     }
   });
 
@@ -459,10 +462,14 @@ describe("statusCommand", () => {
       payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"),
     ).toBe(true);
 
-    if (originalAgents) mocks.listAgentsForGateway.mockImplementation(originalAgents);
-    if (originalResolveStorePath)
+    if (originalAgents) {
+      mocks.listAgentsForGateway.mockImplementation(originalAgents);
+    }
+    if (originalResolveStorePath) {
       mocks.resolveStorePath.mockImplementation(originalResolveStorePath);
-    if (originalLoadSessionStore)
+    }
+    if (originalLoadSessionStore) {
       mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+    }
   });
 });

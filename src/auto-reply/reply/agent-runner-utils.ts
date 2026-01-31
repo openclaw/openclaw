@@ -20,9 +20,13 @@ export function buildThreadingToolContext(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  if (!config) return {};
+  if (!config) {
+    return {};
+  }
   const rawProvider = sessionCtx.Provider?.trim().toLowerCase();
-  if (!rawProvider) return {};
+  if (!rawProvider) {
+    return {};
+  }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const dock = provider ? getChannelDock(provider) : undefined;
@@ -78,10 +82,14 @@ export const formatResponseUsageLine = (params: {
   };
 }): string | null => {
   const usage = params.usage;
-  if (!usage) return null;
+  if (!usage) {
+    return null;
+  }
   const input = usage.input;
   const output = usage.output;
-  if (typeof input !== "number" && typeof output !== "number") return null;
+  if (typeof input !== "number" && typeof output !== "number") {
+    return null;
+  }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   const cost =
@@ -109,7 +117,9 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
       break;
     }
   }
-  if (index === -1) return [...payloads, { text: line }];
+  if (index === -1) {
+    return [...payloads, { text: line }];
+  }
   const existing = payloads[index];
   const existingText = existing.text ?? "";
   const separator = existingText.endsWith("\n") ? "" : "\n";

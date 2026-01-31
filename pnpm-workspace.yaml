@@ -12,3 +12,4 @@ onlyBuiltDependencies:
   - esbuild
   - protobufjs
   - sharp
+  - '@napi-rs/canvas'

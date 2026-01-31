@@ -16,7 +16,9 @@ export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
 
 export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") return null;
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return null;
+  }
   return trimmed;
 }
 
@@ -40,13 +42,17 @@ export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[
 
 export function resolveGatewaySystemdServiceName(profile?: string): string {
   const suffix = resolveGatewayProfileSuffix(profile);
-  if (!suffix) return GATEWAY_SYSTEMD_SERVICE_NAME;
+  if (!suffix) {
+    return GATEWAY_SYSTEMD_SERVICE_NAME;
+  }
   return `openclaw-gateway${suffix}`;
 }
 
 export function resolveGatewayWindowsTaskName(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
-  if (!normalized) return GATEWAY_WINDOWS_TASK_NAME;
+  if (!normalized) {
+    return GATEWAY_WINDOWS_TASK_NAME;
+  }
   return `OpenClaw Gateway (${normalized})`;
 }
 
@@ -57,9 +63,15 @@ export function formatGatewayServiceDescription(params?: {
   const profile = normalizeGatewayProfile(params?.profile);
   const version = params?.version?.trim();
   const parts: string[] = [];
-  if (profile) parts.push(`profile: ${profile}`);
-  if (version) parts.push(`v${version}`);
-  if (parts.length === 0) return "OpenClaw Gateway";
+  if (profile) {
+    parts.push(`profile: ${profile}`);
+  }
+  if (version) {
+    parts.push(`v${version}`);
+  }
+  if (parts.length === 0) {
+    return "OpenClaw Gateway";
+  }
   return `OpenClaw Gateway (${parts.join(", ")})`;
 }
 
@@ -77,6 +89,8 @@ export function resolveNodeWindowsTaskName(): string {
 
 export function formatNodeServiceDescription(params?: { version?: string }): string {
   const version = params?.version?.trim();
-  if (!version) return "OpenClaw Node Host";
+  if (!version) {
+    return "OpenClaw Node Host";
+  }
   return `OpenClaw Node Host (v${version})`;
 }

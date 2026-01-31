@@ -68,14 +68,20 @@ export const registerTelegramHandlers = ({
     debounceMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
-      if (entry.allMedia.length > 0) return false;
+      if (entry.allMedia.length > 0) {
+        return false;
+      }
       const text = entry.msg.text ?? entry.msg.caption ?? "";
-      if (!text.trim()) return false;
+      if (!text.trim()) {
+        return false;
+      }
       return !hasControlCommand(text, cfg, { botUsername: entry.botUsername });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
-      if (!last) return;
+      if (!last) {
+        return;
+      }
       if (entries.length === 1) {
         await processMessage(last.ctx, last.allMedia, last.storeAllowFrom);
         return;
@@ -84,7 +90,9 @@ export const registerTelegramHandlers = ({
         .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
         .filter(Boolean)
         .join("\n");
-      if (!combinedText.trim()) return;
+      if (!combinedText.trim()) {
+        return;
+      }
       const first = entries[0];
       const baseCtx = first.ctx as { me?: unknown; getFile?: unknown } & Record<string, unknown>;
       const getFile =
@@ -146,10 +154,14 @@ export const registerTelegramHandlers = ({
 
       const first = entry.messages[0];
       const last = entry.messages.at(-1);
-      if (!first || !last) return;
+      if (!first || !last) {
+        return;
+      }
 
       const combinedText = entry.messages.map((m) => m.msg.text ?? "").join("");
-      if (!combinedText.trim()) return;
+      if (!combinedText.trim()) {
+        return;
+      }
 
       const syntheticMessage: TelegramMessage = {
         ...first.msg,
@@ -191,8 +203,12 @@ export const registerTelegramHandlers = ({
 
   bot.on("callback_query", async (ctx) => {
     const callback = ctx.callbackQuery;
-    if (!callback) return;
-    if (shouldSkipUpdate(ctx)) return;
+    if (!callback) {
+      return;
+    }
+    if (shouldSkipUpdate(ctx)) {
+      return;
+    }
     // Answer immediately to prevent Telegram from retrying while we process
     await withTelegramApiErrorLogging({
       operation: "answerCallbackQuery",
@@ -202,19 +218,27 @@ export const registerTelegramHandlers = ({
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
-      if (!data || !callbackMessage) return;
+      if (!data || !callbackMessage) {
+        return;
+      }
 
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId,
       });
-      if (inlineButtonsScope === "off") return;
+      if (inlineButtonsScope === "off") {
+        return;
+      }
 
       const chatId = callbackMessage.chat.id;
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
-      if (inlineButtonsScope === "dm" && isGroup) return;
-      if (inlineButtonsScope === "group" && !isGroup) return;
+      if (inlineButtonsScope === "dm" && isGroup) {
+        return;
+      }
+      if (inlineButtonsScope === "group" && !isGroup) {
+        return;
+      }
 
       const messageThreadId = (callbackMessage as { message_thread_id?: number }).message_thread_id;
       const isForum = (callbackMessage.chat as { is_forum?: boolean }).is_forum === true;
@@ -303,7 +327,9 @@ export const registerTelegramHandlers = ({
 
       if (inlineButtonsScope === "allowlist") {
         if (!isGroup) {
-          if (dmPolicy === "disabled") return;
+          if (dmPolicy === "disabled") {
+            return;
+          }
           if (dmPolicy !== "open") {
             const allowed =
               effectiveDmAllow.hasWildcard ||
@@ -313,7 +339,9 @@ export const registerTelegramHandlers = ({
                   senderId,
                   senderUsername,
                 }));
-            if (!allowed) return;
+            if (!allowed) {
+              return;
+            }
           }
         } else {
           const allowed =
@@ -324,17 +352,23 @@ export const registerTelegramHandlers = ({
                 senderId,
                 senderUsername,
               }));
-          if (!allowed) return;
+          if (!allowed) {
+            return;
+          }
         }
       }
 
       const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);
       if (paginationMatch) {
         const pageValue = paginationMatch[1];
-        if (pageValue === "noop") return;
+        if (pageValue === "noop") {
+          return;
+        }
 
         const page = Number.parseInt(pageValue, 10);
-        if (Number.isNaN(page) || page < 1) return;
+        if (Number.isNaN(page) || page < 1) {
+          return;
+        }
 
         const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg) || undefined;
         const skillCommands = listSkillCommandsForAgents({
@@ -391,8 +425,12 @@ export const registerTelegramHandlers = ({
   bot.on("message:migrate_to_chat_id", async (ctx) => {
     try {
       const msg = ctx.message;
-      if (!msg?.migrate_to_chat_id) return;
-      if (shouldSkipUpdate(ctx)) return;
+      if (!msg?.migrate_to_chat_id) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
 
       const oldChatId = String(msg.chat.id);
       const newChatId = String(msg.migrate_to_chat_id);
@@ -438,8 +476,12 @@ export const registerTelegramHandlers = ({
   bot.on("message", async (ctx) => {
     try {
       const msg = ctx.message;
-      if (!msg) return;
-      if (shouldSkipUpdate(ctx)) return;
+      if (!msg) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
 
       const chatId = msg.chat.id;
       const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";

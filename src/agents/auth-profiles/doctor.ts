@@ -12,7 +12,9 @@ export function formatAuthDoctorHint(params: {
   profileId?: string;
 }): string {
   const providerKey = normalizeProviderId(params.provider);
-  if (providerKey !== "anthropic") return "";
+  if (providerKey !== "anthropic") {
+    return "";
+  }
 
   const legacyProfileId = params.profileId ?? "anthropic:default";
   const suggested = suggestOAuthProfileIdForLegacyDefault({
@@ -21,7 +23,9 @@ export function formatAuthDoctorHint(params: {
     provider: providerKey,
     legacyProfileId,
   });
-  if (!suggested || suggested === legacyProfileId) return "";
+  if (!suggested || suggested === legacyProfileId) {
+    return "";
+  }
 
   const storeOauthProfiles = listProfilesForProvider(params.store, providerKey)
     .filter((id) => params.store.profiles[id]?.type === "oauth")

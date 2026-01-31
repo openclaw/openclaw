@@ -51,7 +51,7 @@ Status: stable.
 <li>Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.</li>
 <li>TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.</li>
 <li>macOS: finish OpenClaw app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.</li>
-<li>Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy com.clawdbot migrations). Thanks @thewilloftheshadow.</li>
+<li>Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy bundle ID migrations). Thanks @thewilloftheshadow.</li>
 <li>macOS: limit project-local <code>node_modules/.bin</code> PATH preference to debug builds (reduce PATH hijacking risk).</li>
 <li>macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.</li>
 <li>macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.</li>

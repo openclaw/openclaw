@@ -15,8 +15,12 @@ export type ChannelsListOptions = {
 };
 
 const colorValue = (value: string) => {
-  if (value === "none") return theme.error(value);
-  if (value === "env") return theme.accent(value);
+  if (value === "none") {
+    return theme.error(value);
+  }
+  if (value === "env") {
+    return theme.accent(value);
+  }
   return theme.success(value);
 };
 
@@ -101,7 +105,9 @@ export async function channelsListCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
   const includeUsage = opts.usage !== false;
 
   const plugins = listChannelPlugins();
@@ -129,7 +135,9 @@ export async function channelsListCommand(
 
   for (const plugin of plugins) {
     const accounts = plugin.config.listAccountIds(cfg);
-    if (!accounts || accounts.length === 0) continue;
+    if (!accounts || accounts.length === 0) {
+      continue;
+    }
     for (const accountId of accounts) {
       const snapshot = await buildChannelAccountSnapshot({
         plugin,

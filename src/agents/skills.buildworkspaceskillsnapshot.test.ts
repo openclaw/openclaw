@@ -62,7 +62,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     expect(snapshot.prompt).toContain("visible-skill");
     expect(snapshot.prompt).not.toContain("hidden-skill");
-    expect(snapshot.skills.map((skill) => skill.name).sort()).toEqual([
+    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
       "hidden-skill",
       "visible-skill",
     ]);

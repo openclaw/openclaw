@@ -9,19 +9,29 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.messageChannel ?? opts.messageChannel,
     opts.replyChannel ?? opts.channel,
   );
-  if (normalizedChannel) merged.messageChannel = normalizedChannel;
+  if (normalizedChannel) {
+    merged.messageChannel = normalizedChannel;
+  }
 
   const normalizedAccountId = normalizeAccountId(merged.accountId ?? opts.accountId);
-  if (normalizedAccountId) merged.accountId = normalizedAccountId;
+  if (normalizedAccountId) {
+    merged.accountId = normalizedAccountId;
+  }
 
   const groupId = (merged.groupId ?? opts.groupId)?.toString().trim();
-  if (groupId) merged.groupId = groupId;
+  if (groupId) {
+    merged.groupId = groupId;
+  }
 
   const groupChannel = (merged.groupChannel ?? opts.groupChannel)?.toString().trim();
-  if (groupChannel) merged.groupChannel = groupChannel;
+  if (groupChannel) {
+    merged.groupChannel = groupChannel;
+  }
 
   const groupSpace = (merged.groupSpace ?? opts.groupSpace)?.toString().trim();
-  if (groupSpace) merged.groupSpace = groupSpace;
+  if (groupSpace) {
+    merged.groupSpace = groupSpace;
+  }
 
   if (
     merged.currentThreadTs == null &&

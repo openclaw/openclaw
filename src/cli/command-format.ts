@@ -12,8 +12,12 @@ export function formatCliCommand(
   const cliName = resolveCliName();
   const normalizedCommand = replaceCliName(command, cliName);
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
-  if (!profile) return normalizedCommand;
-  if (!CLI_PREFIX_RE.test(normalizedCommand)) return normalizedCommand;
+  if (!profile) {
+    return normalizedCommand;
+  }
+  if (!CLI_PREFIX_RE.test(normalizedCommand)) {
+    return normalizedCommand;
+  }
   if (PROFILE_FLAG_RE.test(normalizedCommand) || DEV_FLAG_RE.test(normalizedCommand)) {
     return normalizedCommand;
   }

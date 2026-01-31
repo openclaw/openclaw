@@ -44,7 +44,9 @@ export function resolveSoulEvilConfigFromHook(
   entry: Record<string, unknown> | undefined,
   log?: SoulEvilLog,
 ): SoulEvilConfig | null {
-  if (!entry) return null;
+  if (!entry) {
+    return null;
+  }
   const file = typeof entry.file === "string" ? entry.file : undefined;
   if (entry.file !== undefined && !file) {
     log?.warn?.("soul-evil config: file must be a string");
@@ -80,23 +82,33 @@ export function resolveSoulEvilConfigFromHook(
     log?.warn?.("soul-evil config: purge must be an object");
   }
 
-  if (!file && chance === undefined && !purge) return null;
+  if (!file && chance === undefined && !purge) {
+    return null;
+  }
   return { file, chance, purge };
 }
 
 function clampChance(value?: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
   return Math.min(1, Math.max(0, value));
 }
 
 function parsePurgeAt(raw?: string): number | null {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const trimmed = raw.trim();
   const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const hour = Number.parseInt(match[1] ?? "", 10);
   const minute = Number.parseInt(match[2] ?? "", 10);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return null;
+  }
   return hour * 60 + minute;
 }
 
@@ -111,9 +123,13 @@ function timeOfDayMsInTimezone(date: Date, timeZone: string): number | null {
     }).formatToParts(date);
     const map: Record<string, string> = {};
     for (const part of parts) {
-      if (part.type !== "literal") map[part.type] = part.value;
+      if (part.type !== "literal") {
+        map[part.type] = part.value;
+      }
     }
-    if (!map.hour || !map.minute || !map.second) return null;
+    if (!map.hour || !map.minute || !map.second) {
+      return null;
+    }
     const hour = Number.parseInt(map.hour, 10);
     const minute = Number.parseInt(map.minute, 10);
     const second = Number.parseInt(map.second, 10);
@@ -132,9 +148,13 @@ function isWithinDailyPurgeWindow(params: {
   now: Date;
   timeZone: string;
 }): boolean {
-  if (!params.at || !params.duration) return false;
+  if (!params.at || !params.duration) {
+    return false;
+  }
   const startMinutes = parsePurgeAt(params.at);
-  if (startMinutes === null) return false;
+  if (startMinutes === null) {
+    return false;
+  }
 
   let durationMs: number;
   try {
@@ -142,13 +162,19 @@ function isWithinDailyPurgeWindow(params: {
   } catch {
     return false;
   }
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return false;
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return false;
+  }
 
   const dayMs = 24 * 60 * 60 * 1000;
-  if (durationMs >= dayMs) return true;
+  if (durationMs >= dayMs) {
+    return true;
+  }
 
   const nowMs = timeOfDayMsInTimezone(params.now, params.timeZone);
-  if (nowMs === null) return false;
+  if (nowMs === null) {
+    return false;
+  }
 
   const startMs = startMinutes * 60 * 1000;
   const endMs = startMs + durationMs;
@@ -204,7 +230,9 @@ export async function applySoulEvilOverride(params: {
     now: params.now,
     random: params.random,
   });
-  if (!decision.useEvil) return params.files;
+  if (!decision.useEvil) {
+    return params.files;
+  }
 
   const workspaceDir = resolveUserPath(params.workspaceDir);
   const evilPath = path.join(workspaceDir, decision.fileName);
@@ -235,11 +263,15 @@ export async function applySoulEvilOverride(params: {
 
   let replaced = false;
   const updated = params.files.map((file) => {
-    if (file.name !== "SOUL.md") return file;
+    if (file.name !== "SOUL.md") {
+      return file;
+    }
     replaced = true;
     return { ...file, content: evilContent, missing: false };
   });
-  if (!replaced) return params.files;
+  if (!replaced) {
+    return params.files;
+  }
 
   params.log?.debug?.(
     `SOUL_EVIL active (${decision.reason ?? "unknown"}) using ${decision.fileName}`,

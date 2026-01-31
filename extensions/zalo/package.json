@@ -28,6 +28,6 @@
   },
   "dependencies": {
     "openclaw": "workspace:*",
-    "undici": "7.19.0"
+    "undici": "7.19.2"
   }
 }

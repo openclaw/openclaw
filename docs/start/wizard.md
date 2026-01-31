@@ -97,8 +97,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
    - More detail: [Synthetic](/providers/synthetic)
    - **Moonshot (Kimi K2)**: config is auto-written.
-   - **Kimi Code**: config is auto-written.
-   - More detail: [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
+   - **Kimi Coding**: config is auto-written.
+   - More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
    - **Skip**: no auth configured yet.
    - Pick a default model from detected options (or enter provider/model manually).
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
@@ -117,14 +117,14 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - Non‑loopback binds still require auth.
 
 5) **Channels**
-  - WhatsApp: optional QR login.
-  - Telegram: bot token.
-  - Discord: bot token.
-  - Google Chat: service account JSON + webhook audience.
-  - Mattermost (plugin): bot token + base URL.
-   - Signal: optional `signal-cli` install + account config.
-   - iMessage: local `imsg` CLI path + DB access.
-  - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
+   - [WhatsApp](/channels/whatsapp): optional QR login.
+   - [Telegram](/channels/telegram): bot token.
+   - [Discord](/channels/discord): bot token.
+   - [Google Chat](/channels/googlechat): service account JSON + webhook audience.
+   - [Mattermost](/channels/mattermost) (plugin): bot token + base URL.
+   - [Signal](/channels/signal): optional `signal-cli` install + account config.
+   - [iMessage](/channels/imessage): local `imsg` CLI path + DB access.
+   - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
 
 6) **Daemon install**
    - macOS: LaunchAgent

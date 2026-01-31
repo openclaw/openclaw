@@ -121,7 +121,9 @@ async function resolveStickerVisionSupport(params: {
       agentId: params.agentId,
     });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    if (!entry) return false;
+    if (!entry) {
+      return false;
+    }
     return modelSupportsVision(entry);
   } catch {
     return false;
@@ -221,7 +223,9 @@ export const buildTelegramMessageContext = async ({
 
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
   if (!isGroup) {
-    if (dmPolicy === "disabled") return null;
+    if (dmPolicy === "disabled") {
+      return null;
+    }
 
     if (dmPolicy !== "open") {
       const candidate = String(chatId);
@@ -333,12 +337,19 @@ export const buildTelegramMessageContext = async ({
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
   let placeholder = "";
-  if (msg.photo) placeholder = "<media:image>";
-  else if (msg.video) placeholder = "<media:video>";
-  else if (msg.video_note) placeholder = "<media:video>";
-  else if (msg.audio || msg.voice) placeholder = "<media:audio>";
-  else if (msg.document) placeholder = "<media:document>";
-  else if (msg.sticker) placeholder = "<media:sticker>";
+  if (msg.photo) {
+    placeholder = "<media:image>";
+  } else if (msg.video) {
+    placeholder = "<media:video>";
+  } else if (msg.video_note) {
+    placeholder = "<media:video>";
+  } else if (msg.audio || msg.voice) {
+    placeholder = "<media:audio>";
+  } else if (msg.document) {
+    placeholder = "<media:document>";
+  } else if (msg.sticker) {
+    placeholder = "<media:sticker>";
+  }
 
   // Check if sticker has a cached description - if so, use it instead of sending the image
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
@@ -359,8 +370,12 @@ export const buildTelegramMessageContext = async ({
   const rawTextSource = msg.text ?? msg.caption ?? "";
   const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
-  if (!rawBody) rawBody = placeholder;
-  if (!rawBody && allMedia.length === 0) return null;
+  if (!rawBody) {
+    rawBody = placeholder;
+  }
+  if (!rawBody && allMedia.length === 0) {
+    return null;
+  }
 
   let bodyText = rawBody;
   if (!bodyText && allMedia.length > 0) {

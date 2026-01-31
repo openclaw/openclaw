@@ -70,4 +70,22 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("none");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("resolves per-account tokens when the config account key casing doesn't match routing normalization", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            // Note the mixed-case key; runtime accountId is normalized.
+            careyNotifications: { botToken: "acct-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "careynotifications" });
+    expect(res.token).toBe("acct-token");
+    expect(res.source).toBe("config");
+  });
 });

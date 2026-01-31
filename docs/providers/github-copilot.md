@@ -4,7 +4,7 @@ read_when:
   - You want to use GitHub Copilot as a model provider
   - You need the `openclaw models auth login-github-copilot` flow
 ---
-# Github Copilot
+# GitHub Copilot
 
 ## What is GitHub Copilot?
 

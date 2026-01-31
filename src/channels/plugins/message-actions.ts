@@ -8,22 +8,30 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
     const list = plugin.actions?.listActions?.({ cfg });
-    if (!list) continue;
-    for (const action of list) actions.add(action);
+    if (!list) {
+      continue;
+    }
+    for (const action of list) {
+      actions.add(action);
+    }
   }
   return Array.from(actions);
 }
 
 export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
   for (const plugin of listChannelPlugins()) {
-    if (plugin.actions?.supportsButtons?.({ cfg })) return true;
+    if (plugin.actions?.supportsButtons?.({ cfg })) {
+      return true;
+    }
   }
   return false;
 }
 
 export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
   for (const plugin of listChannelPlugins()) {
-    if (plugin.actions?.supportsCards?.({ cfg })) return true;
+    if (plugin.actions?.supportsCards?.({ cfg })) {
+      return true;
+    }
   }
   return false;
 }
@@ -32,7 +40,9 @@ export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
 ): Promise<AgentToolResult<unknown> | null> {
   const plugin = getChannelPlugin(ctx.channel);
-  if (!plugin?.actions?.handleAction) return null;
+  if (!plugin?.actions?.handleAction) {
+    return null;
+  }
   if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: ctx.action })) {
     return null;
   }

@@ -74,7 +74,9 @@ export function resolveSessionKeyForRequest(opts: {
     const foundKey = Object.keys(sessionStore).find(
       (key) => sessionStore[key]?.sessionId === opts.sessionId,
     );
-    if (foundKey) sessionKey = foundKey;
+    if (foundKey) {
+      sessionKey = foundKey;
+    }
   }
 
   return { sessionKey, sessionStore, storePath };

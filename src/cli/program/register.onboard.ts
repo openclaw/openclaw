@@ -17,14 +17,20 @@ function resolveInstallDaemonFlag(
   command: unknown,
   opts: { installDaemon?: boolean },
 ): boolean | undefined {
-  if (!command || typeof command !== "object") return undefined;
+  if (!command || typeof command !== "object") {
+    return undefined;
+  }
   const getOptionValueSource =
     "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
-  if (typeof getOptionValueSource !== "function") return undefined;
+  if (typeof getOptionValueSource !== "function") {
+    return undefined;
+  }
 
   // Commander doesn't support option conflicts natively; keep original behavior.
   // If --skip-daemon is explicitly passed, it wins.
-  if (getOptionValueSource.call(command, "skipDaemon") === "cli") return false;
+  if (getOptionValueSource.call(command, "skipDaemon") === "cli") {
+    return false;
+  }
   if (getOptionValueSource.call(command, "installDaemon") === "cli") {
     return Boolean(opts.installDaemon);
   }
@@ -69,7 +75,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--openrouter-api-key <key>", "OpenRouter API key")
     .option("--ai-gateway-api-key <key>", "Vercel AI Gateway API key")
     .option("--moonshot-api-key <key>", "Moonshot API key")
-    .option("--kimi-code-api-key <key>", "Kimi Code API key")
+    .option("--kimi-code-api-key <key>", "Kimi Coding API key")
     .option("--gemini-api-key <key>", "Gemini API key")
     .option("--zai-api-key <key>", "Z.AI API key")
     .option("--xiaomi-api-key <key>", "Xiaomi API key")

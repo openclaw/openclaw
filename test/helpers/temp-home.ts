@@ -24,8 +24,11 @@ function snapshotEnv(): EnvSnapshot {
 
 function restoreEnv(snapshot: EnvSnapshot) {
   const restoreKey = (key: string, value: string | undefined) => {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
   };
   restoreKey("HOME", snapshot.home);
   restoreKey("USERPROFILE", snapshot.userProfile);
@@ -36,14 +39,19 @@ function restoreEnv(snapshot: EnvSnapshot) {
 
 function snapshotExtraEnv(keys: string[]): Record<string, string | undefined> {
   const snapshot: Record<string, string | undefined> = {};
-  for (const key of keys) snapshot[key] = process.env[key];
+  for (const key of keys) {
+    snapshot[key] = process.env[key];
+  }
   return snapshot;
 }
 
 function restoreExtraEnv(snapshot: Record<string, string | undefined>) {
   for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
   }
 }
 
@@ -52,9 +60,13 @@ function setTempHome(base: string) {
   process.env.USERPROFILE = base;
   process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
 
-  if (process.platform !== "win32") return;
+  if (process.platform !== "win32") {
+    return;
+  }
   const match = base.match(/^([A-Za-z]:)(.*)$/);
-  if (!match) return;
+  if (!match) {
+    return;
+  }
   process.env.HOMEDRIVE = match[1];
   process.env.HOMEPATH = match[2] || "\\";
 }
@@ -78,8 +90,11 @@ export async function withTempHome<T>(
   if (opts.env) {
     for (const [key, raw] of Object.entries(opts.env)) {
       const value = typeof raw === "function" ? raw(base) : raw;
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   }
 

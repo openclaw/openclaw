@@ -33,7 +33,7 @@ const state: RegistryState = (() => {
       key: null,
     };
   }
-  return globalState[REGISTRY_STATE] as RegistryState;
+  return globalState[REGISTRY_STATE];
 })();
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
