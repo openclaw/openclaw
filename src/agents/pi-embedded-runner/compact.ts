@@ -45,6 +45,7 @@ import { resolveSandboxContext } from "../sandbox.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -434,7 +435,63 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // Run before_compaction hooks
+        const hookRunner = getGlobalHookRunner();
+        const messageCountBefore = session.messages.length;
+        let tokenCountBefore: number | undefined;
+        try {
+          tokenCountBefore = 0;
+          for (const msg of session.messages) {
+            tokenCountBefore += estimateTokens(msg);
+          }
+        } catch {
+          tokenCountBefore = undefined;
+        }
+
+        if (hookRunner?.hasHooks("before_compaction")) {
+          try {
+            await hookRunner.runBeforeCompaction(
+              {
+                messageCount: messageCountBefore,
+                tokenCount: tokenCountBefore,
+              },
+              {
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+                workspaceDir: effectiveWorkspace,
+                messageProvider: params.messageChannel ?? params.messageProvider,
+              },
+            );
+          } catch (hookErr) {
+            log.warn(`before_compaction hook failed: ${String(hookErr)}`);
+          }
+        }
+
         const result = await session.compact(params.customInstructions);
+
+        // Run after_compaction hooks
+        const messageCountAfter = session.messages.length;
+        if (hookRunner?.hasHooks("after_compaction")) {
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: messageCountAfter,
+                tokenCount: result.tokensBefore, // tokens after compaction
+                compactedCount: messageCountBefore - messageCountAfter,
+              },
+              {
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+                workspaceDir: effectiveWorkspace,
+                messageProvider: params.messageChannel ?? params.messageProvider,
+              },
+            );
+          } catch (hookErr) {
+            log.warn(`after_compaction hook failed: ${String(hookErr)}`);
+          }
+        }
+
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
