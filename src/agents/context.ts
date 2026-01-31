@@ -7,6 +7,14 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
 
+// Override incorrect context windows from upstream packages.
+// Sonnet 4.5 context window is 1M, not 2M (requires beta headers for API access).
+// See: https://platform.claude.com/docs/en/build-with-claude/context-windows
+const CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
+  "claude-sonnet-4-5": 1_000_000,
+  "claude-sonnet-4-5-20250514": 1_000_000,
+};
+
 const MODEL_CACHE = new Map<string, number>();
 const loadPromise = (async () => {
   try {
@@ -21,7 +29,11 @@ const loadPromise = (async () => {
       if (!m?.id) {
         continue;
       }
-      if (typeof m.contextWindow === "number" && m.contextWindow > 0) {
+      // Apply local overrides for known incorrect values from upstream
+      const override = CONTEXT_WINDOW_OVERRIDES[m.id];
+      if (override !== undefined) {
+        MODEL_CACHE.set(m.id, override);
+      } else if (typeof m.contextWindow === "number" && m.contextWindow > 0) {
         MODEL_CACHE.set(m.id, m.contextWindow);
       }
     }
