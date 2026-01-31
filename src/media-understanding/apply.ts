@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { detectMime, kindFromMime } from "../media/mime.js";
 import {
   DEFAULT_INPUT_FILE_MAX_BYTES,
   DEFAULT_INPUT_FILE_MAX_CHARS,
@@ -256,8 +257,46 @@ async function extractFileBlocks(params: {
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
     const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
-    if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
-      continue;
+    // Skip audio/video binary files from being injected as text.
+    // Use both the attachment kind (from declared MIME / extension) AND the
+    // buffer's resolved MIME. When the buffer looks like text (textLike) we
+    // also sniff the magic bytes to distinguish real audio/video from misnamed
+    // text files (e.g. a CSV saved as .mp3). If the magic bytes confirm
+    // audio/video, it's truly binary and we skip. If not, it's likely a
+    // mislabeled text file and we allow it through.
+    const bufferMimeBase = bufferResult?.mime?.split(";")[0]?.trim();
+    const bufferKind = bufferMimeBase ? kindFromMime(bufferMimeBase) : undefined;
+    if (
+      !forcedTextMimeResolved &&
+      (kind === "audio" || kind === "video" || bufferKind === "audio" || bufferKind === "video")
+    ) {
+      if (!textLike) {
+        // Not text-like at all — definitely binary, skip.
+        if (shouldLogVerbose()) {
+          logVerbose(`media: file attachment skipped (binary ${kind}) index=${attachment.index}`);
+        }
+        continue;
+      }
+      // textLike is true — sniff magic bytes to decide.
+      const sniffedMime = await detectMime({ buffer: bufferResult?.buffer });
+      const sniffedKind = sniffedMime ? kindFromMime(sniffedMime) : undefined;
+      if (sniffedKind === "audio" || sniffedKind === "video") {
+        // Magic bytes confirm real audio/video. But UTF-16 BOM (0xFF 0xFE)
+        // collides with MPEG frame sync — if UTF-16 detected AND the sniff
+        // only shows MPEG (not a container format like ogg/mp4), it may be a
+        // misnamed text file. Container formats (ogg, mp4, webm, etc.) have
+        // unambiguous magic bytes, so trust them unconditionally.
+        const isAmbiguousSniff = utf16Charset && sniffedMime?.startsWith("audio/mpeg");
+        if (!isAmbiguousSniff) {
+          if (shouldLogVerbose()) {
+            logVerbose(
+              `media: file attachment skipped (binary ${kind}, sniffed=${sniffedMime}) index=${attachment.index}`,
+            );
+          }
+          continue;
+        }
+        // Ambiguous: UTF-16 BOM + MPEG sniff — likely a misnamed text file.
+      }
     }
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
