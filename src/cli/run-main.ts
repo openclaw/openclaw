@@ -9,6 +9,7 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { formatUncaughtError } from "../infra/errors.js";
+import { setupGlobalProxy } from "../infra/proxy.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
@@ -29,6 +30,7 @@ export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = stripWindowsNodeExec(argv);
   loadDotEnv({ quiet: true });
   normalizeEnv();
+  setupGlobalProxy();
   ensureOpenClawCliOnPath();
 
   // Enforce the minimum supported runtime before doing any work.
