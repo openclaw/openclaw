@@ -35,7 +35,7 @@ See [Venice AI](/providers/venice).
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [OpenRouter](/providers/openrouter)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
-- [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
+- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)

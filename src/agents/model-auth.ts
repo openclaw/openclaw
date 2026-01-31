@@ -269,6 +269,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
   }
 
+  if (normalized === "kimi-coding") {
+    return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
+  }
+
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",
@@ -279,7 +283,6 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     openrouter: "OPENROUTER_API_KEY",
     "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
     moonshot: "MOONSHOT_API_KEY",
-    "kimi-code": "KIMICODE_API_KEY",
     minimax: "MINIMAX_API_KEY",
     xiaomi: "XIAOMI_API_KEY",
     synthetic: "SYNTHETIC_API_KEY",
