@@ -183,7 +183,7 @@ services:
     command:
       [
         "node",
-        "dist/index.js",
+        "dist/index.mjs",
         "gateway",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND}",
@@ -250,7 +250,7 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-CMD ["node","dist/index.js"]
+CMD ["node","dist/index.mjs"]
 ```
 
 ---

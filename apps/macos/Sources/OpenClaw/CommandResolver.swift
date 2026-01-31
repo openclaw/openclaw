@@ -5,7 +5,7 @@ enum CommandResolver {
     private static let helperName = "openclaw"
 
     static func gatewayEntrypoint(in root: URL) -> String? {
-        let distEntry = root.appendingPathComponent("dist/index.js").path
+        let distEntry = root.appendingPathComponent("dist/index.mjs").path
         if FileManager().isReadableFile(atPath: distEntry) { return distEntry }
         let openclawEntry = root.appendingPathComponent("openclaw.mjs").path
         if FileManager().isReadableFile(atPath: openclawEntry) { return openclawEntry }
@@ -271,7 +271,7 @@ enum CommandResolver {
             }
 
             let missingEntry = """
-            openclaw entrypoint missing (looked for dist/index.js or openclaw.mjs); run pnpm build.
+            openclaw entrypoint missing (looked for dist/index.mjs or openclaw.mjs); run pnpm build.
             """
             return self.errorCommand(with: missingEntry)
 
@@ -360,10 +360,10 @@ enum CommandResolver {
         if command -v openclaw >/dev/null 2>&1; then
           CLI="$(command -v openclaw)"
           openclaw \(quotedArgs);
-        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/dist/index.js" ]; then
+        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/dist/index.mjs" ]; then
           if command -v node >/dev/null 2>&1; then
-            CLI="node $PRJ/dist/index.js"
-            node "$PRJ/dist/index.js" \(quotedArgs);
+            CLI="node $PRJ/dist/index.mjs"
+            node "$PRJ/dist/index.mjs" \(quotedArgs);
           else
             echo "Node >=22 required on remote host"; exit 127;
           fi

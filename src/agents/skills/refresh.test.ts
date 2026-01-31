@@ -24,7 +24,7 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/node_modules/pkg/index.js"))).toBe(
       true,
     );
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/dist/index.js"))).toBe(true);
+    expect(ignored.some((re) => re.test("/tmp/workspace/skills/dist/index.mjs"))).toBe(true);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/.git/config"))).toBe(true);
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
   });

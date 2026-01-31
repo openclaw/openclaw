@@ -6,8 +6,8 @@ describe("isMainModule", () => {
   it("returns true when argv[1] matches current file", () => {
     expect(
       isMainModule({
-        currentFile: "/repo/dist/index.js",
-        argv: ["node", "/repo/dist/index.js"],
+        currentFile: "/repo/dist/index.mjs",
+        argv: ["node", "/repo/dist/index.mjs"],
         cwd: "/repo",
         env: {},
       }),
@@ -17,10 +17,10 @@ describe("isMainModule", () => {
   it("returns true under PM2 when pm_exec_path matches current file", () => {
     expect(
       isMainModule({
-        currentFile: "/repo/dist/index.js",
+        currentFile: "/repo/dist/index.mjs",
         argv: ["node", "/pm2/lib/ProcessContainerFork.js"],
         cwd: "/repo",
-        env: { pm_exec_path: "/repo/dist/index.js", pm_id: "0" },
+        env: { pm_exec_path: "/repo/dist/index.mjs", pm_id: "0" },
       }),
     ).toBe(true);
   });
@@ -28,7 +28,7 @@ describe("isMainModule", () => {
   it("returns false when running under PM2 but this module is imported", () => {
     expect(
       isMainModule({
-        currentFile: "/repo/node_modules/openclaw/dist/index.js",
+        currentFile: "/repo/node_modules/openclaw/dist/index.mjs",
         argv: ["node", "/repo/app.js"],
         cwd: "/repo",
         env: { pm_exec_path: "/repo/app.js", pm_id: "0" },

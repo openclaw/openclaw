@@ -57,7 +57,7 @@ primary_region = "iad"
   NODE_OPTIONS = "--max-old-space-size=1536"
 
 [processes]
-  app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+  app = "node dist/index.mjs gateway --allow-unconfigured --port 3000 --bind lan"
 
 [http_service]
   internal_port = 3000
@@ -332,10 +332,10 @@ If you need to change the startup command without a full redeploy:
 fly machines list
 
 # Update command
-fly machine update <machine-id> --command "node dist/index.js gateway --port 3000 --bind lan" -y
+fly machine update <machine-id> --command "node dist/index.mjs gateway --port 3000 --bind lan" -y
 
 # Or with memory increase
-fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
+fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.mjs gateway --port 3000 --bind lan" -y
 ```
 
 **Note:** After `fly deploy`, the machine command may reset to what's in `fly.toml`. If you made manual changes, re-apply them after deploy.
