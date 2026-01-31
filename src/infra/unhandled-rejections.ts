@@ -95,13 +95,24 @@ export function isTransientNetworkError(err: unknown): boolean {
     return true;
   }
 
-  // "fetch failed" TypeError from undici (Node's native fetch)
-  if (err instanceof TypeError && err.message === "fetch failed") {
-    const cause = getErrorCause(err);
-    if (cause) {
-      return isTransientNetworkError(cause);
+  // TypeErrors from undici's `fetch` can have multiple messages ("fetch failed",
+  // "The socket connection was closed unexpectedly", etc). Treat these as
+  // transient network errors so they don't crash the gateway.
+  if (err instanceof TypeError) {
+    const message = typeof err.message === "string" ? err.message : "";
+    if (
+      message === "fetch failed" ||
+      message.includes("fetch failed") ||
+      /socket connection.*closed/i.test(message) ||
+      /fetch.*aborted/i.test(message) ||
+      /request.*aborted/i.test(message)
+    ) {
+      const cause = getErrorCause(err);
+      if (cause) {
+        return isTransientNetworkError(cause);
+      }
+      return true;
     }
-    return true;
   }
 
   // Check the cause chain recursively
@@ -141,7 +152,10 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
   return false;
 }
 
-export function installUnhandledRejectionHandler(): void {
+export function installUnhandledRejectionHandler(opts?: {
+  log?: { warn: (...args: any[]) => void; error: (...args: any[]) => void };
+}): void {
+  const logger = opts?.log;
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
@@ -150,31 +164,56 @@ export function installUnhandledRejectionHandler(): void {
     // AbortError is typically an intentional cancellation (e.g., during shutdown)
     // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
-      console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
+      if (logger) {
+        logger.warn("Suppressed AbortError", { error: formatUncaughtError(reason) });
+      } else {
+        console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
+      }
       return;
     }
 
     if (isFatalError(reason)) {
-      console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+      if (logger) {
+        logger.error("FATAL unhandled rejection", { error: formatUncaughtError(reason) });
+      } else {
+        console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+      }
       process.exit(1);
       return;
     }
 
     if (isConfigError(reason)) {
-      console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+      if (logger) {
+        logger.error("CONFIGURATION ERROR - requires fix", { error: formatUncaughtError(reason) });
+      } else {
+        console.error(
+          "[openclaw] CONFIGURATION ERROR - requires fix:",
+          formatUncaughtError(reason),
+        );
+      }
       process.exit(1);
       return;
     }
 
     if (isTransientNetworkError(reason)) {
-      console.warn(
-        "[openclaw] Non-fatal unhandled rejection (continuing):",
-        formatUncaughtError(reason),
-      );
+      if (logger) {
+        logger.warn("Non-fatal unhandled rejection (continuing)", {
+          error: formatUncaughtError(reason),
+        });
+      } else {
+        console.warn(
+          "[openclaw] Non-fatal unhandled rejection (continuing):",
+          formatUncaughtError(reason),
+        );
+      }
       return;
     }
 
-    console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+    if (logger) {
+      logger.error("Unhandled promise rejection", { error: formatUncaughtError(reason) });
+    } else {
+      console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+    }
     process.exit(1);
   });
 }

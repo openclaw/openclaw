@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isTransientNetworkError,
+  installUnhandledRejectionHandler,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -125,5 +129,60 @@ describe("isTransientNetworkError", () => {
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("classifies other undici-type TypeError messages (socket closed) as transient", () => {
+    const msg =
+      "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
+    expect(isTransientNetworkError(new TypeError(msg))).toBe(true);
+  });
+
+  it("does not exit the process for transient fetch failures when handler installed", async () => {
+    // Install the global handler and assert it does not call process.exit for transient errors
+    installUnhandledRejectionHandler();
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+      throw new Error(`process.exit called: ${String(code)}`);
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      process.emit("unhandledRejection", new TypeError("fetch failed"), Promise.resolve());
+      await Promise.resolve();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+      warnSpy.mockRestore();
+      const listeners = process.listeners("unhandledRejection");
+      for (const fn of listeners) {
+        process.off("unhandledRejection", fn);
+      }
+    }
+  });
+
+  it("exits the process for unknown non-transient unhandled rejections", async () => {
+    installUnhandledRejectionHandler();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+      throw new Error(`process.exit called: ${String(code)}`);
+    });
+
+    try {
+      let thrown = false;
+      try {
+        process.emit("unhandledRejection", new Error("boom"), Promise.resolve());
+        await Promise.resolve();
+      } catch {
+        thrown = true;
+      }
+      expect(thrown).toBe(true);
+    } finally {
+      exitSpy.mockRestore();
+      const listeners = process.listeners("unhandledRejection");
+      for (const fn of listeners) {
+        process.off("unhandledRejection", fn);
+      }
+    }
   });
 });

@@ -70,6 +70,7 @@ import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
+import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -88,6 +89,10 @@ const logHooks = log.child("hooks");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const canvasRuntime = runtimeForLogger(logCanvas);
+
+// Use the infra-level handler so transient fetch/network errors are classified and
+// handled consistently (exit vs non-exit). Pass the subsystem logger for structured logs.
+installUnhandledRejectionHandler({ log });
 
 export type GatewayServer = {
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
