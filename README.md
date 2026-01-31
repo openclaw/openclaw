@@ -21,167 +21,9 @@
 
 **QVerisBot** is an AI Agent developed by the **[QVeris AI](https://qveris.ai)** team, based on [OpenClaw](https://github.com/openclaw/openclaw). It's a *personal AI assistant* you run on your own devices.
 
-## What Makes QVerisBot Better
+## QVeris Universal Toolbox — The Core of QVerisBot
 
-Compared to Moltbot (formerly Clawdbot / Moltbot), QVerisBot offers:
-
-- **QVeris Universal Toolbox** — Search and invoke various external trusted tools, turning the assistant into a versatile professional helper, not just a chatbot
-- **Feishu (飞书) Group Chat Support** — Native integration with Feishu, better suited for Chinese enterprise users
-- **Multi-functional Professional Assistant** — Beyond conversation, QVerisBot can handle complex tasks across multiple domains
-
-QVerisBot answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat, **Feishu**), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
-
-If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
-
-[QVeris AI](https://qveris.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/QVerisAI/QVerisBot) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd) · [Source Guide](docs/qverisbot-from-source.md)
-
-**Preferred setup:** Run the onboarding wizard (`pnpm openclaw onboard`). It walks through gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
-
-For detailed installation guide (especially for Feishu/飞书 setup), see [QVerisBot Source Guide](docs/qverisbot-from-source.md).
-
-**Supported Models:**
-- **[Anthropic](https://www.anthropic.com/)** (Claude Pro/Max) — recommended for long-context and prompt-injection resistance
-- **[OpenAI](https://openai.com/)** (GPT-4o/Codex)
-- **[DeepSeek](https://deepseek.com/)** (V3/R1)
-- **[Google](https://ai.google.dev/)** (Gemini 3.0)
-- **[Kimi](https://kimi.ai/)** (Kimi model)
-- **[Minimax](https://minimax.chat/)** (Minimax model)
-- Custom providers via `models.providers` config
-
-Model note: while any model is supported, we recommend **Anthropic Claude Opus 4.5** or **DeepSeek V3** for best results. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
-
-## Models (selection + auth)
-
-- Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
-- Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
-- HTTP proxy for LLM APIs (China users): set `models.proxy` in config
-
-## System Requirements
-
-| Component | Minimum | Recommended |
-| :--- | :--- | :--- |
-| Node.js | 22.12.0 | 22.x LTS |
-| pnpm | 10.x | 10.23.0+ |
-| Python | 3.12 | 3.12+ (for skills) |
-| Git | 2.x | Latest |
-
-## Install from Source (Recommended for QVerisBot)
-
-```bash
-# Clone QVerisBot repository
-git clone https://github.com/QVerisAI/QVerisBot.git
-cd QVerisBot
-
-# Install dependencies
-pnpm install
-
-# Build UI (first time only)
-pnpm ui:build
-
-# Build TypeScript
-pnpm build
-
-# Run onboarding wizard
-pnpm openclaw onboard --install-daemon
-```
-
-## Quick Start
-
-```bash
-# Start the gateway (foreground, with verbose logging)
-pnpm openclaw gateway --port 18789 --verbose
-
-# Or run in background
-nohup pnpm openclaw gateway --port 18789 > /tmp/qverisbot-gateway.log 2>&1 &
-
-# Check channel status
-pnpm openclaw channels status
-
-# Talk to the assistant
-pnpm openclaw agent --message "Hello QVerisBot" --thinking high
-
-# Send a message to Feishu group
-pnpm openclaw message send --to oc_xxx --message "Hello from QVerisBot"
-```
-
-## Configuration
-
-Create config file at `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "agent": {
-    "model": "anthropic/claude-opus-4-5"
-  },
-  "channels": {
-    "feishu": {
-      "enabled": true,
-      "appId": "cli_xxx",
-      "appSecret": "xxx",
-      "eventMode": "websocket",
-      "dmPolicy": "open",
-      "groupPolicy": "open"
-    }
-  },
-  "tools": {
-    "qveris": {
-      "enabled": true,
-      "apiKey": "your-qveris-api-key"
-    }
-  },
-  "models": {
-    "proxy": "http://127.0.0.1:7890"
-  }
-}
-```
-
-For complete configuration options, see [Configuration Reference](https://docs.openclaw.ai/gateway/configuration) or [QVerisBot Source Guide](docs/qverisbot-from-source.md).
-
-## Development Mode
-
-```bash
-# Auto-reload on TS changes
-pnpm gateway:watch
-
-# Run diagnostics
-pnpm openclaw doctor
-
-# Check channel status (deep probe)
-pnpm openclaw channels status --deep
-```
-
-Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node.
-
-## Security defaults (DM access)
-
-QVerisBot connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
-
-Full security guide: [Security](https://docs.openclaw.ai/gateway/security)
-
-Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack/Feishu:
-- **DM pairing** (`dmPolicy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
-- Approve with: `pnpm openclaw pairing approve <channel> <code>` (then the sender is added to a local allowlist store).
-- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the channel allowlist.
-
-Run `pnpm openclaw doctor` to surface risky/misconfigured DM policies.
-
-## Highlights
-
-- **[QVeris Universal Toolbox](https://qveris.ai)** — access 10,000+ external tools for finance, research, search, and more.
-- **[Feishu (飞书) Native Support](docs/qverisbot-from-source.md#3-飞书账号准备)** — deep integration with Feishu via WebSocket, ideal for Chinese enterprise users.
-- **[Local-first Gateway](https://docs.openclaw.ai/gateway)** — single control plane for sessions, channels, tools, and events.
-- **[Multi-channel inbox](https://docs.openclaw.ai/channels)** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Feishu, Microsoft Teams, Matrix, Zalo, WebChat, macOS, iOS/Android.
-- **[Multi-agent routing](https://docs.openclaw.ai/gateway/configuration)** — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
-- **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
-- **[Live Canvas](https://docs.openclaw.ai/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui).
-- **[LLM Proxy Support](docs/qverisbot-from-source.md#634-大模型代理配置)** — HTTP proxy for LLM API calls, useful in network-restricted environments.
-- **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
-
-## QVeris Universal Toolbox — Access 10,000+ Tools & APIs Instantly
-
-Stop writing API wrappers. **[QVeris](https://qveris.ai)** is a third-party AI tool marketplace that connects your agent to the world's data and services — think of it as an "App Store for AI tools."
-
-QVeris packages internet APIs (finance, news, images, search, etc.) into standardized tools that AI agents can call directly.
+> **Why QVerisBot?** Stop writing API wrappers. **[QVeris](https://qveris.ai)** connects your AI assistant to 10,000+ real-world tools and APIs — think of it as an "App Store for AI tools."
 
 ### Leading LLMs & Inference
 
@@ -215,7 +57,7 @@ QVeris packages internet APIs (finance, news, images, search, etc.) into standar
 > [!TIP]
 > This is just the tip of the iceberg. QVeris supports **10,000+ specific tools** across finance, research, healthcare, sports, and more.
 
-### What can you build?
+### What can you build with QVeris?
 
 | Scenario | Tools Used | Workflow |
 | :--- | :--- | :--- |
@@ -223,9 +65,7 @@ QVeris packages internet APIs (finance, news, images, search, etc.) into standar
 | **Crypto Price Monitor** | Binance + AlphaVantage + Finnhub | Query real-time BTC/ETH prices, analyze market sentiment |
 | **Image Search Assistant** | Brave Search + SerpApi + Shutterstock | Find images, reverse image search, access stock photos |
 
-### How to use QVeris
-
-Two-step flow — search for tools, then execute:
+### How to use QVeris (2 steps)
 
 ```python
 # Step 1: Search for tools
@@ -241,43 +81,11 @@ qveris_execute(
 # Returns: {"symbol": "BTCUSDT", "price": "102345.67"}
 ```
 
-### Why QVerisBot needs QVeris
+### Quick Setup QVeris (5 minutes)
 
-| Challenge | Solution |
-| :--- | :--- |
-| **Knowledge cutoff** | LLMs have training data cutoffs — QVeris provides real-time data access |
-| **LLMs can't act** | Models reason well but can't fetch prices or post tweets — QVeris gives them "hands and feet" |
-| **API integration overhead** | No need to write wrappers for each service — QVeris standardizes everything |
-| **Extensibility** | Need a new capability? Search QVeris for existing tools or build your own |
-
-### Getting Started with QVeris (5 minutes)
-
-Follow these steps to enable QVeris tools in QVerisBot:
-
-#### Step 1: Create QVeris Account
-
-1. Visit [qveris.ai](https://qveris.ai) and click **Sign Up**
-2. Register with email or third-party login (Google/GitHub)
-3. Complete email verification
-
-#### Step 2: Generate API Key
-
-1. Log in to [QVeris Dashboard](https://qveris.ai/dashboard)
-2. Navigate to **API Keys** section
-3. Click **Create New API Key**
-4. Copy and save your API key securely (it won't be shown again)
-
-#### Step 3: Purchase Credits (Optional for Free Tier)
-
-QVeris offers a free tier with limited calls. For production use:
-
-1. Go to **Billing** in your dashboard
-2. Choose a plan or add credits
-3. Credits are consumed per tool call (pricing varies by tool)
-
-#### Step 4: Configure QVerisBot
-
-Add your API key to `~/.openclaw/openclaw.json`:
+1. **Create Account**: Visit [qveris.ai](https://qveris.ai) → Sign Up
+2. **Get API Key**: Dashboard → API Keys → Create New Key
+3. **Configure**: Add to `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -290,26 +98,99 @@ Add your API key to `~/.openclaw/openclaw.json`:
 }
 ```
 
-Or set via environment variable:
+Or set via environment: `export QVERIS_API_KEY="qv_your_api_key_here"`
+
+> [!NOTE]
+> QVeris offers a free tier. For production use, purchase credits at [qveris.ai/dashboard](https://qveris.ai/dashboard).
+
+---
+
+## What Else Makes QVerisBot Special
+
+- **[Feishu (飞书) Native Support](docs/qverisbot-from-source.md#3-飞书账号准备)** — WebSocket-based deep integration, ideal for Chinese enterprise users
+- **Multi-channel inbox** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, **Feishu**, Microsoft Teams, Matrix, Zalo, WebChat
+- **Voice Wake + Talk Mode** — always-on speech for macOS/iOS/Android
+- **Live Canvas** — agent-driven visual workspace
+- **LLM Proxy Support** — HTTP proxy for API calls in network-restricted environments
+
+[QVeris AI](https://qveris.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/QVerisAI/QVerisBot) · [Source Guide](docs/qverisbot-from-source.md) · [Discord](https://discord.gg/clawd)
+
+---
+
+## Install QVerisBot
+
+### System Requirements
+
+| Component | Minimum | Recommended |
+| :--- | :--- | :--- |
+| Node.js | 22.12.0 | 22.x LTS |
+| pnpm | 10.x | 10.23.0+ |
+| Python | 3.12 | 3.12+ (for skills) |
+
+### From Source (Recommended)
 
 ```bash
-export QVERIS_API_KEY="qv_your_api_key_here"
+git clone https://github.com/QVerisAI/QVerisBot.git
+cd QVerisBot
+
+pnpm install
+pnpm ui:build   # first time only
+pnpm build
+
+pnpm openclaw onboard --install-daemon
 ```
 
-#### Step 5: Verify Configuration
+For detailed setup (especially Feishu/飞书), see [QVerisBot Source Guide](docs/qverisbot-from-source.md).
 
-Restart QVerisBot and test:
+### Quick Start
 
 ```bash
-# Restart gateway
+# Start gateway
 pnpm openclaw gateway --port 18789 --verbose
 
-# Test with a simple query
-pnpm openclaw agent --message "Use QVeris to search for bitcoin price tools"
+# Talk to the assistant
+pnpm openclaw agent --message "Hello QVerisBot" --thinking high
+
+# Check status
+pnpm openclaw channels status
 ```
 
-> [!TIP]
-> For detailed QVeris configuration options (timeout, max response size, etc.), see [QVeris config](https://docs.openclaw.ai/gateway/configuration#qveris).
+---
+
+## Configuration
+
+Create `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "agent": {
+    "model": "anthropic/claude-opus-4-5"
+  },
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "appId": "cli_xxx",
+      "appSecret": "xxx",
+      "eventMode": "websocket"
+    }
+  },
+  "tools": {
+    "qveris": {
+      "enabled": true,
+      "apiKey": "qv_your_api_key"
+    }
+  },
+  "models": {
+    "proxy": "http://127.0.0.1:7890"
+  }
+}
+```
+
+**Supported Models:** Anthropic Claude, OpenAI GPT-4o, DeepSeek V3/R1, Google Gemini, Kimi, Minimax, and custom providers.
+
+See [Configuration Reference](https://docs.openclaw.ai/gateway/configuration) for all options.
+
+---
 
 ## Star History
 
