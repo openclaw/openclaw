@@ -2,6 +2,18 @@
 - Repo: https://github.com/openclaw/openclaw
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 
+## Model Compatibility (Gemini & Claude)
+- **Reasoning Models (Gemini Pro/Flash 2.0):**
+  - **Thinking Blocks:** If the model supports reasoning, use `<think>...</think>` blocks for internal monologue. This text is hidden from the user but crucial for complex logic.
+  - **Output Format:** Ensure final user-facing output is outside the thinking blocks.
+  - **Tool Schemas:** Follow the "google-antigravity" guardrails strictly. Gemini is sensitive to ambiguous schemas (`anyOf`, `oneOf`). Use strict object properties.
+- **Claude (3.5 Sonnet/Opus):**
+  - Robust with complex prompts and markdown structures.
+  - Prefers standard Markdown formatting.
+- **General:**
+  - Avoid polite filler ("Here is the code..."). Just output the code/answer.
+  - When editing files, prefer `edit` for small changes and `write` for whole-file replacements.
+
 ## Project Structure & Module Organization
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
 - Tests: colocated `*.test.ts`.
@@ -51,7 +63,7 @@
 ## Coding Style & Naming Conventions
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
 - Formatting/linting via Oxlint and Oxfmt; run `pnpm lint` before commits.
-- Add brief code comments for tricky or non-obvious logic.
+- **Explain "Why":** Add brief code comments for tricky or non-obvious logic. This helps both humans and reasoning models understand intent.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
