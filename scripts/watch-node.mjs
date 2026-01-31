@@ -16,7 +16,7 @@ if (initialBuild.status !== 0) {
   process.exit(initialBuild.status ?? 1);
 }
 
-const compilerProcess = spawn("pnpm", ["tsdown", '--watch', 'src/'], {
+const compilerProcess = spawn("pnpm", ["tsc", '-p', 'tsconfig.json', '--noEmit', 'false', '--watch'], {
   cwd,
   env,
   stdio: "inherit",

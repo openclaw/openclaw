@@ -1,9 +1,10 @@
 ---
-summary: "OpenClaw plugins/extensions: discovery, config, and safety"
+summary: 'OpenClaw plugins/extensions: discovery, config, and safety'
 read_when:
   - Adding or modifying plugins/extensions
   - Documenting plugin install or load rules
 ---
+
 # Plugins (Extensions)
 
 ## Quick start (new to plugins?)
@@ -17,19 +18,19 @@ install).
 
 Fast path:
 
-1) See what’s already loaded:
+1. See what’s already loaded:
 
 ```bash
 openclaw plugins list
 ```
 
-2) Install an official plugin (example: Voice Call):
+2. Install an official plugin (example: Voice Call):
 
 ```bash
 openclaw plugins install @openclaw/voice-call
 ```
 
-3) Restart the Gateway, then configure under `plugins.entries.<id>.config`.
+3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 
@@ -73,12 +74,13 @@ Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
-  text: "Hello from OpenClaw",
+  text: 'Hello from OpenClaw',
   cfg: api.config,
 });
 ```
 
 Notes:
+
 - Uses core `messages.tts` configuration (OpenAI or ElevenLabs).
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - Edge TTS is not supported for telephony.
@@ -87,18 +89,22 @@ Notes:
 
 OpenClaw scans, in order:
 
-1) Config paths
+1. Config paths
+
 - `plugins.load.paths` (file or directory)
 
-2) Workspace extensions
+2. Workspace extensions
+
 - `<workspace>/.openclaw/extensions/*.ts`
 - `<workspace>/.openclaw/extensions/*/index.ts`
 
-3) Global extensions
+3. Global extensions
+
 - `~/.openclaw/extensions/*.ts`
 - `~/.openclaw/extensions/*/index.ts`
 
-4) Bundled extensions (shipped with OpenClaw, **disabled by default**)
+4. Bundled extensions (shipped with OpenClaw, **disabled by default**)
+
 - `<openclaw>/extensions/*`
 
 Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
@@ -164,6 +170,7 @@ Example:
 
 OpenClaw can also merge **external channel catalogs** (for example, an MPM
 registry export). Drop a JSON file at one of:
+
 - `~/.openclaw/mpm/plugins.json`
 - `~/.openclaw/mpm/catalog.json`
 - `~/.openclaw/plugins/catalog.json`
@@ -188,17 +195,18 @@ configured id.
 {
   plugins: {
     enabled: true,
-    allow: ["voice-call"],
-    deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    allow: ['voice-call'],
+    deny: ['untrusted-plugin'],
+    load: { paths: ['~/Projects/oss/voice-call-extension'] },
     entries: {
-      "voice-call": { enabled: true, config: { provider: "twilio" } }
-    }
-  }
+      'voice-call': { enabled: true, config: { provider: 'twilio' } },
+    },
+  },
 }
 ```
 
 Fields:
+
 - `enabled`: master toggle (default: true)
 - `allow`: allowlist (optional)
 - `deny`: denylist (optional; deny wins)
@@ -208,6 +216,7 @@ Fields:
 Config changes **require a gateway restart**.
 
 Validation rules (strict):
+
 - Unknown plugin ids in `entries`, `allow`, `deny`, or `slots` are **errors**.
 - Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
   the channel id.
@@ -224,9 +233,9 @@ Some plugin categories are **exclusive** (only one active at a time). Use
 {
   plugins: {
     slots: {
-      memory: "memory-core" // or "none" to disable memory plugins
-    }
-  }
+      memory: 'memory-core', // or "none" to disable memory plugins
+    },
+  },
 }
 ```
 
@@ -311,6 +320,7 @@ export default function register(api) {
 ```
 
 Notes:
+
 - Hook directories follow the normal hook structure (`HOOK.md` + `handler.ts`).
 - Hook eligibility rules still apply (OS/bins/env/config requirements).
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
@@ -330,29 +340,29 @@ Example:
 
 ```ts
 api.registerProvider({
-  id: "acme",
-  label: "AcmeAI",
+  id: 'acme',
+  label: 'AcmeAI',
   auth: [
     {
-      id: "oauth",
-      label: "OAuth",
-      kind: "oauth",
+      id: 'oauth',
+      label: 'OAuth',
+      kind: 'oauth',
       run: async (ctx) => {
         // Run OAuth flow and return auth profiles.
         return {
           profiles: [
             {
-              profileId: "acme:default",
+              profileId: 'acme:default',
               credential: {
-                type: "oauth",
-                provider: "acme",
-                access: "...",
-                refresh: "...",
+                type: 'oauth',
+                provider: 'acme',
+                access: '...',
+                refresh: '...',
                 expires: Date.now() + 3600 * 1000,
               },
             },
           ],
-          defaultModel: "acme/opus-1",
+          defaultModel: 'acme/opus-1',
         };
       },
     },
@@ -361,6 +371,7 @@ api.registerProvider({
 ```
 
 Notes:
+
 - `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
   `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
 - Return `configPatch` when you need to add default models or provider config.
@@ -374,23 +385,26 @@ validated by your channel plugin code.
 
 ```ts
 const myChannel = {
-  id: "acmechat",
+  id: 'acmechat',
   meta: {
-    id: "acmechat",
-    label: "AcmeChat",
-    selectionLabel: "AcmeChat (API)",
-    docsPath: "/channels/acmechat",
-    blurb: "demo channel plugin.",
-    aliases: ["acme"],
+    id: 'acmechat',
+    label: 'AcmeChat',
+    selectionLabel: 'AcmeChat (API)',
+    docsPath: '/channels/acmechat',
+    blurb: 'demo channel plugin.',
+    aliases: ['acme'],
   },
-  capabilities: { chatTypes: ["direct"] },
+  capabilities: { chatTypes: ['direct'] },
   config: {
-    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    listAccountIds: (cfg) =>
+      Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
     resolveAccount: (cfg, accountId) =>
-      (cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? { accountId }),
+      cfg.channels?.acmechat?.accounts?.[accountId ?? 'default'] ?? {
+        accountId,
+      },
   },
   outbound: {
-    deliveryMode: "direct",
+    deliveryMode: 'direct',
     sendText: async () => ({ ok: true }),
   },
 };
@@ -401,6 +415,7 @@ export default function (api) {
 ```
 
 Notes:
+
 - Put config under `channels.<id>` (not `plugins.entries`).
 - `meta.label` is used for labels in CLI/UI lists.
 - `meta.aliases` adds alternate ids for normalization and CLI inputs.
@@ -412,27 +427,32 @@ Notes:
 Use this when you want a **new chat surface** (a “messaging channel”), not a model provider.
 Model provider docs live under `/providers/*`.
 
-1) Pick an id + config shape
+1. Pick an id + config shape
+
 - All channel config lives under `channels.<id>`.
 - Prefer `channels.<id>.accounts.<accountId>` for multi‑account setups.
 
-2) Define the channel metadata
+2. Define the channel metadata
+
 - `meta.label`, `meta.selectionLabel`, `meta.docsPath`, `meta.blurb` control CLI/UI lists.
 - `meta.docsPath` should point at a docs page like `/channels/<id>`.
 - `meta.preferOver` lets a plugin replace another channel (auto-enable prefers it).
 - `meta.detailLabel` and `meta.systemImage` are used by UIs for detail text/icons.
 
-3) Implement the required adapters
+3. Implement the required adapters
+
 - `config.listAccountIds` + `config.resolveAccount`
 - `capabilities` (chat types, media, threads, etc.)
 - `outbound.deliveryMode` + `outbound.sendText` (for basic send)
 
-4) Add optional adapters as needed
+4. Add optional adapters as needed
+
 - `setup` (wizard), `security` (DM policy), `status` (health/diagnostics)
 - `gateway` (start/stop/login), `mentions`, `threading`, `streaming`
 - `actions` (message actions), `commands` (native command behavior)
 
-5) Register the channel in your plugin
+5. Register the channel in your plugin
+
 - `api.registerChannel({ plugin })`
 
 Minimal config example:
@@ -442,10 +462,10 @@ Minimal config example:
   channels: {
     acmechat: {
       accounts: {
-        default: { token: "ACME_TOKEN", enabled: true }
-      }
-    }
-  }
+        default: { token: 'ACME_TOKEN', enabled: true },
+      },
+    },
+  },
 }
 ```
 
@@ -453,23 +473,26 @@ Minimal channel plugin (outbound‑only):
 
 ```ts
 const plugin = {
-  id: "acmechat",
+  id: 'acmechat',
   meta: {
-    id: "acmechat",
-    label: "AcmeChat",
-    selectionLabel: "AcmeChat (API)",
-    docsPath: "/channels/acmechat",
-    blurb: "AcmeChat messaging channel.",
-    aliases: ["acme"],
+    id: 'acmechat',
+    label: 'AcmeChat',
+    selectionLabel: 'AcmeChat (API)',
+    docsPath: '/channels/acmechat',
+    blurb: 'AcmeChat messaging channel.',
+    aliases: ['acme'],
   },
-  capabilities: { chatTypes: ["direct"] },
+  capabilities: { chatTypes: ['direct'] },
   config: {
-    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    listAccountIds: (cfg) =>
+      Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
     resolveAccount: (cfg, accountId) =>
-      (cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? { accountId }),
+      cfg.channels?.acmechat?.accounts?.[accountId ?? 'default'] ?? {
+        accountId,
+      },
   },
   outbound: {
-    deliveryMode: "direct",
+    deliveryMode: 'direct',
     sendText: async ({ text }) => {
       // deliver `text` to your channel here
       return { ok: true };
@@ -493,7 +516,7 @@ See the dedicated guide: [Plugin agent tools](/plugins/agent-tools).
 
 ```ts
 export default function (api) {
-  api.registerGatewayMethod("myplugin.status", ({ respond }) => {
+  api.registerGatewayMethod('myplugin.status', ({ respond }) => {
     respond(true, { ok: true });
   });
 }
@@ -503,11 +526,14 @@ export default function (api) {
 
 ```ts
 export default function (api) {
-  api.registerCli(({ program }) => {
-    program.command("mycmd").action(() => {
-      console.log("Hello");
-    });
-  }, { commands: ["mycmd"] });
+  api.registerCli(
+    ({ program }) => {
+      program.command('mycmd').action(() => {
+        console.log('Hello');
+      });
+    },
+    { commands: ['mycmd'] },
+  );
 }
 ```
 
@@ -520,8 +546,8 @@ that don't need LLM processing.
 ```ts
 export default function (api) {
   api.registerCommand({
-    name: "mystatus",
-    description: "Show plugin status",
+    name: 'mystatus',
+    description: 'Show plugin status',
     handler: (ctx) => ({
       text: `Plugin is running! Channel: ${ctx.channel}`,
     }),
@@ -550,12 +576,12 @@ Example with authorization and arguments:
 
 ```ts
 api.registerCommand({
-  name: "setmode",
-  description: "Set plugin mode",
+  name: 'setmode',
+  description: 'Set plugin mode',
   acceptsArgs: true,
   requireAuth: true,
   handler: async (ctx) => {
-    const mode = ctx.args?.trim() || "default";
+    const mode = ctx.args?.trim() || 'default';
     await saveMode(mode);
     return { text: `Mode set to: ${mode}` };
   },
@@ -563,6 +589,7 @@ api.registerCommand({
 ```
 
 Notes:
+
 - Plugin commands are processed **before** built-in commands and the AI agent
 - Commands are registered globally and work across all channels
 - Command names are case-insensitive (`/MyStatus` matches `/mystatus`)
@@ -575,9 +602,9 @@ Notes:
 ```ts
 export default function (api) {
   api.registerService({
-    id: "my-service",
-    start: () => api.logger.info("ready"),
-    stop: () => api.logger.info("bye"),
+    id: 'my-service',
+    start: () => api.logger.info('ready'),
+    stop: () => api.logger.info('bye'),
   });
 }
 ```
@@ -635,4 +662,4 @@ Plugins run in-process with the Gateway. Treat them as trusted code:
 Plugins can (and should) ship tests:
 
 - In-repo plugins can keep Vitest tests under `src/**` (example: `src/plugins/voice-call.plugin.test.ts`).
-- Separately published plugins should run their own CI (lint/build/test) and validate `openclaw.extensions` points at the built entrypoint (`dist/index.mjs`).
+- Separately published plugins should run their own CI (lint/build/test) and validate `openclaw.extensions` points at the built entrypoint (`dist/index.js`).

@@ -114,7 +114,7 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
     child = spawn(
       "node",
       [
-        "dist/index.mjs",
+        "dist/index.js",
         "gateway",
         "--port",
         String(port),
@@ -201,7 +201,7 @@ const stopGatewayInstance = async (inst: GatewayInstance) => {
 const runCliJson = async (args: string[], env: NodeJS.ProcessEnv): Promise<unknown> => {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const child = spawn("node", ["dist/index.mjs", ...args], {
+  const child = spawn("node", ["dist/index.js", ...args], {
     cwd: process.cwd(),
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],

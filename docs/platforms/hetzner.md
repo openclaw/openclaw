@@ -1,5 +1,5 @@
 ---
-summary: "Run OpenClaw Gateway 24/7 on a cheap Hetzner VPS (Docker) with durable state and baked-in binaries"
+summary: 'Run OpenClaw Gateway 24/7 on a cheap Hetzner VPS (Docker) with durable state and baked-in binaries'
 read_when:
   - You want OpenClaw running 24/7 on a cloud VPS (not your laptop)
   - You want a production-grade, always-on Gateway on your own VPS
@@ -10,6 +10,7 @@ read_when:
 # OpenClaw on Hetzner (Docker, Production VPS Guide)
 
 ## Goal
+
 Run a persistent OpenClaw Gateway on a Hetzner VPS using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
 If you want “OpenClaw 24/7 for ~$5”, this is the simplest reliable setup.
@@ -24,6 +25,7 @@ Hetzner pricing changes; pick the smallest Debian/Ubuntu VPS and scale up if you
 - Access the Control UI from your laptop via an SSH tunnel
 
 The Gateway can be accessed via:
+
 - SSH port forwarding from your laptop
 - Direct port exposure if you manage firewalling and tokens yourself
 
@@ -35,29 +37,29 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ## Quick path (experienced operators)
 
-1) Provision Hetzner VPS  
-2) Install Docker  
-3) Clone OpenClaw repository  
-4) Create persistent host directories  
-5) Configure `.env` and `docker-compose.yml`  
-6) Bake required binaries into the image  
-7) `docker compose up -d`  
-8) Verify persistence and Gateway access
+1. Provision Hetzner VPS
+2. Install Docker
+3. Clone OpenClaw repository
+4. Create persistent host directories
+5. Configure `.env` and `docker-compose.yml`
+6. Bake required binaries into the image
+7. `docker compose up -d`
+8. Verify persistence and Gateway access
 
 ---
 
 ## What you need
 
-- Hetzner VPS with root access  
-- SSH access from your laptop  
-- Basic comfort with SSH + copy/paste  
-- ~20 minutes  
-- Docker and Docker Compose  
-- Model auth credentials  
-- Optional provider credentials  
-  - WhatsApp QR  
-  - Telegram bot token  
-  - Gmail OAuth  
+- Hetzner VPS with root access
+- SSH access from your laptop
+- Basic comfort with SSH + copy/paste
+- ~20 minutes
+- Docker and Docker Compose
+- Model auth credentials
+- Optional provider credentials
+  - WhatsApp QR
+  - Telegram bot token
+  - Gmail OAuth
 
 ---
 
@@ -175,20 +177,20 @@ services:
     ports:
       # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
-      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
+      - '127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789'
 
       # Optional: only if you run iOS/Android nodes against this VPS and need Canvas host.
       # If you expose this publicly, read /gateway/security and firewall accordingly.
       # - "18793:18793"
     command:
       [
-        "node",
-        "dist/index.mjs",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND}",
-        "--port",
-        "${OPENCLAW_GATEWAY_PORT}"
+        'node',
+        'dist/index.js',
+        'gateway',
+        '--bind',
+        '${OPENCLAW_GATEWAY_BIND}',
+        '--port',
+        '${OPENCLAW_GATEWAY_PORT}',
       ]
 ```
 
@@ -202,6 +204,7 @@ Anything installed at runtime will be lost on restart.
 All external binaries required by skills must be installed at image build time.
 
 The examples below show three common binaries only:
+
 - `gog` for Gmail access
 - `goplaces` for Google Places
 - `wacli` for WhatsApp
@@ -210,6 +213,7 @@ These are examples, not a complete list.
 You may install as many binaries as needed using the same pattern.
 
 If you add new skills later that depend on additional binaries, you must:
+
 1. Update the Dockerfile
 2. Rebuild the image
 3. Restart the containers
@@ -250,7 +254,7 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-CMD ["node","dist/index.mjs"]
+CMD ["node","dist/index.js"]
 ```
 
 ---
@@ -311,15 +315,15 @@ Paste your gateway token.
 OpenClaw runs in Docker, but Docker is not the source of truth.
 All long-lived state must survive restarts, rebuilds, and reboots.
 
-| Component | Location | Persistence mechanism | Notes |
-|---|---|---|---|
-| Gateway config | `/home/node/.openclaw/` | Host volume mount | Includes `openclaw.json`, tokens |
-| Model auth profiles | `/home/node/.openclaw/` | Host volume mount | OAuth tokens, API keys |
-| Skill configs | `/home/node/.openclaw/skills/` | Host volume mount | Skill-level state |
-| Agent workspace | `/home/node/.openclaw/workspace/` | Host volume mount | Code and agent artifacts |
-| WhatsApp session | `/home/node/.openclaw/` | Host volume mount | Preserves QR login |
-| Gmail keyring | `/home/node/.openclaw/` | Host volume + password | Requires `GOG_KEYRING_PASSWORD` |
-| External binaries | `/usr/local/bin/` | Docker image | Must be baked at build time |
-| Node runtime | Container filesystem | Docker image | Rebuilt every image build |
-| OS packages | Container filesystem | Docker image | Do not install at runtime |
-| Docker container | Ephemeral | Restartable | Safe to destroy |
+| Component           | Location                          | Persistence mechanism  | Notes                            |
+| ------------------- | --------------------------------- | ---------------------- | -------------------------------- |
+| Gateway config      | `/home/node/.openclaw/`           | Host volume mount      | Includes `openclaw.json`, tokens |
+| Model auth profiles | `/home/node/.openclaw/`           | Host volume mount      | OAuth tokens, API keys           |
+| Skill configs       | `/home/node/.openclaw/skills/`    | Host volume mount      | Skill-level state                |
+| Agent workspace     | `/home/node/.openclaw/workspace/` | Host volume mount      | Code and agent artifacts         |
+| WhatsApp session    | `/home/node/.openclaw/`           | Host volume mount      | Preserves QR login               |
+| Gmail keyring       | `/home/node/.openclaw/`           | Host volume + password | Requires `GOG_KEYRING_PASSWORD`  |
+| External binaries   | `/usr/local/bin/`                 | Docker image           | Must be baked at build time      |
+| Node runtime        | Container filesystem              | Docker image           | Rebuilt every image build        |
+| OS packages         | Container filesystem              | Docker image           | Do not install at runtime        |
+| Docker container    | Ephemeral                         | Restartable            | Safe to destroy                  |
