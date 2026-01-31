@@ -755,6 +755,22 @@ export function createExecTool(
         throw new Error("Provide a command to start.");
       }
 
+      // Check for commands that should use agent tools instead of bash
+      const AGENT_TOOL_EQUIVALENTS: Record<string, string> = {
+        "cron ":
+          "Use the `cron` agent tool with action parameter, not bash cron. See TOOL_SCHEMAS.md.",
+        "/usr/sbin/cron":
+          "Use the `cron` agent tool with action parameter, not system cron. See TOOL_SCHEMAS.md.",
+        crontab:
+          "Use the `cron` agent tool with action parameter, not crontab. See TOOL_SCHEMAS.md.",
+      };
+      const cmdLower = params.command.toLowerCase();
+      for (const [pattern, message] of Object.entries(AGENT_TOOL_EQUIVALENTS)) {
+        if (cmdLower.startsWith(pattern) || cmdLower.includes(` ${pattern}`)) {
+          throw new Error(`Agent tool confusion: ${message}`);
+        }
+      }
+
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];

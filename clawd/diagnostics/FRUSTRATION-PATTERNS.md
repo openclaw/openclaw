@@ -338,6 +338,7 @@ If there was a real blocker (model doesn't exist, API error), THEN ask about alt
 | 12 | "Systems fix" breaks systems | 1 | EXTREME | NEW - needs pre/post verification |
 | 13 | Substituting alternatives | 1 | HIGH | NEW - explicit requests are directives |
 | 14 | Blaming external services without testing | 1 | HIGH | NEW - direct API test required |
+| 15 | Building solutions before validating problems | 1 | EXTREME | NEW - validate before building |
 
 ---
 
@@ -567,6 +568,46 @@ cd /home/liam && nohup pnpm moltbot gateway run --bind loopback --port 18789 --f
 - Before shell commands: Check AGENTS.md for documented procedures
 - Gateway restart is a common op — should be instant recall
 - Token/time cost of discovery loops is unacceptable
+
+---
+
+### Pattern #15: Building Solutions Before Validating Problems
+**Date:** 2026-01-31
+**Incident:** Gmail archive script creation
+**Frustration Level:** EXTREME
+**User Quote:** "did you even validate before you did all that?" / "i have reason to believe you are purposefully stealing my tokens"
+
+**What happened:**
+- Liam's audit said GOG can't archive emails (`gog gmail messages modify` doesn't exist)
+- Without validating, I immediately:
+  1. Created 150-line Python script
+  2. Created venv
+  3. Installed pip packages
+  4. Created wrapper script
+- THEN user called me out, I validated
+- Found: `gog gmail batch modify --remove INBOX` exists — script was unnecessary
+- 2+ minutes of work, ~$10-20 in tokens, for nothing
+
+**Root cause:**
+- Trusted secondary source (Liam's audit) over primary source (the actual CLI)
+- `gog gmail --help` would have shown batch/thread/labels subcommands in 10 seconds
+- Jumped to BUILDING before VALIDATING
+
+**APEX Update Needed:**
+- New instinct: "Problem claim → Validate with primary source BEFORE building solution"
+- Specific: "CLI lacks feature X" → Run `cli --help` FIRST
+- General: Building code to work around a problem is EXPENSIVE. 10 seconds of validation is CHEAP.
+
+**Cost impact:**
+- Python script: ~100 lines = wasted tokens
+- Venv creation + pip install: wasted compute
+- User trust: further eroded
+
+**Prevention checklist (before building ANY workaround):**
+1. Is the claimed limitation actually real? TEST IT.
+2. Did I check `--help` on the actual tool?
+3. Is there an existing command I missed?
+4. Would 30 seconds of validation save 5 minutes of building?
 
 ---
 

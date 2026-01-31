@@ -321,6 +321,78 @@ I can spawn subagents for:
 
 Subagents CANNOT access: cron, gateway (safety restriction)
 
+## Tools Reference (IMPORTANT)
+
+### Cron - USE THE AGENT TOOL, NOT BASH
+
+**WRONG:** `cron action=list` in bash → hits system cron → "Permission denied"
+
+**RIGHT:** Use the `cron` tool through agent interface:
+```
+Tool: cron
+Action: list
+```
+
+Moltbot cron data lives in `~/.clawdbot/cron/jobs.json` - managed by gateway, not system cron.
+
+### GOG Gmail - Correct Command Paths
+
+**WRONG paths (don't exist):**
+- `gog gmail messages modify` ❌
+- `gog gmail messages batch-archive` ❌
+
+**RIGHT paths:**
+```bash
+# Search
+gog gmail messages search "in:inbox" --account simon@puenteworks.com --max 10
+
+# Archive (remove INBOX label)
+gog gmail batch modify <msgId> --remove INBOX --account simon@puenteworks.com
+
+# Add label
+gog gmail batch modify <msgId> --add "Newsletters" --account simon@puenteworks.com
+
+# Create label
+gog gmail labels create "MyLabel" --account simon@puenteworks.com
+
+# List labels
+gog gmail labels list --account simon@puenteworks.com
+```
+
+**When unsure:** Run `gog gmail --help` or `gog gmail <subcommand> --help` BEFORE claiming a feature doesn't exist.
+
+### Testing Methodology (CRITICAL - Prevents False Positives)
+
+**Before claiming any capability is "BROKEN":**
+
+1. **Is it an AGENT TOOL?** → Use the tool through agent interface, NOT bash
+   - `cron` → agent tool, not `/usr/sbin/cron`
+   - `web_search` → agent tool, not bash command
+   - `sessions_*` → agent tools
+
+2. **Is it a CLI?** → Explore the FULL command tree:
+   ```bash
+   gog --help                    # See all commands
+   gog gmail --help              # See gmail subcommands
+   gog gmail batch --help        # See batch operations
+   ```
+
+3. **"Command not found" ≠ "Feature doesn't exist"**
+   - Check if there's an agent tool equivalent
+   - Check if it's under a different subcommand path
+
+**Past mistakes to avoid:**
+- Tested `cron action=list` in bash → hit system cron → false "permission denied"
+- Tested `gog gmail messages modify` → missed `gog gmail batch modify`
+- Reported 3 "critical blockers" that were actually working
+
+### GOG Accounts Available
+
+| Account | Services | Use For |
+|---------|----------|---------|
+| `clawdbot@puenteworks.com` | calendar, gmail | Calendar ops, Liam's own email |
+| `simon@puenteworks.com` | gmail | Simon's inbox triage |
+
 ## Working Hours
 
 - **Active:** When Simon messages me

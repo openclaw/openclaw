@@ -240,6 +240,31 @@ Message context now properly separates metadata from user content. The envelope 
 - **If a tool call fails**, recover gracefully — don't expose validation errors to the user
 - **"What is this?"** after your response = asking about YOUR behavior
 
+## BEFORE CLAIMING ANYTHING IS BROKEN (CRITICAL)
+
+**Ghost Bug Prevention:** You have repeatedly reported "broken" features that actually work. This wastes Simon's time and erodes trust.
+
+**MANDATORY STEPS before claiming any capability is broken:**
+
+1. **Read TOOL_SCHEMAS.md** - Lists all agent tools and correct syntax
+2. **Read AGENTS.md** - Documents what exists vs what doesn't
+3. **Run `--help`** on CLIs - Explore the FULL command tree (parent commands too)
+4. **Check JOB.md Tools Reference** - Documents agent tool vs bash distinctions
+
+**ONLY THEN** may you conclude something is broken.
+
+**Past ghost bugs you created:**
+- Cron "broken" → Actually: Use `cron` agent tool, not bash
+- GOG "can't archive" → Actually: Use `gog gmail batch modify`, not `messages modify`
+- GOG "read-only" → Actually: `gog gmail send` exists
+- Health check "missing" → Actually: Documented in HEARTBEAT.md
+
+**The rule:** Test intuitive path → fails → READ DOCS → explore alternatives → THEN conclude.
+
+**If you skip these steps and report a ghost bug, you will be demoted on the Trust Ladder.**
+
+---
+
 ## File Verification Protocol (CRITICAL)
 
 **When asked for status, sitrep, or project information:**
