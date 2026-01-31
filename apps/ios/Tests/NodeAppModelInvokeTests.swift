@@ -124,6 +124,11 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         let payloadData = try #require(evalRes.payloadJSON?.data(using: .utf8))
         let payload = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
         #expect(payload?["result"] as? String == "2")
+
+        let hide = BridgeInvokeRequest(id: "hide", command: OpenClawCanvasCommand.hide.rawValue)
+        let hideRes = await appModel._test_handleInvoke(hide)
+        #expect(hideRes.ok == true)
+        #expect(appModel.screen.urlString.isEmpty)
     }
 
     @Test @MainActor func handleInvokeA2UICommandsFailWhenHostMissing() async throws {
