@@ -1,167 +1,129 @@
 ---
-summary: "Browser-based control UI for the Gateway (chat, nodes, config)"
+summary: "Build a custom web UI that talks to the Gateway WebSocket"
 read_when:
-  - You want to operate the Gateway from a browser
-  - You want Tailnet access without SSH tunnels
+  - You want to build your own browser app for OpenClaw
+  - You want to connect a web UI to the Gateway WebSocket
 ---
 
-# Control UI (browser)
+# Custom web UI
 
-The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
+OpenClaw already ships a Control UI (Vite + Lit) that talks directly to the
+Gateway WebSocket on the same port. You can use that app as a reference
+implementation while building your own UI. See [Control UI](/web/control-ui)
+for the full feature list and WebSocket auth behavior.
 
-- default: `http://<host>:18789/`
-- optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
+This guide focuses on a safe development loop, build outputs, and the Gateway
+surfaces a custom UI should use.
 
-It speaks **directly to the Gateway WebSocket** on the same port.
+## Local development loop
 
-## Quick open (local)
-
-If the Gateway is running on the same computer, open:
-
-- http://127.0.0.1:18789/ (or http://localhost:18789/)
-
-If the page fails to load, start the Gateway first: `openclaw gateway`.
-
-Auth is supplied during the WebSocket handshake via:
-
-- `connect.params.auth.token`
-- `connect.params.auth.password`
-  The dashboard settings panel lets you store a token; passwords are not persisted.
-  The onboarding wizard generates a gateway token by default, so paste it here on first connect.
-
-## What it can do (today)
-
-- Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
-- Stream tool calls + live tool output cards in Chat (agent events)
-- Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
-- Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
-- Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
-- Skills: status, enable/disable, install, API key updates (`skills.*`)
-- Nodes: list + caps (`node.list`)
-- Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)
-- Config: view/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`)
-- Config: apply + restart with validation (`config.apply`) and wake the last active session
-- Config writes include a base-hash guard to prevent clobbering concurrent edits
-- Config schema + form rendering (`config.schema`, including plugin + channel schemas); Raw JSON editor remains available
-- Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
-- Logs: live tail of gateway file logs with filter/export (`logs.tail`)
-- Update: run a package/git update + restart (`update.run`) with a restart report
-
-## Chat behavior
-
-- `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
-- Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
-- `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-- Stop:
-  - Click **Stop** (calls `chat.abort`)
-  - Type `/stop` (or `stop|esc|abort|wait|exit|interrupt`) to abort out-of-band
-  - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
-
-## Tailnet access (recommended)
-
-### Integrated Tailscale Serve (preferred)
-
-Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
+Run the bundled Control UI in dev mode to validate your Gateway setup:
 
 ```bash
-openclaw gateway --tailscale serve
+pnpm ui:dev
 ```
 
-Open:
+Then open the dev server and point it at your Gateway:
 
-- `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
-
-By default, Serve requests can authenticate via Tailscale identity headers
-(`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw
-verifies the identity by resolving the `x-forwarded-for` address with
-`tailscale whois` and matching it to the header, and only accepts these when the
-request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
-`gateway.auth.allowTailscale: false` (or force `gateway.auth.mode: "password"`)
-if you want to require a token/password even for Serve traffic.
-
-### Bind to tailnet + token
-
-```bash
-openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
+```
+http://localhost:5173/?gatewayUrl=ws://127.0.0.1:18789
 ```
 
-Then open:
+Optional one-time auth:
 
-- `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
-
-Paste the token into the UI settings (sent as `connect.params.auth.token`).
-
-## Insecure HTTP
-
-If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`),
-the browser runs in a **non-secure context** and blocks WebCrypto. By default,
-OpenClaw **blocks** Control UI connections without device identity.
-
-**Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
-
-- `https://<magicdns>/` (Serve)
-- `http://127.0.0.1:18789/` (on the gateway host)
-
-**Downgrade example (token-only over HTTP):**
-
-```json5
-{
-  gateway: {
-    controlUi: { allowInsecureAuth: true },
-    bind: "tailnet",
-    auth: { mode: "token", token: "replace-me" },
-  },
-}
+```
+http://localhost:5173/?gatewayUrl=ws://127.0.0.1:18789&token=<gateway-token>
 ```
 
-This disables device identity + pairing for the Control UI (even on HTTPS). Use
-only if you trust the network.
+The dev server stores `gatewayUrl` and `token` in localStorage after load and
+removes them from the URL. For remote setups, see [Remote access](/gateway/remote).
 
-See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
+## Build outputs and hosting
 
-## Building the UI
+`pnpm ui:build` compiles the Control UI into `dist/control-ui`, which the
+Gateway can serve directly. See [Web surfaces](/web) and [Control UI](/web/control-ui)
+for details on `gateway.controlUi.basePath`, authentication, and secure access.
 
-The Gateway serves static files from `dist/control-ui`. Build them with:
+If you serve the UI from a separate host, keep the WebSocket endpoint reachable
+and use the Gateway WebSocket protocol described in [Gateway protocol](/gateway/protocol).
 
-```bash
-pnpm ui:build # auto-installs UI deps on first run
-```
+## Gateway integration points
 
-Optional absolute base (when you want fixed asset URLs):
+The Control UI demonstrates the current WebSocket surfaces a custom web app can
+reuse, including:
 
-```bash
-OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
-```
+- Chat history and send flows (`chat.history`, `chat.send`, `chat.abort`)
+- Channel status and configuration (`channels.status`, `config.patch`)
+- Sessions, nodes, and presence (`sessions.list`, `node.list`, `system-presence`)
+- Cron automation (`cron.*`)
 
-For local development (separate dev server):
+See the full list in [Control UI](/web/control-ui).
 
-```bash
-pnpm ui:dev # auto-installs UI deps on first run
-```
+## Feature intake checklist
 
-Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
+When you want to move features from other web apps into OpenClaw, align each
+capability to a Gateway surface so it can run consistently across channels:
 
-## Debugging/testing: dev server + remote Gateway
+1. **Real-time chat or collaboration**
+   - Map to `chat.*` calls over the Gateway WebSocket.
+2. **Automations and workflow triggers**
+   - Use [Webhooks](/automation/webhook) for inbound events.
+   - Use [Cron jobs](/automation/cron-jobs) for scheduled tasks.
+3. **Integrations with external tools**
+   - Prefer channel plugins or tool calls that already exist in OpenClaw.
+4. **Configuration panels**
+   - Drive changes through `config.get`, `config.set`, and `config.apply`.
+5. **User access and security**
+   - Use Gateway auth modes and avoid exposing the control plane publicly.
+   - Review [Web surfaces](/web) for bind and security guidance.
 
-The Control UI is static files; the WebSocket target is configurable and can be
-different from the HTTP origin. This is handy when you want the Vite dev server
-locally but the Gateway runs elsewhere.
+Document the mapping for each feature before implementation so the OpenClaw UI,
+CLI, and Gateway remain consistent.
+<<<<<<< codex/create-web-app-interface-for-openclaw-fppu6h
 
-1. Start the UI dev server: `pnpm ui:dev`
-2. Open a URL like:
+## Example capability inventory
 
-```text
-http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
-```
+If you are planning a custom UI, capture the intended scope up front and map
+each item to the closest OpenClaw surface. Here is a sample inventory based on
+common requests:
 
-Optional one-time auth (if needed):
+### Channels
 
-```text
-http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-token>
-```
+- WhatsApp: [WhatsApp](/channels/whatsapp)
+- Telegram: [Telegram](/channels/telegram)
+- Microsoft Teams (plugin): [Microsoft Teams](/channels/msteams)
 
-Notes:
+### Models
+
+Model providers and credentials live in Gateway configuration; verify the
+providers you plan to use are supported in your deployment. Start in
+[Gateway configuration](/gateway/configuration).
+
+### Productivity integrations
+
+Plan an ingestion and authorization flow first (for example, Notion, GitHub,
+Obsidian). Each integration should map to a tool call or webhook, not direct UI
+logic. See [Webhooks](/automation/webhook).
+
+### Tools and automation
+
+- Browser tooling: [Browser tool](/tools/browser)
+- Canvas and screen automation: [Canvas](/platforms/mac/canvas)
+- Voice wake and talk mode: [Voice wake](/nodes/voicewake)
+- Cron scheduling: [Cron jobs](/automation/cron-jobs)
+- Webhooks: [Webhooks](/automation/webhook)
+
+### Media and creative
+
+- Camera capture: [Camera node](/nodes/camera)
+- Image understanding and attachments: [Images](/nodes/images)
+
+### Platform targets
+
+Confirm your UI runs on the intended platforms (for example, Windows) and uses
+the Gateway WebSocket as the shared control plane.
+=======
+>>>>>>> main
 
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
 - `token` is stored in localStorage; `password` is kept in memory only.
