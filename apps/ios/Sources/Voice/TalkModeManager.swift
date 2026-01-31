@@ -17,6 +17,7 @@ final class TalkModeManager: NSObject {
     var statusText: String = "Off"
 
     private let audioEngine = AVAudioEngine()
+    private var inputTapInstalled = false
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -160,6 +161,7 @@ final class TalkModeManager: NSObject {
         input.removeTap(onBus: 0)
         let tapBlock = Self.makeAudioTapAppendCallback(request: request)
         input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
+        self.inputTapInstalled = true
 
         self.audioEngine.prepare()
         try self.audioEngine.start()
@@ -185,7 +187,10 @@ final class TalkModeManager: NSObject {
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
         self.recognitionRequest = nil
-        self.audioEngine.inputNode.removeTap(onBus: 0)
+        if self.inputTapInstalled {
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+            self.inputTapInstalled = false
+        }
         self.audioEngine.stop()
         self.speechRecognizer = nil
     }
