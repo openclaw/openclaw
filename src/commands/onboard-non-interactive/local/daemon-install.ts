@@ -15,7 +15,9 @@ export async function installGatewayDaemonNonInteractive(params: {
   gatewayToken?: string;
 }) {
   const { opts, runtime, port, gatewayToken } = params;
-  if (!opts.installDaemon) return;
+  if (!opts.installDaemon) {
+    return;
+  }
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   const systemdAvailable =

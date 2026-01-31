@@ -107,16 +107,26 @@ async function promptSignalAllowFrom(params: {
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
       const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
+      if (!raw) {
+        return "Required";
+      }
       const parts = parseSignalAllowFromInput(raw);
       for (const part of parts) {
-        if (part === "*") continue;
-        if (part.toLowerCase().startsWith("uuid:")) {
-          if (!part.slice("uuid:".length).trim()) return "Invalid uuid entry";
+        if (part === "*") {
           continue;
         }
-        if (isUuidLike(part)) continue;
-        if (!normalizeE164(part)) return `Invalid entry: ${part}`;
+        if (part.toLowerCase().startsWith("uuid:")) {
+          if (!part.slice("uuid:".length).trim()) {
+            return "Invalid uuid entry";
+          }
+          continue;
+        }
+        if (isUuidLike(part)) {
+          continue;
+        }
+        if (!normalizeE164(part)) {
+          return `Invalid entry: ${part}`;
+        }
       }
       return undefined;
     },
@@ -124,9 +134,15 @@ async function promptSignalAllowFrom(params: {
   const parts = parseSignalAllowFromInput(String(entry));
   const normalized = parts
     .map((part) => {
-      if (part === "*") return "*";
-      if (part.toLowerCase().startsWith("uuid:")) return `uuid:${part.slice(5).trim()}`;
-      if (isUuidLike(part)) return `uuid:${part}`;
+      if (part === "*") {
+        return "*";
+      }
+      if (part.toLowerCase().startsWith("uuid:")) {
+        return `uuid:${part.slice(5).trim()}`;
+      }
+      if (isUuidLike(part)) {
+        return `uuid:${part}`;
+      }
       return normalizeE164(part);
     })
     .filter(Boolean);
@@ -231,7 +247,9 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
         message: `Signal account set (${account}). Keep it?`,
         initialValue: true,
       });
-      if (!keep) account = "";
+      if (!keep) {
+        account = "";
+      }
     }
 
     if (!account) {

@@ -44,7 +44,9 @@ export function validateA2UIJsonl(jsonl: string) {
 
   lines.forEach((line, idx) => {
     const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     messageCount += 1;
     let obj: unknown;
     try {

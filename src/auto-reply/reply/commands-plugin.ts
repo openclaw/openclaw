@@ -19,11 +19,15 @@ export const handlePluginCommand: CommandHandler = async (
 ): Promise<CommandHandlerResult | null> => {
   const { command, cfg } = params;
 
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
 
   // Try to match a plugin command
   const match = matchPluginCommand(command.commandBodyNormalized);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
 
   // Execute the plugin command (always returns a result)
   const result = await executePluginCommand({

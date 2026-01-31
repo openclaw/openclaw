@@ -54,8 +54,12 @@ function mapStyle(style: MarkdownStyle): SignalTextStyle | null {
 
 function mergeStyles(styles: SignalTextStyleRange[]): SignalTextStyleRange[] {
   const sorted = [...styles].toSorted((a, b) => {
-    if (a.start !== b.start) return a.start - b.start;
-    if (a.length !== b.length) return a.length - b.length;
+    if (a.start !== b.start) {
+      return a.start - b.start;
+    }
+    if (a.length !== b.length) {
+      return a.length - b.length;
+    }
     return a.style.localeCompare(b.style);
   });
 
@@ -80,7 +84,9 @@ function clampStyles(styles: SignalTextStyleRange[], maxLength: number): SignalT
     const start = Math.max(0, Math.min(style.start, maxLength));
     const end = Math.min(style.start + style.length, maxLength);
     const length = end - start;
-    if (length > 0) clamped.push({ start, length, style: style.style });
+    if (length > 0) {
+      clamped.push({ start, length, style: style.style });
+    }
   }
   return clamped;
 }
@@ -89,7 +95,9 @@ function applyInsertionsToStyles(
   spans: SignalStyleSpan[],
   insertions: Insertion[],
 ): SignalStyleSpan[] {
-  if (insertions.length === 0) return spans;
+  if (insertions.length === 0) {
+    return spans;
+  }
   const sortedInsertions = [...insertions].toSorted((a, b) => a.pos - b.pos);
   let updated = spans;
 
@@ -135,7 +143,9 @@ function applyInsertionsToStyles(
 
 function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const text = ir.text ?? "";
-  if (!text) return { text: "", styles: [] };
+  if (!text) {
+    return { text: "", styles: [] };
+  }
 
   const sortedLinks = [...ir.links].toSorted((a, b) => a.start - b.start);
   let out = "";
@@ -143,7 +153,9 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const insertions: Insertion[] = [];
 
   for (const link of sortedLinks) {
-    if (link.start < cursor) continue;
+    if (link.start < cursor) {
+      continue;
+    }
     out += text.slice(cursor, link.end);
 
     const href = link.href.trim();
@@ -170,7 +182,9 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const mappedStyles: SignalStyleSpan[] = ir.styles
     .map((span) => {
       const mapped = mapStyle(span.style);
-      if (!mapped) return null;
+      if (!mapped) {
+        return null;
+      }
       return { start: span.start, end: span.end, style: mapped };
     })
     .filter((span): span is SignalStyleSpan => span !== null);

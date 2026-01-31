@@ -219,9 +219,13 @@ describe("gateway e2e", () => {
       let didSendToken = false;
       while (!next.done) {
         const step = next.step;
-        if (!step) throw new Error("wizard missing step");
+        if (!step) {
+          throw new Error("wizard missing step");
+        }
         const value = step.type === "text" ? wizardToken : null;
-        if (step.type === "text") didSendToken = true;
+        if (step.type === "text") {
+          didSendToken = true;
+        }
         next = await client.request("wizard.next", {
           sessionId,
           answer: { stepId: step.id, value },

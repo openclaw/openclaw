@@ -24,8 +24,12 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
   try {
     const text = await res.text();
     const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) return undefined;
-    if (collapsed.length <= MAX_ERROR_CHARS) return collapsed;
+    if (!collapsed) {
+      return undefined;
+    }
+    if (collapsed.length <= MAX_ERROR_CHARS) {
+      return collapsed;
+    }
     return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
   } catch {
     return undefined;

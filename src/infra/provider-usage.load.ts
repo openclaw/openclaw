@@ -95,8 +95,12 @@ export async function loadProviderUsageSummary(
 
   const snapshots = await Promise.all(tasks);
   const providers = snapshots.filter((entry) => {
-    if (entry.windows.length > 0) return true;
-    if (!entry.error) return true;
+    if (entry.windows.length > 0) {
+      return true;
+    }
+    if (!entry.error) {
+      return true;
+    }
     return !ignoredErrors.has(entry.error);
   });
 

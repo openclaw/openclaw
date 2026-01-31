@@ -97,20 +97,32 @@ export function createSessionsListTool(opts?: {
       const rows: SessionListRow[] = [];
 
       for (const entry of sessions) {
-        if (!entry || typeof entry !== "object") continue;
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
         const key = typeof entry.key === "string" ? entry.key : "";
-        if (!key) continue;
+        if (!key) {
+          continue;
+        }
 
         const entryAgentId = resolveAgentIdFromSessionKey(key);
         const crossAgent = entryAgentId !== requesterAgentId;
-        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) continue;
+        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
+          continue;
+        }
 
-        if (key === "unknown") continue;
-        if (key === "global" && alias !== "global") continue;
+        if (key === "unknown") {
+          continue;
+        }
+        if (key === "global" && alias !== "global") {
+          continue;
+        }
 
         const gatewayKind = typeof entry.kind === "string" ? entry.kind : undefined;
         const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
-        if (allowedKinds && !allowedKinds.has(kind)) continue;
+        if (allowedKinds && !allowedKinds.has(kind)) {
+          continue;
+        }
 
         const displayKey = resolveDisplaySessionKey({
           key,

@@ -129,7 +129,9 @@ export async function createGatewayRuntimeState(params: {
       httpServers.push(httpServer);
       httpBindHosts.push(host);
     } catch (err) {
-      if (host === bindHosts[0]) throw err;
+      if (host === bindHosts[0]) {
+        throw err;
+      }
       params.log.warn(
         `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
       );

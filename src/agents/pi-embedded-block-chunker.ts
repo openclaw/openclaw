@@ -25,7 +25,9 @@ export class EmbeddedBlockChunker {
   }
 
   append(text: string) {
-    if (!text) return;
+    if (!text) {
+      return;
+    }
     this.#buffer += text;
   }
 
@@ -47,7 +49,9 @@ export class EmbeddedBlockChunker {
     const { force, emit } = params;
     const minChars = Math.max(1, Math.floor(this.#chunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
-    if (this.#buffer.length < minChars && !force) return;
+    if (this.#buffer.length < minChars && !force) {
+      return;
+    }
 
     if (force && this.#buffer.length <= maxChars) {
       if (this.#buffer.trim().length > 0) {
@@ -103,14 +107,20 @@ export class EmbeddedBlockChunker {
         this.#buffer = stripLeadingNewlines(this.#buffer.slice(nextStart));
       }
 
-      if (this.#buffer.length < minChars && !force) return;
-      if (this.#buffer.length < maxChars && !force) return;
+      if (this.#buffer.length < minChars && !force) {
+        return;
+      }
+      if (this.#buffer.length < maxChars && !force) {
+        return;
+      }
     }
   }
 
   #pickSoftBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
-    if (buffer.length < minChars) return { index: -1 };
+    if (buffer.length < minChars) {
+      return { index: -1 };
+    }
     const fenceSpans = parseFenceSpans(buffer);
     const preference = this.#chunking.breakPreference ?? "paragraph";
 
@@ -119,8 +129,12 @@ export class EmbeddedBlockChunker {
       while (paragraphIdx !== -1) {
         const candidates = [paragraphIdx, paragraphIdx + 1];
         for (const candidate of candidates) {
-          if (candidate < minChars) continue;
-          if (candidate < 0 || candidate >= buffer.length) continue;
+          if (candidate < minChars) {
+            continue;
+          }
+          if (candidate < 0 || candidate >= buffer.length) {
+            continue;
+          }
           if (isSafeFenceBreak(fenceSpans, candidate)) {
             return { index: candidate };
           }
@@ -144,13 +158,17 @@ export class EmbeddedBlockChunker {
       let sentenceIdx = -1;
       for (const match of matches) {
         const at = match.index ?? -1;
-        if (at < minChars) continue;
+        if (at < minChars) {
+          continue;
+        }
         const candidate = at + 1;
         if (isSafeFenceBreak(fenceSpans, candidate)) {
           sentenceIdx = candidate;
         }
       }
-      if (sentenceIdx >= minChars) return { index: sentenceIdx };
+      if (sentenceIdx >= minChars) {
+        return { index: sentenceIdx };
+      }
     }
 
     return { index: -1 };
@@ -159,7 +177,9 @@ export class EmbeddedBlockChunker {
   #pickBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
-    if (buffer.length < minChars) return { index: -1 };
+    if (buffer.length < minChars) {
+      return { index: -1 };
+    }
     const window = buffer.slice(0, Math.min(maxChars, buffer.length));
     const fenceSpans = parseFenceSpans(buffer);
 
@@ -169,8 +189,12 @@ export class EmbeddedBlockChunker {
       while (paragraphIdx >= minChars) {
         const candidates = [paragraphIdx, paragraphIdx + 1];
         for (const candidate of candidates) {
-          if (candidate < minChars) continue;
-          if (candidate < 0 || candidate >= buffer.length) continue;
+          if (candidate < minChars) {
+            continue;
+          }
+          if (candidate < 0 || candidate >= buffer.length) {
+            continue;
+          }
           if (isSafeFenceBreak(fenceSpans, candidate)) {
             return { index: candidate };
           }
@@ -194,13 +218,17 @@ export class EmbeddedBlockChunker {
       let sentenceIdx = -1;
       for (const match of matches) {
         const at = match.index ?? -1;
-        if (at < minChars) continue;
+        if (at < minChars) {
+          continue;
+        }
         const candidate = at + 1;
         if (isSafeFenceBreak(fenceSpans, candidate)) {
           sentenceIdx = candidate;
         }
       }
-      if (sentenceIdx >= minChars) return { index: sentenceIdx };
+      if (sentenceIdx >= minChars) {
+        return { index: sentenceIdx };
+      }
     }
 
     if (preference === "newline" && buffer.length < maxChars) {
@@ -214,7 +242,9 @@ export class EmbeddedBlockChunker {
     }
 
     if (buffer.length >= maxChars) {
-      if (isSafeFenceBreak(fenceSpans, maxChars)) return { index: maxChars };
+      if (isSafeFenceBreak(fenceSpans, maxChars)) {
+        return { index: maxChars };
+      }
       const fence = findFenceSpanAt(fenceSpans, maxChars);
       if (fence) {
         return {
@@ -234,6 +264,8 @@ export class EmbeddedBlockChunker {
 
 function stripLeadingNewlines(value: string): string {
   let i = 0;
-  while (i < value.length && value[i] === "\n") i++;
+  while (i < value.length && value[i] === "\n") {
+    i++;
+  }
   return i > 0 ? value.slice(i) : value;
 }

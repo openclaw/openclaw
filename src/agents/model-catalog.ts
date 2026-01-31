@@ -45,14 +45,18 @@ export async function loadModelCatalog(params?: {
   if (params?.useCache === false) {
     modelCatalogPromise = null;
   }
-  if (modelCatalogPromise) return modelCatalogPromise;
+  if (modelCatalogPromise) {
+    return modelCatalogPromise;
+  }
 
   modelCatalogPromise = (async () => {
     const models: ModelCatalogEntry[] = [];
     const sortModels = (entries: ModelCatalogEntry[]) =>
       entries.sort((a, b) => {
         const p = a.provider.localeCompare(b.provider);
-        if (p !== 0) return p;
+        if (p !== 0) {
+          return p;
+        }
         return a.name.localeCompare(b.name);
       });
     try {
@@ -74,9 +78,13 @@ export async function loadModelCatalog(params?: {
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
-        if (!id) continue;
+        if (!id) {
+          continue;
+        }
         const provider = String(entry?.provider ?? "").trim();
-        if (!provider) continue;
+        if (!provider) {
+          continue;
+        }
         const name = String(entry?.name ?? id).trim() || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0

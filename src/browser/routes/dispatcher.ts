@@ -55,7 +55,9 @@ function createRegistry() {
 }
 
 function normalizePath(path: string) {
-  if (!path) return "/";
+  if (!path) {
+    return "/";
+  }
   return path.startsWith("/") ? path : `/${path}`;
 }
 
@@ -71,7 +73,9 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
       const body = req.body;
 
       const match = registry.routes.find((route) => {
-        if (route.method !== method) return false;
+        if (route.method !== method) {
+          return false;
+        }
         return route.regex.test(path);
       });
       if (!match) {

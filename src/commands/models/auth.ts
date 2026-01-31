@@ -52,9 +52,13 @@ type TokenProvider = "anthropic";
 
 function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
   const trimmed = raw?.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const normalized = normalizeProviderId(trimmed);
-  if (normalized === "anthropic") return "anthropic";
+  if (normalized === "anthropic") {
+    return "anthropic";
+  }
   return "custom";
 }
 
@@ -80,7 +84,9 @@ export async function modelsAuthSetupTokenCommand(
       message: "Have you run `claude setup-token` and copied the token?",
       initialValue: true,
     });
-    if (!proceed) return;
+    if (!proceed) {
+      return;
+    }
   }
 
   const tokenInput = await text({
@@ -239,7 +245,9 @@ function resolveProviderMatch(
   rawProvider?: string,
 ): ProviderPlugin | null {
   const raw = rawProvider?.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const normalized = normalizeProviderId(raw);
   return (
     providers.find((provider) => normalizeProviderId(provider.id) === normalized) ??
@@ -253,7 +261,9 @@ function resolveProviderMatch(
 
 function pickAuthMethod(provider: ProviderPlugin, rawMethod?: string): ProviderAuthMethod | null {
   const raw = rawMethod?.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const normalized = raw.toLowerCase();
   return (
     provider.auth.find((method) => method.id.toLowerCase() === normalized) ??
@@ -307,8 +317,12 @@ function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
 }
 
 function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" | "token" {
-  if (credential.type === "api_key") return "api_key";
-  if (credential.type === "token") return "token";
+  if (credential.type === "api_key") {
+    return "api_key";
+  }
+  if (credential.type === "token") {
+    return "token";
+  }
   return "oauth";
 }
 

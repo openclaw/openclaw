@@ -119,8 +119,12 @@ export class SearchableSelectList implements Component {
     a: { item: SelectItem; tier: number; score: number },
     b: { item: SelectItem; tier: number; score: number },
   ) => {
-    if (a.tier !== b.tier) return a.tier - b.tier;
-    if (a.score !== b.score) return a.score - b.score;
+    if (a.tier !== b.tier) {
+      return a.tier - b.tier;
+    }
+    if (a.score !== b.score) {
+      return a.score - b.score;
+    }
     return this.getItemLabel(a.item).localeCompare(this.getItemLabel(b.item));
   };
 
@@ -134,7 +138,9 @@ export class SearchableSelectList implements Component {
       .split(/\s+/)
       .map((token) => token.toLowerCase())
       .filter((token) => token.length > 0);
-    if (tokens.length === 0) return text;
+    if (tokens.length === 0) {
+      return text;
+    }
 
     const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
     let result = text;
@@ -186,7 +192,9 @@ export class SearchableSelectList implements Component {
     // Render visible items
     for (let i = startIndex; i < endIndex; i++) {
       const item = this.filteredItems[i];
-      if (!item) continue;
+      if (!item) {
+        continue;
+      }
       const isSelected = i === this.selectedIndex;
       lines.push(this.renderItemLine(item, isSelected, width, query));
     }
@@ -236,7 +244,9 @@ export class SearchableSelectList implements Component {
   }
 
   handleInput(keyData: string): void {
-    if (isKeyRelease(keyData)) return;
+    if (isKeyRelease(keyData)) {
+      return;
+    }
 
     const allowVimNav = !this.searchInput.getValue().trim();
 

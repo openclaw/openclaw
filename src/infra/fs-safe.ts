@@ -94,7 +94,9 @@ export async function openFileWithinRoot(params: {
     return { handle, realPath, stat };
   } catch (err) {
     await handle.close().catch(() => {});
-    if (err instanceof SafeOpenError) throw err;
+    if (err instanceof SafeOpenError) {
+      throw err;
+    }
     if (isNotFoundError(err)) {
       throw new SafeOpenError("not-found", "file not found");
     }

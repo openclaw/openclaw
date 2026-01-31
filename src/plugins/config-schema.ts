@@ -13,7 +13,9 @@ function error(message: string): SafeParseResult {
 export function emptyPluginConfigSchema(): OpenClawPluginConfigSchema {
   return {
     safeParse(value: unknown): SafeParseResult {
-      if (value === undefined) return { success: true, data: undefined };
+      if (value === undefined) {
+        return { success: true, data: undefined };
+      }
       if (!value || typeof value !== "object" || Array.isArray(value)) {
         return error("expected config object");
       }

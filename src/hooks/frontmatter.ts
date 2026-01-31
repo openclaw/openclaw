@@ -16,7 +16,9 @@ export function parseFrontmatter(content: string): ParsedHookFrontmatter {
 }
 
 function normalizeStringList(input: unknown): string[] {
-  if (!input) return [];
+  if (!input) {
+    return [];
+  }
   if (Array.isArray(input)) {
     return input.map((value) => String(value).trim()).filter(Boolean);
   }
@@ -30,7 +32,9 @@ function normalizeStringList(input: unknown): string[] {
 }
 
 function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
-  if (!input || typeof input !== "object") return undefined;
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
   const raw = input as Record<string, unknown>;
   const kindRaw =
     typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
@@ -43,12 +47,22 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
     kind: kind,
   };
 
-  if (typeof raw.id === "string") spec.id = raw.id;
-  if (typeof raw.label === "string") spec.label = raw.label;
+  if (typeof raw.id === "string") {
+    spec.id = raw.id;
+  }
+  if (typeof raw.label === "string") {
+    spec.label = raw.label;
+  }
   const bins = normalizeStringList(raw.bins);
-  if (bins.length > 0) spec.bins = bins;
-  if (typeof raw.package === "string") spec.package = raw.package;
-  if (typeof raw.repository === "string") spec.repository = raw.repository;
+  if (bins.length > 0) {
+    spec.bins = bins;
+  }
+  if (typeof raw.package === "string") {
+    spec.package = raw.package;
+  }
+  if (typeof raw.repository === "string") {
+    spec.repository = raw.repository;
+  }
 
   return spec;
 }
@@ -67,10 +81,14 @@ export function resolveOpenClawMetadata(
   frontmatter: ParsedHookFrontmatter,
 ): OpenClawHookMetadata | undefined {
   const raw = getFrontmatterValue(frontmatter, "metadata");
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   try {
     const parsed = JSON5.parse(raw);
-    if (!parsed || typeof parsed !== "object") return undefined;
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
     const metadataRawCandidates = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
     let metadataRaw: unknown;
     for (const key of metadataRawCandidates) {
@@ -80,7 +98,9 @@ export function resolveOpenClawMetadata(
         break;
       }
     }
-    if (!metadataRaw || typeof metadataRaw !== "object") return undefined;
+    if (!metadataRaw || typeof metadataRaw !== "object") {
+      return undefined;
+    }
     const metadataObj = metadataRaw as Record<string, unknown>;
     const requiresRaw =
       typeof metadataObj.requires === "object" && metadataObj.requires !== null

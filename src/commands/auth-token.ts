@@ -6,7 +6,9 @@ export const DEFAULT_TOKEN_PROFILE_NAME = "default";
 
 export function normalizeTokenProfileName(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return DEFAULT_TOKEN_PROFILE_NAME;
+  if (!trimmed) {
+    return DEFAULT_TOKEN_PROFILE_NAME;
+  }
   const slug = trimmed
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
@@ -23,7 +25,9 @@ export function buildTokenProfileId(params: { provider: string; name: string }):
 
 export function validateAnthropicSetupToken(raw: string): string | undefined {
   const trimmed = raw.trim();
-  if (!trimmed) return "Required";
+  if (!trimmed) {
+    return "Required";
+  }
   if (!trimmed.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX)) {
     return `Expected token starting with ${ANTHROPIC_SETUP_TOKEN_PREFIX}`;
   }

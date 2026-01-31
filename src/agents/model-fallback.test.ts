@@ -158,7 +158,9 @@ describe("runWithModelFallback", () => {
       },
     });
     const run = vi.fn().mockImplementation(async (providerId, modelId) => {
-      if (providerId === "fallback") return "ok";
+      if (providerId === "fallback") {
+        return "ok";
+      }
       throw new Error(`unexpected provider: ${providerId}/${modelId}`);
     });
 
@@ -219,7 +221,9 @@ describe("runWithModelFallback", () => {
       },
     });
     const run = vi.fn().mockImplementation(async (providerId) => {
-      if (providerId === provider) return "ok";
+      if (providerId === provider) {
+        return "ok";
+      }
       return "unexpected";
     });
 

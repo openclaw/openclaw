@@ -16,7 +16,9 @@ export const ACT_KINDS = [
 export type ActKind = (typeof ACT_KINDS)[number];
 
 export function isActKind(value: unknown): value is ActKind {
-  if (typeof value !== "string") return false;
+  if (typeof value !== "string") {
+    return false;
+  }
   return (ACT_KINDS as readonly string[]).includes(value);
 }
 
@@ -32,7 +34,9 @@ const ALLOWED_CLICK_MODIFIERS = new Set<ClickModifier>([
 ]);
 
 export function parseClickButton(raw: string): ClickButton | undefined {
-  if (raw === "left" || raw === "right" || raw === "middle") return raw;
+  if (raw === "left" || raw === "right" || raw === "middle") {
+    return raw;
+  }
   return undefined;
 }
 

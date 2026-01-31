@@ -59,7 +59,9 @@ export async function deliverLineAutoReply(params: {
   let replyTokenUsed = params.replyTokenUsed;
 
   const pushLineMessages = async (messages: messagingApi.Message[]): Promise<void> => {
-    if (messages.length === 0) return;
+    if (messages.length === 0) {
+      return;
+    }
     for (let i = 0; i < messages.length; i += 5) {
       await deps.pushMessagesLine(to, messages.slice(i, i + 5), {
         accountId,
@@ -71,7 +73,9 @@ export async function deliverLineAutoReply(params: {
     messages: messagingApi.Message[],
     allowReplyToken: boolean,
   ): Promise<void> => {
-    if (messages.length === 0) return;
+    if (messages.length === 0) {
+      return;
+    }
 
     let remaining = messages;
     if (allowReplyToken && replyToken && !replyTokenUsed) {

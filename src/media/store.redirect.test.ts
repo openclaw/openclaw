@@ -47,7 +47,9 @@ describe("media store redirects", () => {
       const res = new PassThrough();
       const req = {
         on: (event: string, handler: (...args: unknown[]) => void) => {
-          if (event === "error") res.on("error", handler);
+          if (event === "error") {
+            res.on("error", handler);
+          }
           return req;
         },
         end: () => undefined,
@@ -88,7 +90,9 @@ describe("media store redirects", () => {
       const res = new PassThrough();
       const req = {
         on: (event: string, handler: (...args: unknown[]) => void) => {
-          if (event === "error") res.on("error", handler);
+          if (event === "error") {
+            res.on("error", handler);
+          }
           return req;
         },
         end: () => undefined,

@@ -8,8 +8,12 @@ import {
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCredential): boolean {
-  if (!a) return false;
-  if (a.type !== "oauth") return false;
+  if (!a) {
+    return false;
+  }
+  if (a.type !== "oauth") {
+    return false;
+  }
   return (
     a.provider === b.provider &&
     a.access === b.access &&
@@ -23,12 +27,18 @@ function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCr
 }
 
 function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
-  if (!cred) return false;
-  if (cred.type !== "oauth" && cred.type !== "token") return false;
+  if (!cred) {
+    return false;
+  }
+  if (cred.type !== "oauth" && cred.type !== "token") {
+    return false;
+  }
   if (cred.provider !== "qwen-portal") {
     return false;
   }
-  if (typeof cred.expires !== "number") return true;
+  if (typeof cred.expires !== "number") {
+    return true;
+  }
   return cred.expires > now + EXTERNAL_CLI_NEAR_EXPIRY_MS;
 }
 

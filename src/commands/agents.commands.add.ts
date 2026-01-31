@@ -55,7 +55,9 @@ export async function agentsAddCommand(
   params?: { hasFlags?: boolean },
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -127,7 +129,9 @@ export async function agentsAddCommand(
         : { config: nextConfig, added: [], skipped: [], conflicts: [] };
 
     await writeConfigFile(bindingResult.config);
-    if (!opts.json) logConfigUpdated(runtime);
+    if (!opts.json) {
+      logConfigUpdated(runtime);
+    }
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
       skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
@@ -154,7 +158,9 @@ export async function agentsAddCommand(
       runtime.log(`Agent: ${agentId}`);
       runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
       runtime.log(`Agent dir: ${shortenHomePath(agentDir)}`);
-      if (model) runtime.log(`Model: ${model}`);
+      if (model) {
+        runtime.log(`Model: ${model}`);
+      }
       if (bindingResult.conflicts.length > 0) {
         runtime.error(
           [
@@ -178,7 +184,9 @@ export async function agentsAddCommand(
       (await prompter.text({
         message: "Agent name",
         validate: (value) => {
-          if (!value?.trim()) return "Required";
+          if (!value?.trim()) {
+            return "Required";
+          }
           const normalized = normalizeAgentId(value);
           if (normalized === DEFAULT_AGENT_ID) {
             return `"${DEFAULT_AGENT_ID}" is reserved. Choose another name.`;

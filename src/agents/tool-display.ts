@@ -59,7 +59,9 @@ function normalizeToolName(name?: string): string {
 
 function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
-  if (!cleaned) return "Tool";
+  if (!cleaned) {
+    return "Tool";
+  }
   return cleaned
     .split(/\s+/)
     .map((part) =>
@@ -72,31 +74,43 @@ function defaultTitle(name: string): string {
 
 function normalizeVerb(value?: string): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   return trimmed.replace(/_/g, " ");
 }
 
 function coerceDisplayValue(value: unknown): string | undefined {
-  if (value === null || value === undefined) return undefined;
+  if (value === null || value === undefined) {
+    return undefined;
+  }
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if (!trimmed) return undefined;
+    if (!trimmed) {
+      return undefined;
+    }
     const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
-    if (!firstLine) return undefined;
+    if (!firstLine) {
+      return undefined;
+    }
     return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine;
   }
   if (typeof value === "boolean") {
     return value ? "true" : undefined;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value) || value === 0) return undefined;
+    if (!Number.isFinite(value) || value === 0) {
+      return undefined;
+    }
     return String(value);
   }
   if (Array.isArray(value)) {
     const values = value
       .map((item) => coerceDisplayValue(item))
       .filter((item): item is string => Boolean(item));
-    if (values.length === 0) return undefined;
+    if (values.length === 0) {
+      return undefined;
+    }
     const preview = values.slice(0, 3).join(", ");
     return values.length > 3 ? `${preview}…` : preview;
   }
@@ -104,11 +118,17 @@ function coerceDisplayValue(value: unknown): string | undefined {
 }
 
 function lookupValueByPath(args: unknown, path: string): unknown {
-  if (!args || typeof args !== "object") return undefined;
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
   let current: unknown = args;
   for (const segment of path.split(".")) {
-    if (!segment) return undefined;
-    if (!current || typeof current !== "object") return undefined;
+    if (!segment) {
+      return undefined;
+    }
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
     const record = current as Record<string, unknown>;
     current = record[segment];
   }
@@ -119,7 +139,9 @@ function formatDetailKey(raw: string): string {
   const segments = raw.split(".").filter(Boolean);
   const last = segments.at(-1) ?? raw;
   const override = DETAIL_LABEL_OVERRIDES[last];
-  if (override) return override;
+  if (override) {
+    return override;
+  }
   const cleaned = last.replace(/_/g, " ").replace(/-/g, " ");
   const spaced = cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
   return spaced.trim().toLowerCase() || last.toLowerCase();
@@ -130,21 +152,31 @@ function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefine
   for (const key of keys) {
     const value = lookupValueByPath(args, key);
     const display = coerceDisplayValue(value);
-    if (!display) continue;
+    if (!display) {
+      continue;
+    }
     entries.push({ label: formatDetailKey(key), value: display });
   }
-  if (entries.length === 0) return undefined;
-  if (entries.length === 1) return entries[0].value;
+  if (entries.length === 0) {
+    return undefined;
+  }
+  if (entries.length === 1) {
+    return entries[0].value;
+  }
 
   const seen = new Set<string>();
   const unique: Array<{ label: string; value: string }> = [];
   for (const entry of entries) {
     const token = `${entry.label}:${entry.value}`;
-    if (seen.has(token)) continue;
+    if (seen.has(token)) {
+      continue;
+    }
     seen.add(token);
     unique.push(entry);
   }
-  if (unique.length === 0) return undefined;
+  if (unique.length === 0) {
+    return undefined;
+  }
   return unique
     .slice(0, MAX_DETAIL_ENTRIES)
     .map((entry) => `${entry.label} ${entry.value}`)
@@ -152,10 +184,14 @@ function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefine
 }
 
 function resolveReadDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") return undefined;
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
   const record = args as Record<string, unknown>;
   const path = typeof record.path === "string" ? record.path : undefined;
-  if (!path) return undefined;
+  if (!path) {
+    return undefined;
+  }
   const offset = typeof record.offset === "number" ? record.offset : undefined;
   const limit = typeof record.limit === "number" ? record.limit : undefined;
   if (offset !== undefined && limit !== undefined) {
@@ -165,7 +201,9 @@ function resolveReadDetail(args: unknown): string | undefined {
 }
 
 function resolveWriteDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") return undefined;
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
   const record = args as Record<string, unknown>;
   const path = typeof record.path === "string" ? record.path : undefined;
   return path;
@@ -175,7 +213,9 @@ function resolveActionSpec(
   spec: ToolDisplaySpec | undefined,
   action: string | undefined,
 ): ToolDisplayActionSpec | undefined {
-  if (!spec || !action) return undefined;
+  if (!spec || !action) {
+    return undefined;
+  }
   return spec.actions?.[action] ?? undefined;
 }
 
@@ -199,7 +239,9 @@ export function resolveToolDisplay(params: {
   const verb = normalizeVerb(actionSpec?.label ?? action);
 
   let detail: string | undefined;
-  if (key === "read") detail = resolveReadDetail(params.args);
+  if (key === "read") {
+    detail = resolveReadDetail(params.args);
+  }
   if (!detail && (key === "write" || key === "edit" || key === "attach")) {
     detail = resolveWriteDetail(params.args);
   }
@@ -229,9 +271,15 @@ export function resolveToolDisplay(params: {
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   const parts: string[] = [];
-  if (display.verb) parts.push(display.verb);
-  if (display.detail) parts.push(redactToolDetail(display.detail));
-  if (parts.length === 0) return undefined;
+  if (display.verb) {
+    parts.push(display.verb);
+  }
+  if (display.detail) {
+    parts.push(redactToolDetail(display.detail));
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
   return parts.join(" · ");
 }
 

@@ -41,14 +41,20 @@ export function applyNonInteractiveGatewayConfig(params: {
   // Tighten config to safe combos:
   // - If Tailscale is on, force loopback bind (the tunnel handles external access).
   // - If using Tailscale Funnel, require password auth.
-  if (tailscaleMode !== "off" && bind !== "loopback") bind = "loopback";
-  if (tailscaleMode === "funnel" && authMode !== "password") authMode = "password";
+  if (tailscaleMode !== "off" && bind !== "loopback") {
+    bind = "loopback";
+  }
+  if (tailscaleMode === "funnel" && authMode !== "password") {
+    authMode = "password";
+  }
 
   let nextConfig = params.nextConfig;
   let gatewayToken = opts.gatewayToken?.trim() || undefined;
 
   if (authMode === "token") {
-    if (!gatewayToken) gatewayToken = randomToken();
+    if (!gatewayToken) {
+      gatewayToken = randomToken();
+    }
     nextConfig = {
       ...nextConfig,
       gateway: {

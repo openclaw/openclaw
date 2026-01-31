@@ -98,7 +98,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const defaultRuntime = runtime.channels[channelId];
       const raw =
         accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
-      if (!raw) return undefined;
+      if (!raw) {
+        return undefined;
+      }
       return raw;
     };
 
@@ -171,7 +173,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
           probe: probeResult,
           audit: auditResult,
         });
-        if (lastProbeAt) snapshot.lastProbeAt = lastProbeAt;
+        if (lastProbeAt) {
+          snapshot.lastProbeAt = lastProbeAt;
+        }
         const activity = getChannelActivity({
           channel: channelId as never,
           accountId,

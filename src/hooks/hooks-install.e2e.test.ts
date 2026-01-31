@@ -95,7 +95,9 @@ describe("hooks install (e2e)", () => {
     const { installHooksFromPath } = await import("./install.js");
     const installResult = await installHooksFromPath({ path: packDir });
     expect(installResult.ok).toBe(true);
-    if (!installResult.ok) return;
+    if (!installResult.ok) {
+      return;
+    }
 
     const { clearInternalHooks, createInternalHookEvent, triggerInternalHook } =
       await import("./internal-hooks.js");

@@ -28,14 +28,22 @@ export type SkillsCheckOptions = {
 };
 
 function appendClawHubHint(output: string, json?: boolean): string {
-  if (json) return output;
+  if (json) {
+    return output;
+  }
   return `${output}\n\nTip: use \`npx clawhub\` to search, install, and sync skills.`;
 }
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
-  if (skill.eligible) return theme.success("✓ ready");
-  if (skill.disabled) return theme.warn("⏸ disabled");
-  if (skill.blockedByAllowlist) return theme.warn("🚫 blocked");
+  if (skill.eligible) {
+    return theme.success("✓ ready");
+  }
+  if (skill.disabled) {
+    return theme.warn("⏸ disabled");
+  }
+  if (skill.blockedByAllowlist) {
+    return theme.warn("🚫 blocked");
+  }
   return theme.error("✗ missing");
 }
 

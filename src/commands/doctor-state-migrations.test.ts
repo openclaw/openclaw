@@ -25,7 +25,9 @@ async function makeTempRoot() {
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  if (!tempRoot) return;
+  if (!tempRoot) {
+    return;
+  }
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
   tempRoot = null;
 });

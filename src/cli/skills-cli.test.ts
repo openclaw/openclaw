@@ -218,7 +218,9 @@ describe("skills-cli", () => {
       const moduleDir = path.dirname(fileURLToPath(import.meta.url));
       const root = path.resolve(moduleDir, "..", "..");
       const candidate = path.join(root, "skills");
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
       return undefined;
     }
 
@@ -251,7 +253,9 @@ describe("skills-cli", () => {
 
     it("formats info for a real bundled skill (peekaboo)", () => {
       const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) return;
+      if (!bundledDir) {
+        return;
+      }
 
       const report = buildWorkspaceSkillStatus("/tmp", {
         managedSkillsDir: "/nonexistent",

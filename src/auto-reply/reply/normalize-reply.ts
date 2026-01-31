@@ -51,7 +51,9 @@ export function normalizeReplyPayload(
   const shouldStripHeartbeat = opts.stripHeartbeat ?? true;
   if (shouldStripHeartbeat && text?.includes(HEARTBEAT_TOKEN)) {
     const stripped = stripHeartbeatToken(text, { mode: "message" });
-    if (stripped.didStrip) opts.onHeartbeatStrip?.();
+    if (stripped.didStrip) {
+      opts.onHeartbeatStrip?.();
+    }
     if (stripped.shouldSkip && !hasMedia && !hasChannelData) {
       opts.onSkip?.("heartbeat");
       return null;

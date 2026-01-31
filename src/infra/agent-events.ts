@@ -23,7 +23,9 @@ const listeners = new Set<(evt: AgentEventPayload) => void>();
 const runContextById = new Map<string, AgentRunContext>();
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
-  if (!runId) return;
+  if (!runId) {
+    return;
+  }
   const existing = runContextById.get(runId);
   if (!existing) {
     runContextById.set(runId, { ...context });

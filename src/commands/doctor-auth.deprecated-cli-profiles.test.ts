@@ -50,7 +50,9 @@ afterEach(() => {
 
 describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
   it("removes deprecated CLI auth profiles from store + config", async () => {
-    if (!tempAgentDir) throw new Error("Missing temp agent dir");
+    if (!tempAgentDir) {
+      throw new Error("Missing temp agent dir");
+    }
     const authPath = path.join(tempAgentDir, "auth-profiles.json");
     fs.writeFileSync(
       authPath,

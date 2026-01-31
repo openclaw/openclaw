@@ -29,7 +29,9 @@ export async function searchVector(params: {
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
 }): Promise<SearchRowResult[]> {
-  if (params.queryVec.length === 0 || params.limit <= 0) return [];
+  if (params.queryVec.length === 0 || params.limit <= 0) {
+    return [];
+  }
   if (await params.ensureVectorReady(params.queryVec.length)) {
     const rows = params.db
       .prepare(
@@ -143,9 +145,13 @@ export async function searchKeyword(params: {
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
-  if (params.limit <= 0) return [];
+  if (params.limit <= 0) {
+    return [];
+  }
   const ftsQuery = params.buildFtsQuery(params.query);
-  if (!ftsQuery) return [];
+  if (!ftsQuery) {
+    return [];
+  }
 
   const rows = params.db
     .prepare(

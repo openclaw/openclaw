@@ -111,7 +111,9 @@ export async function renderQrPngBase64(
   const buf = Buffer.alloc(size * size * 4, 255);
   for (let row = 0; row < modules; row += 1) {
     for (let col = 0; col < modules; col += 1) {
-      if (!qr.isDark(row, col)) continue;
+      if (!qr.isDark(row, col)) {
+        continue;
+      }
       const startX = (col + marginModules) * scale;
       const startY = (row + marginModules) * scale;
       for (let y = 0; y < scale; y += 1) {

@@ -37,16 +37,24 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
 }): Promise<boolean> {
-  if (process.platform !== "darwin") return false;
+  if (process.platform !== "darwin") {
+    return false;
+  }
 
   const listed = await isLaunchAgentListed({ env: params.env });
-  if (!listed) return false;
+  if (!listed) {
+    return false;
+  }
 
   const loaded = await isLaunchAgentLoaded({ env: params.env });
-  if (loaded) return false;
+  if (loaded) {
+    return false;
+  }
 
   const plistExists = await launchAgentPlistExists(params.env);
-  if (!plistExists) return false;
+  if (!plistExists) {
+    return false;
+  }
 
   note("LaunchAgent is listed but not loaded in launchd.", `${params.title} LaunchAgent`);
 
@@ -54,7 +62,9 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     message: `Repair ${params.title} LaunchAgent bootstrap now?`,
     initialValue: true,
   });
-  if (!shouldFix) return false;
+  if (!shouldFix) {
+    return false;
+  }
 
   params.runtime.log(`Bootstrapping ${params.title} LaunchAgent...`);
   const repair = await repairLaunchAgentBootstrap({ env: params.env });
@@ -83,7 +93,9 @@ export async function maybeRepairGatewayDaemon(params: {
   gatewayDetailsMessage: string;
   healthOk: boolean;
 }) {
-  if (params.healthOk) return;
+  if (params.healthOk) {
+    return;
+  }
 
   const service = resolveGatewayService();
   // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
@@ -129,7 +141,9 @@ export async function maybeRepairGatewayDaemon(params: {
       note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
     } else if (loaded && serviceRuntime?.status === "running") {
       const lastError = await readLastGatewayErrorLine(process.env);
-      if (lastError) note(`Last gateway error: ${lastError}`, "Gateway");
+      if (lastError) {
+        note(`Last gateway error: ${lastError}`, "Gateway");
+      }
     }
   }
 
@@ -190,7 +204,9 @@ export async function maybeRepairGatewayDaemon(params: {
   });
   if (summary || hints.length > 0) {
     const lines: string[] = [];
-    if (summary) lines.push(`Runtime: ${summary}`);
+    if (summary) {
+      lines.push(`Runtime: ${summary}`);
+    }
     lines.push(...hints);
     note(lines.join("\n"), "Gateway");
   }

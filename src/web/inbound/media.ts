@@ -13,7 +13,9 @@ export async function downloadInboundMedia(
   sock: Awaited<ReturnType<typeof createWaSocket>>,
 ): Promise<{ buffer: Buffer; mimetype?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
-  if (!message) return undefined;
+  if (!message) {
+    return undefined;
+  }
   const mimetype =
     message.imageMessage?.mimetype ??
     message.videoMessage?.mimetype ??

@@ -25,7 +25,9 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   )
     .trim()
     .toLowerCase();
-  if (!value) throw new Error("Channel required");
+  if (!value) {
+    throw new Error("Channel required");
+  }
 
   const normalized = normalizeChannelId(value);
   if (normalized) {
@@ -36,7 +38,9 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   }
 
   // Allow extension channels: validate format but don't require registry
-  if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) return value as PairingChannel;
+  if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) {
+    return value as PairingChannel;
+  }
   throw new Error(`Invalid channel: ${value}`);
 }
 
@@ -136,7 +140,9 @@ export function registerPairingCli(program: Command) {
         `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
       );
 
-      if (!opts.notify) return;
+      if (!opts.notify) {
+        return;
+      }
       await notifyApproved(channel, approved.id).catch((err) => {
         defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
       });

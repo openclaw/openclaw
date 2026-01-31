@@ -199,9 +199,15 @@ export const sendHandlers: GatewayRequestHandlers = {
           messageId: result.messageId,
           channel,
         };
-        if ("chatId" in result) payload.chatId = result.chatId;
-        if ("channelId" in result) payload.channelId = result.channelId;
-        if ("toJid" in result) payload.toJid = result.toJid;
+        if ("chatId" in result) {
+          payload.chatId = result.chatId;
+        }
+        if ("channelId" in result) {
+          payload.channelId = result.channelId;
+        }
+        if ("toJid" in result) {
+          payload.toJid = result.toJid;
+        }
         if ("conversationId" in result) {
           payload.conversationId = result.conversationId;
         }
@@ -324,10 +330,18 @@ export const sendHandlers: GatewayRequestHandlers = {
         messageId: result.messageId,
         channel,
       };
-      if (result.toJid) payload.toJid = result.toJid;
-      if (result.channelId) payload.channelId = result.channelId;
-      if (result.conversationId) payload.conversationId = result.conversationId;
-      if (result.pollId) payload.pollId = result.pollId;
+      if (result.toJid) {
+        payload.toJid = result.toJid;
+      }
+      if (result.channelId) {
+        payload.channelId = result.channelId;
+      }
+      if (result.conversationId) {
+        payload.conversationId = result.conversationId;
+      }
+      if (result.pollId) {
+        payload.pollId = result.pollId;
+      }
       context.dedupe.set(`poll:${idem}`, {
         ts: Date.now(),
         ok: true,

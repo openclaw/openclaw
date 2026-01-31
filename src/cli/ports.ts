@@ -19,13 +19,17 @@ export function parseLsofOutput(output: string): PortProcess[] {
   let current: Partial<PortProcess> = {};
   for (const line of lines) {
     if (line.startsWith("p")) {
-      if (current.pid) results.push(current as PortProcess);
+      if (current.pid) {
+        results.push(current as PortProcess);
+      }
       current = { pid: Number.parseInt(line.slice(1), 10) };
     } else if (line.startsWith("c")) {
       current.command = line.slice(1);
     }
   }
-  if (current.pid) results.push(current as PortProcess);
+  if (current.pid) {
+    results.push(current as PortProcess);
+  }
   return results;
 }
 
@@ -42,7 +46,9 @@ export function listPortListeners(port: number): PortProcess[] {
     if (code === "ENOENT") {
       throw new Error("lsof not found; required for --force", { cause: err });
     }
-    if (status === 1) return []; // no listeners
+    if (status === 1) {
+      return [];
+    } // no listeners
     throw err instanceof Error ? err : new Error(String(err));
   }
 }

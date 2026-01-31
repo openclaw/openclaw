@@ -32,7 +32,9 @@ export function readTelegramButtons(
   params: Record<string, unknown>,
 ): TelegramButton[][] | undefined {
   const raw = params.buttons;
-  if (raw == null) return undefined;
+  if (raw == null) {
+    return undefined;
+  }
   if (!Array.isArray(raw)) {
     throw new Error("buttons must be an array of button rows");
   }

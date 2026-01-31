@@ -164,7 +164,9 @@ export function createCanvasTool(): AnyAgentTool {
               : typeof params.jsonlPath === "string" && params.jsonlPath.trim()
                 ? await fs.readFile(params.jsonlPath.trim(), "utf8")
                 : "";
-          if (!jsonl.trim()) throw new Error("jsonl or jsonlPath required");
+          if (!jsonl.trim()) {
+            throw new Error("jsonl or jsonlPath required");
+          }
           await invoke("canvas.a2ui.pushJSONL", { jsonl });
           return jsonResult({ ok: true });
         }

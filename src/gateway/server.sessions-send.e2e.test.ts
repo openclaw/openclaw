@@ -87,7 +87,9 @@ describe("sessions_send gateway loopback", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool) throw new Error("missing sessions_send tool");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
 
     const result = await tool.execute("call-loopback", {
       sessionKey: "main",
@@ -152,7 +154,9 @@ describe("sessions_send label lookup", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool) throw new Error("missing sessions_send tool");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
 
     // Send using label instead of sessionKey
     const result = await tool.execute("call-by-label", {
@@ -172,7 +176,9 @@ describe("sessions_send label lookup", () => {
 
   it("returns error when label not found", { timeout: 60_000 }, async () => {
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool) throw new Error("missing sessions_send tool");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
 
     const result = await tool.execute("call-missing-label", {
       label: "nonexistent-label",
@@ -186,7 +192,9 @@ describe("sessions_send label lookup", () => {
 
   it("returns error when neither sessionKey nor label provided", { timeout: 60_000 }, async () => {
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool) throw new Error("missing sessions_send tool");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
 
     const result = await tool.execute("call-no-key", {
       message: "hello",

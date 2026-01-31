@@ -73,7 +73,9 @@ function resolveExecOverrides(params: {
     (params.sessionEntry?.execSecurity as ExecOverrides["security"]);
   const ask = params.directives.execAsk ?? (params.sessionEntry?.execAsk as ExecOverrides["ask"]);
   const node = params.directives.execNode ?? params.sessionEntry?.execNode;
-  if (!host && !security && !ask && !node) return undefined;
+  if (!host && !security && !ask && !node) {
+    return undefined;
+  }
   return { host, security, ask, node };
 }
 
@@ -270,7 +272,9 @@ export async function resolveReplyDirectives(params: {
       };
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   let cleanedBody = (() => {
-    if (!existingBody) return parsedDirectives.cleaned;
+    if (!existingBody) {
+      return parsedDirectives.cleaned;
+    }
     if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,

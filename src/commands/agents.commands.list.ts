@@ -27,8 +27,12 @@ function formatSummary(summary: AgentSummary) {
       : `${summary.id}${defaultTag}`;
 
   const identityParts = [];
-  if (summary.identityEmoji) identityParts.push(summary.identityEmoji);
-  if (summary.identityName) identityParts.push(summary.identityName);
+  if (summary.identityEmoji) {
+    identityParts.push(summary.identityEmoji);
+  }
+  if (summary.identityName) {
+    identityParts.push(summary.identityName);
+  }
   const identityLine = identityParts.length > 0 ? identityParts.join(" ") : null;
   const identitySource =
     summary.identitySource === "identity"
@@ -43,7 +47,9 @@ function formatSummary(summary: AgentSummary) {
   }
   lines.push(`  Workspace: ${shortenHomePath(summary.workspace)}`);
   lines.push(`  Agent dir: ${shortenHomePath(summary.agentDir)}`);
-  if (summary.model) lines.push(`  Model: ${summary.model}`);
+  if (summary.model) {
+    lines.push(`  Model: ${summary.model}`);
+  }
   lines.push(`  Routing rules: ${summary.bindings}`);
 
   if (summary.routes?.length) {
@@ -70,7 +76,9 @@ export async function agentsListCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
 
   const summaries = buildAgentSummaries(cfg);
   const bindingMap = new Map<string, AgentBinding[]>();
@@ -107,7 +115,9 @@ export async function agentsListCommand(
       bindings,
       providerStatus,
     });
-    if (providerLines.length > 0) summary.providers = providerLines;
+    if (providerLines.length > 0) {
+      summary.providers = providerLines;
+    }
   }
 
   if (opts.json) {

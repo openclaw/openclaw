@@ -22,7 +22,9 @@ type DiscordClientOpts = {
 
 function resolveToken(params: { explicit?: string; accountId: string; fallbackToken?: string }) {
   const explicit = normalizeDiscordToken(params.explicit);
-  if (explicit) return explicit;
+  if (explicit) {
+    return explicit;
+  }
   const fallback = normalizeDiscordToken(params.fallbackToken);
   if (!fallback) {
     throw new Error(
@@ -48,12 +50,16 @@ function resolveDiscordRest(opts: DiscordClientOpts) {
 }
 
 function addPermissionBits(base: bigint, add?: string) {
-  if (!add) return base;
+  if (!add) {
+    return base;
+  }
   return base | BigInt(add);
 }
 
 function removePermissionBits(base: bigint, deny?: string) {
-  if (!deny) return base;
+  if (!deny) {
+    return base;
+  }
   return base & ~BigInt(deny);
 }
 

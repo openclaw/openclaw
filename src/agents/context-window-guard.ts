@@ -11,7 +11,9 @@ export type ContextWindowInfo = {
 };
 
 function normalizePositiveInt(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
   const int = Math.floor(value);
   return int > 0 ? int : null;
 }
@@ -24,7 +26,9 @@ export function resolveContextWindowInfo(params: {
   defaultTokens: number;
 }): ContextWindowInfo {
   const fromModel = normalizePositiveInt(params.modelContextWindow);
-  if (fromModel) return { tokens: fromModel, source: "model" };
+  if (fromModel) {
+    return { tokens: fromModel, source: "model" };
+  }
 
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
@@ -35,10 +39,14 @@ export function resolveContextWindowInfo(params: {
     const match = models.find((m) => m?.id === params.modelId);
     return normalizePositiveInt(match?.contextWindow);
   })();
-  if (fromModelsConfig) return { tokens: fromModelsConfig, source: "modelsConfig" };
+  if (fromModelsConfig) {
+    return { tokens: fromModelsConfig, source: "modelsConfig" };
+  }
 
   const fromAgentConfig = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (fromAgentConfig) return { tokens: fromAgentConfig, source: "agentContextTokens" };
+  if (fromAgentConfig) {
+    return { tokens: fromAgentConfig, source: "agentContextTokens" };
+  }
 
   return { tokens: Math.floor(params.defaultTokens), source: "default" };
 }

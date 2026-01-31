@@ -52,7 +52,9 @@ export type ChannelsAddOptions = {
 };
 
 function parseList(value: string | undefined): string[] | undefined {
-  if (!value?.trim()) return undefined;
+  if (!value?.trim()) {
+    return undefined;
+  }
   const parsed = value
     .split(/[\n,;]+/g)
     .map((entry) => entry.trim())
@@ -62,10 +64,14 @@ function parseList(value: string | undefined): string[] | undefined {
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
   return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
-    if (entry.id.toLowerCase() === trimmed) return true;
+    if (entry.id.toLowerCase() === trimmed) {
+      return true;
+    }
     return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
   });
 }
@@ -76,7 +82,9 @@ export async function channelsAddCommand(
   params?: { hasFlags?: boolean },
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
   let nextConfig = cfg;
 
   const useWizard = shouldUseWizard(params);
@@ -149,7 +157,9 @@ export async function channelsAddCommand(
       workspaceDir,
     });
     nextConfig = result.cfg;
-    if (!result.installed) return;
+    if (!result.installed) {
+      return;
+    }
     reloadOnboardingPluginRegistry({ cfg: nextConfig, runtime, workspaceDir });
     channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }

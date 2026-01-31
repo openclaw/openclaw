@@ -12,7 +12,9 @@ export function maybeHandleQueueDirective(params: {
   sessionEntry?: SessionEntry;
 }): ReplyPayload | undefined {
   const { directives } = params;
-  if (!directives.hasQueueDirective) return undefined;
+  if (!directives.hasQueueDirective) {
+    return undefined;
+  }
 
   const wantsStatus =
     !directives.queueMode &&

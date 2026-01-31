@@ -33,7 +33,9 @@ describe("skills entries config schema", () => {
     });
 
     expect(res.success).toBe(false);
-    if (res.success) return;
+    if (res.success) {
+      return;
+    }
 
     expect(
       res.error.issues.some(

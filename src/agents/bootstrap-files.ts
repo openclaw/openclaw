@@ -12,7 +12,9 @@ export function makeBootstrapWarn(params: {
   sessionLabel: string;
   warn?: (message: string) => void;
 }): ((message: string) => void) | undefined {
-  if (!params.warn) return undefined;
+  if (!params.warn) {
+    return undefined;
+  }
   return (message: string) => params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
 }
 

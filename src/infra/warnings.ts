@@ -26,11 +26,15 @@ export function installProcessWarningFilter(): void {
   const globalState = globalThis as typeof globalThis & {
     [warningFilterKey]?: { installed: boolean };
   };
-  if (globalState[warningFilterKey]?.installed) return;
+  if (globalState[warningFilterKey]?.installed) {
+    return;
+  }
   globalState[warningFilterKey] = { installed: true };
 
   process.on("warning", (warning: Warning) => {
-    if (shouldIgnoreWarning(warning)) return;
+    if (shouldIgnoreWarning(warning)) {
+      return;
+    }
     process.stderr.write(`${warning.stack ?? warning.toString()}\n`);
   });
 }

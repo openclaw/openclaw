@@ -51,7 +51,9 @@ export async function maybeInstallDaemon(params: {
       shouldCheckLinger = true;
       shouldInstall = false;
     }
-    if (action === "skip") return;
+    if (action === "skip") {
+      return;
+    }
     if (action === "reinstall") {
       await withProgress(
         { label: "Gateway service", indeterminate: true, delayMs: 0 },

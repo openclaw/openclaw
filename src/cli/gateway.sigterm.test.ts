@@ -67,7 +67,9 @@ describe("gateway SIGTERM", () => {
   let child: ReturnType<typeof spawn> | null = null;
 
   afterEach(() => {
-    if (!child || child.killed) return;
+    if (!child || child.killed) {
+      return;
+    }
     try {
       child.kill("SIGKILL");
     } catch {
@@ -124,7 +126,9 @@ describe("gateway SIGTERM", () => {
     });
 
     const proc = child;
-    if (!proc) throw new Error("failed to spawn gateway");
+    if (!proc) {
+      throw new Error("failed to spawn gateway");
+    }
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
@@ -148,7 +152,9 @@ describe("gateway SIGTERM", () => {
           `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
       );
     }
-    if (result.code === null && result.signal === "SIGTERM") return;
+    if (result.code === null && result.signal === "SIGTERM") {
+      return;
+    }
     expect(result.signal).toBeNull();
   });
 });

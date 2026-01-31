@@ -48,7 +48,9 @@ async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
 }) {
-  if (params.opts.acceptRisk === true) return;
+  if (params.opts.acceptRisk === true) {
+    return;
+  }
 
   await params.prompter.note(
     [
@@ -238,19 +240,33 @@ export async function runOnboardingWizard(
 
   if (flow === "quickstart") {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
-      if (value === "loopback") return "Loopback (127.0.0.1)";
-      if (value === "lan") return "LAN";
-      if (value === "custom") return "Custom IP";
-      if (value === "tailnet") return "Tailnet (Tailscale IP)";
+      if (value === "loopback") {
+        return "Loopback (127.0.0.1)";
+      }
+      if (value === "lan") {
+        return "LAN";
+      }
+      if (value === "custom") {
+        return "Custom IP";
+      }
+      if (value === "tailnet") {
+        return "Tailnet (Tailscale IP)";
+      }
       return "Auto";
     };
     const formatAuth = (value: GatewayAuthChoice) => {
-      if (value === "token") return "Token (default)";
+      if (value === "token") {
+        return "Token (default)";
+      }
       return "Password";
     };
     const formatTailscale = (value: "off" | "serve" | "funnel") => {
-      if (value === "off") return "Off";
-      if (value === "serve") return "Serve";
+      if (value === "off") {
+        return "Off";
+      }
+      if (value === "serve") {
+        return "Serve";
+      }
       return "Funnel";
     };
     const quickstartLines = quickstartGateway.hasExisting

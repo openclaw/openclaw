@@ -10,8 +10,12 @@ import { shortenHomeInString } from "../../utils.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
-  if (!trimmed) return raw;
-  if (trimmed.toLowerCase().startsWith("v")) return trimmed;
+  if (!trimmed) {
+    return raw;
+  }
+  if (trimmed.toLowerCase().startsWith("v")) {
+    return trimmed;
+  }
   return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
 }
 
@@ -23,9 +27,13 @@ function resolveNodeVersions(node: {
 }) {
   const core = node.coreVersion?.trim() || undefined;
   const ui = node.uiVersion?.trim() || undefined;
-  if (core || ui) return { core, ui };
+  if (core || ui) {
+    return { core, ui };
+  }
   const legacy = node.version?.trim();
-  if (!legacy) return { core: undefined, ui: undefined };
+  if (!legacy) {
+    return { core: undefined, ui: undefined };
+  }
   const platform = node.platform?.trim().toLowerCase() ?? "";
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
@@ -40,15 +48,23 @@ function formatNodeVersions(node: {
 }) {
   const { core, ui } = resolveNodeVersions(node);
   const parts: string[] = [];
-  if (core) parts.push(`core ${formatVersionLabel(core)}`);
-  if (ui) parts.push(`ui ${formatVersionLabel(ui)}`);
+  if (core) {
+    parts.push(`core ${formatVersionLabel(core)}`);
+  }
+  if (ui) {
+    parts.push(`ui ${formatVersionLabel(ui)}`);
+  }
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function formatPathEnv(raw?: string): string | null {
-  if (typeof raw !== "string") return null;
+  if (typeof raw !== "string") {
+    return null;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const parts = trimmed.split(":").filter(Boolean);
   const display =
     parts.length <= 3 ? trimmed : `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
@@ -56,7 +72,9 @@ function formatPathEnv(raw?: string): string | null {
 }
 
 function parseSinceMs(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) return undefined;
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
   const value =
     typeof raw === "string" ? raw.trim() : typeof raw === "number" ? String(raw).trim() : null;
   if (value === null) {
@@ -64,7 +82,9 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
     defaultRuntime.exit(1);
     return undefined;
   }
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   try {
     return parseDurationMs(value);
   } catch (err) {
@@ -104,7 +124,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                 )
               : null;
           const filtered = nodes.filter((n) => {
-            if (connectedOnly && !n.connected) return false;
+            if (connectedOnly && !n.connected) {
+              return false;
+            }
             if (sinceMs !== undefined) {
               const paired = lastConnectedById?.get(n.nodeId);
               const lastConnectedAtMs =
@@ -113,8 +135,12 @@ export function registerNodesStatusCommands(nodes: Command) {
                   : typeof n.connectedAtMs === "number"
                     ? n.connectedAtMs
                     : undefined;
-              if (typeof lastConnectedAtMs !== "number") return false;
-              if (now - lastConnectedAtMs > sinceMs) return false;
+              if (typeof lastConnectedAtMs !== "number") {
+                return false;
+              }
+              if (now - lastConnectedAtMs > sinceMs) {
+                return false;
+              }
             }
             return true;
           });
@@ -131,7 +157,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           defaultRuntime.log(
             `Known: ${filtered.length}${filteredLabel} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
           );
-          if (filtered.length === 0) return;
+          if (filtered.length === 0) {
+            return;
+          }
 
           const rows = filtered.map((n) => {
             const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
@@ -261,7 +289,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(muted("- (none reported)"));
             return;
           }
-          for (const c of commands) defaultRuntime.log(`- ${c}`);
+          for (const c of commands) {
+            defaultRuntime.log(`- ${c}`);
+          }
         });
       }),
   );
@@ -294,7 +324,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           const filteredPaired = paired.filter((node) => {
             if (connectedOnly) {
               const live = connectedById?.get(node.nodeId);
-              if (!live?.connected) return false;
+              if (!live?.connected) {
+                return false;
+              }
             }
             if (sinceMs !== undefined) {
               const live = connectedById?.get(node.nodeId);
@@ -304,8 +336,12 @@ export function registerNodesStatusCommands(nodes: Command) {
                   : typeof live?.connectedAtMs === "number"
                     ? live.connectedAtMs
                     : undefined;
-              if (typeof lastConnectedAtMs !== "number") return false;
-              if (now - lastConnectedAtMs > sinceMs) return false;
+              if (typeof lastConnectedAtMs !== "number") {
+                return false;
+              }
+              if (now - lastConnectedAtMs > sinceMs) {
+                return false;
+              }
             }
             return true;
           });

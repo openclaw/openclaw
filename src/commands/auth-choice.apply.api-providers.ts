@@ -57,7 +57,9 @@ export async function applyAuthChoiceApiProviders(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = async (model: string) => {
-    if (!params.agentId) return;
+    if (!params.agentId) {
+      return;
+    }
     await params.prompter.note(
       `Default model set to ${model} for agent "${params.agentId}".`,
       "Model configured",

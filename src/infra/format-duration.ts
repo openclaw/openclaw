@@ -7,7 +7,9 @@ export function formatDurationSeconds(
   ms: number,
   options: FormatDurationSecondsOptions = {},
 ): string {
-  if (!Number.isFinite(ms)) return "unknown";
+  if (!Number.isFinite(ms)) {
+    return "unknown";
+  }
   const decimals = options.decimals ?? 1;
   const unit = options.unit ?? "s";
   const seconds = Math.max(0, ms) / 1000;
@@ -22,8 +24,12 @@ export type FormatDurationMsOptions = {
 };
 
 export function formatDurationMs(ms: number, options: FormatDurationMsOptions = {}): string {
-  if (!Number.isFinite(ms)) return "unknown";
-  if (ms < 1000) return `${ms}ms`;
+  if (!Number.isFinite(ms)) {
+    return "unknown";
+  }
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
   return formatDurationSeconds(ms, {
     decimals: options.decimals ?? 2,
     unit: options.unit ?? "s",

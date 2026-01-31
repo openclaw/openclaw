@@ -18,7 +18,9 @@ export type ChannelsRemoveOptions = {
 
 function listAccountIds(cfg: OpenClawConfig, channel: ChatChannel): string[] {
   const plugin = getChannelPlugin(channel);
-  if (!plugin) return [];
+  if (!plugin) {
+    return [];
+  }
   return plugin.config.listAccountIds(cfg);
 }
 
@@ -28,7 +30,9 @@ export async function channelsRemoveCommand(
   params?: { hasFlags?: boolean },
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;

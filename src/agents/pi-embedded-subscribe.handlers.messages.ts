@@ -23,7 +23,9 @@ export function handleMessageStart(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") return;
+  if (msg?.role !== "assistant") {
+    return;
+  }
 
   // KNOWN: Resetting at `text_end` is unsafe (late/duplicate end events).
   // ASSUME: `message_start` is the only reliable boundary for “new assistant message begins”.
@@ -40,7 +42,9 @@ export function handleMessageUpdate(
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") return;
+  if (msg?.role !== "assistant") {
+    return;
+  }
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
@@ -159,7 +163,9 @@ export function handleMessageEnd(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") return;
+  if (msg?.role !== "assistant") {
+    return;
+  }
 
   const assistantMessage = msg;
   promoteThinkingTagsToBlocks(assistantMessage);
@@ -195,12 +201,16 @@ export function handleMessageEnd(
   const shouldEmitReasoningBeforeAnswer =
     shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
   const maybeEmitReasoning = () => {
-    if (!shouldEmitReasoning || !formattedReasoning) return;
+    if (!shouldEmitReasoning || !formattedReasoning) {
+      return;
+    }
     ctx.state.lastReasoningSent = formattedReasoning;
     void onBlockReply?.({ text: formattedReasoning });
   };
 
-  if (shouldEmitReasoningBeforeAnswer) maybeEmitReasoning();
+  if (shouldEmitReasoningBeforeAnswer) {
+    maybeEmitReasoning();
+  }
 
   if (
     (ctx.state.blockReplyBreak === "message_end" ||
@@ -251,7 +261,9 @@ export function handleMessageEnd(
     }
   }
 
-  if (!shouldEmitReasoningBeforeAnswer) maybeEmitReasoning();
+  if (!shouldEmitReasoningBeforeAnswer) {
+    maybeEmitReasoning();
+  }
   if (ctx.state.streamReasoning && rawThinking) {
     ctx.emitReasoningStream(rawThinking);
   }

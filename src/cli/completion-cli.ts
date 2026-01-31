@@ -21,7 +21,9 @@ export function registerCompletionCli(program: Command) {
       const entries = getSubCliEntries();
       for (const entry of entries) {
         // Skip completion command itself to avoid cycle if we were to add it to the list
-        if (entry.name === "completion") continue;
+        if (entry.name === "completion") {
+          continue;
+        }
         await registerSubCliByName(program, entry.name);
       }
 
@@ -84,7 +86,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
     const content = await fs.readFile(profilePath, "utf-8");
     if (content.includes(`${binName} completion`)) {
-      if (!yes) console.log(`Completion already installed in ${profilePath}`);
+      if (!yes) {
+        console.log(`Completion already installed in ${profilePath}`);
+      }
       return;
     }
 
@@ -318,7 +322,9 @@ function generateFishCompletion(program: Command): string {
   const visit = (cmd: Command, parents: string[]) => {
     const cmdName = cmd.name();
     const fullPath = [...parents];
-    if (parents.length > 0) fullPath.push(cmdName); // Only push if not root, or consistent root handling
+    if (parents.length > 0) {
+      fullPath.push(cmdName);
+    } // Only push if not root, or consistent root handling
 
     // Fish uses 'seen_subcommand_from' to determine context.
     // For root: complete -c openclaw -n "__fish_use_subcommand" -a "subcmd" -d "desc"
@@ -339,8 +345,12 @@ function generateFishCompletion(program: Command): string {
           ?.replace(/^-/, "");
         const desc = opt.description.replace(/'/g, "'\\''");
         let line = `complete -c ${rootCmd} -n "__fish_use_subcommand"`;
-        if (short) line += ` -s ${short}`;
-        if (long) line += ` -l ${long}`;
+        if (short) {
+          line += ` -s ${short}`;
+        }
+        if (long) {
+          line += ` -l ${long}`;
+        }
         line += ` -d '${desc}'\n`;
         script += line;
       }
@@ -368,8 +378,12 @@ function generateFishCompletion(program: Command): string {
           ?.replace(/^-/, "");
         const desc = opt.description.replace(/'/g, "'\\''");
         let line = `complete -c ${rootCmd} -n "__fish_seen_subcommand_from ${cmdName}"`;
-        if (short) line += ` -s ${short}`;
-        if (long) line += ` -l ${long}`;
+        if (short) {
+          line += ` -s ${short}`;
+        }
+        if (long) {
+          line += ` -l ${long}`;
+        }
         line += ` -d '${desc}'\n`;
         script += line;
       }

@@ -39,7 +39,9 @@ async function waitForNonEmptyFile(pathname: string, timeoutMs = 2000) {
   const startedAt = process.hrtime.bigint();
   for (;;) {
     const raw = await fs.readFile(pathname, "utf-8").catch(() => "");
-    if (raw.trim().length > 0) return raw;
+    if (raw.trim().length > 0) {
+      return raw;
+    }
     const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     if (elapsedMs >= timeoutMs) {
       throw new Error(`timeout waiting for file ${pathname}`);

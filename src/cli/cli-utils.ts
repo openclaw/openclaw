@@ -56,7 +56,9 @@ export function resolveOptionFromCommand<T>(
   let current: Command | null | undefined = command;
   while (current) {
     const opts = current.opts?.() ?? {};
-    if (opts[key] !== undefined) return opts[key];
+    if (opts[key] !== undefined) {
+      return opts[key];
+    }
     current = current.parent ?? undefined;
   }
   return undefined;

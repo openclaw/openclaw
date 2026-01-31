@@ -68,7 +68,9 @@ function resolveRepoRoot(params: {
     try {
       const resolved = path.resolve(configured);
       const stat = fs.statSync(resolved);
-      if (stat.isDirectory()) return resolved;
+      if (stat.isDirectory()) {
+        return resolved;
+      }
     } catch {
       // ignore invalid config path
     }
@@ -79,10 +81,14 @@ function resolveRepoRoot(params: {
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);
-    if (seen.has(resolved)) continue;
+    if (seen.has(resolved)) {
+      continue;
+    }
     seen.add(resolved);
     const root = findGitRoot(resolved);
-    if (root) return root;
+    if (root) {
+      return root;
+    }
   }
   return undefined;
 }
@@ -93,12 +99,16 @@ function findGitRoot(startDir: string): string | null {
     const gitPath = path.join(current, ".git");
     try {
       const stat = fs.statSync(gitPath);
-      if (stat.isDirectory() || stat.isFile()) return current;
+      if (stat.isDirectory() || stat.isFile()) {
+        return current;
+      }
     } catch {
       // ignore missing .git at this level
     }
     const parent = path.dirname(current);
-    if (parent === current) break;
+    if (parent === current) {
+      break;
+    }
     current = parent;
   }
   return null;

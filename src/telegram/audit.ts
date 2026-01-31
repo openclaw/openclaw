@@ -57,12 +57,22 @@ export function collectTelegramUnmentionedGroupIds(
   const groupIds: string[] = [];
   let unresolvedGroups = 0;
   for (const [key, value] of Object.entries(groups)) {
-    if (key === "*") continue;
-    if (!value || typeof value !== "object") continue;
-    if (value.enabled === false) continue;
-    if (value.requireMention !== false) continue;
+    if (key === "*") {
+      continue;
+    }
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    if (value.enabled === false) {
+      continue;
+    }
+    if (value.requireMention !== false) {
+      continue;
+    }
     const id = String(key).trim();
-    if (!id) continue;
+    if (!id) {
+      continue;
+    }
     if (/^-?\d+$/.test(id)) {
       groupIds.push(id);
     } else {

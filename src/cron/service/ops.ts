@@ -107,12 +107,16 @@ export async function remove(state: CronServiceState, id: string) {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
     const before = state.store?.jobs.length ?? 0;
-    if (!state.store) return { ok: false, removed: false } as const;
+    if (!state.store) {
+      return { ok: false, removed: false } as const;
+    }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
-    if (removed) emit(state, { jobId: id, action: "removed" });
+    if (removed) {
+      emit(state, { jobId: id, action: "removed" });
+    }
     return { ok: true, removed } as const;
   });
 }
@@ -124,7 +128,9 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     const due = isJobDue(job, now, { forced: mode === "force" });
-    if (!due) return { ok: true, ran: false, reason: "not-due" as const };
+    if (!due) {
+      return { ok: true, ran: false, reason: "not-due" as const };
+    }
     await executeJob(state, job, now, { forced: mode === "force" });
     await persist(state);
     armTimer(state);

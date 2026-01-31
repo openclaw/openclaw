@@ -300,7 +300,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const existed = Boolean(entry);
     const queueKeys = new Set<string>(target.storeKeys);
     queueKeys.add(target.canonicalKey);
-    if (sessionId) queueKeys.add(sessionId);
+    if (sessionId) {
+      queueKeys.add(sessionId);
+    }
     clearSessionQueues([...queueKeys]);
     stopSubagentsForRequester({ cfg, requesterSessionKey: target.canonicalKey });
     if (sessionId) {
@@ -325,7 +327,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         store[primaryKey] = store[existingKey];
         delete store[existingKey];
       }
-      if (store[primaryKey]) delete store[primaryKey];
+      if (store[primaryKey]) {
+        delete store[primaryKey];
+      }
     });
 
     const archived: string[] = [];
@@ -336,7 +340,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         entry?.sessionFile,
         target.agentId,
       )) {
-        if (!fs.existsSync(candidate)) continue;
+        if (!fs.existsSync(candidate)) {
+          continue;
+        }
         try {
           archived.push(archiveFileOnDisk(candidate, "deleted"));
         } catch {
@@ -443,7 +449,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     await updateSessionStore(storePath, (store) => {
       const entryKey = compactTarget.primaryKey;
       const entryToUpdate = store[entryKey];
-      if (!entryToUpdate) return;
+      if (!entryToUpdate) {
+        return;
+      }
       delete entryToUpdate.inputTokens;
       delete entryToUpdate.outputTokens;
       delete entryToUpdate.totalTokens;

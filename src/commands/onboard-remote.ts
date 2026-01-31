@@ -21,7 +21,9 @@ function buildLabel(beacon: GatewayBonjourBeacon): string {
 
 function ensureWsUrl(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) return DEFAULT_GATEWAY_URL;
+  if (!trimmed) {
+    return DEFAULT_GATEWAY_URL;
+  }
   return trimmed;
 }
 

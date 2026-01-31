@@ -21,15 +21,25 @@ export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean 
 };
 
 export const formatTokenK = (value?: number | null) => {
-  if (!value || !Number.isFinite(value)) return "-";
-  if (value < 1024) return `${Math.round(value)}`;
+  if (!value || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value < 1024) {
+    return `${Math.round(value)}`;
+  }
   return `${Math.round(value / 1024)}k`;
 };
 
 export const formatMs = (value?: number | null) => {
-  if (value === null || value === undefined) return "-";
-  if (!Number.isFinite(value)) return "-";
-  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
   return `${Math.round(value / 100) / 10}s`;
 };
 
@@ -70,7 +80,9 @@ export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
   const models = cfg.agents?.defaults?.models ?? {};
   for (const raw of Object.keys(models)) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
-    if (!parsed) continue;
+    if (!parsed) {
+      continue;
+    }
     allowed.add(modelKey(parsed.provider, parsed.model));
   }
   return allowed;
@@ -78,7 +90,9 @@ export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
 
 export function normalizeAlias(alias: string): string {
   const trimmed = alias.trim();
-  if (!trimmed) throw new Error("Alias cannot be empty.");
+  if (!trimmed) {
+    throw new Error("Alias cannot be empty.");
+  }
   if (!/^[A-Za-z0-9_.:-]+$/.test(trimmed)) {
     throw new Error("Alias must use letters, numbers, dots, underscores, colons, or dashes.");
   }
@@ -90,7 +104,9 @@ export function resolveKnownAgentId(params: {
   rawAgentId?: string | null;
 }): string | undefined {
   const raw = params.rawAgentId?.trim();
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const agentId = normalizeAgentId(raw);
   const knownAgents = listAgentIds(params.cfg);
   if (!knownAgents.includes(agentId)) {

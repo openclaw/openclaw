@@ -383,8 +383,11 @@ describe("provider usage loading", () => {
       expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
       expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
     } finally {
-      if (cookieSnapshot === undefined) delete process.env.CLAUDE_AI_SESSION_KEY;
-      else process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
+      if (cookieSnapshot === undefined) {
+        delete process.env.CLAUDE_AI_SESSION_KEY;
+      } else {
+        process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
+      }
     }
   });
 });

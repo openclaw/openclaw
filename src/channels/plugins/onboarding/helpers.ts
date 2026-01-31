@@ -16,7 +16,9 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
     initialValue: initial,
   });
 
-  if (choice !== "__new__") return normalizeAccountId(choice);
+  if (choice !== "__new__") {
+    return normalizeAccountId(choice);
+  }
 
   const entered = await params.prompter.text({
     message: `New ${params.label} account id`,
@@ -36,6 +38,8 @@ export function addWildcardAllowFrom(
   allowFrom?: Array<string | number> | null,
 ): Array<string | number> {
   const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
-  if (!next.includes("*")) next.push("*");
+  if (!next.includes("*")) {
+    next.push("*");
+  }
   return next;
 }

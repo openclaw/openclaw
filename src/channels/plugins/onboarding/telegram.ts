@@ -74,21 +74,31 @@ async function promptTelegramAllowFrom(params: {
 
   const resolveTelegramUserId = async (raw: string): Promise<string | null> => {
     const trimmed = raw.trim();
-    if (!trimmed) return null;
+    if (!trimmed) {
+      return null;
+    }
     const stripped = trimmed.replace(/^(telegram|tg):/i, "").trim();
-    if (/^\d+$/.test(stripped)) return stripped;
-    if (!token) return null;
+    if (/^\d+$/.test(stripped)) {
+      return stripped;
+    }
+    if (!token) {
+      return null;
+    }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
     const url = `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(username)}`;
     try {
       const res = await fetch(url);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        return null;
+      }
       const data = (await res.json().catch(() => null)) as {
         ok?: boolean;
         result?: { id?: number | string };
       } | null;
       const id = data?.ok ? data?.result?.id : undefined;
-      if (typeof id === "number" || typeof id === "string") return String(id);
+      if (typeof id === "number" || typeof id === "string") {
+        return String(id);
+      }
       return null;
     } catch {
       // Network error during username lookup - return null to prompt user for numeric ID

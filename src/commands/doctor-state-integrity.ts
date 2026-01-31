@@ -81,12 +81,18 @@ function addUserRwx(mode: number): number {
 function countJsonlLines(filePath: string): number {
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) return 0;
+    if (!raw) {
+      return 0;
+    }
     let count = 0;
     for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") count += 1;
+      if (raw[i] === "\n") {
+        count += 1;
+      }
     }
-    if (!raw.endsWith("\n")) count += 1;
+    if (!raw.endsWith("\n")) {
+      count += 1;
+    }
     return count;
   } catch {
     return 0;
@@ -106,12 +112,20 @@ function findOtherStateDirs(stateDir: string): string[] {
       continue;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith(".")) continue;
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (entry.name.startsWith(".")) {
+        continue;
+      }
       const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
       for (const candidate of candidates) {
-        if (candidate === resolvedState) continue;
-        if (existsDir(candidate)) found.push(candidate);
+        if (candidate === resolvedState) {
+          continue;
+        }
+        if (existsDir(candidate)) {
+          found.push(candidate);
+        }
       }
     }
   }
@@ -168,7 +182,9 @@ export async function noteStateIntegrity(
   if (stateDirExists && !canWriteDir(stateDir)) {
     warnings.push(`- State directory not writable (${displayStateDir}).`);
     const hint = dirPermissionHint(stateDir);
-    if (hint) warnings.push(`  ${hint}`);
+    if (hint) {
+      warnings.push(`  ${hint}`);
+    }
     const repair = await prompter.confirmSkipInNonInteractive({
       message: `Repair permissions on ${displayStateDir}?`,
       initialValue: true,
@@ -234,9 +250,15 @@ export async function noteStateIntegrity(
     dirCandidates.set(storeDir, "Session store dir");
     dirCandidates.set(oauthDir, "OAuth dir");
     const displayDirFor = (dir: string) => {
-      if (dir === sessionsDir) return displaySessionsDir;
-      if (dir === storeDir) return displayStoreDir;
-      if (dir === oauthDir) return displayOauthDir;
+      if (dir === sessionsDir) {
+        return displaySessionsDir;
+      }
+      if (dir === storeDir) {
+        return displayStoreDir;
+      }
+      if (dir === oauthDir) {
+        return displayOauthDir;
+      }
       return shortenHomePath(dir);
     };
 
@@ -261,7 +283,9 @@ export async function noteStateIntegrity(
       if (!canWriteDir(dir)) {
         warnings.push(`- ${label} not writable (${displayDir}).`);
         const hint = dirPermissionHint(dir);
-        if (hint) warnings.push(`  ${hint}`);
+        if (hint) {
+          warnings.push(`  ${hint}`);
+        }
         const repair = await prompter.confirmSkipInNonInteractive({
           message: `Repair permissions on ${label}?`,
           initialValue: true,
@@ -282,7 +306,9 @@ export async function noteStateIntegrity(
 
   const extraStateDirs = new Set<string>();
   if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
-    if (existsDir(defaultStateDir)) extraStateDirs.add(defaultStateDir);
+    if (existsDir(defaultStateDir)) {
+      extraStateDirs.add(defaultStateDir);
+    }
   }
   for (const other of findOtherStateDirs(stateDir)) {
     extraStateDirs.add(other);
@@ -310,7 +336,9 @@ export async function noteStateIntegrity(
       .slice(0, 5);
     const missing = recent.filter(([, entry]) => {
       const sessionId = entry.sessionId;
-      if (!sessionId) return false;
+      if (!sessionId) {
+        return false;
+      }
       const transcriptPath = resolveSessionFilePath(sessionId, entry, {
         agentId,
       });
@@ -350,9 +378,13 @@ export async function noteStateIntegrity(
 }
 
 export function noteWorkspaceBackupTip(workspaceDir: string) {
-  if (!existsDir(workspaceDir)) return;
+  if (!existsDir(workspaceDir)) {
+    return;
+  }
   const gitMarker = path.join(workspaceDir, ".git");
-  if (fs.existsSync(gitMarker)) return;
+  if (fs.existsSync(gitMarker)) {
+    return;
+  }
   note(
     [
       "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",

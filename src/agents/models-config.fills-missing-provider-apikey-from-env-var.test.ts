@@ -85,8 +85,11 @@ describe("models-config", () => {
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-VL-01");
       } finally {
-        if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
-        else process.env.MINIMAX_API_KEY = prevKey;
+        if (prevKey === undefined) {
+          delete process.env.MINIMAX_API_KEY;
+        } else {
+          process.env.MINIMAX_API_KEY = prevKey;
+        }
       }
     });
   });

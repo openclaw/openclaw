@@ -29,8 +29,12 @@ function formatCharsAndTokens(chars: number): string {
 }
 
 function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized === "/context") return "";
-  if (commandBodyNormalized.startsWith("/context ")) return commandBodyNormalized.slice(8).trim();
+  if (commandBodyNormalized === "/context") {
+    return "";
+  }
+  if (commandBodyNormalized.startsWith("/context ")) {
+    return commandBodyNormalized.slice(8).trim();
+  }
   return "";
 }
 
@@ -49,7 +53,9 @@ async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
   const existing = params.sessionEntry?.systemPromptReport;
-  if (existing && existing.source === "run") return existing;
+  if (existing && existing.source === "run") {
+    return existing;
+  }
 
   const workspaceDir = params.workspaceDir;
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);

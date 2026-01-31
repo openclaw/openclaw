@@ -377,7 +377,9 @@ describe("doctor command", () => {
 
     expect(
       note.mock.calls.some(([message, title]) => {
-        if (title !== "Sandbox" || typeof message !== "string") return false;
+        if (title !== "Sandbox" || typeof message !== "string") {
+          return false;
+        }
         const normalized = message.replace(/\s+/g, " ").trim();
         return (
           normalized.includes('agents.list (id "work") sandbox docker') &&
@@ -411,8 +413,9 @@ describe("doctor command", () => {
         value === "/Users/steipete/openclaw" ||
         value === legacyPath ||
         value === legacyAgentsPath
-      )
+      ) {
         return true;
+      }
       return realExists(value as never);
     });
 

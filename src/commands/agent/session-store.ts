@@ -56,7 +56,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
   };
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-    if (cliSessionId) setCliSessionId(next, providerUsed, cliSessionId);
+    if (cliSessionId) {
+      setCliSessionId(next, providerUsed, cliSessionId);
+    }
   }
   next.abortedLastRun = result.meta.aborted ?? false;
   if (hasNonzeroUsage(usage)) {

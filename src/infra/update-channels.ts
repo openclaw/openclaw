@@ -6,15 +6,23 @@ export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
 export const DEV_BRANCH = "main";
 
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const normalized = value.trim().toLowerCase();
-  if (normalized === "stable" || normalized === "beta" || normalized === "dev") return normalized;
+  if (normalized === "stable" || normalized === "beta" || normalized === "dev") {
+    return normalized;
+  }
   return null;
 }
 
 export function channelToNpmTag(channel: UpdateChannel): string {
-  if (channel === "beta") return "beta";
-  if (channel === "dev") return "dev";
+  if (channel === "beta") {
+    return "beta";
+  }
+  if (channel === "dev") {
+    return "dev";
+  }
   return "latest";
 }
 
@@ -60,7 +68,9 @@ export function formatUpdateChannelLabel(params: {
   gitTag?: string | null;
   gitBranch?: string | null;
 }): string {
-  if (params.source === "config") return `${params.channel} (config)`;
+  if (params.source === "config") {
+    return `${params.channel} (config)`;
+  }
   if (params.source === "git-tag") {
     return params.gitTag ? `${params.channel} (${params.gitTag})` : `${params.channel} (tag)`;
   }

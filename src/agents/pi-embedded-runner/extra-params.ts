@@ -29,9 +29,15 @@ function resolveCacheControlTtl(
   modelId: string,
 ): CacheControlTtl | undefined {
   const raw = extraParams?.cacheControlTtl;
-  if (raw !== "5m" && raw !== "1h") return undefined;
-  if (provider === "anthropic") return raw;
-  if (provider === "openrouter" && modelId.startsWith("anthropic/")) return raw;
+  if (raw !== "5m" && raw !== "1h") {
+    return undefined;
+  }
+  if (provider === "anthropic") {
+    return raw;
+  }
+  if (provider === "openrouter" && modelId.startsWith("anthropic/")) {
+    return raw;
+  }
   return undefined;
 }
 

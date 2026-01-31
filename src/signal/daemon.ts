@@ -20,11 +20,17 @@ export type SignalDaemonHandle = {
 
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   // signal-cli commonly writes all logs to stderr; treat severity explicitly.
-  if (/\b(ERROR|WARN|WARNING)\b/.test(trimmed)) return "error";
+  if (/\b(ERROR|WARN|WARNING)\b/.test(trimmed)) {
+    return "error";
+  }
   // Some signal-cli failures are not tagged with WARN/ERROR but should still be surfaced loudly.
-  if (/\b(FAILED|SEVERE|EXCEPTION)\b/i.test(trimmed)) return "error";
+  if (/\b(FAILED|SEVERE|EXCEPTION)\b/i.test(trimmed)) {
+    return "error";
+  }
   return "log";
 }
 
@@ -40,9 +46,15 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   if (opts.receiveMode) {
     args.push("--receive-mode", opts.receiveMode);
   }
-  if (opts.ignoreAttachments) args.push("--ignore-attachments");
-  if (opts.ignoreStories) args.push("--ignore-stories");
-  if (opts.sendReadReceipts) args.push("--send-read-receipts");
+  if (opts.ignoreAttachments) {
+    args.push("--ignore-attachments");
+  }
+  if (opts.ignoreStories) {
+    args.push("--ignore-stories");
+  }
+  if (opts.sendReadReceipts) {
+    args.push("--send-read-receipts");
+  }
 
   return args;
 }
@@ -58,15 +70,21 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   child.stdout?.on("data", (data) => {
     for (const line of data.toString().split(/\r?\n/)) {
       const kind = classifySignalCliLogLine(line);
-      if (kind === "log") log(`signal-cli: ${line.trim()}`);
-      else if (kind === "error") error(`signal-cli: ${line.trim()}`);
+      if (kind === "log") {
+        log(`signal-cli: ${line.trim()}`);
+      } else if (kind === "error") {
+        error(`signal-cli: ${line.trim()}`);
+      }
     }
   });
   child.stderr?.on("data", (data) => {
     for (const line of data.toString().split(/\r?\n/)) {
       const kind = classifySignalCliLogLine(line);
-      if (kind === "log") log(`signal-cli: ${line.trim()}`);
-      else if (kind === "error") error(`signal-cli: ${line.trim()}`);
+      if (kind === "log") {
+        log(`signal-cli: ${line.trim()}`);
+      } else if (kind === "error") {
+        error(`signal-cli: ${line.trim()}`);
+      }
     }
   });
   child.on("error", (err) => {

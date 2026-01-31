@@ -11,7 +11,9 @@ const BUNDLED_VERSION =
 
 function argValue(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
-  if (idx < 0) return undefined;
+  if (idx < 0) {
+    return undefined;
+  }
   const value = args[idx + 1];
   return value && !value.startsWith("-") ? value : undefined;
 }
@@ -145,7 +147,9 @@ async function main() {
       } catch (err) {
         defaultRuntime.error(`gateway: shutdown error: ${String(err)}`);
       } finally {
-        if (forceExitTimer) clearTimeout(forceExitTimer);
+        if (forceExitTimer) {
+          clearTimeout(forceExitTimer);
+        }
         server = null;
         if (isRestart) {
           shuttingDown = false;

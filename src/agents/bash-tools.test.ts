@@ -11,7 +11,9 @@ import { sanitizeBinaryOutput } from "./shell-utils.js";
 const isWin = process.platform === "win32";
 const resolveShellFromPath = (name: string) => {
   const envPath = process.env.PATH ?? "";
-  if (!envPath) return undefined;
+  if (!envPath) {
+    return undefined;
+  }
   const entries = envPath.split(path.delimiter).filter(Boolean);
   for (const entry of entries) {
     const candidate = path.join(entry, name);
@@ -71,11 +73,15 @@ describe("exec tool backgrounding", () => {
   const originalShell = process.env.SHELL;
 
   beforeEach(() => {
-    if (!isWin && defaultShell) process.env.SHELL = defaultShell;
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
   });
 
   afterEach(() => {
-    if (!isWin) process.env.SHELL = originalShell;
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
   });
 
   it(
@@ -301,12 +307,16 @@ describe("exec PATH handling", () => {
   const originalShell = process.env.SHELL;
 
   beforeEach(() => {
-    if (!isWin && defaultShell) process.env.SHELL = defaultShell;
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
   });
 
   afterEach(() => {
     process.env.PATH = originalPath;
-    if (!isWin) process.env.SHELL = originalShell;
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
   });
 
   it("prepends configured path entries", async () => {

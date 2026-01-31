@@ -36,18 +36,24 @@ const COMMAND = "/subagents";
 const ACTIONS = new Set(["list", "stop", "log", "send", "info", "help"]);
 
 function formatTimestamp(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) return "n/a";
+  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
+    return "n/a";
+  }
   return new Date(valueMs).toISOString();
 }
 
 function formatTimestampWithAge(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) return "n/a";
+  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
+    return "n/a";
+  }
   return `${formatTimestamp(valueMs)} (${formatAgeShort(Date.now() - valueMs)})`;
 }
 
 function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): string | undefined {
   const raw = params.sessionKey?.trim() || params.ctx.CommandTargetSessionKey?.trim();
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
 }
@@ -57,7 +63,9 @@ function resolveSubagentTarget(
   token: string | undefined,
 ): SubagentTargetResolution {
   const trimmed = token?.trim();
-  if (!trimmed) return { error: "Missing subagent id." };
+  if (!trimmed) {
+    return { error: "Missing subagent id." };
+  }
   if (trimmed === "last") {
     const sorted = sortSubagentRuns(runs);
     return { entry: sorted[0] };
@@ -75,7 +83,9 @@ function resolveSubagentTarget(
     return match ? { entry: match } : { error: `Unknown subagent session: ${trimmed}` };
   }
   const byRunId = runs.filter((entry) => entry.runId.startsWith(trimmed));
-  if (byRunId.length === 1) return { entry: byRunId[0] };
+  if (byRunId.length === 1) {
+    return { entry: byRunId[0] };
+  }
   if (byRunId.length > 1) {
     return { error: `Ambiguous run id prefix: ${trimmed}` };
   }
@@ -117,11 +127,17 @@ export function extractMessageText(message: ChatMessage): { role: string; text: 
     );
     return normalized ? { role, text: normalized } : null;
   }
-  if (!Array.isArray(content)) return null;
+  if (!Array.isArray(content)) {
+    return null;
+  }
   const chunks: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
-    if ((block as { type?: unknown }).type !== "text") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      continue;
+    }
     const text = (block as { text?: unknown }).text;
     if (typeof text === "string") {
       const value = shouldSanitize ? sanitizeTextContent(text) : text;
@@ -138,7 +154,9 @@ function formatLogLines(messages: ChatMessage[]) {
   const lines: string[] = [];
   for (const msg of messages) {
     const extracted = extractMessageText(msg);
-    if (!extracted) continue;
+    if (!extracted) {
+      continue;
+    }
     const label = extracted.role === "assistant" ? "Assistant" : "User";
     lines.push(`${label}: ${extracted.text}`);
   }
@@ -153,9 +171,13 @@ function loadSubagentSessionEntry(params: Parameters<CommandHandler>[0], childKe
 }
 
 export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const normalized = params.command.commandBodyNormalized;
-  if (!normalized.startsWith(COMMAND)) return null;
+  if (!normalized.startsWith(COMMAND)) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /subagents from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -361,7 +383,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         },
         timeoutMs: 10_000,
       });
-      if (response?.runId) runId = response.runId;
+      if (response?.runId) {
+        runId = response.runId;
+      }
     } catch (err) {
       const messageText =
         err instanceof Error ? err.message : typeof err === "string" ? err : "error";

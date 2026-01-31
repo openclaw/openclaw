@@ -441,9 +441,12 @@ vi.mock("../config/config.js", async () => {
         ...fileSession,
         mainKey: fileSession.mainKey ?? "main",
       };
-      if (typeof testState.sessionStorePath === "string")
+      if (typeof testState.sessionStorePath === "string") {
         session.store = testState.sessionStorePath;
-      if (testState.sessionConfig) Object.assign(session, testState.sessionConfig);
+      }
+      if (testState.sessionConfig) {
+        Object.assign(session, testState.sessionConfig);
+      }
 
       const fileGateway =
         fileConfig.gateway &&
@@ -451,9 +454,15 @@ vi.mock("../config/config.js", async () => {
         !Array.isArray(fileConfig.gateway)
           ? ({ ...(fileConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
           : {};
-      if (testState.gatewayBind) fileGateway.bind = testState.gatewayBind;
-      if (testState.gatewayAuth) fileGateway.auth = testState.gatewayAuth;
-      if (testState.gatewayControlUi) fileGateway.controlUi = testState.gatewayControlUi;
+      if (testState.gatewayBind) {
+        fileGateway.bind = testState.gatewayBind;
+      }
+      if (testState.gatewayAuth) {
+        fileGateway.auth = testState.gatewayAuth;
+      }
+      if (testState.gatewayControlUi) {
+        fileGateway.controlUi = testState.gatewayControlUi;
+      }
       const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
       const fileCanvasHost =
@@ -462,8 +471,9 @@ vi.mock("../config/config.js", async () => {
         !Array.isArray(fileConfig.canvasHost)
           ? ({ ...(fileConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
           : {};
-      if (typeof testState.canvasHostPort === "number")
+      if (typeof testState.canvasHostPort === "number") {
         fileCanvasHost.port = testState.canvasHostPort;
+      }
       const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
 
       const hooks = testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
@@ -472,8 +482,12 @@ vi.mock("../config/config.js", async () => {
         fileConfig.cron && typeof fileConfig.cron === "object" && !Array.isArray(fileConfig.cron)
           ? ({ ...(fileConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
           : {};
-      if (typeof testState.cronEnabled === "boolean") fileCron.enabled = testState.cronEnabled;
-      if (typeof testState.cronStorePath === "string") fileCron.store = testState.cronStorePath;
+      if (typeof testState.cronEnabled === "boolean") {
+        fileCron.enabled = testState.cronEnabled;
+      }
+      if (typeof testState.cronStorePath === "string") {
+        fileCron.store = testState.cronStorePath;
+      }
       const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
 
       const config = {

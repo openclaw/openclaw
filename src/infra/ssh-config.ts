@@ -10,9 +10,13 @@ export type SshResolvedConfig = {
 };
 
 function parsePort(value: string | undefined): number | undefined {
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
   return parsed;
 }
 
@@ -21,10 +25,14 @@ export function parseSshConfigOutput(output: string): SshResolvedConfig {
   const lines = output.split("\n");
   for (const raw of lines) {
     const line = raw.trim();
-    if (!line) continue;
+    if (!line) {
+      continue;
+    }
     const [key, ...rest] = line.split(/\s+/);
     const value = rest.join(" ").trim();
-    if (!key || !value) continue;
+    if (!key || !value) {
+      continue;
+    }
     switch (key) {
       case "user":
         result.user = value;
@@ -36,7 +44,9 @@ export function parseSshConfigOutput(output: string): SshResolvedConfig {
         result.port = parsePort(value);
         break;
       case "identityfile":
-        if (value !== "none") result.identityFiles.push(value);
+        if (value !== "none") {
+          result.identityFiles.push(value);
+        }
         break;
       default:
         break;

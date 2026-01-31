@@ -167,9 +167,15 @@ export function createInternalHookEvent(
 }
 
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
-  if (event.type !== "agent" || event.action !== "bootstrap") return false;
+  if (event.type !== "agent" || event.action !== "bootstrap") {
+    return false;
+  }
   const context = event.context as Partial<AgentBootstrapHookContext> | null;
-  if (!context || typeof context !== "object") return false;
-  if (typeof context.workspaceDir !== "string") return false;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  if (typeof context.workspaceDir !== "string") {
+    return false;
+  }
   return Array.isArray(context.bootstrapFiles);
 }

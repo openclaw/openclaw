@@ -15,7 +15,9 @@ export function resolveChannelMediaMaxBytes(params: {
     cfg: params.cfg,
     accountId,
   });
-  if (channelLimit) return channelLimit * MB;
+  if (channelLimit) {
+    return channelLimit * MB;
+  }
   if (params.cfg.agents?.defaults?.mediaMaxMb) {
     return params.cfg.agents.defaults.mediaMaxMb * MB;
   }

@@ -19,23 +19,35 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
-  if (!block || typeof block !== "object") return false;
+  if (!block || typeof block !== "object") {
+    return false;
+  }
   const rec = block as Record<string, unknown>;
   return rec.type === "image" && typeof rec.data === "string" && typeof rec.mimeType === "string";
 }
 
 function isTextBlock(block: unknown): block is TextContentBlock {
-  if (!block || typeof block !== "object") return false;
+  if (!block || typeof block !== "object") {
+    return false;
+  }
   const rec = block as Record<string, unknown>;
   return rec.type === "text" && typeof rec.text === "string";
 }
 
 function inferMimeTypeFromBase64(base64: string): string | undefined {
   const trimmed = base64.trim();
-  if (!trimmed) return undefined;
-  if (trimmed.startsWith("/9j/")) return "image/jpeg";
-  if (trimmed.startsWith("iVBOR")) return "image/png";
-  if (trimmed.startsWith("R0lGOD")) return "image/gif";
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("/9j/")) {
+    return "image/jpeg";
+  }
+  if (trimmed.startsWith("iVBOR")) {
+    return "image/png";
+  }
+  if (trimmed.startsWith("R0lGOD")) {
+    return "image/gif";
+  }
   return undefined;
 }
 
@@ -189,7 +201,9 @@ export async function sanitizeImageBlocks(
   label: string,
   opts: { maxDimensionPx?: number; maxBytes?: number } = {},
 ): Promise<{ images: ImageContent[]; dropped: number }> {
-  if (images.length === 0) return { images, dropped: 0 };
+  if (images.length === 0) {
+    return { images, dropped: 0 };
+  }
   const sanitized = await sanitizeContentBlocksImages(images as ToolContentBlock[], label, opts);
   const next = sanitized.filter(isImageBlock);
   return { images: next, dropped: Math.max(0, images.length - next.length) };
@@ -201,7 +215,9 @@ export async function sanitizeToolResultImages(
   opts: { maxDimensionPx?: number; maxBytes?: number } = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
-  if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) return result;
+  if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) {
+    return result;
+  }
 
   const next = await sanitizeContentBlocksImages(content, label, opts);
   return { ...result, content: next };

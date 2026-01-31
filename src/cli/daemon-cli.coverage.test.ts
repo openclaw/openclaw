@@ -96,21 +96,29 @@ describe("daemon-cli coverage", () => {
   });
 
   afterEach(() => {
-    if (originalEnv.OPENCLAW_STATE_DIR !== undefined)
+    if (originalEnv.OPENCLAW_STATE_DIR !== undefined) {
       process.env.OPENCLAW_STATE_DIR = originalEnv.OPENCLAW_STATE_DIR;
-    else delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      delete process.env.OPENCLAW_STATE_DIR;
+    }
 
-    if (originalEnv.OPENCLAW_CONFIG_PATH !== undefined)
+    if (originalEnv.OPENCLAW_CONFIG_PATH !== undefined) {
       process.env.OPENCLAW_CONFIG_PATH = originalEnv.OPENCLAW_CONFIG_PATH;
-    else delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    }
 
-    if (originalEnv.OPENCLAW_GATEWAY_PORT !== undefined)
+    if (originalEnv.OPENCLAW_GATEWAY_PORT !== undefined) {
       process.env.OPENCLAW_GATEWAY_PORT = originalEnv.OPENCLAW_GATEWAY_PORT;
-    else delete process.env.OPENCLAW_GATEWAY_PORT;
+    } else {
+      delete process.env.OPENCLAW_GATEWAY_PORT;
+    }
 
-    if (originalEnv.OPENCLAW_PROFILE !== undefined)
+    if (originalEnv.OPENCLAW_PROFILE !== undefined) {
       process.env.OPENCLAW_PROFILE = originalEnv.OPENCLAW_PROFILE;
-    else delete process.env.OPENCLAW_PROFILE;
+    } else {
+      delete process.env.OPENCLAW_PROFILE;
+    }
   });
 
   it("probes gateway status by default", async () => {

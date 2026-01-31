@@ -17,18 +17,24 @@ export function shouldLogVerbose() {
 }
 
 export function logVerbose(message: string) {
-  if (!shouldLogVerbose()) return;
+  if (!shouldLogVerbose()) {
+    return;
+  }
   try {
     getLogger().debug({ message }, "verbose");
   } catch {
     // ignore logger failures to avoid breaking verbose printing
   }
-  if (!globalVerbose) return;
+  if (!globalVerbose) {
+    return;
+  }
   console.log(theme.muted(message));
 }
 
 export function logVerboseConsole(message: string) {
-  if (!globalVerbose) return;
+  if (!globalVerbose) {
+    return;
+  }
   console.log(theme.muted(message));
 }
 

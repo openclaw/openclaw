@@ -65,9 +65,15 @@ function errorHtmlResponse(
   };
 }
 function requestUrl(input: RequestInfo): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.toString();
-  if ("url" in input && typeof input.url === "string") return input.url;
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if ("url" in input && typeof input.url === "string") {
+    return input.url;
+  }
   return "";
 }
 
