@@ -187,6 +187,7 @@
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
     "linkedom": "^0.18.12",
+    "long": "^5.3.2",
     "markdown-it": "^14.1.0",
     "node-edge-tts": "^1.2.9",
     "osc-progress": "^0.3.0",
