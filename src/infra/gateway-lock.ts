@@ -69,7 +69,7 @@ function isGatewayArgv(args: string[]): boolean {
   if (!normalized.includes("gateway")) return false;
 
   const entryCandidates = [
-    "dist/index.js",
+    "dist/index.mjs",
     "dist/index.mjs",
     "dist/entry.js",
     "openclaw.mjs",

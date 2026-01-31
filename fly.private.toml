@@ -22,7 +22,7 @@ primary_region = "iad"  # change to your closest region
   NODE_OPTIONS = "--max-old-space-size=1536"
 
 [processes]
-  app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+  app = "node dist/index.mjs gateway --allow-unconfigured --port 3000 --bind lan"
 
 # NOTE: No [http_service] block = no public ingress allocated.
 # The gateway will only be accessible via:
