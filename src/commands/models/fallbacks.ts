@@ -8,6 +8,7 @@ import {
   modelKey,
   resolveModelTarget,
   updateConfig,
+  validateModelInCatalog,
 } from "./shared.js";
 
 export async function modelsFallbacksListCommand(
@@ -35,17 +36,39 @@ export async function modelsFallbacksListCommand(
   for (const entry of fallbacks) runtime.log(`- ${entry}`);
 }
 
-export async function modelsFallbacksAddCommand(modelRaw: string, runtime: RuntimeEnv) {
-  const updated = await updateConfig((cfg) => {
-    const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const targetKey = modelKey(resolved.provider, resolved.model);
-    const nextModels = { ...cfg.agents?.defaults?.models };
+export async function modelsFallbacksAddCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+  opts?: { force?: boolean },
+) {
+  const cfg = loadConfig();
+  const resolved = resolveModelTarget({ raw: modelRaw, cfg });
+  const targetKey = modelKey(resolved.provider, resolved.model);
+
+  // Validate model exists in catalog unless --force is used
+  const validation = await validateModelInCatalog(resolved.provider, resolved.model);
+  if (!validation.valid) {
+    if (opts?.force) {
+      runtime.log(`⚠️ Model not found in catalog: ${targetKey}. Proceeding anyway (--force).`);
+    } else {
+      const suggestionText =
+        validation.suggestions && validation.suggestions.length > 0
+          ? `\nDid you mean: ${validation.suggestions.join(", ")}?`
+          : "";
+      throw new Error(
+        `Unknown model: ${targetKey}${suggestionText}\nUse --force to skip validation.`,
+      );
+    }
+  }
+
+  const updated = await updateConfig((cfgSnapshot) => {
+    const nextModels = { ...cfgSnapshot.agents?.defaults?.models };
     if (!nextModels[targetKey]) nextModels[targetKey] = {};
     const aliasIndex = buildModelAliasIndex({
-      cfg,
+      cfg: cfgSnapshot,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    const existing = cfg.agents?.defaults?.model?.fallbacks ?? [];
+    const existing = cfgSnapshot.agents?.defaults?.model?.fallbacks ?? [];
     const existingKeys = existing
       .map((entry) =>
         resolveModelRefFromString({
@@ -57,18 +80,18 @@ export async function modelsFallbacksAddCommand(modelRaw: string, runtime: Runti
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
 
-    if (existingKeys.includes(targetKey)) return cfg;
+    if (existingKeys.includes(targetKey)) return cfgSnapshot;
 
-    const existingModel = cfg.agents?.defaults?.model as
+    const existingModel = cfgSnapshot.agents?.defaults?.model as
       | { primary?: string; fallbacks?: string[] }
       | undefined;
 
     return {
-      ...cfg,
+      ...cfgSnapshot,
       agents: {
-        ...cfg.agents,
+        ...cfgSnapshot.agents,
         defaults: {
-          ...cfg.agents?.defaults,
+          ...cfgSnapshot.agents?.defaults,
           model: {
             ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
             fallbacks: [...existing, targetKey],

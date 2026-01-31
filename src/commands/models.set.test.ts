@@ -11,6 +11,13 @@ vi.mock("../config/config.js", () => ({
   loadConfig,
 }));
 
+// Mock model catalog to return empty (graceful degradation - all models are valid)
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: vi.fn().mockResolvedValue([]),
+  findModelInCatalog: vi.fn().mockReturnValue(undefined),
+  modelSupportsVision: vi.fn().mockReturnValue(false),
+}));
+
 describe("models set + fallbacks", () => {
   beforeEach(() => {
     readConfigFileSnapshot.mockReset();

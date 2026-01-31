@@ -8,6 +8,7 @@ import {
   modelKey,
   resolveModelTarget,
   updateConfig,
+  validateImageModel,
 } from "./shared.js";
 
 export async function modelsImageFallbacksListCommand(
@@ -35,17 +36,49 @@ export async function modelsImageFallbacksListCommand(
   for (const entry of fallbacks) runtime.log(`- ${entry}`);
 }
 
-export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: RuntimeEnv) {
-  const updated = await updateConfig((cfg) => {
-    const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const targetKey = modelKey(resolved.provider, resolved.model);
-    const nextModels = { ...cfg.agents?.defaults?.models };
+export async function modelsImageFallbacksAddCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+  opts?: { force?: boolean },
+) {
+  const cfg = loadConfig();
+  const resolved = resolveModelTarget({ raw: modelRaw, cfg });
+  const targetKey = modelKey(resolved.provider, resolved.model);
+
+  // Validate model exists in catalog and supports vision unless --force is used
+  const validation = await validateImageModel(resolved.provider, resolved.model);
+  if (!validation.valid) {
+    if (opts?.force) {
+      runtime.log(`⚠️ Model not found in catalog: ${targetKey}. Proceeding anyway (--force).`);
+    } else {
+      const suggestionText =
+        validation.suggestions && validation.suggestions.length > 0
+          ? `\nDid you mean: ${validation.suggestions.join(", ")}?`
+          : "";
+      throw new Error(
+        `Unknown model: ${targetKey}${suggestionText}\nUse --force to skip validation.`,
+      );
+    }
+  } else if (validation.entry && validation.supportsVision === false) {
+    if (opts?.force) {
+      runtime.log(
+        `⚠️ Model ${targetKey} may not support image input. Proceeding anyway (--force).`,
+      );
+    } else {
+      runtime.log(
+        `⚠️ Model ${targetKey} does not appear to support image input. Use --force to set anyway.`,
+      );
+    }
+  }
+
+  const updated = await updateConfig((cfgSnapshot) => {
+    const nextModels = { ...cfgSnapshot.agents?.defaults?.models };
     if (!nextModels[targetKey]) nextModels[targetKey] = {};
     const aliasIndex = buildModelAliasIndex({
-      cfg,
+      cfg: cfgSnapshot,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    const existing = cfg.agents?.defaults?.imageModel?.fallbacks ?? [];
+    const existing = cfgSnapshot.agents?.defaults?.imageModel?.fallbacks ?? [];
     const existingKeys = existing
       .map((entry) =>
         resolveModelRefFromString({
@@ -57,18 +90,18 @@ export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: 
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
 
-    if (existingKeys.includes(targetKey)) return cfg;
+    if (existingKeys.includes(targetKey)) return cfgSnapshot;
 
-    const existingModel = cfg.agents?.defaults?.imageModel as
+    const existingModel = cfgSnapshot.agents?.defaults?.imageModel as
       | { primary?: string; fallbacks?: string[] }
       | undefined;
 
     return {
-      ...cfg,
+      ...cfgSnapshot,
       agents: {
-        ...cfg.agents,
+        ...cfgSnapshot.agents,
         defaults: {
-          ...cfg.agents?.defaults,
+          ...cfgSnapshot.agents?.defaults,
           imageModel: {
             ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
             fallbacks: [...existing, targetKey],

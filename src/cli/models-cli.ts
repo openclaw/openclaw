@@ -119,9 +119,10 @@ export function registerModelsCli(program: Command) {
     .command("set")
     .description("Set the default model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .option("--force", "Skip model validation", false)
+    .action(async (model: string, opts) => {
       await runModelsCommand(async () => {
-        await modelsSetCommand(model, defaultRuntime);
+        await modelsSetCommand(model, defaultRuntime, { force: Boolean(opts.force) });
       });
     });
 
@@ -129,9 +130,10 @@ export function registerModelsCli(program: Command) {
     .command("set-image")
     .description("Set the image model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .option("--force", "Skip model validation", false)
+    .action(async (model: string, opts) => {
       await runModelsCommand(async () => {
-        await modelsSetImageCommand(model, defaultRuntime);
+        await modelsSetImageCommand(model, defaultRuntime, { force: Boolean(opts.force) });
       });
     });
 
@@ -186,9 +188,10 @@ export function registerModelsCli(program: Command) {
     .command("add")
     .description("Add a fallback model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .option("--force", "Skip model validation", false)
+    .action(async (model: string, opts) => {
       await runModelsCommand(async () => {
-        await modelsFallbacksAddCommand(model, defaultRuntime);
+        await modelsFallbacksAddCommand(model, defaultRuntime, { force: Boolean(opts.force) });
       });
     });
 
@@ -230,9 +233,10 @@ export function registerModelsCli(program: Command) {
     .command("add")
     .description("Add an image fallback model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .option("--force", "Skip model validation", false)
+    .action(async (model: string, opts) => {
       await runModelsCommand(async () => {
-        await modelsImageFallbacksAddCommand(model, defaultRuntime);
+        await modelsImageFallbacksAddCommand(model, defaultRuntime, { force: Boolean(opts.force) });
       });
     });
 
