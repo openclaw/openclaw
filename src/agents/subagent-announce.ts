@@ -231,6 +231,41 @@ async function maybeQueueSubagentAnnounce(params: {
   return "none";
 }
 
+/**
+ * Build a descriptive error status label from outcome data.
+ * Includes error type, message, and hint if available.
+ */
+function buildErrorStatusLabel(outcome: SubagentRunOutcome): string {
+  const parts: string[] = [];
+
+  // Start with "failed"
+  parts.push("failed");
+
+  // Add error type context
+  if (outcome.errorType) {
+    const typeLabel: Record<string, string> = {
+      model: "API error",
+      tool: "tool error",
+      network: "network error",
+      config: "configuration error",
+      timeout: "timeout",
+    };
+    const label = typeLabel[outcome.errorType] || "error";
+    parts.push(`(${label}):`);
+  }
+
+  // Add error message
+  const errorMsg = outcome.error || "unknown error";
+  parts.push(errorMsg);
+
+  // Add hint if available
+  if (outcome.errorHint) {
+    parts.push(`— ${outcome.errorHint}`);
+  }
+
+  return parts.join(" ");
+}
+
 async function buildSubagentStatsLine(params: {
   sessionKey: string;
   startedAt?: number;
@@ -344,6 +379,8 @@ export function buildSubagentSystemPrompt(params: {
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  errorType?: "model" | "tool" | "network" | "config" | "timeout" | "unknown";
+  errorHint?: string;
 };
 
 export async function runSubagentAnnounceFlow(params: {
@@ -430,7 +467,7 @@ export async function runSubagentAnnounceFlow(params: {
         : outcome.status === "timeout"
           ? "timed out"
           : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
+            ? buildErrorStatusLabel(outcome)
             : "finished with unknown status";
 
     // Build instructional message for main agent

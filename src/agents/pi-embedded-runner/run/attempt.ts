@@ -57,6 +57,7 @@ import {
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
@@ -554,9 +555,11 @@ export async function runEmbeddedAttempt(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        // Fix: Repair tool_use/tool_result pairings AFTER truncation (issue #4367)
+        const repaired = sanitizeToolUseResultPairing(limited);
+        cacheTrace?.recordStage("session:limited", { messages: repaired });
+        if (repaired.length > 0) {
+          activeSession.agent.replaceMessages(repaired);
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();
