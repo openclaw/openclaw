@@ -1,5 +1,3 @@
-import type { RESTGetAPIChannelResult, RESTGetAPIGuildChannelsResult } from "discord-api-types/v10";
-
 import { fetchDiscord } from "./api.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
