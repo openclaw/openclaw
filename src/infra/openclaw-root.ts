@@ -18,9 +18,13 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
     const name = await readPackageName(current);
-    if (name && CORE_PACKAGE_NAMES.has(name)) return current;
+    if (name && CORE_PACKAGE_NAMES.has(name)) {
+      return current;
+    }
     const parent = path.dirname(current);
-    if (parent === current) break;
+    if (parent === current) {
+      break;
+    }
     current = parent;
   }
   return null;
@@ -58,7 +62,9 @@ export async function resolveOpenClawPackageRoot(opts: {
 
   for (const candidate of candidates) {
     const found = await findPackageRoot(candidate);
-    if (found) return found;
+    if (found) {
+      return found;
+    }
   }
 
   return null;

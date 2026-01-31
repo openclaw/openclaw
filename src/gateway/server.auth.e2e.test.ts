@@ -17,7 +17,9 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 installGatewayTestHooks({ scope: "suite" });
 
 async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {
-  if (ws.readyState === WebSocket.CLOSED) return true;
+  if (ws.readyState === WebSocket.CLOSED) {
+    return true;
+  }
   return await new Promise((resolve) => {
     const timer = setTimeout(() => resolve(ws.readyState === WebSocket.CLOSED), timeoutMs);
     ws.once("close", () => {

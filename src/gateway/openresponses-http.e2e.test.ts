@@ -73,7 +73,9 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
 }
 
 async function ensureResponseConsumed(res: Response) {
-  if (res.bodyUsed) return;
+  if (res.bodyUsed) {
+    return;
+  }
   try {
     await res.text();
   } catch {
@@ -493,7 +495,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const typeText = await resTypeMatch.text();
       const typeEvents = parseSseEvents(typeText);
       for (const event of typeEvents) {
-        if (event.data === "[DONE]") continue;
+        if (event.data === "[DONE]") {
+          continue;
+        }
         const parsed = JSON.parse(event.data) as { type?: string };
         expect(event.event).toBe(parsed.type);
       }

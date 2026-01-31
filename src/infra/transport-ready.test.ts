@@ -15,7 +15,9 @@ describe("waitForTransportReady", () => {
       runtime,
       check: async () => {
         attempts += 1;
-        if (attempts > 4) return { ok: true };
+        if (attempts > 4) {
+          return { ok: true };
+        }
         return { ok: false, error: "not ready" };
       },
     });

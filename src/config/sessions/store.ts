@@ -74,7 +74,9 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     entry.lastTo === normalized.lastTo &&
     entry.lastAccountId === normalized.lastAccountId &&
     entry.lastThreadId === normalized.lastThreadId;
-  if (sameDelivery && sameLast) return entry;
+  if (sameDelivery && sameLast) {
+    return entry;
+  }
   return {
     ...entry,
     deliveryContext: nextDelivery,
@@ -87,7 +89,9 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 
 function normalizeSessionStore(store: Record<string, SessionEntry>): void {
   for (const [key, entry] of Object.entries(store)) {
-    if (!entry) continue;
+    if (!entry) {
+      continue;
+    }
     const normalized = normalizeSessionEntryDelivery(entry);
     if (normalized !== entry) {
       store[key] = normalized;
@@ -136,7 +140,9 @@ export function loadSessionStore(
 
   // Best-effort migration: message provider → channel naming.
   for (const entry of Object.values(store)) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
     const rec = entry as unknown as Record<string, unknown>;
     if (typeof rec.channel !== "string" && typeof rec.provider === "string") {
       rec.channel = rec.provider;
@@ -203,7 +209,9 @@ async function saveSessionStoreUnlocked(
         err && typeof err === "object" && "code" in err
           ? String((err as { code?: unknown }).code)
           : null;
-      if (code === "ENOENT") return;
+      if (code === "ENOENT") {
+        return;
+      }
       throw err;
     }
     return;
@@ -233,7 +241,9 @@ async function saveSessionStoreUnlocked(
           err2 && typeof err2 === "object" && "code" in err2
             ? String((err2 as { code?: unknown }).code)
             : null;
-        if (code2 === "ENOENT") return;
+        if (code2 === "ENOENT") {
+          return;
+        }
         throw err2;
       }
       return;
@@ -313,7 +323,9 @@ async function withSessionStoreLock<T>(
         await new Promise((r) => setTimeout(r, pollIntervalMs));
         continue;
       }
-      if (code !== "EEXIST") throw err;
+      if (code !== "EEXIST") {
+        throw err;
+      }
 
       const now = Date.now();
       if (now - startedAt > timeoutMs) {
@@ -352,9 +364,13 @@ export async function updateSessionStoreEntry(params: {
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
-    if (!existing) return null;
+    if (!existing) {
+      return null;
+    }
     const patch = await update(existing);
-    if (!patch) return existing;
+    if (!patch) {
+      return existing;
+    }
     const next = mergeSessionEntry(existing, patch);
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);
@@ -379,8 +395,12 @@ export async function recordSessionMetaFromInbound(params: {
       existing,
       groupResolution: params.groupResolution,
     });
-    if (!patch) return existing ?? null;
-    if (!existing && !createIfMissing) return null;
+    if (!patch) {
+      return existing ?? null;
+    }
+    if (!existing && !createIfMissing) {
+      return null;
+    }
     const next = mergeSessionEntry(existing, patch);
     store[sessionKey] = next;
     return next;

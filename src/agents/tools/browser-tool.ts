@@ -70,7 +70,9 @@ async function resolveBrowserNodeTarget(params: {
   if (params.sandboxBridgeUrl?.trim() && params.target !== "node" && !params.requestedNode) {
     return null;
   }
-  if (params.target && params.target !== "node") return null;
+  if (params.target && params.target !== "node") {
+    return null;
+  }
   if (mode === "manual" && params.target !== "node" && !params.requestedNode) {
     return null;
   }
@@ -101,7 +103,9 @@ async function resolveBrowserNodeTarget(params: {
     );
   }
 
-  if (mode === "manual") return null;
+  if (mode === "manual") {
+    return null;
+  }
 
   if (browserNodes.length === 1) {
     const node = browserNodes[0];
@@ -152,7 +156,9 @@ async function callBrowserProxy(params: {
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  if (!files || files.length === 0) return new Map<string, string>();
+  if (!files || files.length === 0) {
+    return new Map<string, string>();
+  }
   const mapping = new Map<string, string>();
   for (const file of files) {
     const buffer = Buffer.from(file.base64, "base64");
@@ -163,7 +169,9 @@ async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  if (!result || typeof result !== "object") return;
+  if (!result || typeof result !== "object") {
+    return;
+  }
   const obj = result as Record<string, unknown>;
   if (typeof obj.path === "string" && mapping.has(obj.path)) {
     obj.path = mapping.get(obj.path);
@@ -402,8 +410,11 @@ export function createBrowserTool(opts?: {
                 });
             return jsonResult(result);
           }
-          if (targetId) await browserCloseTab(baseUrl, targetId, { profile });
-          else await browserAct(baseUrl, { kind: "close" }, { profile });
+          if (targetId) {
+            await browserCloseTab(baseUrl, targetId, { profile });
+          } else {
+            await browserAct(baseUrl, { kind: "close" }, { profile });
+          }
           return jsonResult({ ok: true });
         }
         case "snapshot": {
@@ -592,7 +603,9 @@ export function createBrowserTool(opts?: {
         }
         case "upload": {
           const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
-          if (paths.length === 0) throw new Error("paths required");
+          if (paths.length === 0) {
+            throw new Error("paths required");
+          }
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");

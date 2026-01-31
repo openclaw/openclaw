@@ -39,13 +39,17 @@ const defaultLogger: HookInstallLogger = {};
 
 function unscopedPackageName(name: string): string {
   const trimmed = name.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
   return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
 }
 
 function safeDirName(input: string): string {
   const trimmed = input.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
   return trimmed.replaceAll("/", "__");
 }
 
@@ -349,7 +353,9 @@ export async function installHooksFromNpmSpec(params: {
   const dryRun = params.dryRun ?? false;
   const expectedHookPackId = params.expectedHookPackId;
   const spec = params.spec.trim();
-  if (!spec) return { ok: false, error: "missing npm spec" };
+  if (!spec) {
+    return { ok: false, error: "missing npm spec" };
+  }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-pack-"));
   logger.info?.(`Downloading ${spec}…`);

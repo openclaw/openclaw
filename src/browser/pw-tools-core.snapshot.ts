@@ -160,7 +160,9 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
 }): Promise<{ url: string }> {
   const url = String(opts.url ?? "").trim();
-  if (!url) throw new Error("url is required");
+  if (!url) {
+    throw new Error("url is required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.goto(url, {

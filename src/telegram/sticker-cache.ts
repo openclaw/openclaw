@@ -187,7 +187,9 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
       (entry) =>
         entry.provider.toLowerCase() === provider.toLowerCase() && modelSupportsVision(entry),
     );
-    if (entries.length === 0) return undefined;
+    if (entries.length === 0) {
+      return undefined;
+    }
     const defaultId =
       provider === "openai"
         ? "gpt-5-mini"
@@ -211,7 +213,9 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
 
   if (!resolved) {
     for (const provider of VISION_PROVIDERS) {
-      if (!(await hasProviderKey(provider))) continue;
+      if (!(await hasProviderKey(provider))) {
+        continue;
+      }
       const entry = selectCatalogModel(provider);
       if (entry) {
         resolved = { provider, model: entry.id };

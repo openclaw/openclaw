@@ -26,7 +26,9 @@ export type IMessageSendResult = {
 };
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
-  if (!result) return null;
+  if (!result) {
+    return null;
+  }
   const raw =
     (typeof result.messageId === "string" && result.messageId.trim()) ||
     (typeof result.message_id === "string" && result.message_id.trim()) ||
@@ -83,7 +85,9 @@ export async function sendMessageIMessage(
     filePath = resolved.path;
     if (!message.trim()) {
       const kind = mediaKindFromMime(resolved.contentType ?? undefined);
-      if (kind) message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      if (kind) {
+        message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      }
     }
   }
 
@@ -104,7 +108,9 @@ export async function sendMessageIMessage(
     service: service || "auto",
     region,
   };
-  if (filePath) params.file = filePath;
+  if (filePath) {
+    params.file = filePath;
+  }
 
   if (target.kind === "chat_id") {
     params.chat_id = target.chatId;

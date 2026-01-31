@@ -61,10 +61,14 @@ const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
 
 function resolveHostName(hostHeader?: string): string {
   const host = (hostHeader ?? "").trim().toLowerCase();
-  if (!host) return "";
+  if (!host) {
+    return "";
+  }
   if (host.startsWith("[")) {
     const end = host.indexOf("]");
-    if (end !== -1) return host.slice(1, end);
+    if (end !== -1) {
+      return host.slice(1, end);
+    }
   }
   const [name] = host.split(":");
   return name ?? "";
@@ -229,7 +233,9 @@ export function attachGatewayWsMessageHandler(params: {
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
 
   socket.on("message", async (data) => {
-    if (isClosed()) return;
+    if (isClosed()) {
+      return;
+    }
     const text = rawDataToString(data);
     try {
       const parsed = JSON.parse(text);
@@ -681,30 +687,40 @@ export function attachGatewayWsMessageHandler(params: {
           const isPaired = paired?.publicKey === devicePublicKey;
           if (!isPaired) {
             const ok = await requirePairing("not-paired");
-            if (!ok) return;
+            if (!ok) {
+              return;
+            }
           } else {
             const allowedRoles = new Set(
               Array.isArray(paired.roles) ? paired.roles : paired.role ? [paired.role] : [],
             );
             if (allowedRoles.size === 0) {
               const ok = await requirePairing("role-upgrade", paired);
-              if (!ok) return;
+              if (!ok) {
+                return;
+              }
             } else if (!allowedRoles.has(role)) {
               const ok = await requirePairing("role-upgrade", paired);
-              if (!ok) return;
+              if (!ok) {
+                return;
+              }
             }
 
             const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
             if (scopes.length > 0) {
               if (pairedScopes.length === 0) {
                 const ok = await requirePairing("scope-upgrade", paired);
-                if (!ok) return;
+                if (!ok) {
+                  return;
+                }
               } else {
                 const allowedScopes = new Set(pairedScopes);
                 const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
                 if (missingScope) {
                   const ok = await requirePairing("scope-upgrade", paired);
-                  if (!ok) return;
+                  if (!ok) {
+                    return;
+                  }
                 }
               }
             }
@@ -828,7 +844,9 @@ export function attachGatewayWsMessageHandler(params: {
           const instanceIdRaw = connectParams.client.instanceId;
           const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-          if (instanceId) nodeIdsForPairing.add(instanceId);
+          if (instanceId) {
+            nodeIdsForPairing.add(instanceId);
+          }
           for (const nodeId of nodeIdsForPairing) {
             void updatePairedNodeMetadata(nodeId, {
               lastConnectedAtMs: nodeSession.connectedAtMs,

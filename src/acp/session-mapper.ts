@@ -12,7 +12,9 @@ export type AcpSessionMeta = {
 };
 
 export function parseSessionMeta(meta: unknown): AcpSessionMeta {
-  if (!meta || typeof meta !== "object") return {};
+  if (!meta || typeof meta !== "object") {
+    return {};
+  }
   const record = meta as Record<string, unknown>;
   return {
     sessionKey: readString(record, ["sessionKey", "session", "key"]),
@@ -45,7 +47,9 @@ export async function resolveSessionKey(params: {
   }
 
   if (params.meta.sessionKey) {
-    if (!requireExisting) return params.meta.sessionKey;
+    if (!requireExisting) {
+      return params.meta.sessionKey;
+    }
     const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
       key: params.meta.sessionKey,
     });
@@ -66,7 +70,9 @@ export async function resolveSessionKey(params: {
   }
 
   if (requestedKey) {
-    if (!requireExisting) return requestedKey;
+    if (!requireExisting) {
+      return requestedKey;
+    }
     const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
       key: requestedKey,
     });
@@ -86,6 +92,8 @@ export async function resetSessionIfNeeded(params: {
   opts: AcpServerOptions;
 }): Promise<void> {
   const resetSession = params.meta.resetSession ?? params.opts.resetSession ?? false;
-  if (!resetSession) return;
+  if (!resetSession) {
+    return;
+  }
   await params.gateway.request("sessions.reset", { key: params.sessionKey });
 }

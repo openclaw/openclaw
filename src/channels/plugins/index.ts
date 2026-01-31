@@ -19,7 +19,9 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
   const resolved: ChannelPlugin[] = [];
   for (const plugin of channels) {
     const id = String(plugin.id).trim();
-    if (!id || seen.has(id)) continue;
+    if (!id || seen.has(id)) {
+      continue;
+    }
     seen.add(id);
     resolved.push(plugin);
   }
@@ -33,14 +35,18 @@ export function listChannelPlugins(): ChannelPlugin[] {
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
     const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
-    if (orderA !== orderB) return orderA - orderB;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
     return a.id.localeCompare(b.id);
   });
 }
 
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = String(id).trim();
-  if (!resolvedId) return undefined;
+  if (!resolvedId) {
+    return undefined;
+  }
   return listChannelPlugins().find((plugin) => plugin.id === resolvedId);
 }
 

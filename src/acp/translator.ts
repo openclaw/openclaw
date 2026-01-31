@@ -210,7 +210,9 @@ export class AcpGatewayAgent implements Agent {
     if (!session) {
       throw new Error(`Session ${params.sessionId} not found`);
     }
-    if (!params.modeId) return {};
+    if (!params.modeId) {
+      return {};
+    }
     try {
       await this.gateway.request("sessions.patch", {
         key: session.sessionKey,
@@ -276,7 +278,9 @@ export class AcpGatewayAgent implements Agent {
 
   async cancel(params: CancelNotification): Promise<void> {
     const session = this.sessionStore.getSession(params.sessionId);
-    if (!session) return;
+    if (!session) {
+      return;
+    }
 
     this.sessionStore.cancelActiveRun(params.sessionId);
     try {
@@ -294,24 +298,38 @@ export class AcpGatewayAgent implements Agent {
 
   private async handleAgentEvent(evt: EventFrame): Promise<void> {
     const payload = evt.payload as Record<string, unknown> | undefined;
-    if (!payload) return;
+    if (!payload) {
+      return;
+    }
     const stream = payload.stream as string | undefined;
     const data = payload.data as Record<string, unknown> | undefined;
     const sessionKey = payload.sessionKey as string | undefined;
-    if (!stream || !data || !sessionKey) return;
+    if (!stream || !data || !sessionKey) {
+      return;
+    }
 
-    if (stream !== "tool") return;
+    if (stream !== "tool") {
+      return;
+    }
     const phase = data.phase as string | undefined;
     const name = data.name as string | undefined;
     const toolCallId = data.toolCallId as string | undefined;
-    if (!toolCallId) return;
+    if (!toolCallId) {
+      return;
+    }
 
     const pending = this.findPendingBySessionKey(sessionKey);
-    if (!pending) return;
+    if (!pending) {
+      return;
+    }
 
     if (phase === "start") {
-      if (!pending.toolCalls) pending.toolCalls = new Set();
-      if (pending.toolCalls.has(toolCallId)) return;
+      if (!pending.toolCalls) {
+        pending.toolCalls = new Set();
+      }
+      if (pending.toolCalls.has(toolCallId)) {
+        return;
+      }
       pending.toolCalls.add(toolCallId);
       const args = data.args as Record<string, unknown> | undefined;
       await this.connection.sessionUpdate({
@@ -344,17 +362,25 @@ export class AcpGatewayAgent implements Agent {
 
   private async handleChatEvent(evt: EventFrame): Promise<void> {
     const payload = evt.payload as Record<string, unknown> | undefined;
-    if (!payload) return;
+    if (!payload) {
+      return;
+    }
 
     const sessionKey = payload.sessionKey as string | undefined;
     const state = payload.state as string | undefined;
     const runId = payload.runId as string | undefined;
     const messageData = payload.message as Record<string, unknown> | undefined;
-    if (!sessionKey || !state) return;
+    if (!sessionKey || !state) {
+      return;
+    }
 
     const pending = this.findPendingBySessionKey(sessionKey);
-    if (!pending) return;
-    if (runId && pending.idempotencyKey !== runId) return;
+    if (!pending) {
+      return;
+    }
+    if (runId && pending.idempotencyKey !== runId) {
+      return;
+    }
 
     if (state === "delta" && messageData) {
       await this.handleDeltaEvent(pending.sessionId, messageData);
@@ -381,10 +407,14 @@ export class AcpGatewayAgent implements Agent {
     const content = messageData.content as Array<{ type: string; text?: string }> | undefined;
     const fullText = content?.find((c) => c.type === "text")?.text ?? "";
     const pending = this.pendingPrompts.get(sessionId);
-    if (!pending) return;
+    if (!pending) {
+      return;
+    }
 
     const sentSoFar = pending.sentTextLength ?? 0;
-    if (fullText.length <= sentSoFar) return;
+    if (fullText.length <= sentSoFar) {
+      return;
+    }
 
     const newText = fullText.slice(sentSoFar);
     pending.sentTextLength = fullText.length;
@@ -407,7 +437,9 @@ export class AcpGatewayAgent implements Agent {
 
   private findPendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
     for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey === sessionKey) return pending;
+      if (pending.sessionKey === sessionKey) {
+        return pending;
+      }
     }
     return undefined;
   }
