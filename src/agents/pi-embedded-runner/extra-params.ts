@@ -4,6 +4,11 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
 
+const OPENROUTER_APP_HEADERS: Record<string, string> = {
+  "HTTP-Referer": "https://openclaw.ai",
+  "X-Title": "OpenClaw",
+};
+
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -97,7 +102,24 @@ function createStreamFnWithExtraParams(
 }
 
 /**
+ * Create a streamFn wrapper that adds OpenRouter app attribution headers.
+ * These headers allow OpenClaw to appear on OpenRouter's leaderboard.
+ */
+function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model as Model<Api>, context, {
+      ...options,
+      headers: {
+        ...OPENROUTER_APP_HEADERS,
+        ...options?.headers,
+      },
+    });
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
+ * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *
  * @internal Exported for testing
  */
@@ -125,5 +147,10 @@ export function applyExtraParamsToAgent(
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
+  }
+
+  if (provider === "openrouter") {
+    log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
+    agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
   }
 }
