@@ -32,6 +32,17 @@ const MINIMAX_API_COST = {
   cacheWrite: 10,
 };
 
+const INFINI_BASE_URL = "https://cloud.infini-ai.com/maas/v1";
+const INFINI_DEFAULT_MODEL_ID = "qwen2.5-7b-instruct";
+const INFINI_DEFAULT_CONTEXT_WINDOW = 128000;
+const INFINI_DEFAULT_MAX_TOKENS = 8192;
+const INFINI_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
 export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
 const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
@@ -376,6 +387,24 @@ export function buildXiaomiProvider(): ProviderConfig {
   };
 }
 
+export function buildInfiniProvider(): ProviderConfig {
+  return {
+    baseUrl: INFINI_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: INFINI_DEFAULT_MODEL_ID,
+        name: "Qwen 2.5 7B Instruct",
+        reasoning: false,
+        input: ["text"],
+        cost: INFINI_DEFAULT_COST,
+        contextWindow: INFINI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: INFINI_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -451,6 +480,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
+  const infiniKey =
+    resolveEnvApiKeyVarName("infini") ??
+    resolveApiKeyFromProfiles({ provider: "infini", store: authStore });
+  if (infiniKey) {
+    providers.infini = { ...buildInfiniProvider(), apiKey: infiniKey };
   }
 
   // Ollama provider - only add if explicitly configured

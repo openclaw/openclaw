@@ -5,6 +5,7 @@ import {
   fetchCodexUsage,
   fetchCopilotUsage,
   fetchGeminiUsage,
+  fetchInfiniUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
@@ -64,6 +65,8 @@ export async function loadProviderUsageSummary(
             return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
           case "openai-codex":
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
+          case "infini":
+            return await fetchInfiniUsage(auth.token, timeoutMs, fetchFn);
           case "minimax":
             return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
           case "xiaomi":

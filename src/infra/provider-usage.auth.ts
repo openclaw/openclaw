@@ -114,6 +114,41 @@ function resolveMinimaxApiKey(): string | undefined {
   return undefined;
 }
 
+function resolveInfiniApiKey(): string | undefined {
+  const envDirect = process.env.INFINI_API_KEY?.trim();
+  if (envDirect) {
+    return envDirect;
+  }
+
+  const envResolved = resolveEnvApiKey("infini");
+  if (envResolved?.apiKey) {
+    return envResolved.apiKey;
+  }
+
+  const cfg = loadConfig();
+  const key = getCustomProviderApiKey(cfg, "infini");
+  if (key) {
+    return key;
+  }
+
+  const store = ensureAuthProfileStore();
+  const apiProfile = listProfilesForProvider(store, "infini").find((id) => {
+    const cred = store.profiles[id];
+    return cred?.type === "api_key" || cred?.type === "token";
+  });
+  if (!apiProfile) {
+    return undefined;
+  }
+  const cred = store.profiles[apiProfile];
+  if (cred?.type === "api_key" && cred.key?.trim()) {
+    return cred.key.trim();
+  }
+  if (cred?.type === "token" && cred.token?.trim()) {
+    return cred.token.trim();
+  }
+  return undefined;
+}
+
 function resolveXiaomiApiKey(): string | undefined {
   const envDirect = process.env.XIAOMI_API_KEY?.trim();
   if (envDirect) {
@@ -254,6 +289,13 @@ export async function resolveProviderAuths(params: {
   for (const provider of params.providers) {
     if (provider === "zai") {
       const apiKey = resolveZaiApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+    if (provider === "infini") {
+      const apiKey = resolveInfiniApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }

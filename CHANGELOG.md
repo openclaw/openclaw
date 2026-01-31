@@ -2,6 +2,14 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.2.1
+
+### Changes
+
+- Providers: add Infini AI provider support with OpenAI-compatible API and usage tracking.
+
+### Fixes
+
 ## 2026.1.31
 
 ### Changes
