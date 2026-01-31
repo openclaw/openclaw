@@ -2,6 +2,8 @@ import path from "node:path";
 
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 
+export { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
 export function discoverAuthStorage(agentDir: string): AuthStorage {
   return new AuthStorage(path.join(agentDir, "auth.json"));
@@ -10,5 +12,3 @@ export function discoverAuthStorage(agentDir: string): AuthStorage {
 export function discoverModels(authStorage: AuthStorage, agentDir: string): ModelRegistry {
   return new ModelRegistry(authStorage, path.join(agentDir, "models.json"));
 }
-
-export type { AuthStorage, ModelRegistry };
