@@ -1,5 +1,4 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
