@@ -4,7 +4,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { getActiveRunThreadContext, queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -158,12 +158,14 @@ export async function runReplyAgent(params: {
         })
       : null;
 
-  // Only attempt fast steering when there's no thread routing to preserve.
-  // When originatingThreadId is set, the message needs per-thread reply routing
-  // which is lost by queueEmbeddedPiMessage (it only injects the prompt text).
-  // Forcing these through enqueueFollowupRun preserves the routing context.
-  const hasThreadRouting = followupRun.originatingThreadId != null;
-  if (shouldSteer && isStreaming && !hasThreadRouting) {
+  // Only attempt fast steering when the incoming message is from the same thread
+  // as the active run. Cross-thread steering would route replies to the wrong thread.
+  // When thread contexts don't match, we fall through to enqueueFollowupRun which
+  // preserves per-message routing.
+  const activeRunThread = getActiveRunThreadContext(followupRun.run.sessionId);
+  const incomingThread = followupRun.originatingThreadId;
+  const isSameThread = activeRunThread === incomingThread;
+  if (shouldSteer && isStreaming && isSameThread) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       if (activeSessionEntry && activeSessionStore && sessionKey) {

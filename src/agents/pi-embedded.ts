@@ -7,6 +7,7 @@ export type {
 export {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
+  getActiveRunThreadContext,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
