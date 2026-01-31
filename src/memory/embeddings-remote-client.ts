@@ -1,5 +1,5 @@
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
-import type { EmbeddingProviderOptions } from "./embeddings.js";
+import { sanitizeHeaders, type EmbeddingProviderOptions } from "./embeddings.js";
 
 type RemoteEmbeddingProviderId = "openai" | "voyage";
 
@@ -23,7 +23,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         params.provider,
       );
   const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || params.defaultBaseUrl;
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  const headerOverrides = sanitizeHeaders(providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
