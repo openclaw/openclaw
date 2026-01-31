@@ -747,7 +747,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     let afterVersion = beforeVersion;
     if (pkgRoot) {
       afterVersion = await readPackageVersion(pkgRoot);
-      const entryPath = path.join(pkgRoot, "dist", "entry.js");
+      const entryPath = path.join(pkgRoot, "dist", "entry.mjs");
       if (await pathExists(entryPath)) {
         const doctorStep = await runUpdateStep({
           name: `${CLI_NAME} doctor`,
