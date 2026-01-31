@@ -1,8 +1,16 @@
 node_modules
 **/node_modules/
+
+# Environment files (secrets)
 .env
-docker-compose.extra.yml
+.env.local
+.env*.local
+.env.production
+!.env.example
+
+# Build artifacts
 dist
+build
 *.bun-build
 pnpm-lock.yaml
 bun.lock
@@ -71,3 +79,31 @@ USER.md
 
 # local tooling
 .serena/
+
+# ===========================================
+# AI AGENT FACTORY - SECURITY EXCLUSIONS
+# ===========================================
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# Credentials and secrets
+credentials/
+.clawdbot-secure/
+.openclaw-secure/
+*.pem
+*.key
+*.crt
+*.enc
+
+# Secure data
+data/secure/
+sessions/
+
+# OS files
+Thumbs.db
+thumbs.db
+Desktop.ini
