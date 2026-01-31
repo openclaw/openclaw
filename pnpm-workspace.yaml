@@ -1,6 +1,7 @@
 packages:
   - .
   - ui
+  - companion
   - packages/*
   - extensions/*
 

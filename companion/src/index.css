@@ -1,0 +1,124 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/figtree";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+    --background: oklch(0.961 0.007 88.64);
+    --foreground: oklch(0.23 0.000 89.88);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.23 0.000 89.88);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.23 0.000 89.88);
+    --primary: oklch(0.23 0.000 89.88);
+    --primary-foreground: oklch(0.961 0.007 88.64);
+    --secondary: oklch(1 0 0);
+    --secondary-foreground: oklch(0.23 0.000 89.88);
+    --muted: oklch(0.925 0.007 88.65);
+    --muted-foreground: oklch(0.528 0.000 89.88);
+    --accent: oklch(0.925 0.007 88.65);
+    --accent-foreground: oklch(0.23 0.000 89.88);
+    --brand: oklch(0.6433 0.2457 16.15);
+    --brand-foreground: oklch(1 0 0);
+    --destructive: oklch(0.577 0.215 27.33);
+    --border: transparent;
+    --input: oklch(1 0 0);
+    --ring: oklch(0.23 0.000 89.88);
+    --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.04);
+    --shadow-soft-hover: 0 8px 30px rgba(0, 0, 0, 0.08);
+    --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.03);
+    --chart-1: oklch(0.643 0.246 16.15);
+    --chart-2: oklch(0.700 0.200 16.15);
+    --chart-3: oklch(0.750 0.150 16.15);
+    --chart-4: oklch(0.800 0.100 16.15);
+    --chart-5: oklch(0.900 0.050 16.15);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.985 0.003 88.64);
+    --sidebar-foreground: oklch(0.23 0.000 89.88);
+    --sidebar-primary: oklch(0.643 0.246 16.15);
+    --sidebar-primary-foreground: oklch(1 0 0);
+    --sidebar-accent: oklch(0.925 0.007 88.65);
+    --sidebar-accent-foreground: oklch(0.23 0.000 89.88);
+    --sidebar-border: transparent;
+    --sidebar-ring: oklch(0.23 0.000 89.88);
+}
+
+@theme inline {
+    --font-sans: 'Figtree Variable', sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-brand-foreground: var(--brand-foreground);
+    --color-brand: var(--brand);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) - 4px);
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) + 4px);
+    --radius-2xl: calc(var(--radius) + 8px);
+    --radius-3xl: calc(var(--radius) + 12px);
+    --radius-4xl: calc(var(--radius) + 16px);
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+
+  ::selection {
+    @apply bg-brand/20;
+  }
+
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.8 0.007 88.64) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: oklch(0.8 0.007 88.64);
+    border-radius: 9999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.7 0.007 88.64);
+  }
+}

@@ -17,6 +17,7 @@ import {
 import { loadInternalHooks } from "../hooks/loader.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { startCompanionUiServer } from "./companion-ui.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
@@ -156,5 +157,22 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { browserControl, pluginServices };
+  const companionUiPort = params.cfg.gateway?.companionUi?.port ?? 18790;
+  const gatewayPort = params.cfg.gateway?.port ?? 18789;
+  const gatewayToken = params.cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  let companionUiServer: Awaited<ReturnType<typeof startCompanionUiServer>> = null;
+  try {
+    companionUiServer = await startCompanionUiServer({
+      port: companionUiPort,
+      gatewayPort,
+      gatewayToken,
+    });
+    if (companionUiServer) {
+      params.log.warn(`companion UI listening on http://127.0.0.1:${companionUiPort}`);
+    }
+  } catch (err) {
+    params.log.warn(`companion UI failed to start on port ${companionUiPort}: ${String(err)}`);
+  }
+
+  return { browserControl, pluginServices, companionUiServer };
 }

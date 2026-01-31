@@ -91,6 +91,8 @@
     "ui:install": "node scripts/ui.js install",
     "ui:dev": "node scripts/ui.js dev",
     "ui:build": "node scripts/ui.js build",
+    "companion:dev": "pnpm --dir companion dev",
+    "companion:build": "pnpm --dir companion build",
     "start": "node scripts/run-node.mjs",
     "openclaw": "node scripts/run-node.mjs",
     "gateway:watch": "node scripts/watch-node.mjs gateway --force",
