@@ -39,6 +39,13 @@ export type AuthProfileFailureReason =
   | "timeout"
   | "unknown";
 
+/** Per-model cooldown entry for model-scoped rate limit tracking */
+export type ModelCooldownEntry = {
+  cooldownUntil?: number;
+  errorCount?: number;
+  lastFailureAt?: number;
+};
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
@@ -48,6 +55,8 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /** Model-scoped cooldowns for rate_limit errors (keyed by model ID) */
+  modelCooldowns?: Record<string, ModelCooldownEntry>;
 };
 
 export type AuthProfileStore = {

@@ -1,7 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type {
+  AuthProfileFailureReason,
+  AuthProfileStore,
+  ModelCooldownEntry,
+  ProfileUsageStats,
+} from "./types.js";
 
 function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
   const values = [stats.cooldownUntil, stats.disabledUntil]
@@ -15,14 +20,33 @@ function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
 
 /**
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
+ * When `modelId` is provided, also checks model-scoped cooldown for rate_limit errors.
+ * Profile-level cooldown (auth/billing/timeout) still blocks all models.
  */
-export function isProfileInCooldown(store: AuthProfileStore, profileId: string): boolean {
+export function isProfileInCooldown(
+  store: AuthProfileStore,
+  profileId: string,
+  modelId?: string,
+): boolean {
   const stats = store.usageStats?.[profileId];
   if (!stats) {
     return false;
   }
   const unusableUntil = resolveProfileUnusableUntil(stats);
-  return unusableUntil ? Date.now() < unusableUntil : false;
+  if (unusableUntil && Date.now() < unusableUntil) {
+    return true;
+  }
+  if (modelId) {
+    const modelEntry = stats.modelCooldowns?.[modelId];
+    if (
+      modelEntry?.cooldownUntil &&
+      Number.isFinite(modelEntry.cooldownUntil) &&
+      Date.now() < modelEntry.cooldownUntil
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -50,6 +74,7 @@ export async function markAuthProfileUsed(params: {
         disabledUntil: undefined,
         disabledReason: undefined,
         failureCounts: undefined,
+        modelCooldowns: undefined,
       };
       return true;
     },
@@ -71,6 +96,7 @@ export async function markAuthProfileUsed(params: {
     disabledUntil: undefined,
     disabledReason: undefined,
     failureCounts: undefined,
+    modelCooldowns: undefined,
   };
   saveAuthProfileStore(store, agentDir);
 }
@@ -208,8 +234,12 @@ export async function markAuthProfileFailure(params: {
   reason: AuthProfileFailureReason;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  /** When provided and reason is "rate_limit", cooldown is scoped to this model only. */
+  modelId?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg } = params;
+  const { store, profileId, reason, agentDir, cfg, modelId } = params;
+  const useModelScope = reason === "rate_limit" && !!modelId;
+
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
@@ -227,12 +257,30 @@ export async function markAuthProfileFailure(params: {
         providerId: providerKey,
       });
 
-      freshStore.usageStats[profileId] = computeNextProfileUsageStats({
-        existing,
-        now,
-        reason,
-        cfgResolved,
-      });
+      if (useModelScope) {
+        const modelEntry = existing.modelCooldowns?.[modelId] ?? {};
+        const errorCount = (modelEntry.errorCount ?? 0) + 1;
+        const cooldownMs = calculateAuthProfileCooldownMs(errorCount);
+        freshStore.usageStats[profileId] = {
+          ...existing,
+          lastFailureAt: now,
+          modelCooldowns: {
+            ...existing.modelCooldowns,
+            [modelId]: {
+              cooldownUntil: now + cooldownMs,
+              errorCount,
+              lastFailureAt: now,
+            },
+          },
+        };
+      } else {
+        freshStore.usageStats[profileId] = computeNextProfileUsageStats({
+          existing,
+          now,
+          reason,
+          cfgResolved,
+        });
+      }
       return true;
     },
   });
@@ -247,18 +295,36 @@ export async function markAuthProfileFailure(params: {
   store.usageStats = store.usageStats ?? {};
   const existing = store.usageStats[profileId] ?? {};
   const now = Date.now();
-  const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
-  const cfgResolved = resolveAuthCooldownConfig({
-    cfg,
-    providerId: providerKey,
-  });
 
-  store.usageStats[profileId] = computeNextProfileUsageStats({
-    existing,
-    now,
-    reason,
-    cfgResolved,
-  });
+  if (useModelScope) {
+    const modelEntry = existing.modelCooldowns?.[modelId] ?? {};
+    const errorCount = (modelEntry.errorCount ?? 0) + 1;
+    const cooldownMs = calculateAuthProfileCooldownMs(errorCount);
+    store.usageStats[profileId] = {
+      ...existing,
+      lastFailureAt: now,
+      modelCooldowns: {
+        ...existing.modelCooldowns,
+        [modelId]: {
+          cooldownUntil: now + cooldownMs,
+          errorCount,
+          lastFailureAt: now,
+        },
+      },
+    };
+  } else {
+    const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
+    const cfgResolved = resolveAuthCooldownConfig({
+      cfg,
+      providerId: providerKey,
+    });
+    store.usageStats[profileId] = computeNextProfileUsageStats({
+      existing,
+      now,
+      reason,
+      cfgResolved,
+    });
+  }
   saveAuthProfileStore(store, agentDir);
 }
 
