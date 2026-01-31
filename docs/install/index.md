@@ -73,11 +73,14 @@ SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
 
 If you see `sharp: Please add node-gyp to your dependencies`, either install build tooling (macOS: Xcode CLT + `npm install -g node-gyp`) or use the `SHARP_IGNORE_GLOBAL_LIBVIPS=1` workaround above to skip the native build.
 
-Or:
+Or with pnpm:
 
 ```bash
 pnpm add -g openclaw@latest
+pnpm approve-builds -g   # select openclaw, node-llama-cpp, sharp, etc.
 ```
+
+pnpm requires explicit approval for packages with build scripts. After `pnpm add -g`, run `pnpm approve-builds -g` and approve the listed packages (openclaw, node-llama-cpp, sharp, protobufjs, etc.), then pnpm will run their postinstall scripts.
 
 Then:
 
