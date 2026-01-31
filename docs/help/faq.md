@@ -274,7 +274,7 @@ setup (PATH, services, permissions, auth files). Give them the **full source che
 the hackable (git) install:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method git
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
 ```
 
 This installs OpenClaw **from a git checkout**, so the agent can read the code + docs and
@@ -313,7 +313,7 @@ Install docs: [Install](/install), [Installer flags](/install/installer), [Updat
 The repo recommends running from source and using the onboarding wizard:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw onboard --install-daemon
 ```
 
@@ -470,11 +470,11 @@ https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md
 One‑liners (macOS/Linux):
 
 ```bash
-curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.bot/install.sh | bash -s -- --beta
+curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --beta
 ```
 
 ```bash
-curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.bot/install.sh | bash -s -- --install-method git
+curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
 ```
 
 Windows installer (PowerShell):
@@ -507,7 +507,7 @@ This switches to the `main` branch and updates from source.
 2. **Hackable install (from the installer site):**
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method git
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
 ```
 
 That gives you a local repo you can edit, then update via git.
@@ -529,19 +529,19 @@ Docs: [Update](/cli/update), [Development channels](/install/development-channel
 Re-run the installer with **verbose output**:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --verbose
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --verbose
 ```
 
 Beta install with verbose:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --beta --verbose
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --beta --verbose
 ```
 
 For a hackable (git) install:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method git --verbose
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --verbose
 ```
 
 More options: [Installer flags](/install/installer).
@@ -574,7 +574,7 @@ Use the **hackable (git) install** so you have the full source and docs locally,
 your bot (or Claude/Codex) _from that folder_ so it can read the repo and answer precisely.
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method git
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
 ```
 
 More detail: [Install](/install) and [Installer flags](/install/installer).
