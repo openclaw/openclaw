@@ -9,7 +9,7 @@ export async function readLatestAssistantReply(params: {
   sessionKey: string;
   limit?: number;
 }): Promise<string | undefined> {
-  const history = await callGateway({
+  const history = await callGateway<{ messages: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
   });
@@ -27,7 +27,7 @@ export async function runAgentStep(params: {
   lane?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
-  const response = await callGateway({
+  const response = await callGateway<{ runId?: string }>({
     method: "agent",
     params: {
       message: params.message,
@@ -44,7 +44,7 @@ export async function runAgentStep(params: {
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
   const stepWaitMs = Math.min(params.timeoutMs, 60_000);
-  const wait = await callGateway({
+  const wait = await callGateway<{ status?: string }>({
     method: "agent.wait",
     params: {
       runId: resolvedRunId,
