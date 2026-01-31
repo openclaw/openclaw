@@ -467,7 +467,7 @@ export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
  * Apply PixelML provider configuration without changing the default model.
  * Registers PixelML models and sets up the provider, but preserves existing model selection.
  */
-export function applyPixelmlProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyPixelmlProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   // Add all catalog models to the allowlist
   for (const entry of PIXELML_MODEL_CATALOG) {
@@ -489,7 +489,7 @@ export function applyPixelmlProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig 
   const mergedModels = [
     ...existingModels,
     ...pixelmlModels.filter(
-      (model) => !existingModels.some((existing) => existing.id === model.id),
+      (model) => !existingModels.some((existing: { id?: string }) => existing.id === model.id),
     ),
   ];
   const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
@@ -526,7 +526,7 @@ export function applyPixelmlProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig 
  * Apply PixelML provider configuration AND set PixelML as the default model.
  * Use this when PixelML is the primary provider choice during onboarding.
  */
-export function applyPixelmlConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyPixelmlConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyPixelmlProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
