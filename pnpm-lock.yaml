@@ -340,6 +340,8 @@ importers:
         specifier: ^6.17.0
         version: 6.17.0(ws@8.19.0)(zod@4.3.6)
 
+  extensions/minimax-portal-auth: {}
+
   extensions/msteams:
     dependencies:
       '@microsoft/agents-hosting':

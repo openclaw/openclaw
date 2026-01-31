@@ -588,6 +588,101 @@ describe("applyAuthChoice", () => {
       refresh: "refresh",
     });
   });
+
+  it("writes MiniMax credentials when selecting minimax-portal", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "minimax-portal",
+        label: "MiniMax",
+        auth: [
+          {
+            id: "oauth",
+            label: "MiniMax OAuth (Global)",
+            kind: "device_code",
+            run: vi.fn(async () => ({
+              profiles: [
+                {
+                  profileId: "minimax-portal:default",
+                  credential: {
+                    type: "oauth",
+                    provider: "minimax-portal",
+                    access: "access",
+                    refresh: "refresh",
+                    expires: Date.now() + 60 * 60 * 1000,
+                  },
+                },
+              ],
+              configPatch: {
+                models: {
+                  providers: {
+                    "minimax-portal": {
+                      baseUrl: "https://api.minimax.io/anthropic",
+                      apiKey: "minimax-oauth",
+                      api: "anthropic-messages",
+                      models: [],
+                    },
+                  },
+                },
+              },
+              defaultModel: "minimax-portal/MiniMax-M2.1",
+            })),
+          },
+        ],
+      },
+    ]);
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "oauth" as never),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "minimax-portal",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result.config.auth?.profiles?.["minimax-portal:default"]).toMatchObject({
+      provider: "minimax-portal",
+      mode: "oauth",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe("minimax-portal/MiniMax-M2.1");
+    expect(result.config.models?.providers?.["minimax-portal"]).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      apiKey: "minimax-oauth",
+    });
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
+    };
+    expect(parsed.profiles?.["minimax-portal:default"]).toMatchObject({
+      provider: "minimax-portal",
+      access: "access",
+      refresh: "refresh",
+    });
+  });
 });
 
 describe("resolvePreferredProviderForAuthChoice", () => {

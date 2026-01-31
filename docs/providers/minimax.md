@@ -35,7 +35,24 @@ MiniMax highlights these improvements in M2.1:
 
 ## Choose a setup
 
-### MiniMax M2.1 — recommended
+### MiniMax OAuth (Coding Plan) — recommended
+
+**Best for:** quick setup with MiniMax Coding Plan via OAuth, no API key required.
+
+Enable the bundled OAuth plugin and authenticate:
+
+```bash
+moltbot plugins enable minimax-portal-auth  # skip if already loaded.
+moltbot gateway restart  # restart if gateway is already running
+moltbot onboard --auth-choice minimax-portal
+```
+You will be prompted to select an endpoint:
+- **Global** - International users (`api.minimax.io`)
+- **CN** - Users in China (`api.minimaxi.com`)
+
+See [MiniMax OAuth plugin README](https://github.com/moltbot/moltbot/tree/main/extensions/minimax-portal-auth) for details.
+
+### MiniMax M2.1 (API key) 
 
 **Best for:** hosted MiniMax with Anthropic-compatible API.
 
@@ -142,6 +159,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 2) Select **Model/auth**.
 3) Choose **MiniMax M2.1**.
 4) Pick your default model when prompted.
+
 
 ## Configuration options
 

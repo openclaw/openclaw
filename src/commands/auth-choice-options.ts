@@ -52,7 +52,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.1 (recommended)",
-    choices: ["minimax-api", "minimax-api-lightning"],
+    choices: ["minimax-portal", "minimax-api", "minimax-api-lightning"],
   },
   {
     value: "moonshot",
@@ -174,6 +174,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
+  });
+  options.push({
+    value: "minimax-portal",
+    label: "MiniMax OAuth",
+    hint: "OAuth new users enjoy a 3-day free trial of the MiniMax Coding Plan!",
   });
   options.push({ value: "qwen-portal", label: "Qwen OAuth" });
   options.push({
