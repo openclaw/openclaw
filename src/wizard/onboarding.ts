@@ -42,6 +42,7 @@ import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { installCompletion } from "../cli/completion-cli.js";
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -448,4 +449,16 @@ export async function runOnboardingWizard(
     prompter,
     runtime,
   });
+
+  const installShell = await prompter.confirm({
+    message: "Install shell completion script?",
+    initialValue: true,
+  });
+
+  if (installShell) {
+    const shell = process.env.SHELL?.split("/").pop() || "zsh";
+    // We pass 'yes=true' to skip any double-confirmation inside the helper,
+    // as the wizard prompt above serves as confirmation.
+    await installCompletion(shell, true);
+  }
 }
