@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { resolveWorkspaceTemplateDir } from "../../agents/workspace-templates.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, writeConfigFile } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -13,14 +14,10 @@ const DEV_IDENTITY_THEME = "protocol droid";
 const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 
-const DEV_TEMPLATE_DIR = path.resolve(
-  path.dirname(new URL(import.meta.url).pathname),
-  "../../../docs/reference/templates",
-);
-
 async function loadDevTemplate(name: string, fallback: string): Promise<string> {
   try {
-    const raw = await fs.promises.readFile(path.join(DEV_TEMPLATE_DIR, name), "utf-8");
+    const templateDir = await resolveWorkspaceTemplateDir();
+    const raw = await fs.promises.readFile(path.join(templateDir, name), "utf-8");
     if (!raw.startsWith("---")) {
       return raw;
     }
