@@ -379,6 +379,7 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `context overflow detected; attempting auto-compaction for ${provider}/${modelId}`,
                 );
+                await params.onCompactionStart?.();
                 overflowCompactionAttempted = true;
                 const compactResult = await compactEmbeddedPiSessionDirect({
                   sessionId: params.sessionId,

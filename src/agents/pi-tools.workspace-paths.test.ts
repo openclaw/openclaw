@@ -2,14 +2,31 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
+// Mock plugins to avoid loading them in these tests.
+// Loading plugins involves Jiti/resolution which can be sensitive to CWD changes
+// or simply slow. These tests only care about core read/write/edit tools.
+vi.mock("../plugins/tools.js", () => {
+  return {
+    resolvePluginTools: () => [],
+    getPluginToolMeta: () => undefined,
+  };
+});
+
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
+  const originalCwd = process.cwd();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
     return await fn(dir);
   } finally {
+    // Robustness: ensure we leave the temp dir before deleting it
+    try {
+      process.chdir(originalCwd);
+    } catch {
+      // ignore
+    }
     await fs.rm(dir, { recursive: true, force: true });
   }
 }
@@ -19,7 +36,19 @@ function getTextContent(result?: { content?: Array<{ type: string; text?: string
   return textBlock?.text ?? "";
 }
 
+const originalCwd = process.cwd();
+
 describe("workspace path resolution", () => {
+  afterEach(() => {
+    // Defensive: ensure we are always back in a valid directory so subsequent
+    // tests don't crash with ENOENT: uv_cwd.
+    try {
+      process.chdir(originalCwd);
+    } catch {
+      // ignore
+    }
+  });
+
   it("reads relative paths against workspaceDir even after cwd changes", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {

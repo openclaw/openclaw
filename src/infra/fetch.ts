@@ -4,6 +4,96 @@ type FetchWithPreconnect = typeof fetch & {
 
 type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
 
+function sanitizeHeaderValue(value: string): string {
+  // fast path for common ascii
+  let isClean = true;
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 255) {
+      isClean = false;
+      break;
+    }
+  }
+  if (isClean) {
+    return value;
+  } // eslint-disable-line no-control-regex
+
+  // Node's undici fetch crashes on header values > 255 (ByteString).
+  // We sanitize them by replacing non-latin1 chars with '?'.
+  return value.replace(/[^\u0000-\u00ff]/g, "?"); // eslint-disable-line no-control-regex
+}
+
+function sanitizeHeaders(init?: RequestInit): RequestInit | undefined {
+  if (!init || !init.headers) {
+    return init;
+  }
+
+  if (typeof Headers !== "undefined" && init.headers instanceof Headers) {
+    // Headers object: iterate
+    const dirtyEntries: [string, string][] = [];
+    init.headers.forEach((value, key) => {
+      const sanitized = sanitizeHeaderValue(value);
+      if (sanitized !== value) {
+        dirtyEntries.push([key, sanitized]);
+      }
+    });
+
+    if (dirtyEntries.length > 0) {
+      const h = new Headers(init.headers);
+      for (const [k, v] of dirtyEntries) {
+        h.set(k, v);
+      }
+      return { ...init, headers: h };
+    }
+    return init; // No changes
+  }
+
+  if (Array.isArray(init.headers)) {
+    // Array of tuples
+    const dirtyIndices: [number, string][] = [];
+    for (let i = 0; i < init.headers.length; i++) {
+      const entry = init.headers[i];
+      if (entry.length >= 2) {
+        const val = entry[1];
+        const sanitized = sanitizeHeaderValue(val);
+        if (sanitized !== val) {
+          dirtyIndices.push([i, sanitized]);
+        }
+      }
+    }
+    if (dirtyIndices.length > 0) {
+      const next = [...init.headers];
+      for (const [i, v] of dirtyIndices) {
+        next[i] = [next[i][0], v];
+      }
+      return { ...init, headers: next };
+    }
+    return init;
+  }
+
+  // Record<string, string>
+  const rec = init.headers as Record<string, string>;
+  let nextRec: Record<string, string> | undefined;
+
+  for (const k in rec) {
+    const v = rec[k];
+    if (typeof v === "string") {
+      const s = sanitizeHeaderValue(v);
+      if (s !== v) {
+        if (!nextRec) {
+          nextRec = { ...rec };
+        }
+        nextRec[k] = s;
+      }
+    }
+  }
+
+  if (nextRec) {
+    return { ...init, headers: nextRec };
+  }
+
+  return init;
+}
+
 function withDuplex(
   init: RequestInit | undefined,
   input: RequestInfo | URL,
@@ -27,7 +117,8 @@ function withDuplex(
 
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const patchedInit = withDuplex(init, input);
+    const sanitizedInit = sanitizeHeaders(init);
+    const patchedInit = withDuplex(sanitizedInit, input);
     const signal = patchedInit?.signal;
     if (!signal) {
       return fetchImpl(input, patchedInit);
@@ -72,4 +163,10 @@ export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined
     return undefined;
   }
   return wrapFetchWithAbortSignal(resolved);
+}
+
+export function installGlobalFetchSanitizer(): void {
+  if (globalThis.fetch) {
+    globalThis.fetch = wrapFetchWithAbortSignal(globalThis.fetch);
+  }
 }

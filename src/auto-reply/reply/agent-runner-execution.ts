@@ -286,6 +286,13 @@ export async function runAgentTurnWithFallback(params: {
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
+            onCompactionStart: async () => {
+              if (params.opts?.onPartialReply) {
+                await params.opts.onPartialReply({
+                  text: "🧹 Compacting context, please wait...",
+                });
+              }
+            },
             onPartialReply: allowPartialStream
               ? async (payload) => {
                   const textForTyping = await handlePartialForTyping(payload);

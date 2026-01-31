@@ -4,12 +4,14 @@ import path from "node:path";
 import process from "node:process";
 
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import { installGlobalFetchSanitizer } from "./infra/fetch.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { installProcessWarningFilter } from "./infra/warnings.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 process.title = "openclaw";
 installProcessWarningFilter();
+installGlobalFetchSanitizer();
 normalizeEnv();
 
 if (process.argv.includes("--no-color")) {
