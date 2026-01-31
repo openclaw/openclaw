@@ -527,7 +527,7 @@ export class MemoryIndexManager {
         entry.chunks = row.c ?? 0;
         bySource.set(row.source, entry);
       }
-      return sources.map((source) => ({ source, ...bySource.get(source)! }));
+      return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
     })();
     return {
       files: files?.c ?? 0,

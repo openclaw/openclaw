@@ -331,13 +331,13 @@ export function resolveGroupDmAllow(params: {
 }) {
   const { channels, channelId, channelName, channelSlug } = params;
   if (!channels || channels.length === 0) return true;
-  const allowList = channels.map((entry) => normalizeDiscordSlug(String(entry)));
+  const allowList = new Set(channels.map((entry) => normalizeDiscordSlug(String(entry))));
   const candidates = [
     normalizeDiscordSlug(channelId),
     channelSlug,
     channelName ? normalizeDiscordSlug(channelName) : "",
   ].filter(Boolean);
-  return allowList.includes("*") || candidates.some((candidate) => allowList.includes(candidate));
+  return allowList.has("*") || candidates.some((candidate) => allowList.has(candidate));
 }
 
 export function shouldEmitDiscordReactionNotification(params: {

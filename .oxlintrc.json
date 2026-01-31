@@ -6,7 +6,14 @@
     "oxc"
   ],
   "categories": {
-    "correctness": "error"
+    "correctness": "error",
+    "perf": "error"
+  },
+  "rules": {
+    "eslint-plugin-unicorn/prefer-array-find": "off",
+    "eslint/no-await-in-loop": "off",
+    "oxc/no-accumulating-spread": "off",
+    "oxc/no-map-spread": "off"
   },
   "ignorePatterns": ["src/canvas-host/a2ui/a2ui.bundle.js"]
 }

@@ -310,8 +310,8 @@ describe("createTelegramBot", () => {
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
     ]);
-    const reserved = listNativeCommandSpecs().map((command) => command.name);
-    expect(registered.some((command) => reserved.includes(command.command))).toBe(false);
+    const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
+    expect(registered.some((command) => reserved.has(command.command))).toBe(false);
   });
 
   it("uses wrapped fetch when global fetch is available", () => {

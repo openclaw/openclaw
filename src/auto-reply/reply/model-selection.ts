@@ -434,7 +434,7 @@ export function resolveModelDirectiveSelection(params: {
           defaultProvider,
           defaultModel,
         });
-        return { candidate, ...details };
+        return Object.assign({ candidate }, details);
       })
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
