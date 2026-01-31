@@ -7,11 +7,14 @@ This repository contains an analysis and starter implementation for integrating 
 ## Findings
 
 ### 1. **No Existing Integration**
+
 - ✅ Confirmed: There is **no existing Cursor Agent integration** in OpenClaw
 - ✅ OpenClaw's plugin architecture makes this integration **highly feasible**
 
 ### 2. **What is Cursor Agent?**
+
 Cursor Agent is Cursor's AI coding assistant that can:
+
 - Complete complex coding tasks independently
 - Run terminal commands
 - Edit code files
@@ -19,16 +22,20 @@ Cursor Agent is Cursor's AI coding assistant that can:
 - Execute browser automation
 
 **Cursor Background Agents API** provides:
+
 - Programmatic agent launch via REST API
 - Webhook support for status change events
 - HTTP-based integration
 
 ### 3. **OpenClaw Architecture**
+
 OpenClaw uses a **plugin-based channel system**:
+
 - **Core channels**: Built-in (`src/discord/`, `src/slack/`, etc.)
 - **Extension channels**: External plugins (`extensions/twitch/`, `extensions/zalo/`, etc.)
 
 Each channel implements the `ChannelPlugin` interface with adapters for:
+
 - Outbound messaging
 - Inbound monitoring
 - Status tracking
@@ -38,26 +45,33 @@ Each channel implements the `ChannelPlugin` interface with adapters for:
 ## Implementation Approach
 
 ### Recommended: Channel Integration
+
 Treat Cursor Agent as a **messaging channel** where:
+
 1. OpenClaw sends coding tasks to Cursor Agent
 2. Cursor Agent executes tasks
 3. Results returned via webhooks
 4. Responses routed back to original OpenClaw channel
 
 ### Alternative: Tool Integration
+
 Integrate as an **agent tool** (like `browser`, `canvas`) for use by any OpenClaw agent.
 
 ## What's Been Created
 
 ### 1. **Analysis Document** (`CURSOR_AGENT_INTEGRATION.md`)
+
 Comprehensive analysis covering:
+
 - Architecture overview
 - Integration patterns
 - Technical considerations
 - Implementation roadmap
 
 ### 2. **Starter Implementation** (`extensions/cursor-agent/`)
+
 Complete plugin structure with:
+
 - ✅ Plugin entry point (`index.ts`)
 - ✅ Channel plugin implementation (`src/plugin.ts`)
 - ✅ Configuration schema (`src/config-schema.ts`)
@@ -88,6 +102,7 @@ extensions/cursor-agent/
 ## Next Steps
 
 ### Immediate (Research)
+
 1. **Get Cursor API Documentation**
    - API endpoints and base URL
    - Authentication method (API keys, OAuth?)
@@ -105,6 +120,7 @@ extensions/cursor-agent/
    - Validate webhook flow
 
 ### Implementation
+
 1. **Complete API Client** (`src/api.ts`)
    - Implement actual API calls
    - Add error handling
@@ -126,6 +142,7 @@ extensions/cursor-agent/
    - Webhook URL configuration
 
 ### Testing
+
 1. Unit tests for API client
 2. Integration tests with mock API
 3. End-to-end tests with real Cursor API
@@ -133,16 +150,19 @@ extensions/cursor-agent/
 ## Inspiration from Existing Integrations
 
 ### Twitch Extension
+
 - **Monitor pattern**: Long-running connection processing events
 - **Client registry**: Managing multiple connections
 - **Status tracking**: Runtime state management
 
 ### Zalo Extension
+
 - **Webhook handling**: Secure webhook verification
 - **Polling fallback**: Alternative to webhooks
 - **Onboarding**: Step-by-step setup wizard
 
 ### Discord/Slack Extensions
+
 - **Message normalization**: Platform-specific format conversion
 - **Action handling**: User interaction responses
 - **Directory integration**: User/channel resolution
@@ -171,6 +191,7 @@ extensions/cursor-agent/
 ## Usage Flow
 
 1. **User sends message** via WhatsApp/Telegram/etc.
+
    ```
    "Fix the bug in src/utils.ts"
    ```
@@ -178,6 +199,7 @@ extensions/cursor-agent/
 2. **OpenClaw routes** message to Cursor Agent channel
 
 3. **Outbound adapter** converts to Cursor task:
+
    ```json
    {
      "instructions": "Fix the bug in src/utils.ts",
@@ -215,6 +237,7 @@ extensions/cursor-agent/
 🟢 **Implementation Complete** - Ready for testing
 
 The implementation includes:
+
 - ✅ Complete API client with all endpoints
 - ✅ Webhook handler with signature verification
 - ✅ Session correlation via task store

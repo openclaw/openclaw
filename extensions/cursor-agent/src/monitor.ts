@@ -5,11 +5,7 @@
  * and routes agent completion results back to OpenClaw sessions.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import {
-  registerPluginHttpRoute,
-  normalizePluginHttpPath,
-} from "openclaw/plugin-sdk";
+import { registerPluginHttpRoute, normalizePluginHttpPath } from "openclaw/plugin-sdk";
 import type { CursorAgentAccountConfig, CursorAgentWebhookPayload } from "./types.js";
 import { getCursorAgentRuntime } from "./runtime.js";
 import { verifyWebhookSignature, parseWebhookHeaders } from "./api.js";

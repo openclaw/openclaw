@@ -50,12 +50,12 @@ npx vitest run extensions/cursor-agent --coverage
 
 ## Message Syntax
 
-| Format | Example |
-|--------|---------|
-| Basic | `Fix the bug in utils.ts` |
-| With repo | `@repo:https://github.com/org/repo Fix the bug` |
-| With branch | `@branch:develop Fix the bug` |
-| Both | `@repo:https://github.com/org/repo @branch:develop Fix the bug` |
+| Format      | Example                                                         |
+| ----------- | --------------------------------------------------------------- |
+| Basic       | `Fix the bug in utils.ts`                                       |
+| With repo   | `@repo:https://github.com/org/repo Fix the bug`                 |
+| With branch | `@branch:develop Fix the bug`                                   |
+| Both        | `@repo:https://github.com/org/repo @branch:develop Fix the bug` |
 
 ---
 
@@ -85,11 +85,11 @@ npx vitest run extensions/cursor-agent --coverage
 
 ## Ports
 
-| Service | Dev | Prod |
-|---------|-----|------|
-| Gateway | 18790 | 18789 |
-| Mock API | 3456 | - |
-| WebChat | http://localhost:18790 | - |
+| Service  | Dev                    | Prod  |
+| -------- | ---------------------- | ----- |
+| Gateway  | 18790                  | 18789 |
+| Mock API | 3456                   | -     |
+| WebChat  | http://localhost:18790 | -     |
 
 ---
 
@@ -148,13 +148,13 @@ POST /v0/agents/:id/messages # Follow-up
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Port in use | `lsof -i :18790` then `kill -9 <PID>` |
-| Module not found | `npm install` |
-| Invalid signature | Check `webhookSecret` matches |
-| No repository | Add `@repo:` or set default in config |
-| 401 Unauthorized | Check API key |
+| Problem           | Solution                              |
+| ----------------- | ------------------------------------- |
+| Port in use       | `lsof -i :18790` then `kill -9 <PID>` |
+| Module not found  | `npm install`                         |
+| Invalid signature | Check `webhookSecret` matches         |
+| No repository     | Add `@repo:` or set default in config |
+| 401 Unauthorized  | Check API key                         |
 
 ---
 

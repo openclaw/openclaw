@@ -156,34 +156,34 @@ The plugin implements OpenClaw's `ChannelPlugin` interface:
 
 ```typescript
 interface ChannelPlugin {
-  id: string;                    // "cursor-agent"
-  meta: ChannelMeta;            // Display info
+  id: string; // "cursor-agent"
+  meta: ChannelMeta; // Display info
   capabilities: ChannelCapabilities;
-  
+
   config: {
-    listAccountIds();           // List configured accounts
-    resolveAccount();           // Get account config
-    isConfigured();             // Check if ready
-    isEnabled();                // Check if active
+    listAccountIds(); // List configured accounts
+    resolveAccount(); // Get account config
+    isConfigured(); // Check if ready
+    isEnabled(); // Check if active
   };
-  
+
   outbound: {
-    sendMessage();              // Send task to Cursor
-    sendToolResult();           // Send follow-up
+    sendMessage(); // Send task to Cursor
+    sendToolResult(); // Send follow-up
   };
-  
+
   gateway: {
-    startAccount();             // Start webhook listener
-    stopAccount();              // Stop listener
+    startAccount(); // Start webhook listener
+    stopAccount(); // Stop listener
   };
-  
+
   status: {
-    probeAccount();             // Health check
-    buildAccountSnapshot();     // Current status
+    probeAccount(); // Health check
+    buildAccountSnapshot(); // Current status
   };
-  
+
   onboarding: {
-    runSetup();                 // CLI wizard
+    runSetup(); // CLI wizard
   };
 }
 ```
@@ -194,16 +194,16 @@ Tasks are tracked in an in-memory store:
 
 ```typescript
 interface CursorAgentTask {
-  id: string;           // Cursor task ID (bc_xxx)
-  sessionKey: string;   // OpenClaw session
-  accountId: string;    // Cursor account
+  id: string; // Cursor task ID (bc_xxx)
+  sessionKey: string; // OpenClaw session
+  accountId: string; // Cursor account
   instructions: string; // Original message
-  repository: string;   // GitHub repo
-  branch: string;       // Git branch
-  status: Status;       // PENDING/RUNNING/FINISHED/ERROR
-  createdAt: number;    // Timestamp
-  updatedAt: number;    // Last update
-  prUrl?: string;       // Pull request URL
+  repository: string; // GitHub repo
+  branch: string; // Git branch
+  status: Status; // PENDING/RUNNING/FINISHED/ERROR
+  createdAt: number; // Timestamp
+  updatedAt: number; // Last update
+  prUrl?: string; // Pull request URL
 }
 ```
 

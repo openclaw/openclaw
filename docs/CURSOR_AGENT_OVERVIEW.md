@@ -38,13 +38,16 @@ This project integrates **Cursor's Background Agents API** with **OpenClaw**, en
 ## Key Components
 
 ### 1. OpenClaw
+
 An open-source personal AI assistant that connects to messaging platforms. Think of it as a bridge between you and AI services.
 
 - GitHub: https://github.com/openclaw/openclaw
 - Supports: WhatsApp, Telegram, Slack, Discord, Signal, iMessage, and more
 
 ### 2. Cursor Background Agents
+
 Cursor's cloud-based AI coding agents that can:
+
 - Clone repositories
 - Understand codebases
 - Write and modify code
@@ -54,7 +57,9 @@ Cursor's cloud-based AI coding agents that can:
 - API: https://cursor.com/docs/background-agent/api/
 
 ### 3. This Integration
+
 A channel plugin for OpenClaw that:
+
 - Receives messages from any OpenClaw channel
 - Sends them to Cursor's Background Agents API
 - Receives webhook notifications when tasks complete
@@ -65,6 +70,7 @@ A channel plugin for OpenClaw that:
 ### 1. You Send a Message
 
 From WhatsApp, Telegram, or any connected channel:
+
 ```
 Fix the authentication bug in src/auth/login.ts
 @repo:https://github.com/mycompany/webapp
@@ -74,6 +80,7 @@ Fix the authentication bug in src/auth/login.ts
 ### 2. OpenClaw Processes It
 
 The Cursor Agent channel plugin:
+
 - Extracts the repository URL and branch
 - Formats the instructions
 - Calls Cursor's API to launch an agent
@@ -81,6 +88,7 @@ The Cursor Agent channel plugin:
 ### 3. Cursor Agent Works
 
 Cursor's cloud agent:
+
 - Clones your repository
 - Analyzes the codebase
 - Makes the requested changes
@@ -90,6 +98,7 @@ Cursor's cloud agent:
 ### 4. You Get Results
 
 Back in your chat:
+
 ```
 ✅ Cursor Agent Task Completed
 
@@ -126,21 +135,25 @@ cursor-agent-openclaw/
 ## Quick Start
 
 ### 1. Setup Dev Environment
+
 ```bash
 ./dev/setup.sh
 ```
 
 ### 2. Start Mock Server (for testing without API key)
+
 ```bash
 ./dev/mock-cursor.sh
 ```
 
 ### 3. Start Gateway
+
 ```bash
 CURSOR_API_BASE_URL=http://localhost:3456 ./dev/start.sh
 ```
 
 ### 4. Test
+
 ```bash
 ./dev/test-cursor.sh launch "Add a README" https://github.com/test/repo
 ```

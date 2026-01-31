@@ -7,6 +7,7 @@
 - **Git**: Version control
 
 Optional:
+
 - **Cursor API Key**: For real API testing
 - **ngrok/Tailscale**: For webhook testing
 
@@ -27,6 +28,7 @@ npm install
 ```
 
 This creates an isolated environment:
+
 - `dev/config/` - Configuration files
 - `dev/data/` - Data storage
 - `dev/.env` - Environment variables
@@ -90,6 +92,7 @@ extensions/cursor-agent/
 ### Adding a New Feature
 
 1. **Update types** (`src/types.ts`):
+
    ```typescript
    export interface NewFeature {
      // ...
@@ -97,6 +100,7 @@ extensions/cursor-agent/
    ```
 
 2. **Implement logic** (relevant file):
+
    ```typescript
    export function newFeature() {
      // ...
@@ -104,6 +108,7 @@ extensions/cursor-agent/
    ```
 
 3. **Add tests** (`src/*.test.ts`):
+
    ```typescript
    describe("newFeature", () => {
      it("should do something", () => {
@@ -135,11 +140,11 @@ export async function newEndpoint(
     },
     body: JSON.stringify(params),
   });
-  
+
   if (!response.ok) {
     throw new Error(`API error: ${await response.text()}`);
   }
-  
+
   return response.json();
 }
 ```
@@ -147,6 +152,7 @@ export async function newEndpoint(
 ### Adding Configuration Options
 
 1. **Update schema** (`src/config-schema.ts`):
+
    ```typescript
    export const CursorAgentAccountSchema = z.object({
      // existing fields...
@@ -155,6 +161,7 @@ export async function newEndpoint(
    ```
 
 2. **Update types** (`src/types.ts`):
+
    ```typescript
    export interface CursorAgentAccountConfig {
      // existing fields...
@@ -198,6 +205,7 @@ npx vitest run extensions/cursor-agent --coverage
 ### Manual Testing
 
 1. Start the gateway:
+
    ```bash
    ./dev/start.sh
    ```
@@ -240,17 +248,20 @@ Use webhook.site for debugging:
 ### Common Issues
 
 **"Cannot find module"**
+
 ```bash
 npm install
 ```
 
 **"Port already in use"**
+
 ```bash
 lsof -i :18790
 kill -9 <PID>
 ```
 
 **"Invalid signature"**
+
 - Check `webhookSecret` matches in config
 - Ensure raw body is used for verification
 
@@ -269,10 +280,10 @@ describe("featureName", () => {
     it("should do expected behavior", () => {
       // Arrange
       const input = createTestInput();
-      
+
       // Act
       const result = featureName(input);
-      
+
       // Assert
       expect(result).toBe(expected);
     });
@@ -283,6 +294,7 @@ describe("featureName", () => {
 ## Submitting Changes
 
 1. **Create a branch**:
+
    ```bash
    git checkout -b feature/your-feature
    ```
@@ -290,11 +302,13 @@ describe("featureName", () => {
 2. **Make changes** with tests
 
 3. **Run tests**:
+
    ```bash
    npx vitest run extensions/cursor-agent
    ```
 
 4. **Commit**:
+
    ```bash
    git add .
    git commit -m "feat(cursor-agent): add new feature"

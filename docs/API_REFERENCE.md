@@ -86,11 +86,11 @@ List all background agents.
 ```typescript
 [
   {
-    "id": string,
-    "status": "PENDING" | "RUNNING" | "FINISHED" | "ERROR",
-    "createdAt": string      // ISO 8601 timestamp
-  }
-]
+    id: string,
+    status: "PENDING" | "RUNNING" | "FINISHED" | "ERROR",
+    createdAt: string, // ISO 8601 timestamp
+  },
+];
 ```
 
 #### Example
@@ -176,23 +176,20 @@ Currently only `statusChange` events are supported.
 
 ### Headers
 
-| Header | Description |
-|--------|-------------|
+| Header                | Description                                  |
+| --------------------- | -------------------------------------------- |
 | `X-Webhook-Signature` | HMAC-SHA256 signature: `sha256=<hex_digest>` |
-| `X-Webhook-ID` | Unique delivery ID |
-| `X-Webhook-Event` | Event type (`statusChange`) |
-| `User-Agent` | `Cursor-Agent-Webhook/1.0` |
+| `X-Webhook-ID`        | Unique delivery ID                           |
+| `X-Webhook-Event`     | Event type (`statusChange`)                  |
+| `User-Agent`          | `Cursor-Agent-Webhook/1.0`                   |
 
 ### Signature Verification
 
 ```javascript
-const crypto = require('crypto');
+const crypto = require("crypto");
 
 function verifyWebhook(secret, rawBody, signature) {
-  const expected = 'sha256=' + 
-    crypto.createHmac('sha256', secret)
-      .update(rawBody)
-      .digest('hex');
+  const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
   return signature === expected;
 }
 ```
@@ -222,6 +219,7 @@ function verifyWebhook(secret, rawBody, signature) {
 ### Example Payloads
 
 **RUNNING**
+
 ```json
 {
   "event": "statusChange",
@@ -236,6 +234,7 @@ function verifyWebhook(secret, rawBody, signature) {
 ```
 
 **FINISHED**
+
 ```json
 {
   "event": "statusChange",
@@ -256,6 +255,7 @@ function verifyWebhook(secret, rawBody, signature) {
 ```
 
 **ERROR**
+
 ```json
 {
   "event": "statusChange",
@@ -278,24 +278,27 @@ function verifyWebhook(secret, rawBody, signature) {
 
 Users can include special annotations in messages:
 
-| Annotation | Description | Example |
-|------------|-------------|---------|
-| `@repo:<url>` | Override repository | `@repo:https://github.com/org/repo` |
-| `@branch:<name>` | Override branch | `@branch:develop` |
+| Annotation       | Description         | Example                             |
+| ---------------- | ------------------- | ----------------------------------- |
+| `@repo:<url>`    | Override repository | `@repo:https://github.com/org/repo` |
+| `@branch:<name>` | Override branch     | `@branch:develop`                   |
 
 ### Examples
 
 **Basic task**
+
 ```
 Fix the authentication bug
 ```
 
 **With repository**
+
 ```
 @repo:https://github.com/myorg/webapp Fix the login issue
 ```
 
 **With repository and branch**
+
 ```
 @repo:https://github.com/myorg/webapp @branch:feature-auth Add OAuth support
 ```
@@ -303,6 +306,7 @@ Fix the authentication bug
 ### Response Format
 
 **Success**
+
 ```
 ✅ Cursor Agent Task Completed
 
@@ -315,6 +319,7 @@ View in Cursor
 ```
 
 **Error**
+
 ```
 ❌ Cursor Agent Task Failed
 
@@ -339,32 +344,28 @@ The integration handles rate limiting with exponential backoff.
 
 ## Error Codes
 
-| Status | Meaning |
-|--------|---------|
-| 400 | Bad request (invalid payload) |
-| 401 | Unauthorized (invalid API key) |
-| 403 | Forbidden (no access to repo) |
-| 404 | Not found (agent doesn't exist) |
-| 429 | Rate limited |
-| 500 | Server error |
+| Status | Meaning                         |
+| ------ | ------------------------------- |
+| 400    | Bad request (invalid payload)   |
+| 401    | Unauthorized (invalid API key)  |
+| 403    | Forbidden (no access to repo)   |
+| 404    | Not found (agent doesn't exist) |
+| 429    | Rate limited                    |
+| 500    | Server error                    |
 
 ---
 
 ## SDK Usage
 
 ```typescript
-import { 
-  launchAgentTask, 
-  listAgents, 
-  getAgentDetails 
-} from "./src/api.js";
+import { launchAgentTask, listAgents, getAgentDetails } from "./src/api.js";
 
 // Launch an agent
 const result = await launchAgentTask(account, {
   instructions: "Add unit tests",
   repository: "https://github.com/user/repo",
   branch: "main",
-  webhookUrl: "https://example.com/webhook"
+  webhookUrl: "https://example.com/webhook",
 });
 
 console.log(`Launched: ${result.id}`);

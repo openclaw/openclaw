@@ -37,8 +37,12 @@ const codexCliLog = createSubsystemLogger("agent/codex-cli");
 
 function getProviderLogger(provider: string) {
   const normalized = provider.toLowerCase();
-  if (normalized === "cursor-cli") return cursorCliLog;
-  if (normalized === "codex-cli") return codexCliLog;
+  if (normalized === "cursor-cli") {
+    return cursorCliLog;
+  }
+  if (normalized === "codex-cli") {
+    return codexCliLog;
+  }
   return claudeCliLog; // default for claude-cli and unknown providers
 }
 

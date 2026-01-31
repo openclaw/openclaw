@@ -7,6 +7,7 @@ This document analyzes the feasibility of integrating **Cursor Agent** (Cursor's
 ## What is Cursor Agent?
 
 **Cursor Agent** is Cursor's AI coding assistant that can:
+
 - Complete complex coding tasks independently
 - Run terminal commands
 - Edit code files
@@ -15,6 +16,7 @@ This document analyzes the feasibility of integrating **Cursor Agent** (Cursor's
 - Generate images
 
 **Cursor Background Agents API** provides:
+
 - **Programmatic agent launch** - Launch agents via API with instructions, tools, and context
 - **Webhook support** - Receive real-time notifications about agent status changes (`statusChange` events)
 - **HTTP-based integration** - REST API endpoints for agent management
@@ -50,7 +52,9 @@ extensions/cursor-agent/
 ### Key Components Needed
 
 #### 1. **Channel Plugin** (`plugin.ts`)
+
 Implements `ChannelPlugin` interface with:
+
 - **Meta**: Channel metadata (id: "cursor-agent", label: "Cursor Agent")
 - **Capabilities**: `{ chatTypes: ["dm"] }` (likely DM-only initially)
 - **Config Schema**: API keys, webhook URLs, workspace paths
@@ -59,27 +63,35 @@ Implements `ChannelPlugin` interface with:
 - **Status Adapter**: Health checks and connection status
 
 #### 2. **API Client** (`api.ts`)
+
 HTTP client for Cursor Background Agents API:
+
 - Launch agent with instructions
 - Poll agent status
 - Handle webhook verification
 - Manage agent lifecycle
 
 #### 3. **Monitor** (`monitor.ts`)
+
 Webhook listener that:
+
 - Receives `statusChange` events from Cursor
 - Processes agent completion/results
 - Routes responses back to OpenClaw sessions
 - Handles webhook signature verification
 
 #### 4. **Outbound** (`outbound.ts`)
+
 Sends messages to Cursor Agent:
+
 - Converts OpenClaw messages to Cursor agent tasks
 - Maps OpenClaw context to Cursor instructions
 - Handles file attachments (code files, etc.)
 
 #### 5. **Onboarding** (`onboarding.ts`)
+
 Setup wizard for:
+
 - API key configuration
 - Webhook URL setup
 - Workspace path selection
@@ -88,36 +100,46 @@ Setup wizard for:
 ## Integration Approach
 
 ### Option 1: Channel Integration (Recommended)
+
 **Treat Cursor Agent as a messaging channel** where:
+
 - OpenClaw sends coding tasks to Cursor Agent
 - Cursor Agent executes tasks and sends results back
 - Two-way communication via webhooks
 
 **Pros:**
+
 - Fits existing OpenClaw architecture perfectly
 - Can route Cursor Agent responses to any OpenClaw channel
 - Leverages existing session management
 
 **Cons:**
+
 - Cursor Agent is more of a tool than a chat channel
 - May need custom message formatting
 
 ### Option 2: Tool Integration
+
 **Integrate Cursor Agent as an agent tool** (like `browser`, `canvas`, `nodes`):
+
 - Add `cursor_agent` tool to OpenClaw's tool registry
 - Agent can invoke Cursor Agent for coding tasks
 - Results returned as tool outputs
 
 **Pros:**
+
 - More natural fit for Cursor Agent's purpose
 - Can be used by any OpenClaw agent
 
 **Cons:**
+
 - Requires different integration pattern
 - May need async handling for long-running tasks
 
 ### Option 3: Hybrid Approach (Best)
+
 **Both channel AND tool integration:**
+
 - Channel for direct Cursor Agent communication
 - Tool for agent-to-agent usage
 
@@ -182,16 +204,19 @@ export async function monitorCursorAgentProvider(options: {
 ## Inspiration from Existing Integrations
 
 ### From Twitch Extension
+
 - **Monitor pattern**: Long-running connection that processes incoming events
 - **Client manager**: Registry for managing multiple connections
 - **Status tracking**: Runtime state management
 
 ### From Zalo Extension
+
 - **Webhook handling**: Secure webhook verification
 - **Polling fallback**: Alternative to webhooks if needed
 - **Onboarding flow**: Step-by-step setup wizard
 
 ### From Discord/Slack Extensions
+
 - **Message normalization**: Convert platform-specific formats
 - **Action handling**: React to user interactions
 - **Directory integration**: User/channel resolution
@@ -199,26 +224,31 @@ export async function monitorCursorAgentProvider(options: {
 ## Technical Considerations
 
 ### 1. **API Authentication**
+
 - Cursor API requires API keys
 - Webhook verification via signatures
 - Rate limiting considerations
 
 ### 2. **Async Task Handling**
+
 - Cursor Agent tasks can be long-running
 - Need to handle pending states
 - Store task IDs for correlation
 
 ### 3. **Context Management**
+
 - Map OpenClaw workspace to Cursor workspace
 - Handle file references
 - Preserve conversation context
 
 ### 4. **Error Handling**
+
 - API failures
 - Webhook delivery failures
 - Agent execution errors
 
 ### 5. **Security**
+
 - Validate webhook signatures
 - Sanitize user inputs
 - Rate limit API calls

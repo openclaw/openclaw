@@ -62,7 +62,9 @@ async function main() {
 
       if (!instructions || !repository) {
         console.error("Usage: test-api.ts launch <instructions> <repository> [branch]");
-        console.error("Example: test-api.ts launch 'Fix the bug' https://github.com/user/repo main");
+        console.error(
+          "Example: test-api.ts launch 'Fix the bug' https://github.com/user/repo main",
+        );
         process.exit(1);
       }
 

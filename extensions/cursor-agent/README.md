@@ -48,15 +48,15 @@ Or manually add to `~/.openclaw/openclaw.json`:
 
 ## Configuration Options
 
-| Option | Required | Description |
-|--------|----------|-------------|
-| `apiKey` | Yes | Cursor API key from dashboard |
-| `repository` | No | Default GitHub repository URL |
-| `branch` | No | Default branch (default: "main") |
-| `webhookUrl` | No | URL for receiving status updates |
-| `webhookSecret` | No | Secret for webhook signature verification (8-256 chars) |
-| `defaultModel` | No | AI model preference |
-| `defaultInstructions` | No | Prefix added to all tasks |
+| Option                | Required | Description                                             |
+| --------------------- | -------- | ------------------------------------------------------- |
+| `apiKey`              | Yes      | Cursor API key from dashboard                           |
+| `repository`          | No       | Default GitHub repository URL                           |
+| `branch`              | No       | Default branch (default: "main")                        |
+| `webhookUrl`          | No       | URL for receiving status updates                        |
+| `webhookSecret`       | No       | Secret for webhook signature verification (8-256 chars) |
+| `defaultModel`        | No       | AI model preference                                     |
+| `defaultInstructions` | No       | Prefix added to all tasks                               |
 
 ## Usage
 
@@ -182,12 +182,12 @@ Add to your config and to Cursor (if configurable).
 
 ### Endpoints Used
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v0/agents` | POST | Launch a new agent |
-| `/v0/agents` | GET | List all agents |
-| `/v0/agents/:id` | GET | Get agent details |
-| `/v0/agents/:id/messages` | POST | Send follow-up |
+| Endpoint                  | Method | Description        |
+| ------------------------- | ------ | ------------------ |
+| `/v0/agents`              | POST   | Launch a new agent |
+| `/v0/agents`              | GET    | List all agents    |
+| `/v0/agents/:id`          | GET    | Get agent details  |
+| `/v0/agents/:id/messages` | POST   | Send follow-up     |
 
 ### Webhook Events
 
@@ -221,12 +221,14 @@ Ensure `apiKey` is set in your configuration.
 ### "No repository specified"
 
 Either:
+
 - Set a default `repository` in config
 - Include `@repo:URL` in your message
 
 ### "Repository not found"
 
 Ensure:
+
 - The repository exists and is public, OR
 - You've connected it to Cursor via GitHub integration
 

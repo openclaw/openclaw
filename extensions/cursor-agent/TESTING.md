@@ -34,14 +34,14 @@ pnpm test:coverage
 
 ### Test Files
 
-| File | Coverage |
-|------|----------|
-| `src/api.test.ts` | Webhook signature verification, header parsing |
-| `src/config.test.ts` | Configuration loading, account resolution |
-| `src/outbound.test.ts` | Message parsing (repo/branch extraction) |
-| `src/task-store.test.ts` | Task storage and correlation |
-| `src/monitor.test.ts` | Webhook processing, payload validation |
-| `src/plugin.test.ts` | Plugin structure, config adapter |
+| File                     | Coverage                                       |
+| ------------------------ | ---------------------------------------------- |
+| `src/api.test.ts`        | Webhook signature verification, header parsing |
+| `src/config.test.ts`     | Configuration loading, account resolution      |
+| `src/outbound.test.ts`   | Message parsing (repo/branch extraction)       |
+| `src/task-store.test.ts` | Task storage and correlation                   |
+| `src/monitor.test.ts`    | Webhook processing, payload validation         |
+| `src/plugin.test.ts`     | Plugin structure, config adapter               |
 
 ### Running from Root
 
@@ -114,11 +114,13 @@ pnpm test:api details bc_xxxxx
 ### Webhook Testing
 
 1. **Expose a webhook endpoint** (e.g., with ngrok):
+
    ```bash
    ngrok http 18789
    ```
 
 2. **Configure webhook** in your test config:
+
    ```json
    {
      "webhookUrl": "https://abc123.ngrok.io/cursor-agent/default/webhook",
@@ -135,6 +137,7 @@ Test the full integration through OpenClaw channels.
 ### Setup
 
 1. Add configuration to `~/.openclaw/openclaw.json`:
+
    ```json
    {
      "channels": {
@@ -152,6 +155,7 @@ Test the full integration through OpenClaw channels.
    ```
 
 2. Start the Gateway:
+
    ```bash
    pnpm gateway:watch
    ```
@@ -164,6 +168,7 @@ Test the full integration through OpenClaw channels.
 ### Test via WhatsApp/Telegram
 
 Once connected to a messaging channel, send:
+
 ```
 @repo:https://github.com/your-org/repo Add unit tests for utils.ts
 ```
@@ -253,25 +258,25 @@ jobs:
 ### With Real API (Secrets)
 
 ```yaml
-  e2e:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      # ... setup steps ...
-      - run: pnpm test:api list
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+e2e:
+  runs-on: ubuntu-latest
+  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  steps:
+    # ... setup steps ...
+    - run: pnpm test:api list
+      env:
+        CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
 ```
 
 ## Coverage Goals
 
-| Area | Target | Notes |
-|------|--------|-------|
-| API Client | 90% | Core functionality |
-| Config | 95% | Simple parsing |
-| Task Store | 95% | Simple CRUD |
-| Webhook | 80% | Network-dependent |
-| Plugin | 70% | Integration-heavy |
+| Area       | Target | Notes              |
+| ---------- | ------ | ------------------ |
+| API Client | 90%    | Core functionality |
+| Config     | 95%    | Simple parsing     |
+| Task Store | 95%    | Simple CRUD        |
+| Webhook    | 80%    | Network-dependent  |
+| Plugin     | 70%    | Integration-heavy  |
 
 ## Next Steps
 

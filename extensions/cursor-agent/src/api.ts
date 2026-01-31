@@ -79,7 +79,9 @@ export async function launchAgentTask(
       const errorJson = JSON.parse(errorText);
       errorMessage = errorJson.message || errorJson.error || errorMessage;
     } catch {
-      if (errorText) errorMessage = errorText;
+      if (errorText) {
+        errorMessage = errorText;
+      }
     }
     throw new Error(errorMessage);
   }
@@ -191,8 +193,7 @@ export function verifyWebhookSignature(
     return false;
   }
 
-  const expectedSignature =
-    "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
+  const expectedSignature = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
 
   // Constant-time comparison to prevent timing attacks
   if (signature.length !== expectedSignature.length) {

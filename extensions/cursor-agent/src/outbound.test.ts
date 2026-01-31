@@ -2,7 +2,7 @@
  * Tests for Cursor Agent outbound adapter.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
 // Test the message parsing functions by extracting them
 // For now, we'll test via the module's behavior
@@ -131,7 +131,7 @@ describe("outbound message parsing", () => {
 
     it("should parse message with both repo and branch", () => {
       const result = parseMessage(
-        "@repo:https://github.com/user/repo @branch:develop Fix the login bug"
+        "@repo:https://github.com/user/repo @branch:develop Fix the login bug",
       );
       expect(result.repo).toBe("https://github.com/user/repo");
       expect(result.branch).toBe("develop");
@@ -139,20 +139,14 @@ describe("outbound message parsing", () => {
     });
 
     it("should parse message with only instructions", () => {
-      const result = parseMessage(
-        "Fix the login bug",
-        "https://github.com/default/repo",
-        "main"
-      );
+      const result = parseMessage("Fix the login bug", "https://github.com/default/repo", "main");
       expect(result.repo).toBe("https://github.com/default/repo");
       expect(result.branch).toBe("main");
       expect(result.instructions).toBe("Fix the login bug");
     });
 
     it("should handle annotations in any order", () => {
-      const result = parseMessage(
-        "@branch:feature Fix bug @repo:https://github.com/user/repo"
-      );
+      const result = parseMessage("@branch:feature Fix bug @repo:https://github.com/user/repo");
       expect(result.repo).toBe("https://github.com/user/repo");
       expect(result.branch).toBe("feature");
       expect(result.instructions).toBe("Fix bug");

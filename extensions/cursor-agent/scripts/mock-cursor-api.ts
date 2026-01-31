@@ -23,14 +23,17 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3456;
 const WEBHOOK_SECRET = "mock-webhook-secret";
 
 // In-memory storage for mock agents
-const agents = new Map<string, {
-  id: string;
-  status: string;
-  createdAt: string;
-  prompt: { text: string };
-  source: { repository: string; ref: string };
-  webhookUrl?: string;
-}>();
+const agents = new Map<
+  string,
+  {
+    id: string;
+    status: string;
+    createdAt: string;
+    prompt: { text: string };
+    source: { repository: string; ref: string };
+    webhookUrl?: string;
+  }
+>();
 
 // Parse JSON body
 async function parseBody(req: any): Promise<any> {
@@ -50,7 +53,9 @@ async function parseBody(req: any): Promise<any> {
 
 // Send webhook notification
 async function sendWebhook(agent: any, status: string, extra: any = {}) {
-  if (!agent.webhookUrl) return;
+  if (!agent.webhookUrl) {
+    return;
+  }
 
   const payload = JSON.stringify({
     event: "statusChange",
@@ -165,7 +170,7 @@ const server = createServer(async (req, res) => {
       console.log(`  Created agent ${id}`);
 
       // Start async simulation
-      simulateAgent(agent);
+      void simulateAgent(agent);
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ id, status: "PENDING" }));
@@ -198,15 +203,23 @@ const server = createServer(async (req, res) => {
       }
 
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        id: agent.id,
-        status: agent.status,
-        createdAt: agent.createdAt,
-        summary: agent.status === "FINISHED" ? `Completed: ${agent.prompt.text.slice(0, 50)}` : undefined,
-        target: agent.status === "FINISHED" ? {
-          branchName: `cursor/mock-${agent.id.slice(-6)}`,
-        } : undefined,
-      }));
+      res.end(
+        JSON.stringify({
+          id: agent.id,
+          status: agent.status,
+          createdAt: agent.createdAt,
+          summary:
+            agent.status === "FINISHED"
+              ? `Completed: ${agent.prompt.text.slice(0, 50)}`
+              : undefined,
+          target:
+            agent.status === "FINISHED"
+              ? {
+                  branchName: `cursor/mock-${agent.id.slice(-6)}`,
+                }
+              : undefined,
+        }),
+      );
       return;
     }
 

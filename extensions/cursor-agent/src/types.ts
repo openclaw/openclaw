@@ -77,12 +77,7 @@ export interface CursorAgentLaunchResponse {
 /**
  * Agent status values.
  */
-export type CursorAgentStatus =
-  | "PENDING"
-  | "RUNNING"
-  | "FINISHED"
-  | "ERROR"
-  | "CANCELLED";
+export type CursorAgentStatus = "PENDING" | "RUNNING" | "FINISHED" | "ERROR" | "CANCELLED";
 
 /**
  * Webhook payload for status change events.

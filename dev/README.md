@@ -37,12 +37,12 @@ dev/
 
 This setup is completely isolated from your global OpenClaw installation:
 
-| Component | Global | Dev |
-|-----------|--------|-----|
-| Config | `~/.openclaw/openclaw.json` | `./dev/config/openclaw.json` |
-| Data | `~/.openclaw/` | `./dev/data/` |
-| Gateway Port | 18789 | 18790 |
-| Credentials | `~/.openclaw/credentials/` | `./dev/data/credentials/` |
+| Component    | Global                      | Dev                          |
+| ------------ | --------------------------- | ---------------------------- |
+| Config       | `~/.openclaw/openclaw.json` | `./dev/config/openclaw.json` |
+| Data         | `~/.openclaw/`              | `./dev/data/`                |
+| Gateway Port | 18789                       | 18790                        |
+| Credentials  | `~/.openclaw/credentials/`  | `./dev/data/credentials/`    |
 
 ## Configuration
 

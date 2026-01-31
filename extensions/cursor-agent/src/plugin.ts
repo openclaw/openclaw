@@ -22,7 +22,12 @@ import type {
   ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import { cursorAgentConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, listAccountIds, isAccountConfigured } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  listAccountIds,
+  isAccountConfigured,
+} from "./config.js";
 import { cursorAgentOutbound } from "./outbound.js";
 import { cursorAgentOnboardingAdapter } from "./onboarding.js";
 import { listAgents } from "./api.js";
@@ -157,7 +162,7 @@ export const cursorAgentPlugin: ChannelPlugin<CursorAgentAccountConfig> = {
 
   gateway: {
     startAccount: async (ctx): Promise<void> => {
-      const account = ctx.account as CursorAgentAccountConfig;
+      const account = ctx.account;
       const accountId = ctx.accountId;
 
       ctx.setStatus?.({
@@ -181,7 +186,6 @@ export const cursorAgentPlugin: ChannelPlugin<CursorAgentAccountConfig> = {
     },
 
     stopAccount: async (ctx): Promise<void> => {
-      const account = ctx.account as CursorAgentAccountConfig;
       const accountId = ctx.accountId;
 
       ctx.setStatus?.({

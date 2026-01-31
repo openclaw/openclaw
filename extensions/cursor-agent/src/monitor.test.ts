@@ -2,31 +2,11 @@
  * Tests for Cursor Agent webhook monitor.
  */
 
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { processWebhookEvent } from "./monitor.js";
 import { clearTasks, setTask, getTask } from "./task-store.js";
 import type { CursorAgentWebhookPayload } from "./types.js";
-
-// Helper to create a test server
-async function withServer(
-  handler: Parameters<typeof createServer>[0],
-  fn: (baseUrl: string) => Promise<void>,
-) {
-  const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) throw new Error("missing server address");
-  try {
-    await fn(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-}
 
 // Helper to create a valid signature
 function createSignature(payload: string, secret: string): string {
@@ -68,9 +48,9 @@ describe("processWebhookEvent", () => {
   it("should reject invalid signature", async () => {
     const payload = JSON.stringify({ event: "statusChange", id: "bc_test" });
 
-    await expect(
-      processWebhookEvent(payload, "sha256=invalid", secret)
-    ).rejects.toThrow("Invalid webhook signature");
+    await expect(processWebhookEvent(payload, "sha256=invalid", secret)).rejects.toThrow(
+      "Invalid webhook signature",
+    );
   });
 
   it("should process payload without signature when no secret", async () => {
