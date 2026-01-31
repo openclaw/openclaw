@@ -52,7 +52,7 @@
           },
           "model": {
             "type": "string",
-            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+            "enum": ["text-embedding-3-small", "text-embedding-3-large", "gemini-embedding-001"]
           }
         },
         "required": ["apiKey"]

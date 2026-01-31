@@ -364,14 +364,24 @@ const memoryPlugin = {
                score: r.score,
              }));
 
-          return {
-            content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
-            details: { count: results.length, memories: sanitizedResults },
-          };
+           return {
+             content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
+             details: { count: results.length, memories: sanitizedResults },
+           };
+         } catch (err) {
+           const errorMsg = err instanceof Error ? err.message : String(err);
+           return {
+             content: [{
+               type: "text",
+               text: `Memory recall failed: ${errorMsg}. Please check your embedding provider configuration.`
+             }],
+             details: { error: errorMsg },
+           };
+         }
         },
-      },
-      { name: "memory_recall" },
-    );
+       },
+       { name: "memory_recall" },
+     );
 
     api.registerTool(
       {
