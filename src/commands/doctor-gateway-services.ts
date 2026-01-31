@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
-import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
+import { findExtraGatewayServices, renderCleanupHintsForServices } from "../daemon/inspect.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
@@ -268,7 +268,8 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  // Generate cleanup hints for the detected extra services (not the current profile)
+  const cleanupHints = renderCleanupHintsForServices(extraServices);
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }

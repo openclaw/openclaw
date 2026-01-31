@@ -52,6 +52,37 @@ export function renderGatewayServiceCleanupHints(
   }
 }
 
+/**
+ * Generate cleanup hints for a list of detected extra gateway services.
+ * Unlike renderGatewayServiceCleanupHints(), this generates hints for
+ * the actual detected services (e.g., clawdbot/moltbot) rather than
+ * the current profile's gateway.
+ */
+export function renderCleanupHintsForServices(services: ExtraGatewayService[]): string[] {
+  const hints: string[] = [];
+  for (const svc of services) {
+    switch (svc.platform) {
+      case "darwin": {
+        hints.push(`launchctl bootout gui/$UID/${svc.label}`);
+        hints.push(`rm ~/Library/LaunchAgents/${svc.label}.plist`);
+        break;
+      }
+      case "linux": {
+        // Extract unit name from label (e.g., "clawdbot-gateway.service" -> "clawdbot-gateway")
+        const unit = svc.label.replace(/\.service$/, "");
+        hints.push(`systemctl --user disable --now ${unit}.service`);
+        hints.push(`rm ~/.config/systemd/user/${unit}.service`);
+        break;
+      }
+      case "win32": {
+        hints.push(`schtasks /Delete /TN "${svc.label}" /F`);
+        break;
+      }
+    }
+  }
+  return hints;
+}
+
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (!home) {
