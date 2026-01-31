@@ -98,7 +98,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     await fs.appendFile(profilePath, `\n# OpenClaw Completion\n${sourceLine}\n`);
     console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
   } catch (err) {
-    console.error(`Failed to install completion: ${err}`);
+    console.error(`Failed to install completion: ${err as string}`);
   }
 }
 
@@ -347,14 +347,12 @@ function generateFishCompletion(program: Command): string {
     } else {
       // Nested commands
       // Logic: if seen subcommand matches parents...
-      const seenCondition = `__fish_seen_subcommand_from ${parents.join(" ")}`;
       // But fish completion logic is simpler if we just say "if we haven't seen THIS command yet but seen parent"
       // Actually, a robust fish completion often requires defining a function to check current line.
       // For simplicity, we'll assume standard fish helper __fish_seen_subcommand_from.
 
       // To properly scope to 'openclaw gateway' and not 'openclaw other gateway', we need to check the sequence.
       // A simplified approach:
-      const parentChain = parents.join(" ");
 
       // Subcommands
       for (const sub of cmd.commands) {
