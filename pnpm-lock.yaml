@@ -230,9 +230,17 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.1.0)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
 
-  extensions/bluebubbles: {}
+  extensions/bluebubbles:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/copilot-proxy: {}
+  extensions/copilot-proxy:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/diagnostics-otel:
     dependencies:
@@ -269,12 +277,28 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: ^1.39.0
         version: 1.39.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/discord: {}
+  extensions/discord:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/google-antigravity-auth: {}
+  extensions/google-antigravity-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/google-gemini-cli-auth: {}
+  extensions/google-gemini-cli-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/googlechat:
     dependencies:
@@ -286,7 +310,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/imessage: {}
+  extensions/imessage:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/line:
     devDependencies:
@@ -294,9 +322,17 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/llm-task: {}
+  extensions/llm-task:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/lobster: {}
+  extensions/lobster:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/matrix:
     dependencies:
@@ -320,7 +356,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/mattermost: {}
+  extensions/mattermost:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/memory-core:
     devDependencies:
@@ -339,8 +379,16 @@ importers:
       openai:
         specifier: ^6.17.0
         version: 6.17.0(ws@8.19.0)(zod@4.3.6)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/minimax-portal-auth: {}
+  extensions/minimax-portal-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/msteams:
     dependencies:
@@ -363,7 +411,11 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2
 
-  extensions/nextcloud-talk: {}
+  extensions/nextcloud-talk:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/nostr:
     dependencies:
@@ -377,13 +429,29 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  extensions/open-prose: {}
+  extensions/open-prose:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/signal: {}
+  extensions/signal:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/slack: {}
+  extensions/slack:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/telegram: {}
+  extensions/telegram:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tlon:
     dependencies:
@@ -393,6 +461,10 @@ importers:
       '@urbit/http-api':
         specifier: ^3.0.0
         version: 3.0.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/twitch:
     dependencies:
@@ -424,8 +496,16 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/whatsapp: {}
+  extensions/whatsapp:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/zalo:
     dependencies:

@@ -7,6 +7,9 @@
     "openclaw": "workspace:*",
     "undici": "7.19.2"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
