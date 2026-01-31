@@ -20,6 +20,8 @@ export type FeishuApiResponse<T> = {
   data?: T;
 };
 
+type FeishuMessageResourceType = "image" | "file" | "audio" | "video";
+
 export type FeishuTenantAccessToken = {
   tenant_access_token: string;
   expire: number;
@@ -241,6 +243,57 @@ export class FeishuClient {
   }
 
   /**
+   * Download a message resource (image/file/audio/video).
+   *
+   * API (Feishu Open Platform):
+   * GET /im/v1/messages/:message_id/resources/:file_key?type=image|file|audio|video
+   *
+   * Returns the raw bytes. The caller is responsible for mime sniffing + saving.
+   */
+  async getMessageResource(
+    messageId: string,
+    fileKey: string,
+    type: FeishuMessageResourceType,
+  ): Promise<{ buffer: Buffer; contentType?: string; fileName?: string }> {
+    const token = await getTenantAccessToken(this.credentials);
+    const url = `${FEISHU_API_BASE}/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${encodeURIComponent(type)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let detail = "";
+        try {
+          detail = (await response.text()).trim();
+        } catch {
+          // ignore
+        }
+        throw new Error(
+          `Failed to download message resource: ${response.status} ${response.statusText}${detail ? ` (${detail})` : ""}`,
+        );
+      }
+
+      const contentType = response.headers.get("content-type") ?? undefined;
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const fileNameMatch = /filename\*?=(?:UTF-8''|")?([^";\n]+)"?/i.exec(disposition);
+      const fileName = fileNameMatch?.[1] ? decodeURIComponent(fileNameMatch[1]) : undefined;
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return { buffer, contentType, fileName };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
    * Send a message to a chat
    */
   async sendMessage(params: FeishuSendMessageParams): Promise<FeishuSendMessageResult> {
@@ -336,6 +389,7 @@ export class FeishuClient {
   async uploadImage(
     image: Buffer | Uint8Array,
     imageType: "message" | "avatar" = "message",
+    meta?: { contentType?: string; fileName?: string },
   ): Promise<string> {
     const token = await getTenantAccessToken(this.credentials);
 
@@ -347,7 +401,9 @@ export class FeishuClient {
     ) as ArrayBuffer;
     const formData = new FormData();
     formData.append("image_type", imageType);
-    formData.append("image", new Blob([arrayBuffer]), "image.png");
+    const blobType = meta?.contentType?.split(";")[0]?.trim() || "application/octet-stream";
+    const fileName = meta?.fileName?.trim() || "image";
+    formData.append("image", new Blob([arrayBuffer], { type: blobType }), fileName);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -363,7 +419,15 @@ export class FeishuClient {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to upload image: ${response.status} ${response.statusText}`);
+        let detail = "";
+        try {
+          detail = (await response.text()).trim();
+        } catch {
+          // ignore
+        }
+        throw new Error(
+          `Failed to upload image: ${response.status} ${response.statusText}${detail ? ` (${detail})` : ""}`,
+        );
       }
 
       const result = (await response.json()) as FeishuApiResponse<{ image_key: string }>;
@@ -380,6 +444,106 @@ export class FeishuClient {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  /**
+   * Upload a file to Feishu (returns file_key).
+   *
+   * API: POST /im/v1/files
+   *
+   * Note: `fileType` is a Feishu enum-like string (e.g. "stream", "pdf", "mp4", "opus").
+   */
+  async uploadFile(params: {
+    file: Buffer | Uint8Array;
+    fileName: string;
+    fileType?: string;
+  }): Promise<string> {
+    const token = await getTenantAccessToken(this.credentials);
+
+    const arrayBuffer = params.file.buffer.slice(
+      params.file.byteOffset,
+      params.file.byteOffset + params.file.byteLength,
+    ) as ArrayBuffer;
+
+    const formData = new FormData();
+    formData.append("file_type", params.fileType ?? "stream");
+    formData.append("file_name", params.fileName);
+    formData.append("file", new Blob([arrayBuffer]), params.fileName);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(`${FEISHU_API_BASE}/im/v1/files`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let detail = "";
+        try {
+          detail = (await response.text()).trim();
+        } catch {
+          // ignore
+        }
+        throw new Error(
+          `Failed to upload file: ${response.status} ${response.statusText}${detail ? ` (${detail})` : ""}`,
+        );
+      }
+
+      const result = (await response.json()) as FeishuApiResponse<{ file_key: string }>;
+      if (result.code !== 0) {
+        throw new Error(`Failed to upload file: ${result.code} ${result.msg}`);
+      }
+      if (!result.data?.file_key) {
+        throw new Error("No file_key in upload response");
+      }
+      return result.data.file_key;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async sendFileMessage(
+    receiveId: string,
+    fileKey: string,
+    receiveIdType: FeishuSendMessageParams["receive_id_type"] = "chat_id",
+  ): Promise<FeishuSendMessageResult> {
+    return this.sendMessage({
+      receive_id: receiveId,
+      receive_id_type: receiveIdType,
+      msg_type: "file",
+      content: JSON.stringify({ file_key: fileKey }),
+    });
+  }
+
+  async sendAudioMessage(
+    receiveId: string,
+    fileKey: string,
+    receiveIdType: FeishuSendMessageParams["receive_id_type"] = "chat_id",
+  ): Promise<FeishuSendMessageResult> {
+    return this.sendMessage({
+      receive_id: receiveId,
+      receive_id_type: receiveIdType,
+      msg_type: "audio",
+      content: JSON.stringify({ file_key: fileKey }),
+    });
+  }
+
+  async sendVideoMessage(
+    receiveId: string,
+    fileKey: string,
+    receiveIdType: FeishuSendMessageParams["receive_id_type"] = "chat_id",
+  ): Promise<FeishuSendMessageResult> {
+    return this.sendMessage({
+      receive_id: receiveId,
+      receive_id_type: receiveIdType,
+      msg_type: "media",
+      content: JSON.stringify({ file_key: fileKey }),
+    });
   }
 
   /**
@@ -411,8 +575,9 @@ export class FeishuClient {
     receiveId: string,
     image: Buffer | Uint8Array,
     receiveIdType: FeishuSendMessageParams["receive_id_type"] = "chat_id",
+    meta?: { contentType?: string; fileName?: string },
   ): Promise<FeishuSendMessageResult> {
-    const imageKey = await this.uploadImage(image, "message");
+    const imageKey = await this.uploadImage(image, "message", meta);
     return this.sendImageMessage(receiveId, imageKey, receiveIdType);
   }
 

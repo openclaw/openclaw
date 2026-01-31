@@ -45,7 +45,7 @@ export function saveXPollState(dataDir: string, accountId: string, state: XPollS
     fs.writeFileSync(filePath, JSON.stringify(state, null, 2));
   } catch (error) {
     // Log but don't throw - state persistence is best-effort
-    console.error(`Failed to save X poll state: ${error}`);
+    console.error("Failed to save X poll state:", error);
   }
 }
 

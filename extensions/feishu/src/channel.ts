@@ -12,7 +12,11 @@ import {
   resolveDefaultFeishuAccountId,
   type ResolvedFeishuAccount,
 } from "../../../src/feishu/accounts.js";
-import { sendMessageFeishu, sendImageFeishu, type SendFeishuMessageParams } from "../../../src/feishu/send.js";
+import {
+  sendMediaFeishu,
+  sendMessageFeishu,
+  type SendFeishuMessageParams,
+} from "../../../src/feishu/send.js";
 import { loadWebMedia } from "../../../src/web/media.js";
 import { monitorFeishuProvider, type FeishuMessageContext } from "../../../src/feishu/monitor.js";
 import { createFeishuClient } from "../../../src/feishu/client.js";
@@ -86,12 +90,21 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     }),
   },
   messaging: {
+    normalizeTarget: (raw) => {
+      // Accept explicit channel prefixes like "feishu:oc_xxx" / "lark:ou_xxx"
+      // and normalize them to the raw Feishu id.
+      let value = String(raw ?? "").trim();
+      value = value.replace(/^(feishu|lark):/i, "").trim();
+      return value;
+    },
     targetResolver: {
       hint: "Use ou_xxx (open_id), oc_xxx (chat_id), or on_xxx (union_id)",
       // Recognize Feishu ID patterns: ou_ (open_id), oc_ (chat_id), on_ (union_id)
-      looksLikeId: (raw: string) => {
+      looksLikeId: (raw: string, normalized?: string) => {
         const trimmed = raw.trim();
-        return /^(ou_|oc_|on_)[a-z0-9]+$/i.test(trimmed);
+        const normalizedTrimmed = normalized?.trim() ?? "";
+        const re = /^(ou_|oc_|on_)[a-z0-9]+$/i;
+        return re.test(trimmed) || re.test(normalizedTrimmed);
       },
     },
   },
@@ -135,21 +148,36 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         lastMessageId = textResult.messageId;
       }
 
-      // Send image if mediaUrl is provided
+      // Send media if mediaUrl is provided
       if (mediaUrl) {
-        const media = await loadWebMedia(mediaUrl);
+        const resolved = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
+        const maxMb = resolved.config.mediaMaxMb ?? cfg.channels?.feishu?.mediaMaxMb ?? 20;
+        const maxBytes = Math.max(1, maxMb) * 1024 * 1024;
+        const media = await loadWebMedia(mediaUrl, maxBytes);
         if (media.buffer) {
-          const imageResult = await sendImageFeishu({
+          const kind =
+            media.kind === "image"
+              ? ("image" as const)
+              : media.kind === "audio"
+                ? ("audio" as const)
+                : media.kind === "video"
+                  ? ("video" as const)
+                  : ("file" as const);
+
+          const mediaResult = await sendMediaFeishu({
             to,
-            image: media.buffer,
+            buffer: media.buffer,
+            contentType: media.contentType,
+            fileName: media.fileName,
+            kind,
             accountId: accountId ?? undefined,
             config: cfg,
             receiveIdType,
           });
-          if (!imageResult.success) {
-            throw new Error(imageResult.error ?? "Failed to send Feishu image");
+          if (!mediaResult.success) {
+            throw new Error(mediaResult.error ?? "Failed to send Feishu media");
           }
-          lastMessageId = imageResult.messageId;
+          lastMessageId = mediaResult.messageId;
         }
       }
 

@@ -13,6 +13,7 @@ import {
   type FeishuPostContent,
   type FeishuPostElement,
 } from "./client.js";
+import { extensionForMime } from "../media/mime.js";
 
 /**
  * Feishu Interactive Card structure for rich markdown messages
@@ -135,7 +136,8 @@ function normalizeHorizontalRules(markdown: string): string {
   const codeBlocks: string[] = [];
   let result = markdown.replace(/```[\s\S]*?```/g, (match) => {
     codeBlocks.push(match);
-    return `\x00CODE_BLOCK_${codeBlocks.length - 1}\x00`;
+    // Avoid control characters (some linters forbid them in regex literals).
+    return `__OPENCLAW_FEISHU_CODE_BLOCK_${codeBlocks.length - 1}__`;
   });
 
   // Match --- that should be horizontal rules (on their own line, possibly with whitespace)
@@ -147,7 +149,7 @@ function normalizeHorizontalRules(markdown: string): string {
   result = result.replace(/\n[ \t]*---[ \t]*$/g, "\n\n---");
 
   // Restore code blocks
-  result = result.replace(/\x00CODE_BLOCK_(\d+)\x00/g, (_match, index) => {
+  result = result.replace(/__OPENCLAW_FEISHU_CODE_BLOCK_(\d+)__/g, (_match, index) => {
     return codeBlocks[parseInt(index, 10)];
   });
 
@@ -520,6 +522,8 @@ export async function sendMessageFeishu(
 export async function sendImageFeishu(params: {
   to: string;
   image: Buffer | Uint8Array;
+  contentType?: string;
+  fileName?: string;
   accountId?: string | null;
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
@@ -554,6 +558,7 @@ export async function sendImageFeishu(params: {
       params.to,
       params.image,
       params.receiveIdType ?? "chat_id",
+      { contentType: params.contentType, fileName: params.fileName },
     );
 
     return {
@@ -563,6 +568,179 @@ export async function sendImageFeishu(params: {
   } catch (err) {
     const errorMsg = formatErrorMessage(err);
     params.runtime?.error?.(`feishu: send image failed: ${errorMsg}`);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  }
+}
+
+function resolveFeishuUploadFileName(params: {
+  contentType?: string;
+  fileName?: string;
+  fallbackBase: string;
+}): string {
+  const contentType = params.contentType?.split(";")[0]?.trim() ?? undefined;
+  const preferredExt = extensionForMime(contentType);
+
+  const trimmed = params.fileName?.trim();
+  if (trimmed) {
+    // If we re-encoded an image (e.g., PNG → JPEG), keep filename extension in sync
+    // so Feishu clients don't get confused by mismatched content-type/extension.
+    if (preferredExt) {
+      const lower = trimmed.toLowerCase();
+      const hasAnyExt = /\.[a-z0-9]{1,6}$/i.test(lower);
+      if (hasAnyExt && !lower.endsWith(preferredExt)) {
+        // Replace the existing extension with the preferred one
+        return trimmed.replace(/\.[a-z0-9]{1,6}$/i, preferredExt);
+      }
+    }
+    return trimmed;
+  }
+
+  return `${params.fallbackBase}${preferredExt ?? ".bin"}`;
+}
+
+function isLikelyOpusAudio(params: { contentType?: string; fileName?: string }): boolean {
+  const ct = params.contentType?.split(";")[0]?.trim().toLowerCase();
+  if (ct === "audio/opus") return true;
+  // OGG container with OPUS is often reported as audio/ogg
+  if (ct === "audio/ogg") return true;
+  const name = params.fileName?.toLowerCase() ?? "";
+  return name.endsWith(".opus") || name.endsWith(".ogg");
+}
+
+/**
+ * Send media (image/audio/video/file) via Feishu.
+ *
+ * - Images: sent as `msg_type=image` for preview; optionally also sent as `file` ("double write")
+ * - Audio: sent as `audio` when OPUS/OGG, otherwise sent as file attachment
+ * - Video: sent as `media` (Feishu video) when mp4-ish, otherwise file attachment
+ * - Other: sent as file attachment
+ */
+export async function sendMediaFeishu(params: {
+  to: string;
+  buffer: Buffer | Uint8Array;
+  contentType?: string;
+  fileName?: string;
+  accountId?: string | null;
+  config?: OpenClawConfig;
+  runtime?: RuntimeEnv;
+  receiveIdType?: "chat_id" | "open_id" | "user_id" | "union_id" | "email";
+  kind: "image" | "audio" | "video" | "file";
+}): Promise<SendFeishuMessageResult> {
+  const cfg = params.config ?? loadConfig();
+  const account = resolveFeishuAccount({
+    cfg,
+    accountId: params.accountId,
+  });
+
+  if (account.credentials.source === "none") {
+    return {
+      success: false,
+      error: `Feishu credentials missing for account "${account.accountId}".`,
+    };
+  }
+
+  if (!account.enabled) {
+    return {
+      success: false,
+      error: `Feishu account "${account.accountId}" is disabled.`,
+    };
+  }
+
+  const client = createFeishuClient(account.credentials, {
+    timeoutMs: (account.config.timeoutSeconds ?? 30) * 1000,
+  });
+
+  try {
+    const receiveIdType = params.receiveIdType ?? "chat_id";
+    let result: FeishuSendMessageResult | null = null;
+
+    if (params.kind === "image") {
+      const uploadName = resolveFeishuUploadFileName({
+        contentType: params.contentType,
+        fileName: params.fileName,
+        fallbackBase: "image",
+      });
+      // 1) Always send previewable image message
+      result = await client.uploadAndSendImage(params.to, params.buffer, receiveIdType, {
+        contentType: params.contentType,
+        fileName: uploadName,
+      });
+
+      // 2) Optional "double write": also upload + send as a file attachment
+      // This helps preserve original bytes/filename and makes downloads easier in some clients.
+      if (account.config.imageDoubleSend === true) {
+        const fileName = resolveFeishuUploadFileName({
+          contentType: params.contentType,
+          fileName: uploadName,
+          fallbackBase: "image",
+        });
+        const fileKey = await client.uploadFile({
+          file: params.buffer,
+          fileName,
+          fileType: "stream",
+        });
+        result = await client.sendFileMessage(params.to, fileKey, receiveIdType);
+      }
+    } else if (params.kind === "audio") {
+      const fileName = resolveFeishuUploadFileName({
+        contentType: params.contentType,
+        fileName: params.fileName,
+        fallbackBase: "audio",
+      });
+      const isOpus = isLikelyOpusAudio({ contentType: params.contentType, fileName });
+      const fileKey = await client.uploadFile({
+        file: params.buffer,
+        fileName,
+        fileType: isOpus ? "opus" : "stream",
+      });
+      result = isOpus
+        ? await client.sendAudioMessage(params.to, fileKey, receiveIdType)
+        : await client.sendFileMessage(params.to, fileKey, receiveIdType);
+    } else if (params.kind === "video") {
+      const fileName = resolveFeishuUploadFileName({
+        contentType: params.contentType,
+        fileName: params.fileName,
+        fallbackBase: "video",
+      });
+      const ct = params.contentType?.split(";")[0]?.trim().toLowerCase();
+      const isMp4 = ct === "video/mp4" || fileName.toLowerCase().endsWith(".mp4");
+      const fileKey = await client.uploadFile({
+        file: params.buffer,
+        fileName,
+        fileType: isMp4 ? "mp4" : "stream",
+      });
+      result = isMp4
+        ? await client.sendVideoMessage(params.to, fileKey, receiveIdType)
+        : await client.sendFileMessage(params.to, fileKey, receiveIdType);
+    } else {
+      // Generic file attachment
+      const fileName = resolveFeishuUploadFileName({
+        contentType: params.contentType,
+        fileName: params.fileName,
+        fallbackBase: "file",
+      });
+      const fileKey = await client.uploadFile({
+        file: params.buffer,
+        fileName,
+        fileType: "stream",
+      });
+      result = await client.sendFileMessage(params.to, fileKey, receiveIdType);
+    }
+
+    if (!result) {
+      throw new Error("Feishu media send produced no result");
+    }
+
+    return {
+      success: true,
+      messageId: result.message_id,
+    };
+  } catch (err) {
+    const errorMsg = formatErrorMessage(err);
+    params.runtime?.error?.(`feishu: send media failed: ${errorMsg}`);
     return {
       success: false,
       error: errorMsg,

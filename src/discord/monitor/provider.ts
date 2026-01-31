@@ -22,7 +22,8 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
-import { fetchDiscordApplicationId } from "../probe.js";
+import { probeDiscordApplicationId } from "../probe.js";
+import { makeDiscordProxyFetch } from "../proxy.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -151,6 +152,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   };
 
   const discordCfg = account.config;
+  // Proxy is now configured globally via top-level `proxy` (gateway startup).
+  // Keep legacy logging for users still using channels.discord.proxy while migrating.
+  const proxyUrl =
+    (cfg as { proxy?: string }).proxy?.trim() ||
+    (discordCfg as { proxy?: string }).proxy?.trim() ||
+    undefined;
+  const proxyFetch = proxyUrl ? makeDiscordProxyFetch(proxyUrl) : undefined;
+  if (proxyUrl && shouldLogVerbose()) {
+    logVerbose(`discord: proxy enabled (account=${account.accountId})`);
+  }
+
   const dmConfig = discordCfg.dm;
   let guildEntries = discordCfg.guilds;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
@@ -223,6 +235,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           const resolved = await resolveDiscordChannelAllowlist({
             token,
             entries: entries.map((entry) => entry.input),
+            fetcher: proxyFetch,
           });
           const nextGuilds = { ...guildEntries };
           const mapping: string[] = [];
@@ -277,6 +290,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         const resolvedUsers = await resolveDiscordUserAllowlist({
           token,
           entries: allowEntries.map((entry) => String(entry)),
+          fetcher: proxyFetch,
         });
         const mapping: string[] = [];
         const unresolved: string[] = [];
@@ -326,6 +340,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           const resolvedUsers = await resolveDiscordUserAllowlist({
             token,
             entries: Array.from(userEntries),
+            fetcher: proxyFetch,
           });
           const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
           const mapping = resolvedUsers
@@ -388,9 +403,28 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
 
-  const applicationId = await fetchDiscordApplicationId(token, 4000);
+  const applicationIdTimeoutMs = 15_000;
+  const applicationIdUrl = "https://discord.com/api/v10/oauth2/applications/@me";
+  const appProbe = await probeDiscordApplicationId(token, applicationIdTimeoutMs, {
+    fetcher: proxyFetch,
+    includeBody: shouldLogVerbose(),
+  });
+  const applicationId = appProbe.id ?? undefined;
   if (!applicationId) {
-    throw new Error("Failed to resolve Discord application id");
+    const parts = [
+      `url=${applicationIdUrl}`,
+      `status=${appProbe.status ?? "unknown"}`,
+      `timeoutMs=${applicationIdTimeoutMs}`,
+      `elapsedMs=${appProbe.elapsedMs}`,
+      `proxy=${proxyUrl ? "on" : "off"}`,
+      appProbe.error ? `error=${inspect(appProbe.error)}` : "",
+      shouldLogVerbose() && appProbe.errorDetails
+        ? `errorDetails=${inspect(appProbe.errorDetails)}`
+        : "",
+      shouldLogVerbose() && appProbe.body ? `body=${inspect(appProbe.body)}` : "",
+    ].filter(Boolean);
+    runtime.log?.(warn(`discord: failed to resolve application id (${parts.join(" ")})`));
+    throw new Error(`Failed to resolve Discord application id (${parts.join(" ")})`);
   }
 
   const maxDiscordCommands = 100;

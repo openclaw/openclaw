@@ -136,6 +136,14 @@ export type FeishuAccountConfig = {
 
   /** Max media file size in MB. Default: 20. */
   mediaMaxMb?: number;
+  /**
+   * When sending images, "double write" them:
+   * - send as `image` message for inline preview
+   * - then also send as `file` attachment for easier download / preserving bytes
+   *
+   * Default: false.
+   */
+  imageDoubleSend?: boolean;
   /** API timeout in seconds. Default: 30. */
   timeoutSeconds?: number;
   /** Retry policy for outbound API calls. */

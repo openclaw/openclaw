@@ -48,6 +48,11 @@ export type OpenClawConfig = {
       | { enabled?: boolean; timeoutMs?: number }
       | undefined;
   };
+  /**
+   * Global HTTP proxy URL used for all outbound fetch() calls (including third-party libraries).
+   * Example: "http://user:pass@proxy-host:8080"
+   */
+  proxy?: string;
   wizard?: {
     lastRunAt?: string;
     lastRunVersion?: string;

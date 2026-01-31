@@ -23,13 +23,16 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { loadWebMedia } from "../web/media.js";
-import { sendMessageFeishu, sendImageFeishu } from "./send.js";
+import { sendMediaFeishu, sendMessageFeishu } from "./send.js";
+import { downloadFeishuInboundMedia, type FeishuInboundMedia } from "./download.js";
 
 // Message deduplication cache to prevent processing duplicate messages
 const feishuMessageDedupe = createDedupeCache({
   maxSize: 1000,
   ttlMs: 60_000, // 1 minute
 });
+
+const MB = 1024 * 1024;
 
 export type DispatchFeishuMessageParams = {
   ctx: FeishuMessageContext;
@@ -152,6 +155,45 @@ function resolvePromptSuffix(
   return account.config.promptSuffix?.trim() || undefined;
 }
 
+async function resolveInboundMedia(params: {
+  ctx: FeishuMessageContext;
+  cfg: OpenClawConfig;
+  account: ResolvedFeishuAccount;
+}): Promise<FeishuInboundMedia | null> {
+  const { ctx, cfg, account } = params;
+
+  const maxMb = account.config.mediaMaxMb ?? cfg.channels?.feishu?.mediaMaxMb ?? 20;
+  const maxBytes = Math.max(1, maxMb) * MB;
+
+  const type = (() => {
+    switch (ctx.messageType) {
+      case "image":
+        return "image" as const;
+      case "audio":
+        return "audio" as const;
+      case "media":
+        return "video" as const;
+      case "file":
+        return "file" as const;
+      default:
+        return null;
+    }
+  })();
+
+  if (!type) return null;
+
+  const fileKey = type === "image" ? ctx.imageKey : ctx.fileKey;
+  if (!fileKey) return null;
+
+  return await downloadFeishuInboundMedia({
+    client: ctx.client,
+    messageId: ctx.messageId,
+    fileKey,
+    type,
+    maxBytes,
+  });
+}
+
 /**
  * Dispatch a Feishu message to the agent system
  */
@@ -206,10 +248,18 @@ export async function dispatchFeishuMessage(params: DispatchFeishuMessageParams)
     return;
   }
 
-  // Skip empty messages
-  const rawMessageText = ctx.text.trim();
+  // Resolve inbound media (best-effort). Media-only messages should still trigger.
+  let inboundMedia: FeishuInboundMedia | null = null;
+  try {
+    inboundMedia = await resolveInboundMedia({ ctx, cfg, account });
+  } catch (err) {
+    runtime?.error?.(danger(`feishu: inbound media download failed: ${formatUncaughtError(err)}`));
+  }
+
+  // Skip truly empty messages (no text + no media)
+  const rawMessageText = ctx.text.trim() || inboundMedia?.placeholder || "";
   if (!rawMessageText) {
-    log(`feishu: skipping empty message`);
+    log(`feishu: skipping empty message (no text/media)`);
     return;
   }
 
@@ -262,6 +312,9 @@ export async function dispatchFeishuMessage(params: DispatchFeishuMessageParams)
     SenderId: ctx.senderId,
     Timestamp: Date.now(),
     MessageThreadId: ctx.threadId,
+    MediaPath: inboundMedia?.saved.path,
+    MediaType: inboundMedia?.saved.contentType,
+    MediaUrl: inboundMedia?.saved.path,
     // Commands are authorized if sender passed access checks
     CommandAuthorized: true,
     // Originating channel info for reply routing
@@ -317,14 +370,18 @@ export async function dispatchFeishuMessage(params: DispatchFeishuMessageParams)
               }
 
               log(`feishu: sending reply to ${ctx.chatId}...`);
-              await sendMessageFeishu({
+              const res = await sendMessageFeishu({
                 to: ctx.chatId,
                 text: replyText,
                 accountId: account.accountId,
                 config: cfg,
                 receiveIdType: "chat_id",
                 autoRichText: true, // Enable markdown rendering
+                runtime,
               });
+              if (!res.success) {
+                throw new Error(res.error ?? "feishu sendMessageFeishu failed");
+              }
               log(`feishu: reply sent successfully`);
             } catch (sendErr) {
               runtime?.error?.(
@@ -335,24 +392,42 @@ export async function dispatchFeishuMessage(params: DispatchFeishuMessageParams)
 
           // Send media (images) if present
           if (hasMedia) {
+            const maxMb = account.config.mediaMaxMb ?? cfg.channels?.feishu?.mediaMaxMb ?? 20;
+            const maxBytes = Math.max(1, maxMb) * MB;
             for (const mediaUrl of mediaUrls) {
               try {
                 log(`feishu: loading media from ${mediaUrl}...`);
-                const media = await loadWebMedia(mediaUrl);
+                const media = await loadWebMedia(mediaUrl, maxBytes);
                 if (media.buffer) {
                   const sizeKb = Math.round(media.buffer.length / 1024);
                   log(
-                    `feishu: loaded image - size=${sizeKb}KB, contentType=${media.contentType ?? "unknown"}`,
+                    `feishu: loaded media - kind=${media.kind}, size=${sizeKb}KB, contentType=${media.contentType ?? "unknown"}`,
                   );
-                  log(`feishu: sending image to ${ctx.chatId}...`);
-                  await sendImageFeishu({
+                  const kind =
+                    media.kind === "image"
+                      ? ("image" as const)
+                      : media.kind === "audio"
+                        ? ("audio" as const)
+                        : media.kind === "video"
+                          ? ("video" as const)
+                          : ("file" as const);
+
+                  log(`feishu: sending media to ${ctx.chatId}...`);
+                  const sent = await sendMediaFeishu({
                     to: ctx.chatId,
-                    image: media.buffer,
+                    buffer: media.buffer,
+                    contentType: media.contentType,
+                    fileName: media.fileName,
+                    kind,
                     accountId: account.accountId,
                     config: cfg,
                     receiveIdType: "chat_id",
+                    runtime,
                   });
-                  log(`feishu: image sent successfully`);
+                  if (!sent.success) {
+                    throw new Error(sent.error ?? "feishu sendMediaFeishu failed");
+                  }
+                  log(`feishu: media sent successfully (messageId=${sent.messageId ?? "unknown"})`);
                 } else {
                   log(`feishu: media load returned no buffer for ${mediaUrl}`);
                 }

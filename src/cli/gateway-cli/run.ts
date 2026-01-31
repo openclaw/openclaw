@@ -13,6 +13,7 @@ import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import { setupGlobalFetchProxy } from "../../infra/fetch-proxy.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
@@ -94,6 +95,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   const cfg = loadConfig();
+  const proxyStatus = setupGlobalFetchProxy(cfg);
+  if (opts.verbose && proxyStatus.changed && proxyStatus.active) {
+    gatewayLog.info(`global fetch proxy enabled (source=${proxyStatus.source})`);
+  } else if (opts.verbose && proxyStatus.changed && !proxyStatus.active) {
+    gatewayLog.info("global fetch proxy disabled");
+  }
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");

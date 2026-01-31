@@ -49,6 +49,7 @@ export const OpenClawSchema = z
       })
       .catchall(z.string())
       .optional(),
+    proxy: z.string().optional(),
     wizard: z
       .object({
         lastRunAt: z.string().optional(),

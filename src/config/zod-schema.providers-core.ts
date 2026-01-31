@@ -220,6 +220,7 @@ export const DiscordAccountSchema = z
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
     token: z.string().optional(),
+    proxy: z.string().optional(),
     allowBots: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
@@ -280,6 +281,104 @@ export const DiscordAccountSchema = z
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
+});
+
+export const FeishuGroupSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+    skills: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    allowFrom: z.array(z.string()).optional(),
+    systemPrompt: z.string().optional(),
+    promptSuffix: z.string().optional(),
+  })
+  .strict();
+
+export const FeishuAccountSchemaBase = z
+  .object({
+    name: z.string().optional(),
+    promptSuffix: z.string().optional(),
+    enabled: z.boolean().optional(),
+
+    appId: z.string().optional(),
+    appSecret: z.string().optional(),
+    appSecretFile: z.string().optional(),
+    verificationToken: z.string().optional(),
+    encryptKey: z.string().optional(),
+
+    startupChatId: z.union([z.string(), z.array(z.string())]).optional(),
+    allowOnlyStartupChats: z.boolean().optional(),
+
+    eventMode: z.enum(["webhook", "websocket"]).optional(),
+    webhookUrl: z.string().optional(),
+    webhookPath: z.string().optional(),
+    webhookPort: z.number().int().positive().optional(),
+
+    capabilities: z.array(z.string()).optional(),
+    markdown: MarkdownConfigSchema,
+    commands: ProviderCommandsSchema,
+    configWrites: z.boolean().optional(),
+
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    replyToMode: ReplyToModeSchema.optional(),
+
+    groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
+    allowFrom: z.array(z.string()).optional(),
+    groupAllowFrom: z.array(z.string()).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("open"),
+
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+
+    textChunkLimit: z.number().int().positive().optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+
+    blockStreaming: z.boolean().optional(),
+    draftChunk: BlockStreamingChunkSchema.optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
+
+    mediaMaxMb: z.number().positive().optional(),
+    imageDoubleSend: z.boolean().optional(),
+
+    timeoutSeconds: z.number().int().positive().optional(),
+    retry: RetryConfigSchema,
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+        sendMessage: z.boolean().optional(),
+        deleteMessage: z.boolean().optional(),
+        editMessage: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
+  })
+  .strict();
+
+export const FeishuAccountSchema = FeishuAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.feishu.dmPolicy="open" requires channels.feishu.allowFrom to include "*"',
+  });
+});
+
+export const FeishuConfigSchema = FeishuAccountSchemaBase.extend({
+  accounts: z.record(z.string(), FeishuAccountSchema.optional()).optional(),
+}).superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.feishu.dmPolicy="open" requires channels.feishu.allowFrom to include "*"',
+  });
 });
 
 export const GoogleChatDmSchema = z

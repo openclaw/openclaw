@@ -22,8 +22,21 @@ function describeToolExecutionError(err: unknown): {
     // Extract cause chain for network errors (fetch failures often nest the real error)
     let cause: string | undefined;
     if (err.cause) {
-      cause =
-        err.cause instanceof Error ? `${err.cause.name}: ${err.cause.message}` : String(err.cause);
+      if (err.cause instanceof Error) {
+        cause = `${err.cause.name}: ${err.cause.message}`;
+      } else if (
+        typeof err.cause === "string" ||
+        typeof err.cause === "number" ||
+        typeof err.cause === "boolean"
+      ) {
+        cause = String(err.cause);
+      } else {
+        try {
+          cause = JSON.stringify(err.cause);
+        } catch {
+          cause = "[unserializable cause]";
+        }
+      }
     }
     return { message, stack: err.stack, cause };
   }

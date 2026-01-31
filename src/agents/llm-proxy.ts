@@ -19,6 +19,10 @@ let currentProxyUrl: string | null = null;
  * Safe to call multiple times - only reconfigures if the proxy URL changes.
  */
 export function setupLlmProxy(cfg: OpenClawConfig | undefined): void {
+  // If a global proxy is configured, do not override it.
+  // Global proxy covers LLM calls too, and keeps other subsystems (Discord, Slack, etc.) consistent.
+  if (cfg?.proxy?.trim()) return;
+
   const proxyUrl = cfg?.models?.proxy?.trim();
 
   // No proxy configured - restore original dispatcher if we changed it

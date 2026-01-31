@@ -179,3 +179,139 @@ export async function fetchDiscordApplicationId(
     return undefined;
   }
 }
+
+export type DiscordApplicationIdProbe = {
+  ok: boolean;
+  elapsedMs: number;
+  status?: number | null;
+  error?: string | null;
+  /**
+   * Extra diagnostic details for network failures (DNS, TLS, proxy, etc).
+   * Only included when requested by the caller (typically verbose logging).
+   */
+  errorDetails?: string | null;
+  /**
+   * Truncated response body for debugging failures.
+   * Never includes auth headers; safe to log.
+   */
+  body?: string | null;
+  id?: string | null;
+};
+
+function truncateBodyForLog(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}… (truncated, ${text.length} chars total)`;
+}
+
+function formatNetworkErrorDetails(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const record = err as Record<string, unknown>;
+  const parts: string[] = [];
+
+  const pick = (key: string) => {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) parts.push(`${key}=${value}`);
+    else if (typeof value === "number" && Number.isFinite(value)) parts.push(`${key}=${value}`);
+  };
+
+  pick("name");
+  pick("code");
+  pick("errno");
+  pick("syscall");
+  pick("address");
+  pick("port");
+
+  const cause = record.cause;
+  if (cause && typeof cause === "object") {
+    const c = cause as Record<string, unknown>;
+    const cparts: string[] = [];
+    const cpick = (key: string) => {
+      const value = c[key];
+      if (typeof value === "string" && value.trim()) cparts.push(`${key}=${value}`);
+      else if (typeof value === "number" && Number.isFinite(value)) cparts.push(`${key}=${value}`);
+    };
+    cpick("name");
+    cpick("code");
+    cpick("errno");
+    cpick("syscall");
+    cpick("address");
+    cpick("port");
+    if (cparts.length > 0) parts.push(`cause{${cparts.join(" ")}}`);
+  }
+
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+/**
+ * Fetch the Discord application id with debug-friendly metadata.
+ *
+ * Used during channel startup to explain failures like:
+ * - invalid token (401)
+ * - blocked network / proxy issues (fetch fails / timeout)
+ * - Discord API errors (non-200 with JSON error body)
+ */
+export async function probeDiscordApplicationId(
+  token: string,
+  timeoutMs: number,
+  opts?: { fetcher?: typeof fetch; includeBody?: boolean; maxBodyChars?: number },
+): Promise<DiscordApplicationIdProbe> {
+  const started = Date.now();
+  const fetcher = opts?.fetcher ?? fetch;
+  const includeBody = opts?.includeBody === true;
+  const maxBodyChars = opts?.maxBodyChars ?? 2000;
+  const normalized = normalizeDiscordToken(token);
+  const base: DiscordApplicationIdProbe = {
+    ok: false,
+    status: null,
+    error: null,
+    errorDetails: null,
+    body: null,
+    id: null,
+    elapsedMs: 0,
+  };
+
+  if (!normalized) {
+    return { ...base, error: "missing token", elapsedMs: Date.now() - started };
+  }
+
+  try {
+    const res = await fetchWithTimeout(
+      `${DISCORD_API_BASE}/oauth2/applications/@me`,
+      timeoutMs,
+      fetcher,
+      {
+        Authorization: `Bot ${normalized}`,
+      },
+    );
+
+    if (!res.ok) {
+      const text = includeBody ? await res.text().catch(() => "") : "";
+      return {
+        ...base,
+        status: res.status,
+        error: `oauth2/applications/@me failed (${res.status})`,
+        body: includeBody ? truncateBodyForLog(text, maxBodyChars) : null,
+        elapsedMs: Date.now() - started,
+      };
+    }
+
+    const json = (await res.json()) as { id?: string };
+    const id = typeof json.id === "string" && json.id.trim() ? json.id.trim() : null;
+    return {
+      ok: Boolean(id),
+      status: res.status,
+      error: id ? null : "missing id in response",
+      body: null,
+      id,
+      elapsedMs: Date.now() - started,
+    };
+  } catch (err) {
+    const details = formatNetworkErrorDetails(err);
+    return {
+      ...base,
+      error: err instanceof Error ? err.message : String(err),
+      errorDetails: details,
+      elapsedMs: Date.now() - started,
+    };
+  }
+}

@@ -64,10 +64,13 @@ export type FeishuMessageContext = {
   messageId: string;
   chatId: string;
   chatType: "p2p" | "group";
+  messageType: string;
   senderId: string;
   senderType: string;
   text: string;
   rawContent: unknown;
+  imageKey?: string;
+  fileKey?: string;
   mentions: FeishuMessageReceiveEvent["event"]["message"]["mentions"];
   wasMentioned: boolean;
   replyToMessageId?: string;
@@ -199,10 +202,13 @@ function createMessageContext(
     messageId: msg.message_id,
     chatId: msg.chat_id,
     chatType: msg.chat_type,
+    messageType: msg.message_type,
     senderId: sender.sender_id.open_id ?? sender.sender_id.user_id ?? "",
     senderType: sender.sender_type,
     text: strippedText,
     rawContent: content.raw,
+    imageKey: content.imageKey,
+    fileKey: content.fileKey,
     mentions: msg.mentions,
     wasMentioned,
     replyToMessageId: msg.parent_id,
