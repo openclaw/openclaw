@@ -52,8 +52,15 @@ export type BedrockDiscoveryConfig = {
   defaultMaxTokens?: number;
 };
 
+export type CopilotSdkConfig = {
+  enabled?: boolean;
+  /** Whether to use SDK-based model discovery (requires Copilot CLI) */
+  enableModelDiscovery?: boolean;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
   bedrockDiscovery?: BedrockDiscoveryConfig;
+  copilotSdk?: CopilotSdkConfig;
 };

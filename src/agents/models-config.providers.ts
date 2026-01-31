@@ -4,6 +4,7 @@ import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
+import { discoverCopilotModels } from "../providers/github-copilot-sdk.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -421,6 +422,7 @@ export async function resolveImplicitProviders(params: {
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;
+  enableSdkDiscovery?: boolean;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
@@ -442,6 +444,8 @@ export async function resolveImplicitCopilotProvider(params: {
   }
 
   let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+  let models: ModelDefinitionConfig[] = [];
+
   if (selectedGithubToken) {
     try {
       const token = await resolveCopilotApiToken({
@@ -451,6 +455,27 @@ export async function resolveImplicitCopilotProvider(params: {
       baseUrl = token.baseUrl;
     } catch {
       baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+    }
+
+    // Attempt SDK-based model discovery if enabled and not in test
+    const shouldDiscoverModels =
+      params.enableSdkDiscovery !== false &&
+      !process.env.VITEST &&
+      process.env.NODE_ENV !== "test";
+
+    if (shouldDiscoverModels) {
+      try {
+        models = await discoverCopilotModels({
+          githubToken: selectedGithubToken,
+          env,
+        });
+        if (models.length > 0) {
+          console.log(`Discovered ${models.length} models from GitHub Copilot subscription`);
+        }
+      } catch (err) {
+        console.warn(`Copilot SDK model discovery failed: ${String(err)}`);
+        // Fall through to return provider with empty models (uses pi-ai built-ins)
+      }
     }
   }
 
@@ -466,12 +491,11 @@ export async function resolveImplicitCopilotProvider(params: {
   // OpenClaw uses its own auth store and exchanges tokens at runtime.
   // `models list` uses OpenClaw's auth heuristics for availability.
 
-  // We intentionally do NOT define custom models for Copilot in models.json.
-  // pi-coding-agent treats providers with models as replacements requiring apiKey.
-  // We only override baseUrl; the model list comes from pi-ai built-ins.
+  // When SDK discovery succeeds, return discovered models.
+  // Otherwise, return empty models array (pi-ai built-ins will be used).
   return {
     baseUrl,
-    models: [],
+    models,
   } satisfies ProviderConfig;
 }
 

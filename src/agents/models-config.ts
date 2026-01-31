@@ -92,7 +92,10 @@ export async function ensureOpenClawModelsJson(
       ? mergeProviderModels(implicitBedrock, existing)
       : implicitBedrock;
   }
-  const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
+  const implicitCopilot = await resolveImplicitCopilotProvider({
+    agentDir,
+    enableSdkDiscovery: cfg.models?.copilotSdk?.enableModelDiscovery,
+  });
   if (implicitCopilot && !providers["github-copilot"]) {
     providers["github-copilot"] = implicitCopilot;
   }
