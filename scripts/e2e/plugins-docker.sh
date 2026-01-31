@@ -29,7 +29,7 @@ module.exports = {
 };
 JS
 
-  node dist/index.js plugins list --json > /tmp/plugins.json
+  node dist/index.mjs plugins list --json > /tmp/plugins.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
@@ -81,8 +81,8 @@ module.exports = {
 JS
   tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
 
-  node dist/index.js plugins install /tmp/demo-plugin-tgz.tgz
-  node dist/index.js plugins list --json > /tmp/plugins2.json
+  node dist/index.mjs plugins install /tmp/demo-plugin-tgz.tgz
+  node dist/index.mjs plugins list --json > /tmp/plugins2.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
@@ -118,8 +118,8 @@ module.exports = {
 };
 JS
 
-  node dist/index.js plugins install "$dir_plugin"
-  node dist/index.js plugins list --json > /tmp/plugins3.json
+  node dist/index.mjs plugins install "$dir_plugin"
+  node dist/index.mjs plugins list --json > /tmp/plugins3.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
@@ -156,8 +156,8 @@ module.exports = {
 };
 JS
 
-  node dist/index.js plugins install "file:$file_pack_dir/package"
-  node dist/index.js plugins list --json > /tmp/plugins4.json
+  node dist/index.mjs plugins install "file:$file_pack_dir/package"
+  node dist/index.mjs plugins list --json > /tmp/plugins4.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
