@@ -1,8 +1,12 @@
 {
+  "browser": {
+    "headless": true,
+    "noSandbox": true
+  },
   "models": {
     "providers": {
       "pipbot": {
-        "baseUrl": "https://veracious-caribou-580.convex.site",
+        "baseUrl": "https://beaming-koala-897.convex.site",
         "apiKey": "${PIPBOT_SERVICE_TOKEN}",
         "api": "anthropic-messages",
         "headers": {
@@ -56,6 +60,15 @@
       "maxConcurrent": 4,
       "subagents": {
         "maxConcurrent": 8
+      },
+      "workspace": "/data",
+      "heartbeat": {
+        "every": "30m",
+        "activeHours": {
+          "start": "08:00",
+          "end": "22:00",
+          "timezone": "America/Los_Angeles"
+        }
       }
     }
   },
