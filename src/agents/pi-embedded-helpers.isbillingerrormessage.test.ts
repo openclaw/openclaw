@@ -14,6 +14,8 @@ describe("isBillingErrorMessage", () => {
     const samples = [
       "Your credit balance is too low to access the Anthropic API.",
       "insufficient credits",
+      "out of credits",
+      "no credits remaining",
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",

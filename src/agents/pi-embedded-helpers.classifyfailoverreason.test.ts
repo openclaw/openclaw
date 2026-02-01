@@ -16,6 +16,15 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("no api key found")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
+    expect(classifyFailoverReason("capacity exhausted")).toBe("rate_limit");
+    expect(classifyFailoverReason("Quota exceeded; will reset after 5 minutes.")).toBe(
+      "rate_limit",
+    );
+    expect(
+      classifyFailoverReason(
+        "LLM request rejected: You have exhausted your capacity on claude-sonnet-4-5. Quota will reset after 18m51s.",
+      ),
+    ).toBe("rate_limit");
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
@@ -23,6 +32,7 @@ describe("classifyFailoverReason", () => {
     ).toBe("rate_limit");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    expect(classifyFailoverReason("insufficient_quota")).toBe("rate_limit");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
