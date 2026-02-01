@@ -38,12 +38,22 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
+  const finalized = finalizeInboundContext(params.ctx);
+  // Inject session context for message:sent hooks
+  const dispatcherOptionsWithContext: ReplyDispatcherWithTypingOptions = {
+    ...params.dispatcherOptions,
+    sessionKey: params.dispatcherOptions.sessionKey ?? finalized.SessionKey,
+    channel:
+      params.dispatcherOptions.channel ??
+      (finalized.OriginatingChannel ?? finalized.Surface ?? finalized.Provider ?? "").toLowerCase(),
+    chatType: params.dispatcherOptions.chatType ?? finalized.ChatType,
+  };
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
-    params.dispatcherOptions,
+    dispatcherOptionsWithContext,
   );
 
   const result = await dispatchInboundMessage({
-    ctx: params.ctx,
+    ctx: finalized,
     cfg: params.cfg,
     dispatcher,
     replyResolver: params.replyResolver,
@@ -64,9 +74,19 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+  const finalized = finalizeInboundContext(params.ctx);
+  // Inject session context for message:sent hooks
+  const dispatcherOptionsWithContext: ReplyDispatcherOptions = {
+    ...params.dispatcherOptions,
+    sessionKey: params.dispatcherOptions.sessionKey ?? finalized.SessionKey,
+    channel:
+      params.dispatcherOptions.channel ??
+      (finalized.OriginatingChannel ?? finalized.Surface ?? finalized.Provider ?? "").toLowerCase(),
+    chatType: params.dispatcherOptions.chatType ?? finalized.ChatType,
+  };
+  const dispatcher = createReplyDispatcher(dispatcherOptionsWithContext);
   const result = await dispatchInboundMessage({
-    ctx: params.ctx,
+    ctx: finalized,
     cfg: params.cfg,
     dispatcher,
     replyResolver: params.replyResolver,
