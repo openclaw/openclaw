@@ -161,7 +161,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_xai_api_key",
       message:
         "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey.",
-      docs: "https://docs.molt.bot/tools/web",
+      docs: "https://docs.openclaw.ai/tools/web",
     };
   }
   return {
@@ -410,7 +410,11 @@ async function runGrokSearch(params: {
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
-}): Promise<{ content: string; citations: string[] }> {
+}): Promise<{
+  content: string;
+  citations: string[];
+  inlineCitations?: GrokSearchResponse["inline_citations"];
+}> {
   const body: Record<string, unknown> = {
     model: params.model,
     input: [
@@ -444,8 +448,9 @@ async function runGrokSearch(params: {
   const data = (await res.json()) as GrokSearchResponse;
   const content = data.output_text ?? "No response";
   const citations = data.citations ?? [];
+  const inlineCitations = data.inline_citations;
 
-  return { content, citations };
+  return { content, citations, inlineCitations };
 }
 
 async function runWebSearch(params: {
@@ -498,7 +503,7 @@ async function runWebSearch(params: {
   }
 
   if (params.provider === "grok") {
-    const { content, citations } = await runGrokSearch({
+    const { content, citations, inlineCitations } = await runGrokSearch({
       query: params.query,
       apiKey: params.apiKey,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
@@ -513,6 +518,7 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       content,
       citations,
+      inlineCitations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
