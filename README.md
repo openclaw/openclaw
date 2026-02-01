@@ -331,6 +331,10 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 
 Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker + sandboxing](https://docs.openclaw.ai/install/docker) · [Sandbox config](https://docs.openclaw.ai/gateway/configuration)
 
+### Community Security Tools
+
+- **[ClawGuard](https://github.com/researchaudio/clawguard)** – A Python security scanner for OpenClaw deployments. Scans configurations, skills, and network exposure for vulnerabilities including secrets exposure, prompt injection risks, and insecure permissions.
+
 ### [WhatsApp](https://docs.openclaw.ai/channels/whatsapp)
 
 - Link the device: `pnpm openclaw channels login` (stores creds in `~/.openclaw/credentials`).
