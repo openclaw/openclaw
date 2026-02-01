@@ -435,6 +435,12 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
 
+    // System-injected messages (greeting prompts, reset instructions) should
+    // never be visible to users in the chat transcript.
+    if (normalized.role.toLowerCase() === "system") {
+      continue;
+    }
+
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
       continue;
     }
