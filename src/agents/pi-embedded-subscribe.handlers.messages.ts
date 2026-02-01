@@ -68,8 +68,57 @@ export function handleMessageUpdate(
     return;
   }
 
-  const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
-  const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+  // Explicit null/undefined detection (Issue #4143)
+  // Some providers (e.g., Kimi 2.5) may return null deltas, causing silent hangs
+  const deltaRaw = assistantRecord?.delta;
+  const contentRaw = assistantRecord?.content;
+  const MAX_CONSECUTIVE_NULLS = 5;
+
+  // Check for null/undefined delta in streaming events
+  if (evtType === "text_delta" && (deltaRaw === null || deltaRaw === undefined)) {
+    ctx.state.consecutiveNullDeltas++;
+    ctx.log.warn(
+      `Received null delta in text_delta event (count: ${ctx.state.consecutiveNullDeltas}/${MAX_CONSECUTIVE_NULLS}). ` +
+        `This may indicate an API issue with the model provider.`,
+    );
+
+    if (ctx.state.consecutiveNullDeltas >= MAX_CONSECUTIVE_NULLS) {
+      const error = new Error(
+        `Model provider returned ${ctx.state.consecutiveNullDeltas} consecutive null deltas. ` +
+          `This typically indicates an API issue or incompatibility. ` +
+          `Try a different model or contact the provider.`,
+      );
+      error.name = "NullDeltaError";
+
+      // Emit error event for better user feedback
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "error",
+        data: {
+          error: error.message,
+        },
+      });
+
+      throw error;
+    }
+    return; // Skip processing this null delta
+  }
+
+  // Reset counter on valid delta
+  if (evtType === "text_delta" && typeof deltaRaw === "string" && deltaRaw.length > 0) {
+    ctx.state.consecutiveNullDeltas = 0;
+  }
+
+  // Check for null content in text_end
+  if (evtType === "text_end" && contentRaw === null && !deltaRaw) {
+    ctx.log.warn(
+      `Received null content in text_end event with no delta. ` +
+        `The model may have failed to generate a response.`,
+    );
+  }
+
+  const delta = typeof deltaRaw === "string" ? deltaRaw : "";
+  const content = typeof contentRaw === "string" ? contentRaw : "";
 
   appendRawStream({
     ts: Date.now(),
