@@ -9,6 +9,21 @@ RUN corepack enable
 WORKDIR /app
 
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+ARG OPENCLAW_DOCKER_OFFICIAL_REPO=""
+RUN if [ -n "$OPENCLAW_DOCKER_OFFICIAL_REPO" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
+      install -m 0755 -d /etc/apt/keyrings && \
+      curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+      chmod a+r /etc/apt/keyrings/docker.gpg && \
+      # Verify the Docker GPG key fingerprint
+      gpg --no-default-keyring --keyring /etc/apt/keyrings/docker.gpg \
+        --list-keys 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 >/dev/null 2>&1 \
+        || { echo "ERROR: Docker GPG key fingerprint mismatch" >&2; exit 1; } && \
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
 RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \

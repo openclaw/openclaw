@@ -49,6 +49,7 @@ This script:
 Optional env vars:
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
+- `OPENCLAW_DOCKER_OFFICIAL_REPO` — add Docker's official APT repository to the image
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 
@@ -141,6 +142,29 @@ Notes:
 - This accepts a space-separated list of apt package names.
 - If you change `OPENCLAW_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
   the image.
+
+### Add Docker official APT repository (optional)
+
+If you need Docker CLI tools (e.g. `docker-ce-cli`) inside the image, set
+`OPENCLAW_DOCKER_OFFICIAL_REPO` before running `docker-setup.sh`. This
+configures Docker's official APT repository with GPG key verification during
+the image build, so packages from it can be installed via
+`OPENCLAW_DOCKER_APT_PACKAGES`.
+
+Example:
+
+```bash
+export OPENCLAW_DOCKER_OFFICIAL_REPO=1
+export OPENCLAW_DOCKER_APT_PACKAGES="docker-ce-cli"
+./docker-setup.sh
+```
+
+Notes:
+
+- Set to any non-empty value to enable (e.g. `1`).
+- The repository is added before `OPENCLAW_DOCKER_APT_PACKAGES` runs, so Docker
+  packages are available for installation in the same build.
+- If you change this value, rerun `docker-setup.sh` to rebuild the image.
 
 ### Faster rebuilds (recommended)
 
