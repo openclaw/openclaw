@@ -18,7 +18,7 @@ import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 const OAUTH_PROVIDER_IDS = new Set(getOAuthProviders().map((provider) => provider.id));
 
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
-  OAUTH_PROVIDER_IDS.has(provider as OAuthProvider) ? (provider as OAuthProvider) : null;
+  OAUTH_PROVIDER_IDS.has(provider) ? provider : null;
 
 function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): string {
   const needsProjectId = provider === "google-gemini-cli" || provider === "google-antigravity";
