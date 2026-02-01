@@ -415,7 +415,7 @@ export class GatewayClient {
   async request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: { expectFinal?: boolean; timeoutMs?: number },
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
@@ -428,14 +428,42 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const rawTimeout = opts?.timeoutMs;
+    const timeoutMs =
+      typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0
+        ? rawTimeout
+        : 30000;
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
     const p = new Promise<T>((resolve, reject) => {
+      timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Gateway request timeout for ${method}`));
+      }, timeoutMs);
+
       this.pending.set(id, {
-        resolve: (value) => resolve(value as T),
-        reject,
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value as T);
+        },
+        reject: (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        },
         expectFinal,
       });
     });
-    this.ws.send(JSON.stringify(frame));
+
+    try {
+      this.ws.send(JSON.stringify(frame));
+    } catch (err) {
+      // Cleanup on send failure to prevent timeout leak and pending map leak
+      clearTimeout(timeout);
+      this.pending.delete(id);
+      throw err;
+    }
+
     return p;
   }
 }
