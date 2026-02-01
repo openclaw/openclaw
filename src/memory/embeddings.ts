@@ -6,6 +6,14 @@ import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./emb
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
+function l2Normalize(vec: number[]): number[] {
+  const magnitude = Math.sqrt(vec.reduce((sum, x) => sum + x * x, 0));
+  if (!Number.isFinite(magnitude) || magnitude < 1e-10) {
+    return vec;
+  }
+  return vec.map((x) => x / magnitude);
+}
+
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 
@@ -98,14 +106,14 @@ async function createLocalEmbeddingProvider(
     embedQuery: async (text) => {
       const ctx = await ensureContext();
       const embedding = await ctx.getEmbeddingFor(text);
-      return Array.from(embedding.vector);
+      return l2Normalize(Array.from(embedding.vector));
     },
     embedBatch: async (texts) => {
       const ctx = await ensureContext();
       const embeddings = await Promise.all(
         texts.map(async (text) => {
           const embedding = await ctx.getEmbeddingFor(text);
-          return Array.from(embedding.vector);
+          return l2Normalize(Array.from(embedding.vector));
         }),
       );
       return embeddings;
