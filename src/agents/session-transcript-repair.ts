@@ -128,6 +128,47 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+
+    // Drop errored/aborted assistant messages that contain tool calls, along with
+    // their matching tool_results. The provider-level transform (pi-ai) also drops
+    // these assistants, but if the tool_results survive they become orphans that
+    // cause "unexpected tool_use_id" API rejections. Defence-in-depth: strip them
+    // here so downstream transforms never see the mismatch.
+    if (
+      (assistant as { stopReason?: unknown }).stopReason === "error" ||
+      (assistant as { stopReason?: unknown }).stopReason === "aborted"
+    ) {
+      const erroredToolCalls = extractToolCallsFromAssistant(assistant);
+      if (erroredToolCalls.length > 0) {
+        const erroredIds = new Set(erroredToolCalls.map((t) => t.id));
+        // Skip ahead past any matching tool_results for this errored assistant
+        let j = i + 1;
+        for (; j < messages.length; j += 1) {
+          const next = messages[j] as AgentMessage;
+          if (!next || typeof next !== "object") continue;
+          const nextRole = (next as { role?: unknown }).role;
+          if (nextRole === "assistant") break;
+          if (nextRole === "toolResult") {
+            const id = extractToolResultId(
+              next as Extract<AgentMessage, { role: "toolResult" }>,
+            );
+            if (id && erroredIds.has(id)) {
+              // Drop the orphan tool_result that matched the errored assistant
+              changed = true;
+              continue;
+            }
+          }
+          out.push(next);
+        }
+        i = j - 1;
+        changed = true;
+        continue;
+      }
+      // Errored assistant without tool calls - keep it
+      out.push(msg);
+      continue;
+    }
+
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
       out.push(msg);
