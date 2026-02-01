@@ -1,6 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { extractAssistantText, formatReasoningMessage } from "./pi-embedded-utils.js";
+import {
+  extractAssistantText,
+  extractAssistantThinking,
+  formatReasoningMessage,
+} from "./pi-embedded-utils.js";
 
 describe("extractAssistantText", () => {
   it("strips Minimax tool invocation XML from text", () => {
@@ -544,5 +548,85 @@ describe("formatReasoningMessage", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Reasoning:\n_Reasoning here_",
     );
+  });
+});
+
+describe("extractAssistantText None filtering", () => {
+  it("filters out 'None' placeholder text from Kimi K2.5", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: " None " },
+        { type: "text", text: "Actual response here" },
+      ],
+      timestamp: Date.now(),
+    };
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Actual response here");
+  });
+
+  it("filters out lowercase 'none' placeholder", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "none" },
+        { type: "text", text: "Real content" },
+      ],
+      timestamp: Date.now(),
+    };
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Real content");
+  });
+
+  it("keeps text containing None as part of a sentence", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "None of the above apply here." }],
+      timestamp: Date.now(),
+    };
+    const result = extractAssistantText(msg);
+    expect(result).toBe("None of the above apply here.");
+  });
+
+  it("filters multiple None placeholders", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: " None " },
+        { type: "text", text: "Content" },
+        { type: "text", text: "  none  " },
+      ],
+      timestamp: Date.now(),
+    };
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Content");
+  });
+});
+
+describe("extractAssistantThinking None filtering", () => {
+  it("filters out 'None' placeholder from thinking blocks", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "None" },
+        { type: "thinking", thinking: "Actual reasoning here" },
+      ],
+      timestamp: Date.now(),
+    };
+    const result = extractAssistantThinking(msg);
+    expect(result).toBe("Actual reasoning here");
+  });
+
+  it("filters out lowercase 'none' from thinking blocks", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "none" },
+        { type: "text", text: "Response" },
+      ],
+      timestamp: Date.now(),
+    };
+    const result = extractAssistantThinking(msg);
+    expect(result).toBe("");
   });
 });

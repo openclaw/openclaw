@@ -177,6 +177,14 @@ export function extractAssistantText(msg: AssistantMessage): string {
     return rec.type === "text" && typeof rec.text === "string";
   };
 
+  // Filter out "None" placeholder text that Kimi K2.5 outputs alongside thinking blocks.
+  // When prompted to use <think> tags, Kimi outputs <think>None</think> as placeholder
+  // when it has no reasoning, leaving "None" in the response after tag stripping.
+  const isNotNonePlaceholder = (text: string): boolean => {
+    const trimmed = text.trim();
+    return trimmed !== "None" && trimmed !== "none";
+  };
+
   const blocks = Array.isArray(msg.content)
     ? msg.content
         .filter(isTextBlock)
@@ -186,6 +194,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
           ).trim(),
         )
         .filter(Boolean)
+        .filter(isNotNonePlaceholder)
     : [];
   const extracted = blocks.join("\n").trim();
   return sanitizeUserFacingText(extracted);
@@ -202,7 +211,10 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
       }
       return "";
     })
-    .filter(Boolean);
+    .filter((text) => {
+      // Filter out "None" placeholder that Kimi K2.5 outputs as thinking content
+      return text && text !== "None" && text !== "none";
+    });
   return blocks.join("\n").trim();
 }
 
