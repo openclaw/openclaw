@@ -77,6 +77,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
 - Discord: add configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.
 - Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
+- Signal: add group mention gating with `channels.signal.groups.<id>.requireMention`. (#1184) Thanks @Jackten.
 - Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.
 - Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
 - Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.

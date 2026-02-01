@@ -251,6 +251,15 @@ export function resolveBlueBubblesGroupRequireMention(params: GroupMentionParams
   });
 }
 
+export function resolveSignalGroupRequireMention(params: GroupMentionParams): boolean {
+  return resolveChannelGroupRequireMention({
+    cfg: params.cfg,
+    channel: "signal",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
 export function resolveTelegramGroupToolPolicy(
   params: GroupMentionParams,
 ): GroupToolPolicyConfig | undefined {
