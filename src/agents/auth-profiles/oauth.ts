@@ -1,4 +1,4 @@
-import { getOAuthApiKey, type OAuthCredentials } from "@mariozechner/pi-ai";
+import { getOAuthApiKey, type OAuthCredentials, type OAuthProvider } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
@@ -46,24 +46,25 @@ async function refreshOAuthTokenWithLock(params: {
       };
     }
 
-    const oauthCreds: Record<string, OAuthCredentials> = {
-      [cred.provider]: cred,
+    const provider = cred.provider as OAuthProvider;
+    const oauthCreds: Partial<Record<OAuthProvider, OAuthCredentials>> = {
+      [provider]: cred,
     };
 
     const result =
-      String(cred.provider) === "chutes"
+      cred.provider === "chutes"
         ? await (async () => {
             const newCredentials = await refreshChutesTokens({
               credential: cred,
             });
             return { apiKey: newCredentials.access, newCredentials };
           })()
-        : String(cred.provider) === "qwen-portal"
+        : cred.provider === "qwen-portal"
           ? await (async () => {
               const newCredentials = await refreshQwenPortalCredentials(cred);
               return { apiKey: newCredentials.access, newCredentials };
             })()
-          : await getOAuthApiKey(cred.provider, oauthCreds);
+          : await getOAuthApiKey(provider, oauthCreds as Record<OAuthProvider, OAuthCredentials>);
     if (!result) {
       return null;
     }
