@@ -222,6 +222,11 @@ Notes:
 - `requireMention` must live under `channels.discord.guilds` (or a specific channel). `channels.discord.requireMention` at the top level is ignored.
 - **Permission audits** (`channels status --probe`) only check numeric channel IDs. If you use slugs/names as `channels.discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `channels.discord.dm.enabled=false`, `channels.discord.dm.policy="disabled"`, or you haven’t been approved yet (`channels.discord.dm.policy="pairing"`).
+- **Exec approvals in Discord**: Discord supports a **button UI** for exec approvals in DMs (Allow once / Always allow / Deny). `/approve <id> ...` is only for forwarded approvals and won’t resolve Discord’s button prompts. If you see `❌ Failed to submit approval: Error: unknown approval id` or the UI never shows up, check:
+  - `channels.discord.execApprovals.enabled: true` in your config.
+  - Your Discord user ID is listed in `channels.discord.execApprovals.approvers` (the UI is only sent to approvers).
+  - Use the buttons in the DM prompt (**Allow once**, **Always allow**, **Deny**).
+  - See [Exec approvals](/tools/exec-approvals) and [Slash commands](/tools/slash-commands) for the broader approvals and command flow.
 
 ## Capabilities & limits
 
@@ -348,6 +353,7 @@ ack reaction after the bot replies.
   - `channels` (create/edit/delete channels + categories + permissions)
   - `roles` (role add/remove, default `false`)
   - `moderation` (timeout/kick/ban, default `false`)
+- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`.
 
 Reaction notifications use `guilds.<id>.reactionNotifications`:
 
