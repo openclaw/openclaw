@@ -33,10 +33,8 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.venv([\\/]|$)/,
   /(^|[\\/])venv([\\/]|$)/,
   /(^|[\\/])__pycache__([\\/]|$)/,
-  /(^|[\\/])\.mypy_cache([\\/]|$)/,
   /(^|[\\/])\.pytest_cache([\\/]|$)/,
-  // Build artifacts and caches
-  /(^|[\\/])build([\\/]|$)/,
+  // General caches
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
