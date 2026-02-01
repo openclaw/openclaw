@@ -176,7 +176,7 @@ export async function createVoiceCallRuntime(params: {
     }
   }
 
-  manager.initialize(provider, webhookUrl);
+  await manager.initialize(provider, webhookUrl);
 
   const stop = async () => {
     if (tunnelResult) {

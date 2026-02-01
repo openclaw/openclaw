@@ -270,3 +270,18 @@ export type EndCallToolResult = {
   success: boolean;
   error?: string;
 };
+
+/** Input for getting call status from provider */
+export type GetCallStatusInput = {
+  providerCallId: string;
+};
+
+/** Result of getting call status from provider */
+export type GetCallStatusResult = {
+  /** Provider's call status (e.g., 'completed', 'in-progress', 'failed') */
+  status: string;
+  /** Whether the call has ended */
+  isTerminal: boolean;
+  /** Error message if status check failed */
+  error?: string;
+};

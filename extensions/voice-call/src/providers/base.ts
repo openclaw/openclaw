@@ -1,4 +1,6 @@
 import type {
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -64,4 +66,10 @@ export interface VoiceCallProvider {
    * Stop listening for user speech (deactivate STT).
    */
   stopListening(input: StopListeningInput): Promise<void>;
+
+  /**
+   * Get current status of a call from the provider.
+   * Used to verify if persisted calls are still active.
+   */
+  getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
 }

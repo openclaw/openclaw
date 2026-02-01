@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type {
   EndReason,
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -20,6 +22,10 @@ import type { VoiceCallProvider } from "./base.js";
  * Events are driven via webhook POST with JSON body:
  * - { events: NormalizedEvent[] } for bulk events
  * - { event: NormalizedEvent } for single event
+ *
+ * Call status behavior:
+ * - providerCallId containing "stale", "ended", or "completed" => terminal
+ * - everything else => active
  */
 export class MockProvider implements VoiceCallProvider {
   readonly name = "mock" as const;
@@ -161,5 +167,18 @@ export class MockProvider implements VoiceCallProvider {
 
   async stopListening(_input: StopListeningInput): Promise<void> {
     // No-op for mock
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const normalized = input.providerCallId.toLowerCase();
+    const isTerminal =
+      normalized.includes("stale") ||
+      normalized.includes("ended") ||
+      normalized.includes("completed");
+
+    return {
+      status: isTerminal ? "completed" : "in-progress",
+      isTerminal,
+    };
   }
 }
