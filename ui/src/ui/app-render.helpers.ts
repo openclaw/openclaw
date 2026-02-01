@@ -87,6 +87,7 @@ export function renderChatControls(state: AppViewState) {
     <div class="chat-controls">
       <label class="field chat-controls__session">
         <select
+	  id="webchat-session-select"
           .value=${state.sessionKey}
           ?disabled=${!state.connected}
           @change=${(e: Event) => {

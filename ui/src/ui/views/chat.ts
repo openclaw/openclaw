@@ -334,6 +334,8 @@ export function renderChat(props: ChatProps) {
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
+	      id="webchat-message-input"
+	      aria-label="Message"
               ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
               .value=${props.draft}
               ?disabled=${!props.connected}
