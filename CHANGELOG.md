@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Docs: update MiniMax OAuth setup commands; Extensions: use OpenClaw plugin SDK for MiniMax OAuth. (#5402) Thanks @Maosghoul.
 - Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
+- Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
 
 ## 2026.1.30
