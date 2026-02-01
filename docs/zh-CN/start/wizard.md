@@ -1,15 +1,15 @@
 ---
 read_when:
-    - 运行或配置上手引导向导
-    - 设置新机器
+  - 运行或配置上手引导向导
+  - 设置新机器
 summary: CLI 上手引导向导：Gateway、工作区、渠道和技能的引导式设置
 x-i18n:
-    generated_at: "2026-02-01T13:49:20Z"
-    model: claude-opus-4-5
-    provider: pi
-    source_hash: 571302dcf63a0c700cab6b54964e524d75d98315d3b35fafe7232d2ce8199e83
-    source_path: start/wizard.md
-    workflow: 9
+  generated_at: "2026-02-01T13:49:20Z"
+  model: claude-opus-4-5
+  provider: pi
+  source_hash: 571302dcf63a0c700cab6b54964e524d75d98315d3b35fafe7232d2ce8199e83
+  source_path: start/wizard.md
+  workflow: 9
 ---
 
 # 上手引导向导 (CLI)

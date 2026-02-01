@@ -21,6 +21,7 @@ This folder stores **generated** and **config** files for documentation translat
 ```
 
 Fields:
+
 - `source`: English (or source) phrase to prefer.
 - `target`: preferred translation output.
 
