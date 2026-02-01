@@ -384,12 +384,22 @@ export async function ensureFunnel(
   }
 }
 
-export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
+export async function enableTailscaleServe(
+  port: number,
+  httpsPort: number | undefined,
+  exec: typeof runExec = runExec,
+) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  const httpsPortValue = httpsPort ?? 443;
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["serve", "--bg", "--yes", `--https=${httpsPortValue}`, String(port)],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function disableTailscaleServe(exec: typeof runExec = runExec) {

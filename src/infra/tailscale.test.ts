@@ -71,19 +71,19 @@ describe("tailscale helpers", () => {
       .mockRejectedValueOnce(new Error("permission denied"))
       .mockResolvedValueOnce({ stdout: "" });
 
-    await enableTailscaleServe(3000, exec as never);
+    await enableTailscaleServe(3000, undefined, exec as never);
 
     expect(exec).toHaveBeenNthCalledWith(
       1,
       tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
+      expect.arrayContaining(["serve", "--bg", "--yes", "--https=443", "3000"]),
       expect.any(Object),
     );
 
     expect(exec).toHaveBeenNthCalledWith(
       2,
       "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"]),
+      expect.arrayContaining(["-n", tailscaleBin, "serve", "--bg", "--yes", "--https=443", "3000"]),
       expect.any(Object),
     );
   });
@@ -92,12 +92,12 @@ describe("tailscale helpers", () => {
     vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi.fn().mockResolvedValue({ stdout: "" });
 
-    await enableTailscaleServe(3000, exec as never);
+    await enableTailscaleServe(3000, undefined, exec as never);
 
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith(
       tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
+      expect.arrayContaining(["serve", "--bg", "--yes", "--https=443", "3000"]),
       expect.any(Object),
     );
   });
@@ -169,7 +169,7 @@ describe("tailscale helpers", () => {
     vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
 
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow("boom");
+    await expect(enableTailscaleServe(3000, undefined, exec as never)).rejects.toThrow("boom");
 
     expect(exec).toHaveBeenCalledTimes(1);
   });
@@ -184,8 +184,22 @@ describe("tailscale helpers", () => {
       .mockRejectedValueOnce(originalError)
       .mockRejectedValueOnce(new Error("sudo: a password is required"));
 
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(originalError);
+    await expect(enableTailscaleServe(3000, undefined, exec as never)).rejects.toBe(originalError);
 
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("enableTailscaleServe uses custom httpsPort when provided", async () => {
+    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await enableTailscaleServe(3000, 8443, exec as never);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledWith(
+      tailscaleBin,
+      expect.arrayContaining(["serve", "--bg", "--yes", "--https=8443", "3000"]),
+      expect.any(Object),
+    );
   });
 });

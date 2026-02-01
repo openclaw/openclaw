@@ -92,6 +92,8 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Custom HTTPS port for tailscale serve (defaults to gateway port if not specified). */
+  httpsPort?: number;
 };
 
 export type GatewayRemoteConfig = {

@@ -51,6 +51,25 @@ force `gateway.auth.mode: "password"`.
 
 Open: `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
+### Tailnet-only (Serve with custom HTTPS port)
+
+By default, Tailscale Serve uses port 443 for HTTPS. To use a different port,
+specify `httpsPort`:
+
+```json5
+{
+  gateway: {
+    bind: "loopback",
+    tailscale: { mode: "serve", httpsPort: 8443 },
+  },
+}
+```
+
+Open: `https://<magicdns>:8443/` (or your configured `gateway.controlUi.basePath`)
+
+Note: The Gateway still listens on its configured port (default: 18789) locally,
+while Tailscale Serve proxies HTTPS requests from the specified HTTPS port.
+
 ### Tailnet-only (bind to Tailnet IP)
 
 Use this when you want the Gateway to listen directly on the Tailnet IP (no Serve/Funnel).
@@ -90,6 +109,7 @@ Prefer `OPENCLAW_GATEWAY_PASSWORD` over committing a password to disk.
 ```bash
 openclaw gateway --tailscale serve
 openclaw gateway --tailscale funnel --auth password
+openclaw gateway --tailscale serve --tailscale-https-port 8443
 ```
 
 ## Notes
@@ -102,6 +122,8 @@ openclaw gateway --tailscale funnel --auth password
 - `gateway.bind: "auto"` prefers loopback; use `tailnet` if you want Tailnet-only.
 - Serve/Funnel only expose the **Gateway control UI + WS**. Nodes connect over
   the same Gateway WS endpoint, so Serve can work for node access.
+- `gateway.tailscale.httpsPort` allows specifying a custom HTTPS port for Tailscale Serve
+  (default: 443). The Gateway itself continues listening on its configured port locally.
 
 ## Browser control (remote Gateway + local browser)
 

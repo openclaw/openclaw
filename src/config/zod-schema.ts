@@ -337,6 +337,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            httpsPort: z.number().int().positive().optional(),
           })
           .strict()
           .optional(),

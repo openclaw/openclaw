@@ -36,6 +36,7 @@ type GatewayRunOpts = {
   auth?: unknown;
   password?: unknown;
   tailscale?: unknown;
+  tailscaleHttpsPort?: unknown;
   tailscaleResetOnExit?: boolean;
   allowUnconfigured?: boolean;
   force?: boolean;
@@ -152,6 +153,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       : null;
   if (tailscaleRaw && !tailscaleMode) {
     defaultRuntime.error('Invalid --tailscale (use "off", "serve", or "funnel")');
+    defaultRuntime.exit(1);
+    return;
+  }
+  const tailscaleHttpsPortRaw = parsePort(opts.tailscaleHttpsPort);
+  if (opts.tailscaleHttpsPort !== undefined && tailscaleHttpsPortRaw === null) {
+    defaultRuntime.error("Invalid --tailscale-https-port (must be a valid port number)");
     defaultRuntime.exit(1);
     return;
   }
@@ -272,10 +279,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
                 }
               : undefined,
           tailscale:
-            tailscaleMode || opts.tailscaleResetOnExit
+            tailscaleMode || opts.tailscaleResetOnExit || tailscaleHttpsPortRaw !== undefined
               ? {
                   mode: tailscaleMode ?? undefined,
                   resetOnExit: Boolean(opts.tailscaleResetOnExit),
+                  httpsPort: tailscaleHttpsPortRaw ?? undefined,
                 }
               : undefined,
         }),
@@ -322,6 +330,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--auth <mode>", 'Gateway auth mode ("token"|"password")')
     .option("--password <password>", "Password for auth mode=password")
     .option("--tailscale <mode>", 'Tailscale exposure mode ("off"|"serve"|"funnel")')
+    .option("--tailscale-https-port <port>", "Custom HTTPS port for tailscale serve (default: 443)")
     .option(
       "--tailscale-reset-on-exit",
       "Reset Tailscale serve/funnel configuration on shutdown",

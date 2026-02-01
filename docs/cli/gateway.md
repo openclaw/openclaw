@@ -48,6 +48,7 @@ Notes:
 - `--token <token>`: token override (also sets `OPENCLAW_GATEWAY_TOKEN` for the process).
 - `--password <password>`: password override (also sets `OPENCLAW_GATEWAY_PASSWORD` for the process).
 - `--tailscale <off|serve|funnel>`: expose the Gateway via Tailscale.
+- `--tailscale-https-port <port>`: custom HTTPS port for Tailscale Serve (default: 443).
 - `--tailscale-reset-on-exit`: reset Tailscale serve/funnel config on shutdown.
 - `--allow-unconfigured`: allow gateway start without `gateway.mode=local` in config.
 - `--dev`: create a dev config + workspace if missing (skips BOOTSTRAP.md).
