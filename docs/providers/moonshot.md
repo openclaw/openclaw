@@ -23,7 +23,7 @@ Current Kimi K2 model IDs:
 - `kimi-k2-turbo-preview`
 - `kimi-k2-thinking`
 - `kimi-k2-thinking-turbo`
-  {/_ moonshot-kimi-k2-ids:end _/}
+{/_ moonshot-kimi-k2-ids:end _/}
 <!-- moonshot-kimi-k2-ids:end -->
 
 ```bash
