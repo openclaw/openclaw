@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -12,6 +13,48 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+
+/**
+ * Emergency pruning: when total tokens exceed context window, aggressively drop
+ * oldest messages until we're under the limit. This handles edge cases where
+ * safeguard's normal pruning (based on maxHistoryShare) isn't sufficient.
+ */
+function emergencyPruneToFitContext(
+  messages: AgentMessage[],
+  contextWindowTokens: number,
+  targetRatio = 0.85,
+): { messages: AgentMessage[]; droppedCount: number; droppedTokens: number } {
+  const targetTokens = Math.floor(contextWindowTokens * targetRatio);
+  let currentTokens = estimateMessagesTokens(messages);
+
+  if (currentTokens <= targetTokens) {
+    return { messages, droppedCount: 0, droppedTokens: 0 };
+  }
+
+  const keptMessages: AgentMessage[] = [];
+  let droppedCount = 0;
+  let droppedTokens = 0;
+
+  // Keep dropping from the beginning (oldest) until we're under target
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const msgTokens = estimateTokens(msg);
+
+    if (currentTokens > targetTokens) {
+      // Drop this message
+      droppedCount++;
+      droppedTokens += msgTokens;
+      currentTokens -= msgTokens;
+    } else {
+      // Keep remaining messages
+      keptMessages.push(...messages.slice(i));
+      break;
+    }
+  }
+
+  return { messages: keptMessages, droppedCount, droppedTokens };
+}
+
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
@@ -267,6 +310,28 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
+      // Emergency pruning: if total tokens still exceed context window after normal pruning,
+      // aggressively drop oldest messages until we're under the limit. This handles edge cases
+      // where context has grown significantly beyond model limits (e.g., >20% over).
+      const totalTokensBeforeEmergency = estimateMessagesTokens(messagesToSummarize);
+      if (totalTokensBeforeEmergency > contextWindowTokens) {
+        const overflowRatio = (totalTokensBeforeEmergency / contextWindowTokens - 1) * 100;
+        const emergency = emergencyPruneToFitContext(
+          messagesToSummarize,
+          contextWindowTokens,
+          0.85, // Target 85% of context window to leave room for summary generation
+        );
+        if (emergency.droppedCount > 0) {
+          console.warn(
+            `Compaction safeguard: emergency pruning triggered (context ${overflowRatio.toFixed(
+              1,
+            )}% over limit); dropped ${emergency.droppedCount} messages ` +
+              `(~${Math.round(emergency.droppedTokens / 1000)}K tokens) to fit context window.`,
+          );
+          messagesToSummarize = emergency.messages;
+        }
+      }
+
       // Use adaptive chunk ratio based on message sizes
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
@@ -339,6 +404,7 @@ export const __testing = {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  emergencyPruneToFitContext,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
