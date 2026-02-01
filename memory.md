@@ -110,26 +110,42 @@ Note: Some references to "moltbot" or "clawdbot" may remain in older code/config
 - **Recommended pricing**: $149/mo family subscription
 - **Research**: `memory/omega-foundation-research.md`
 
-## Agent Console — MVP COMPLETE (Jan 30, 2026) 🚀
+## Agent Console — REBUILDING (Jan 31, 2026) 🔧
 
-- **What**: Real-time operations dashboard for AI agents
-- **Name**: Agent Console
+- **What**: Steve's command center for orchestrating AI sub-agents — REPLACES Vikunja
+- **Name**: Agent Console  
 - **Domain**: agentconsole.app (landing) / dashboard.agentconsole.app (app)
 - **GitHub**: github.com/dbhurley/agent-console
-- **Vikunja project**: ID 8
-- **Status**: MVP complete, dogfooding
+- **Local code**: /Users/steve/Git/agent-console/
 - **Password**: AgentConsole2026!
-- **Gateway token**: ac-gateway-2026-secure (set in gateway.auth.token)
-- **Problem**: Existing tools (LangSmith, Arize, etc.) are observability/debugging focused. Missing: real-time ops console for running agent fleets.
-- **Key differentiators**:
-  - Real-time agent status (running/paused/idle) — not retrospective traces
-  - Task ↔ session linking (why is the agent doing this?)
-  - Intervention capabilities (pause, inject, redirect)
-  - Multi-framework from day 1
-- **Pricing model**: Free ($0/3 agents), Pro ($29/mo/10), Team ($99/mo/50), Enterprise
-- **Tech stack**: Next.js 16, SSE for real-time, Tailwind CSS
-- **Bear doc**: "Agent Ops Console — Project Document"
-- **Spec**: `/Users/steve/clawd/memory/agent-ops-console-spec.md`
+
+### CRITICAL: This is NOT a Vikunja viewer!
+Agent Console is a **bespoke system** that REPLACES Vikunja, Mission Control, and external tools.
+It's MY (Steve's) operational control system for managing sub-agents across DBH Ventures projects.
+
+### Core Functionality (v2 Spec)
+1. **Projects** — Create/manage DBH Ventures incubation projects (our own DB)
+2. **Tasks** — Kanban with create/assign/spawn (our own DB, NOT Vikunja)
+3. **Agents** — Registry of sub-agents (Builder, Scout, Canvas, Scribe, etc.)
+4. **Sessions** — Real-time view from gateway + intervention (pause/inject/kill)
+5. **Comments** — On tasks for context and handoffs
+6. **Cost tracking** — Per project, per task, aggregated from sessions
+
+### Key Interactions
+- Spawn agent FOR a task → session links back to task
+- Cost rolls up: Session → Task → Project
+- Hand off between agents with context preserved
+- Pause/resume/kill running agents
+
+### Tech Notes
+- **Database**: Postgres (Neon) — NOT Vikunja
+- **CSS**: Tailwind v4 — ALL custom styles must be in `@layer` blocks
+- **Real-time**: SSE from gateway for live updates
+
+### Spec Documents
+- **v2 Spec**: `/Users/steve/clawd/memory/agent-console-spec-v2.md`
+- **Bear doc**: "Agent Console — Spec v2"
+- **Old spec** (deprecated): `/Users/steve/clawd/memory/agent-ops-console-spec.md`
 
 ### Agent Roster for Incubation
 Sub-agents defined in `/agents/`:
