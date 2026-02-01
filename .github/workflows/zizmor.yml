@@ -15,6 +15,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run zizmor
-        uses: zizmorcore/zizmor@v0
+        uses: zizmorcore/zizmor@v1.11.0
         with:
           config: zizmor.yml
