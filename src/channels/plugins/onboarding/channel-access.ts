@@ -3,8 +3,10 @@ import type { WizardPrompter } from "../../../wizard/prompts.js";
 export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
 
 export function parseAllowlistEntries(raw: string): string[] {
+  // Split on comma, semicolon, newline, or space
+  // Handles: "#chan1, #chan2" or "#chan1 #chan2" or "#chan1; #chan2"
   return String(raw ?? "")
-    .split(/[,\n]/g)
+    .split(/[,;\s]+/g)
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
