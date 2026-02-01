@@ -291,8 +291,8 @@ export function detectAdvancedInjection(ctx: {
 export function isLikelyAttack(content: string): boolean {
   const result = detectSingleMessageAttacks(content);
   // Return true if any high-severity attack type detected
-  const highSeverityTypes: AttackType[] = ["authority_spoof", "indirect", "cot_hijack"];
+  const highSeverityTypes = new Set<AttackType>(["authority_spoof", "indirect", "cot_hijack"]);
   return (
-    result.attackTypes.some((t) => highSeverityTypes.includes(t)) || result.attackTypes.length >= 2
+    result.attackTypes.some((t) => highSeverityTypes.has(t)) || result.attackTypes.length >= 2
   );
 }

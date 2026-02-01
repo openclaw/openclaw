@@ -152,7 +152,7 @@ export function recombineSyllables(text: string): string {
  * Example: "tpmorpmetsys" -> "systemprompt"
  */
 export function reverseText(text: string): string {
-  return text.split("").reverse().join("");
+  return text.split("").toReversed().join("");
 }
 
 /**
