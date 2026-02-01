@@ -22,6 +22,8 @@ export type ResolveAgentRouteInput = {
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
+  /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
+  parentPeer?: RoutePeer | null;
   guildId?: string | null;
   teamId?: string | null;
 };
@@ -37,6 +39,7 @@ export type ResolvedAgentRoute = {
   /** Match description for debugging/logging. */
   matchedBy:
     | "binding.peer"
+    | "binding.peer.parent"
     | "binding.guild"
     | "binding.team"
     | "binding.account"
@@ -210,6 +213,15 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     if (peerMatch) {
       return choose(peerMatch.agentId, "binding.peer");
     }
+  }
+
+  // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
+  const parentPeer = input.parentPeer
+    ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }
+    : null;
+  if (parentPeer && parentPeer.id) {
+    const parentPeerMatch = bindings.find((b) => matchesPeer(b.match, parentPeer));
+    if (parentPeerMatch) return choose(parentPeerMatch.agentId, "binding.peer.parent");
   }
 
   if (guildId) {
