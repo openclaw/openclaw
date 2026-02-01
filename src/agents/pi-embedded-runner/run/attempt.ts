@@ -790,6 +790,27 @@ export async function runEmbeddedAttempt(
         });
         if (guardrailPromptOutcome.blocked) {
           guardrailBlock = guardrailPromptOutcome;
+          if (sessionManager) {
+            const guardrailResponse =
+              guardrailBlock.response?.trim() || "Request blocked by guardrail policy.";
+            const trimmedPrompt = effectivePrompt.trim();
+            const now = Date.now();
+            if (trimmedPrompt) {
+              sessionManager.appendMessage({
+                role: "user",
+                content: [{ type: "text", text: trimmedPrompt }],
+                timestamp: now,
+              });
+            }
+            sessionManager.appendMessage({
+              role: "assistant",
+              content: [{ type: "text", text: guardrailResponse }],
+              stopReason: "stop",
+              timestamp: now,
+            });
+            const sessionContext = sessionManager.buildSessionContext();
+            activeSession.agent.replaceMessages(sessionContext.messages);
+          }
         } else {
           effectivePrompt = guardrailPromptOutcome.prompt;
           activeSession.agent.replaceMessages(guardrailPromptOutcome.messages);
