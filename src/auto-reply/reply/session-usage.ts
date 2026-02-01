@@ -41,19 +41,19 @@ export async function persistSessionUsageUpdate(params: {
           const input = params.usage?.input ?? 0;
           const outputRaw = params.usage?.output;
           const output = outputRaw ?? 0;
-          const outputKnown = typeof outputRaw === "number" && Number.isFinite(outputRaw);
           const promptTokens =
             input + (params.usage?.cacheRead ?? 0) + (params.usage?.cacheWrite ?? 0);
-          const usageTotal = params.usage?.total;
+          const usageTotalRaw = params.usage?.total;
+          const usageTotal =
+            typeof usageTotalRaw === "number" && Number.isFinite(usageTotalRaw)
+              ? usageTotalRaw
+              : undefined;
+          const derivedTotal = promptTokens > 0 ? promptTokens + output : input + output;
+          const totalTokens = Math.max(usageTotal ?? 0, derivedTotal);
           const patch: Partial<SessionEntry> = {
             inputTokens: input,
             outputTokens: output,
-            totalTokens:
-              promptTokens > 0
-                ? outputKnown
-                  ? promptTokens + output
-                  : (usageTotal ?? promptTokens + output)
-                : (usageTotal ?? input + output),
+            totalTokens,
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,

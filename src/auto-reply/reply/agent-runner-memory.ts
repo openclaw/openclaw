@@ -145,7 +145,8 @@ export async function runMemoryFlushIfNeeded(params: {
   })();
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  const entry =
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
@@ -156,8 +157,8 @@ export async function runMemoryFlushIfNeeded(params: {
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const baseTotalTokens = entry?.totalTokens;
-  const shouldReadTranscript = !isPositiveNumber(baseTotalTokens);
+  let baseTotalTokens = entry?.totalTokens;
+  const shouldReadTranscript = canAttemptFlush && entry && !isPositiveNumber(baseTotalTokens);
   const transcriptTotalTokens = shouldReadTranscript
     ? await readPromptTokensFromSessionLog(
         params.followupRun.run.sessionId,
@@ -165,6 +166,32 @@ export async function runMemoryFlushIfNeeded(params: {
         params.sessionKey ?? params.followupRun.run.sessionKey,
       )
     : undefined;
+  const derivedTotalTokens = Math.max(baseTotalTokens ?? 0, transcriptTotalTokens ?? 0);
+  if (entry && derivedTotalTokens > (baseTotalTokens ?? 0)) {
+    const nextEntry = { ...entry, totalTokens: derivedTotalTokens };
+    entry = nextEntry;
+    if (params.sessionKey && params.sessionStore) {
+      params.sessionStore[params.sessionKey] = nextEntry;
+    }
+    if (params.storePath && params.sessionKey) {
+      try {
+        const updatedEntry = await updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          update: async () => ({ totalTokens: derivedTotalTokens }),
+        });
+        if (updatedEntry) {
+          entry = updatedEntry;
+          if (params.sessionStore) {
+            params.sessionStore[params.sessionKey] = updatedEntry;
+          }
+        }
+      } catch (err) {
+        logVerbose(`failed to persist derived totalTokens: ${String(err)}`);
+      }
+    }
+    baseTotalTokens = entry.totalTokens;
+  }
   const effectivePromptTokens = resolveEffectivePromptTokens({
     baseTotalTokens,
     transcriptTotalTokens,
@@ -202,14 +229,14 @@ export async function runMemoryFlushIfNeeded(params: {
     });
 
   if (!shouldFlushMemory) {
-    return params.sessionEntry;
+    return entry ?? params.sessionEntry;
   }
 
   logVerbose(
     `memoryFlush triggered: sessionKey=${params.sessionKey} totalTokens=${totalTokens} threshold=${threshold}`,
   );
 
-  let activeSessionEntry = params.sessionEntry;
+  let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore;
   const flushRunId = crypto.randomUUID();
   if (params.sessionKey) {
