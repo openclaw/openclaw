@@ -583,6 +583,13 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
+/** Detect JSON parse errors from malformed model tool-call arguments. */
+function isJsonParseError(raw: string): boolean {
+  return /\bis not valid JSON\b|Unexpected token .* in JSON|Unexpected end of JSON input/i.test(
+    raw,
+  );
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -597,6 +604,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "rate_limit";
   }
   if (isCloudCodeAssistFormatError(raw)) {
+    return "format";
+  }
+  if (isJsonParseError(raw)) {
     return "format";
   }
   if (isBillingErrorMessage(raw)) {
