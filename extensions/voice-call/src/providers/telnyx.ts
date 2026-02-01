@@ -27,9 +27,10 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly apiKey: string;
   private readonly connectionId: string;
   private readonly publicKey: string | undefined;
+  private readonly skipVerification: boolean;
   private readonly baseUrl = "https://api.telnyx.com/v2";
 
-  constructor(config: TelnyxConfig) {
+  constructor(config: TelnyxConfig, options: { skipVerification?: boolean } = {}) {
     if (!config.apiKey) {
       throw new Error("Telnyx API key is required");
     }
@@ -40,6 +41,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     this.apiKey = config.apiKey;
     this.connectionId = config.connectionId;
     this.publicKey = config.publicKey;
+    this.skipVerification = options.skipVerification ?? false;
   }
 
   /**
@@ -75,9 +77,12 @@ export class TelnyxProvider implements VoiceCallProvider {
    * Verify Telnyx webhook signature using Ed25519.
    */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
-    if (!this.publicKey) {
-      // No public key configured, skip verification (not recommended for production)
+    if (this.skipVerification) {
       return { ok: true };
+    }
+
+    if (!this.publicKey) {
+      return { ok: false, reason: "Telnyx public key not configured" };
     }
 
     const signature = ctx.headers["telnyx-signature-ed25519"];
@@ -115,7 +120,11 @@ export class TelnyxProvider implements VoiceCallProvider {
       }
 
       // Check timestamp is within 5 minutes
-      const eventTime = parseInt(timestampStr, 10) * 1000;
+      const timestampSec = Number.parseInt(timestampStr, 10);
+      if (!Number.isFinite(timestampSec)) {
+        return { ok: false, reason: "Invalid timestamp" };
+      }
+      const eventTime = timestampSec * 1000;
       const now = Date.now();
       if (Math.abs(now - eventTime) > 5 * 60 * 1000) {
         return { ok: false, reason: "Timestamp too old" };
