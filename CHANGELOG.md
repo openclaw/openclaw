@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- WhatsApp: add HTTP/HTTPS proxy support via `HTTPS_PROXY`/`HTTP_PROXY` environment variables.
+
 ### Fixes
 
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.

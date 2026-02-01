@@ -102,6 +102,9 @@ importers:
       grammy:
         specifier: ^1.39.3
         version: 1.39.3
+      https-proxy-agent:
+        specifier: ^7.0.5
+        version: 7.0.6
       jiti:
         specifier: ^2.6.1
         version: 2.6.1
