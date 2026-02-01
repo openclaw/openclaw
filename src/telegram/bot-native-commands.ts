@@ -363,11 +363,26 @@ export const registerTelegramNativeCommands = ({
     ...customCommands,
   ];
 
-  if (allCommands.length > 0) {
+  // Telegram limits setMyCommands to 100 commands per scope
+  const TELEGRAM_MAX_COMMANDS = 100;
+  const commandsToRegister =
+    allCommands.length > TELEGRAM_MAX_COMMANDS
+      ? allCommands.slice(0, TELEGRAM_MAX_COMMANDS)
+      : allCommands;
+
+  if (allCommands.length > TELEGRAM_MAX_COMMANDS) {
+    runtime.log?.(
+      danger(
+        `Telegram command limit exceeded: ${allCommands.length} commands, registering first ${TELEGRAM_MAX_COMMANDS}`,
+      ),
+    );
+  }
+
+  if (commandsToRegister.length > 0) {
     withTelegramApiErrorLogging({
       operation: "setMyCommands",
       runtime,
-      fn: () => bot.api.setMyCommands(allCommands),
+      fn: () => bot.api.setMyCommands(commandsToRegister),
     }).catch(() => {});
 
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {

@@ -12,6 +12,7 @@ export function createGatewayCloseHandler(params: {
   canvasHost: CanvasHostHandler | null;
   canvasHostServer: CanvasHostServer | null;
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
+  log: { warn: (msg: string) => void };
   pluginServices: PluginServicesHandle | null;
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
@@ -61,8 +62,13 @@ export function createGatewayCloseHandler(params: {
         /* ignore */
       }
     }
-    for (const plugin of listChannelPlugins()) {
-      await params.stopChannel(plugin.id);
+    const plugins = listChannelPlugins();
+    const results = await Promise.allSettled(plugins.map((p) => params.stopChannel(p.id)));
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === "rejected") {
+        params.log.warn(`channel ${plugins[i].id} stop failed: ${String(r.reason)}`);
+      }
     }
     if (params.pluginServices) {
       await params.pluginServices.stop().catch(() => {});

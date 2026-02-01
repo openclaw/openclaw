@@ -19,6 +19,11 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
 
+  // Throttle streaming delta renders to reduce re-render frequency (~10x reduction)
+  const DELTA_RENDER_THROTTLE_MS = 100;
+  let lastDeltaRenderAt = 0;
+  let pendingDeltaRender: NodeJS.Timeout | null = null;
+
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
       return;
@@ -92,8 +97,35 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       chatLog.updateAssistant(displayText, evt.runId);
       setActivityStatus("streaming");
+
+      // Throttle renders during streaming to reduce re-render frequency
+      const now = Date.now();
+      if (now - lastDeltaRenderAt >= DELTA_RENDER_THROTTLE_MS) {
+        lastDeltaRenderAt = now;
+        if (pendingDeltaRender) {
+          clearTimeout(pendingDeltaRender);
+          pendingDeltaRender = null;
+        }
+        tui.requestRender();
+      } else if (!pendingDeltaRender) {
+        // Schedule a trailing render to ensure final delta state is shown
+        pendingDeltaRender = setTimeout(
+          () => {
+            pendingDeltaRender = null;
+            lastDeltaRenderAt = Date.now();
+            tui.requestRender();
+          },
+          DELTA_RENDER_THROTTLE_MS - (now - lastDeltaRenderAt),
+        );
+      }
+      return;
     }
     if (evt.state === "final") {
+      // Cancel pending throttled render since we're finalizing
+      if (pendingDeltaRender) {
+        clearTimeout(pendingDeltaRender);
+        pendingDeltaRender = null;
+      }
       if (isCommandMessage(evt.message)) {
         const text = extractTextFromMessage(evt.message);
         if (text) {

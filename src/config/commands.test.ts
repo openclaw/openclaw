@@ -9,12 +9,13 @@ describe("resolveNativeSkillsEnabled", () => {
         globalSetting: "auto",
       }),
     ).toBe(true);
+    // Telegram defaults to false to avoid 100-command limit
     expect(
       resolveNativeSkillsEnabled({
         providerId: "telegram",
         globalSetting: "auto",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolveNativeSkillsEnabled({
         providerId: "slack",

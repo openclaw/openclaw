@@ -4,6 +4,7 @@
 import { loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { MODEL_CONTEXT_WINDOWS as OPENCODE_ZEN_CONTEXT_WINDOWS } from "./opencode-zen-models.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
 
@@ -36,5 +37,17 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
-  return MODEL_CACHE.get(modelId);
+
+  // Dynamic cache first
+  const cached = MODEL_CACHE.get(modelId);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  // Static fallback for known models (handles prefixed model IDs like "openai-codex/gpt-5.2")
+  const bareModelId = modelId.includes("/") ? modelId.split("/").pop() : modelId;
+  if (!bareModelId) {
+    return undefined;
+  }
+  return OPENCODE_ZEN_CONTEXT_WINDOWS[bareModelId];
 }

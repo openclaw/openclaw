@@ -1,7 +1,9 @@
 import chokidar from "chokidar";
 import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { rollbackToBackupConfig } from "../config/rollback.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { preflightGatewayConfig } from "./config-preflight.js";
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
@@ -308,6 +310,7 @@ export function startGatewayConfigReloader(opts: {
       }
       const nextConfig = snapshot.config;
       const changedPaths = diffConfigPaths(currentConfig, nextConfig);
+      const prevConfig = currentConfig;
       currentConfig = nextConfig;
       settings = resolveGatewayReloadSettings(nextConfig);
       if (changedPaths.length === 0) {
@@ -321,6 +324,20 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       if (settings.mode === "restart") {
+        const preflightError = preflightGatewayConfig(nextConfig);
+        if (preflightError) {
+          opts.log.error(`config preflight failed: ${preflightError}`);
+          opts.log.error(`changed config keys: ${changedPaths.join(", ")}`);
+          // Restore in-memory state to avoid reload loops after rollback
+          currentConfig = prevConfig;
+          const rollbackResult = await rollbackToBackupConfig(snapshot.path);
+          if (rollbackResult.ok) {
+            opts.log.warn(`rolled back to previous config: ${rollbackResult.backupPath}`);
+          } else {
+            opts.log.error(`rollback failed: ${rollbackResult.error}`);
+          }
+          return;
+        }
         if (!restartQueued) {
           restartQueued = true;
           opts.onRestart(plan, nextConfig);
@@ -334,6 +351,20 @@ export function startGatewayConfigReloader(opts: {
               ", ",
             )})`,
           );
+          return;
+        }
+        const preflightError = preflightGatewayConfig(nextConfig);
+        if (preflightError) {
+          opts.log.error(`config preflight failed: ${preflightError}`);
+          opts.log.error(`changed config keys: ${changedPaths.join(", ")}`);
+          // Restore in-memory state to avoid reload loops after rollback
+          currentConfig = prevConfig;
+          const rollbackResult = await rollbackToBackupConfig(snapshot.path);
+          if (rollbackResult.ok) {
+            opts.log.warn(`rolled back to previous config: ${rollbackResult.backupPath}`);
+          } else {
+            opts.log.error(`rollback failed: ${rollbackResult.error}`);
+          }
           return;
         }
         if (!restartQueued) {

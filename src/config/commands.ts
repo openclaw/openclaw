@@ -16,6 +16,21 @@ function resolveAutoDefault(providerId?: ChannelId): boolean {
   return false;
 }
 
+function resolveNativeSkillsAutoDefault(providerId?: ChannelId): boolean {
+  const id = normalizeChannelId(providerId);
+  if (!id) {
+    return false;
+  }
+  // Telegram: skills off by default to avoid 100-command limit
+  if (id === "telegram") {
+    return false;
+  }
+  if (id === "discord") {
+    return true;
+  }
+  return false;
+}
+
 export function resolveNativeSkillsEnabled(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
@@ -29,7 +44,7 @@ export function resolveNativeSkillsEnabled(params: {
   if (setting === false) {
     return false;
   }
-  return resolveAutoDefault(providerId);
+  return resolveNativeSkillsAutoDefault(providerId);
 }
 
 export function resolveNativeCommandsEnabled(params: {
