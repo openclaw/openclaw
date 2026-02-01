@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildAgentSessionKey } from "../routing/resolve-route.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { buildTelegramMessageContext } from "./bot-message-context.js";
+import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
   const baseConfig = {
@@ -222,9 +224,17 @@ describe("buildTelegramMessageContext dynamic agents", () => {
     });
 
     const expectedAgentId = sanitizeAgentId("tgdm-default-42");
+    const expectedSessionKey = buildAgentSessionKey({
+      agentId: expectedAgentId,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "dm", id: "1234" },
+      dmScope: baseConfig.session?.dmScope,
+      identityLinks: baseConfig.session?.identityLinks,
+    }).toLowerCase();
     expect(ctx).not.toBeNull();
     expect(ctx?.route?.agentId).toBe(expectedAgentId);
-    expect(ctx?.ctxPayload?.SessionKey).toBe(`agent:${expectedAgentId}:main`);
+    expect(ctx?.ctxPayload?.SessionKey).toBe(expectedSessionKey);
   });
 
   it("routes group to per-group agent", async () => {
@@ -238,8 +248,43 @@ describe("buildTelegramMessageContext dynamic agents", () => {
     });
 
     const expectedAgentId = sanitizeAgentId(`tggroup-default-${groupId}`);
+    const expectedSessionKey = buildAgentSessionKey({
+      agentId: expectedAgentId,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "group", id: buildTelegramGroupPeerId(groupId) },
+      dmScope: baseConfig.session?.dmScope,
+      identityLinks: baseConfig.session?.identityLinks,
+    }).toLowerCase();
     expect(ctx).not.toBeNull();
     expect(ctx?.route?.agentId).toBe(expectedAgentId);
-    expect(ctx?.ctxPayload?.SessionKey).toBe(`agent:${expectedAgentId}:telegram:group:${groupId}`);
+    expect(ctx?.ctxPayload?.SessionKey).toBe(expectedSessionKey);
+  });
+
+  it("routes forum group to per-group agent with topic session key", async () => {
+    const groupId = -1001234567890;
+    const threadId = 99;
+    const ctx = await buildContext({
+      message_id: 3,
+      chat: { id: groupId, type: "supergroup", title: "Test Forum", is_forum: true },
+      date: 1700000002,
+      text: "@bot hello",
+      message_thread_id: threadId,
+      from: { id: 42, first_name: "Alice" },
+    });
+
+    const expectedAgentId = sanitizeAgentId(`tggroup-default-${groupId}`);
+    const expectedSessionKey = buildAgentSessionKey({
+      agentId: expectedAgentId,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "group", id: buildTelegramGroupPeerId(groupId, threadId) },
+      dmScope: baseConfig.session?.dmScope,
+      identityLinks: baseConfig.session?.identityLinks,
+    }).toLowerCase();
+    expect(ctx).not.toBeNull();
+    expect(ctx?.route?.agentId).toBe(expectedAgentId);
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(threadId);
+    expect(ctx?.ctxPayload?.SessionKey).toBe(expectedSessionKey);
   });
 });
