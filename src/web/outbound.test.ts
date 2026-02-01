@@ -130,7 +130,23 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/file.pdf",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf");
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
+      fileName: "file.pdf",
+    });
+  });
+
+  it("falls back to 'file' when loadWebMedia returns no fileName", async () => {
+    const buf = Buffer.from("bin");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/octet-stream",
+      kind: "document",
+    });
+    await sendMessageWhatsApp("+1555", "blob", {
+      verbose: false,
+      mediaUrl: "/tmp/data.bin",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "blob", buf, "application/octet-stream");
   });
 
   it("sends polls via active listener", async () => {
