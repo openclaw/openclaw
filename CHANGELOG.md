@@ -10,6 +10,9 @@ Docs: https://docs.openclaw.ai
 - Docs: add Mintlify language navigation for zh-Hans. (#6416) Thanks @joshp123.
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
 - Agents: add OpenRouter app attribution headers. (#5050) Thanks @alexanderatallah.
+- Agents: add system prompt safety guardrails. (#5445) Thanks @joshp123.
+- Agents: update pi-ai to 0.50.9 and rename cacheControlTtl -> cacheRetention (with back-compat mapping).
+- Discord: inherit thread parent bindings for routing. (#3892) Thanks @aerolalit.
 
 ### Fixes
 
@@ -18,7 +21,10 @@ Docs: https://docs.openclaw.ai
 - Process: resolve Windows `spawn()` failures for npm-family CLIs by appending `.cmd` when needed. (#5815) Thanks @thejhinvirtuoso.
 - Docs: update MiniMax OAuth setup commands; Extensions: use OpenClaw plugin SDK for MiniMax OAuth. (#5402) Thanks @Maosghoul.
 - Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.
+- System prompt: hint using session_status for current date/time. (#1897, #1928, #2108)
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
+- TUI: prevent crash when searching with digits in the model selector.
+- Browser: secure Chrome extension relay CDP sessions.
 - Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
 - Docs: add zh-CN frontmatter titles for localized metadata. (#6487) Thanks @joshp123.
 - Docs: clarify Moonshot endpoints. (#4763) Thanks @hansbbans.
