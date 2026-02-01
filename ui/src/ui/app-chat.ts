@@ -24,7 +24,7 @@ type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 10;
+export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
