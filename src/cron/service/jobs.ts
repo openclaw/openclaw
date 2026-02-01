@@ -39,9 +39,12 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return undefined;
   }
   if (job.schedule.kind === "at") {
-    // One-shot jobs stay due until they successfully finish.
-    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
+    // One-shot jobs should only auto-run once, even if they fail/skip.
+    if (job.state.lastRunAtMs) {
       return undefined;
+    }
+    if (job.schedule.atMs <= nowMs) {
+      return nowMs;
     }
     return job.schedule.atMs;
   }

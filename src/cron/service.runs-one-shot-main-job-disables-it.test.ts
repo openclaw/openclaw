@@ -47,7 +47,7 @@ describe("CronService", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
@@ -79,6 +79,55 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
+  it("does not loop a past one-shot job when skipped", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await cron.start();
+    vi.setSystemTime(new Date("2025-12-13T00:00:10.000Z"));
+    const atMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const job = await cron.add({
+      name: "past one-shot skipped",
+      enabled: true,
+      schedule: { kind: "at", atMs },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "   " },
+    });
+
+    // Job should be scheduled (clamped to current time or later), but the key
+    // regression test is that after running it doesn't loop.
+    expect(job.state.nextRunAtMs).toBeGreaterThanOrEqual(Date.parse("2025-12-13T00:00:10.000Z"));
+
+    await vi.runOnlyPendingTimersAsync();
+
+    // Post-run state: one-shot should be complete and not reschedule
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T00:00:10.000Z"));
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    await vi.runOnlyPendingTimersAsync();
+    const jobsAgain = await cron.list({ includeDisabled: true });
+    const updatedAgain = jobsAgain.find((j) => j.id === job.id);
+    expect(updatedAgain?.state.lastRunAtMs).toBe(updated?.state.lastRunAtMs);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("runs a one-shot job and deletes it after success when requested", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
@@ -90,7 +139,7 @@ describe("CronService", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
@@ -130,7 +179,7 @@ describe("CronService", () => {
       return now;
     };
 
-    let resolveHeartbeat: ((res: HeartbeatRunResult) => void) | null = null;
+    let resolveHeartbeat: ((res: HeartbeatRunResult) => void) | undefined;
     const runHeartbeatOnce = vi.fn(
       async () =>
         await new Promise<HeartbeatRunResult>((resolve) => {
@@ -146,7 +195,7 @@ describe("CronService", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       runHeartbeatOnce,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
@@ -264,7 +313,7 @@ describe("CronService", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
@@ -315,7 +364,7 @@ describe("CronService", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
@@ -379,7 +428,7 @@ describe("CronService", () => {
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
@@ -443,7 +492,7 @@ describe("CronService", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
