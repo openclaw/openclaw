@@ -34,6 +34,7 @@ jobs:
           cd clawdbot-formal-models
           export OPENCLAW_REPO_DIR="${GITHUB_WORKSPACE}/openclaw"
           node scripts/extract-tool-groups.mjs
+          node scripts/check-tool-group-alias.mjs
 
       - name: Compute drift
         id: drift
