@@ -2,15 +2,15 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../types";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types";
 import type { ChatItem, MessageGroup } from "../types/chat-types";
-import { icons } from "../icons";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render";
+import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer";
+import { icons } from "../icons";
 import { renderMarkdownSidebar } from "./markdown-sidebar";
 import "../components/resizable-divider";
 

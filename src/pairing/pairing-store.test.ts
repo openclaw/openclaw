@@ -2,9 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
 import { resolveOAuthDir } from "../config/paths.js";
 import { listChannelPairingRequests, upsertChannelPairingRequest } from "./pairing-store.js";
 

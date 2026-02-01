@@ -10,7 +10,6 @@ import {
   normalizeAccountId,
   promptAccountId,
 } from "openclaw/plugin-sdk";
-
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 
 const channel = "zalo" as const;

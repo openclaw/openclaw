@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,

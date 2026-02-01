@@ -1,6 +1,6 @@
 import type { BrowserRouteContext } from "../server-context.js";
-import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 import type { BrowserRouteRegistrar } from "./types.js";
+import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   app.get("/tabs", async (req, res) => {

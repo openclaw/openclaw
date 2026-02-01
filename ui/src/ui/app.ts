@@ -1,10 +1,10 @@
 import { LitElement, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
-
+import type { EventLogEntry } from "./app-events";
+import type { DevicePairingList } from "./controllers/devices";
+import type { ExecApprovalRequest } from "./controllers/exec-approval";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
-import { resolveInjectedAssistantIdentity } from "./assistant-identity";
-import { loadSettings, type UiSettings } from "./storage";
-import { renderApp } from "./app-render";
 import type { Tab } from "./navigation";
 import type { ResolvedTheme, ThemeMode } from "./theme";
 import type {
@@ -24,42 +24,7 @@ import type {
   StatusSummary,
   NostrProfile,
 } from "./types";
-import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types";
-import type { EventLogEntry } from "./app-events";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals";
-import type { DevicePairingList } from "./controllers/devices";
-import type { ExecApprovalRequest } from "./controllers/exec-approval";
-import {
-  resetToolStream as resetToolStreamInternal,
-  type ToolStreamEntry,
-} from "./app-tool-stream";
-import {
-  exportLogs as exportLogsInternal,
-  handleChatScroll as handleChatScrollInternal,
-  handleLogsScroll as handleLogsScrollInternal,
-  resetChatScroll as resetChatScrollInternal,
-} from "./app-scroll";
-import { connectGateway as connectGatewayInternal } from "./app-gateway";
-import {
-  handleConnected,
-  handleDisconnected,
-  handleFirstUpdated,
-  handleUpdated,
-} from "./app-lifecycle";
-import {
-  applySettings as applySettingsInternal,
-  loadCron as loadCronInternal,
-  loadOverview as loadOverviewInternal,
-  setTab as setTabInternal,
-  setTheme as setThemeInternal,
-  onPopState as onPopStateInternal,
-} from "./app-settings";
-import {
-  handleAbortChat as handleAbortChatInternal,
-  handleSendChat as handleSendChatInternal,
-  removeQueuedMessage as removeQueuedMessageInternal,
-} from "./app-chat";
+import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -73,8 +38,42 @@ import {
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels";
-import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
+import {
+  handleAbortChat as handleAbortChatInternal,
+  handleSendChat as handleSendChatInternal,
+  removeQueuedMessage as removeQueuedMessageInternal,
+} from "./app-chat";
+import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults";
+import { connectGateway as connectGatewayInternal } from "./app-gateway";
+import {
+  handleConnected,
+  handleDisconnected,
+  handleFirstUpdated,
+  handleUpdated,
+} from "./app-lifecycle";
+import { renderApp } from "./app-render";
+import {
+  exportLogs as exportLogsInternal,
+  handleChatScroll as handleChatScrollInternal,
+  handleLogsScroll as handleLogsScrollInternal,
+  resetChatScroll as resetChatScrollInternal,
+} from "./app-scroll";
+import {
+  applySettings as applySettingsInternal,
+  loadCron as loadCronInternal,
+  loadOverview as loadOverviewInternal,
+  setTab as setTabInternal,
+  setTheme as setThemeInternal,
+  onPopState as onPopStateInternal,
+} from "./app-settings";
+import {
+  resetToolStream as resetToolStreamInternal,
+  type ToolStreamEntry,
+} from "./app-tool-stream";
+import { resolveInjectedAssistantIdentity } from "./assistant-identity";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity";
+import { loadSettings, type UiSettings } from "./storage";
+import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types";
 
 declare global {
   interface Window {

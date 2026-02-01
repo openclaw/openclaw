@@ -1,17 +1,15 @@
+import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
 import {
   ANTHROPIC_SETUP_TOKEN_PREFIX,
   validateAnthropicSetupToken,
 } from "../commands/auth-token.js";
 import { loadConfig } from "../config/config.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   type AuthProfileCredential,
@@ -21,6 +19,7 @@ import {
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";

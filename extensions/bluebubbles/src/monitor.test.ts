@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { EventEmitter } from "node:events";
-
-import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import { EventEmitter } from "node:events";
+import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import {
   handleBlueBubblesWebhookRequest,
   registerBlueBubblesWebhookTarget,
@@ -11,7 +11,6 @@ import {
   _resetBlueBubblesShortIdState,
 } from "./monitor.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
-import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({

@@ -1,5 +1,4 @@
 import { spawn, type SpawnOptions } from "node:child_process";
-
 import type { ZcaResult, ZcaRunOptions } from "./types.js";
 
 const ZCA_BINARY = "zca";

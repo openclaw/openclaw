@@ -1,5 +1,5 @@
-import { createDedupeCache } from "../infra/dedupe.js";
 import type { TelegramContext, TelegramMessage } from "./bot/types.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
 const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;

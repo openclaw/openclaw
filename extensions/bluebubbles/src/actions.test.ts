@@ -1,7 +1,6 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-
-import { bluebubblesMessageActions } from "./actions.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { bluebubblesMessageActions } from "./actions.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {

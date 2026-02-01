@@ -2,9 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import {
   decorateOpenClawProfile,
   ensureProfileCleanExit,

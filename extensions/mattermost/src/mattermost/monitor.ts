@@ -1,5 +1,3 @@
-import WebSocket from "ws";
-
 import type {
   ChannelAccountSnapshot,
   OpenClawConfig,
@@ -19,7 +17,7 @@ import {
   resolveChannelMediaMaxBytes,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
-
+import WebSocket from "ws";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {

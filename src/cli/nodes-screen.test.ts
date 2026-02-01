@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
 
 describe("nodes screen helpers", () => {

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-
 import type { WebhookContext } from "./types.js";
 
 /**

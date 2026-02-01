@@ -1,5 +1,4 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-
 import { extractMessageText } from "./utils.js";
 
 export type TlonHistoryEntry = {

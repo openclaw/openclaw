@@ -2,7 +2,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { installProcessWarningFilter } from "./infra/warnings.js";

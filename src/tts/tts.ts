@@ -1,3 +1,5 @@
+import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
+import { EdgeTTS } from "node-edge-tts";
 import {
   existsSync,
   mkdirSync,
@@ -10,12 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-
-import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
-import { EdgeTTS } from "node-edge-tts";
-
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -25,9 +22,6 @@ import type {
   TtsProvider,
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
-import { logVerbose } from "../globals.js";
-import { isVoiceCompatibleAudio } from "../media/audio.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -36,6 +30,10 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
+import { logVerbose } from "../globals.js";
+import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;

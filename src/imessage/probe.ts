@@ -1,7 +1,7 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { detectBinary } from "../commands/onboard-helpers.js";
 import { loadConfig } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createIMessageRpcClient } from "./client.js";
 
 export type IMessageProbe = {

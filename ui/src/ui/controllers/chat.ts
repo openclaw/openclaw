@@ -1,7 +1,7 @@
-import { extractText } from "../chat/message-extract";
 import type { GatewayBrowserClient } from "../gateway";
-import { generateUUID } from "../uuid";
 import type { ChatAttachment } from "../ui-types";
+import { extractText } from "../chat/message-extract";
+import { generateUUID } from "../uuid";
 
 export type ChatState = {
   client: GatewayBrowserClient | null;

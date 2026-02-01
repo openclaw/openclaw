@@ -1,3 +1,13 @@
+import crypto from "node:crypto";
+import {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserConsoleMessages,
+  browserNavigate,
+  browserPdfSave,
+  browserScreenshotAction,
+} from "../../browser/client-actions.js";
 import {
   browserCloseTab,
   browserFocusTab,
@@ -9,25 +19,14 @@ import {
   browserStop,
   browserTabs,
 } from "../../browser/client.js";
-import {
-  browserAct,
-  browserArmDialog,
-  browserArmFileChooser,
-  browserConsoleMessages,
-  browserNavigate,
-  browserPdfSave,
-  browserScreenshotAction,
-} from "../../browser/client-actions.js";
-import crypto from "node:crypto";
-
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { loadConfig } from "../../config/config.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
+import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
 
 type BrowserProxyFile = {
   path: string;

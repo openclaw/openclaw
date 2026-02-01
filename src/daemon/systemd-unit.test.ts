@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { parseSystemdExecStart } from "./systemd-unit.js";
 
 describe("parseSystemdExecStart", () => {

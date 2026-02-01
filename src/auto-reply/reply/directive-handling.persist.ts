@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -12,15 +15,12 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
 import { formatElevatedEvent, formatReasoningEvent } from "./directive-handling.shared.js";
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;

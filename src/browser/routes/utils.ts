@@ -1,6 +1,6 @@
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import { parseBooleanValue } from "../../utils/boolean.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
+import { parseBooleanValue } from "../../utils/boolean.js";
 
 /**
  * Extract profile name from query string or body and get profile context.

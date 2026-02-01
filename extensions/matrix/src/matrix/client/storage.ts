@@ -2,9 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixStoragePaths } from "./types.js";
+import { getMatrixRuntime } from "../../runtime.js";
 
 export const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";

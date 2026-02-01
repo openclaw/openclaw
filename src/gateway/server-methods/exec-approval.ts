@@ -1,6 +1,7 @@
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -8,7 +9,6 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,

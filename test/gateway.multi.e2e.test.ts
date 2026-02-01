@@ -6,8 +6,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GatewayClient } from "../src/gateway/client.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 
 type GatewayInstance = {

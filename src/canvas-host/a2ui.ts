@@ -1,8 +1,7 @@
-import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { detectMime } from "../media/mime.js";
 
 export const A2UI_PATH = "/__openclaw__/a2ui";

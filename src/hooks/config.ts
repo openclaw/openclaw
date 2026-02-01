@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
-import { resolveHookKey } from "./frontmatter.js";
 import type { HookEligibilityContext, HookEntry } from "./types.js";
+import { resolveHookKey } from "./frontmatter.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,

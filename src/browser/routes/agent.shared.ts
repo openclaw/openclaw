@@ -1,8 +1,8 @@
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { PwAiModule } from "../pw-ai-module.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRequest, BrowserResponse } from "./types.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import { getProfileContext, jsonError } from "./utils.js";
-import type { BrowserRequest, BrowserResponse } from "./types.js";
 
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "Error: 'selector' is not supported. Use 'ref' from snapshot instead.",

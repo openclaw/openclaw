@@ -1,13 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-
-import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
-import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_PATH } from "../config/config.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
+import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

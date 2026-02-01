@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { __testing } from "./web-search.js";
 
 const { inferPerplexityBaseUrlFromApiKey, resolvePerplexityBaseUrl, normalizeFreshness } =

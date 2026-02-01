@@ -1,8 +1,9 @@
+import type { DaemonInstallOptions } from "./types.js";
+import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
-import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -10,7 +11,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
 import { parsePort } from "./shared.js";
-import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);

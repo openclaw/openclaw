@@ -1,9 +1,9 @@
+import type { ZodIssue } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { ZodIssue } from "zod";
-
 import type { OpenClawConfig } from "../config/config.js";
+import type { DoctorOptions } from "./doctor-prompter.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   OpenClawSchema,
   CONFIG_PATH,
@@ -11,12 +11,10 @@ import {
   readConfigFileSnapshot,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { note } from "../terminal/note.js";
-import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
-import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 import { resolveHomeDir } from "../utils.js";
+import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));

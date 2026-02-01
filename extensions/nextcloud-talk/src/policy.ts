@@ -11,7 +11,6 @@ import {
   resolveMentionGatingWithBypass,
   resolveNestedAllowlistDecision,
 } from "openclaw/plugin-sdk";
-
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {

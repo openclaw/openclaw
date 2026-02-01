@@ -7,17 +7,7 @@ import {
   type Event,
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
-
-import {
-  readNostrBusState,
-  writeNostrBusState,
-  computeSinceTimestamp,
-  readNostrProfileState,
-  writeNostrProfileState,
-} from "./nostr-state-store.js";
-import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
 import type { NostrProfile } from "./config-schema.js";
-import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 import {
   createMetrics,
   createNoopMetrics,
@@ -25,6 +15,15 @@ import {
   type MetricsSnapshot,
   type MetricEvent,
 } from "./metrics.js";
+import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
+import {
+  readNostrBusState,
+  writeNostrBusState,
+  computeSinceTimestamp,
+  readNostrProfileState,
+  writeNostrProfileState,
+} from "./nostr-state-store.js";
+import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 

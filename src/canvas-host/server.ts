@@ -1,17 +1,16 @@
+import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
+import chokidar from "chokidar";
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import type { Duplex } from "node:stream";
-
-import chokidar from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
+import type { RuntimeEnv } from "../runtime.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import {
   CANVAS_HOST_PATH,

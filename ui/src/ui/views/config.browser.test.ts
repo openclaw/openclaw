@@ -1,6 +1,5 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
 import { renderConfig } from "./config";
 
 describe("config view", () => {

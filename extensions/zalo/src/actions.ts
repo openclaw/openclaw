@@ -4,7 +4,6 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk";
-
 import { listEnabledZaloAccounts } from "./accounts.js";
 import { sendMessageZalo } from "./send.js";
 

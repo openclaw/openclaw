@@ -1,12 +1,12 @@
+import type { loadConfig } from "../../../config/config.js";
+import type { MentionConfig } from "../mentions.js";
+import type { WebInboundMsg } from "../types.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
-import type { loadConfig } from "../../../config/config.js";
-import { normalizeE164 } from "../../../utils.js";
-import { resolveMentionGating } from "../../../channels/mention-gating.js";
-import type { MentionConfig } from "../mentions.js";
-import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
-import type { WebInboundMsg } from "../types.js";
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
+import { resolveMentionGating } from "../../../channels/mention-gating.js";
+import { normalizeE164 } from "../../../utils.js";
+import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";

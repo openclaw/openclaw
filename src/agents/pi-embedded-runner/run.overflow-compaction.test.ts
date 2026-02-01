@@ -145,12 +145,11 @@ vi.mock("../pi-embedded-helpers.js", async () => {
   };
 });
 
-import { runEmbeddedPiAgent } from "./run.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { log } from "./logger.js";
-
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { runEmbeddedPiAgent } from "./run.js";
+import { runEmbeddedAttempt } from "./run/attempt.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
 const mockedCompactDirect = vi.mocked(compactEmbeddedPiSessionDirect);

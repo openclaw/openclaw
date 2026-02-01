@@ -7,9 +7,9 @@ import {
   type ChannelMessageActionName,
   type ChannelToolSend,
 } from "openclaw/plugin-sdk";
+import type { CoreConfig } from "./types.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { handleMatrixAction } from "./tool-actions.js";
-import type { CoreConfig } from "./types.js";
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {

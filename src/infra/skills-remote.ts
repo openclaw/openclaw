@@ -1,11 +1,11 @@
 import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { loadWorkspaceSkillEntries } from "../agents/skills.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
   nodeId: string;

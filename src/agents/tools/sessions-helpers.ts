@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 

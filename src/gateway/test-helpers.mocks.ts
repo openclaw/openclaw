@@ -1,15 +1,14 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Mock, vi } from "vitest";
-
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 

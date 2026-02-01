@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveGatewayListenHosts } from "./net.js";
 
 describe("resolveGatewayListenHosts", () => {

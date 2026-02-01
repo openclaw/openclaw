@@ -1,7 +1,6 @@
 import { RateLimitError } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   addRoleDiscord,
   banMemberDiscord,

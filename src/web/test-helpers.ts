@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-
 import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
 

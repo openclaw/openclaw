@@ -1,5 +1,14 @@
 import type { Bot, Context } from "grammy";
-
+import type { CommandArgs } from "../auto-reply/commands-registry.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelGroupPolicy } from "../config/group-policy.js";
+import type {
+  ReplyToMode,
+  TelegramAccountConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import {
@@ -10,45 +19,35 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
 } from "../auto-reply/commands-registry.js";
-import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
-import type { CommandArgs } from "../auto-reply/commands-registry.js";
-import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import { danger, logVerbose } from "../globals.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
 import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import { danger, logVerbose } from "../globals.js";
 import {
   executePluginCommand,
   getPluginCommandSpecs,
   matchPluginCommand,
 } from "../plugins/commands.js";
-import type { ChannelGroupPolicy } from "../config/group-policy.js";
-import type {
-  ReplyToMode,
-  TelegramAccountConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "../config/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import { deliverReplies } from "./bot/delivery.js";
-import { buildInlineKeyboard } from "./send.js";
 import {
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
-import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
+import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 

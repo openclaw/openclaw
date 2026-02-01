@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthProfileStore } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
-import type { AuthProfileStore } from "./types.js";
 import { isProfileInCooldown } from "./usage.js";
 
 function resolveProfileUnusableUntil(stats: {

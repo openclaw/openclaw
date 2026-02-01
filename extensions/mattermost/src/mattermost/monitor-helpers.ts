@@ -1,8 +1,6 @@
-import { Buffer } from "node:buffer";
-
-import type WebSocket from "ws";
-
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type WebSocket from "ws";
+import { Buffer } from "node:buffer";
 
 export type ResponsePrefixContext = {
   model?: string;

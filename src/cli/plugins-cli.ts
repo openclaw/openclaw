@@ -1,14 +1,13 @@
+import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
-import type { Command } from "commander";
-
-import { loadConfig, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginRecord } from "../plugins/registry.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
-import type { PluginRecord } from "../plugins/registry.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";

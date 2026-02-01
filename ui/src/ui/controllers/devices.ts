@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway";
-import { loadOrCreateDeviceIdentity } from "../device-identity";
 import { clearDeviceAuthToken, storeDeviceAuthToken } from "../device-auth";
+import { loadOrCreateDeviceIdentity } from "../device-identity";
 
 export type DeviceTokenSummary = {
   role: string;

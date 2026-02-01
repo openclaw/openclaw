@@ -1,10 +1,10 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
 } from "../infra/update-check.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { VERSION } from "../version.js";
 
 export async function getUpdateCheckResult(params: {

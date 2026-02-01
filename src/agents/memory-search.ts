@@ -1,6 +1,5 @@
 import os from "node:os";
 import path from "node:path";
-
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";

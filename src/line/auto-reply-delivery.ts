@@ -2,8 +2,8 @@ import type { messagingApi } from "@line/bot-sdk";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
-import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 import type { LineReplyMessage, SendLineReplyChunksParams } from "./reply-chunks.js";
+import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
 export type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (

@@ -1,5 +1,5 @@
-import type { ChannelId, ChannelPlugin } from "./types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import type { ChannelId, ChannelPlugin } from "./types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 
 const cache = new Map<ChannelId, ChannelPlugin>();

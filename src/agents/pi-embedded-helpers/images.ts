@@ -1,5 +1,4 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
-
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";

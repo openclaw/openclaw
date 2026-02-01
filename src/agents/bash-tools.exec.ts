@@ -1,9 +1,9 @@
-import crypto from "node:crypto";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { Type } from "@sinclair/typebox";
-
+import crypto from "node:crypto";
+import path from "node:path";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -28,6 +28,7 @@ import {
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo, logWarn } from "../logger.js";
 import { formatSpawnError, spawnWithFallback } from "../process/spawn-utils.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   type ProcessSession,
   type SessionStdin,
@@ -38,7 +39,6 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   buildDockerExecArgs,
   buildSandboxEnv,
@@ -51,11 +51,10 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
-import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 const DEFAULT_MAX_OUTPUT = clampNumber(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),

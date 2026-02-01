@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   parseModelRef,
   resolveModelRefFromString,
@@ -7,7 +8,6 @@ import {
   normalizeProviderId,
   modelKey,
 } from "./model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 describe("model-selection", () => {
   describe("normalizeProviderId", () => {
