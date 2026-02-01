@@ -1,3 +1,4 @@
+import { ProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { createWebFetchTool } from "./web-tools.js";
@@ -273,5 +274,103 @@ describe("web_fetch extraction fallbacks", () => {
     await expect(tool?.execute?.("call", { url: "https://example.com/oops" })).rejects.toThrow(
       /Web fetch failed \(500\):.*Oops/,
     );
+  });
+});
+
+describe("web_fetch proxy support", () => {
+  const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    });
+  });
+
+  afterEach(() => {
+    // @ts-expect-error restore
+    global.fetch = priorFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("uses proxy dispatcher when proxy is configured", async () => {
+    let capturedDispatcher: unknown = null;
+    const resolvePinnedSpy = vi.spyOn(ssrf, "resolvePinnedHostname");
+    const mockFetch = vi.fn((input: RequestInfo, init?: RequestInit) => {
+      capturedDispatcher = (init as { dispatcher?: unknown })?.dispatcher;
+      return Promise.resolve(
+        htmlResponse("<html><body><p>Hello via proxy</p></body></html>", requestUrl(input)),
+      ) as Promise<Response>;
+    });
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              proxy: "http://127.0.0.1:7890",
+              firecrawl: { enabled: false },
+            },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/proxy-test" });
+    const details = result?.details as { text?: string };
+
+    expect(mockFetch).toHaveBeenCalled();
+    // Verify dispatcher is a ProxyAgent instance
+    expect(capturedDispatcher).toBeInstanceOf(ProxyAgent);
+    // Verify SSRF protection is bypassed when proxy is configured
+    expect(resolvePinnedSpy).not.toHaveBeenCalled();
+    expect(details.text).toContain("Hello via proxy");
+  });
+
+  it("does not use proxy when proxy is not configured", async () => {
+    let capturedDispatcher: unknown = null;
+    const resolvePinnedSpy = vi.spyOn(ssrf, "resolvePinnedHostname");
+    const mockFetch = vi.fn((input: RequestInfo, init?: RequestInit) => {
+      capturedDispatcher = (init as { dispatcher?: unknown })?.dispatcher;
+      return Promise.resolve(
+        htmlResponse("<html><body><p>Hello direct</p></body></html>", requestUrl(input)),
+      ) as Promise<Response>;
+    });
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              firecrawl: { enabled: false },
+            },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/no-proxy" });
+    const details = result?.details as { text?: string };
+
+    expect(mockFetch).toHaveBeenCalled();
+    // Verify dispatcher is NOT a ProxyAgent (should be pinned dispatcher)
+    expect(capturedDispatcher).toBeDefined();
+    expect(capturedDispatcher).not.toBeInstanceOf(ProxyAgent);
+    // Verify SSRF protection is active when no proxy is configured
+    expect(resolvePinnedSpy).toHaveBeenCalled();
+    expect(details.text).toContain("Hello direct");
   });
 });

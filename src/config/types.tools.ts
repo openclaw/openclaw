@@ -371,6 +371,8 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** HTTP proxy URL for fetch requests (e.g. http://127.0.0.1:7890). */
+      proxy?: string;
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;
