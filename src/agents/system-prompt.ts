@@ -58,7 +58,9 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) return [];
+  if (!params.userTimezone) {
+    return [];
+  }
   return [
     "## Current Date & Time",
     `Time zone: ${params.userTimezone}`,
