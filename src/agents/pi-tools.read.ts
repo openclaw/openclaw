@@ -189,13 +189,20 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
     return tool;
   }
 
+  const nextSchema: Record<string, unknown> = {
+    ...schema,
+    properties,
+  };
+
+  if (required.length > 0) {
+    nextSchema.required = required;
+  } else if ("required" in nextSchema) {
+    delete nextSchema.required;
+  }
+
   return {
     ...tool,
-    parameters: {
-      ...schema,
-      properties,
-      ...(required.length > 0 ? { required } : {}),
-    },
+    parameters: nextSchema,
   };
 }
 
