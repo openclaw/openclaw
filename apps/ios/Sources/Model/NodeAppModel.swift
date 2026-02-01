@@ -636,7 +636,9 @@ final class NodeAppModel {
                  OpenClawMotionCommand.pedometer.rawValue:
                 return try await self.handleMotionInvoke(req)
             case OpenClawTalkCommand.pttStart.rawValue,
-                 OpenClawTalkCommand.pttStop.rawValue:
+                 OpenClawTalkCommand.pttStop.rawValue,
+                 OpenClawTalkCommand.pttCancel.rawValue,
+                 OpenClawTalkCommand.pttOnce.rawValue:
                 return try await self.handleTalkInvoke(req)
             default:
                 return BridgeInvokeResponse(
@@ -1173,6 +1175,21 @@ final class NodeAppModel {
             let payload = await self.talkMode.endPushToTalk()
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
             self.pttVoiceWakeSuspended = false
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawTalkCommand.pttCancel.rawValue:
+            let payload = await self.talkMode.cancelPushToTalk()
+            self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
+            self.pttVoiceWakeSuspended = false
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawTalkCommand.pttOnce.rawValue:
+            self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            defer {
+                self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
+                self.pttVoiceWakeSuspended = false
+            }
+            let payload = try await self.talkMode.runPushToTalkOnce()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:
