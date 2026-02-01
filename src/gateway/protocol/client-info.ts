@@ -11,6 +11,17 @@ export const GATEWAY_CLIENT_IDS = {
   TEST: "test",
   FINGERPRINT: "fingerprint",
   PROBE: "openclaw-probe",
+  // Legacy client IDs (clawdbot/moltbot -> openclaw rename compat)
+  LEGACY_CLAWDBOT_CONTROL_UI: "clawdbot-control-ui",
+  LEGACY_CLAWDBOT_MACOS_APP: "clawdbot-macos",
+  LEGACY_CLAWDBOT_IOS_APP: "clawdbot-ios",
+  LEGACY_CLAWDBOT_ANDROID_APP: "clawdbot-android",
+  LEGACY_CLAWDBOT_PROBE: "clawdbot-probe",
+  LEGACY_MOLTBOT_CONTROL_UI: "moltbot-control-ui",
+  LEGACY_MOLTBOT_MACOS_APP: "moltbot-macos",
+  LEGACY_MOLTBOT_IOS_APP: "moltbot-ios",
+  LEGACY_MOLTBOT_ANDROID_APP: "moltbot-android",
+  LEGACY_MOLTBOT_PROBE: "moltbot-probe",
 } as const;
 
 export type GatewayClientId = (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
