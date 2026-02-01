@@ -6,6 +6,8 @@ export type ApiKeyCredential = {
   provider: string;
   key: string;
   email?: string;
+  /** Optional provider-specific metadata (e.g., account IDs, gateway IDs) */
+  metadata?: Record<string, string>;
 };
 
 export type TokenCredential = {
