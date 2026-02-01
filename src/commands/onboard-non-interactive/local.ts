@@ -13,6 +13,7 @@ import {
   resolveControlUiLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
+import { applyNonInteractiveMemoryDefaults } from "../onboard-memory.js";
 import { applyNonInteractiveAuthChoice } from "./local/auth-choice.js";
 import { installGatewayDaemonNonInteractive } from "./local/daemon-install.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
@@ -75,6 +76,8 @@ export async function runNonInteractiveOnboardingLocal(params: {
   nextConfig = gatewayResult.nextConfig;
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+
+  nextConfig = applyNonInteractiveMemoryDefaults(nextConfig);
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
