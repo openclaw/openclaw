@@ -105,25 +105,11 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function handlePaste(e: ClipboardEvent, props: ChatProps) {
-  const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) return;
+function handleFiles(files: FileList | File[], props: ChatProps) {
+  if (!props.onAttachmentsChange) return;
 
-  const imageItems: DataTransferItem[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
-    }
-  }
-
-  if (imageItems.length === 0) return;
-
-  e.preventDefault();
-
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) continue;
+  for (const file of Array.from(files)) {
+    if (!file.type.startsWith("image/")) continue;
 
     const reader = new FileReader();
     reader.onload = () => {
@@ -137,6 +123,37 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
       props.onAttachmentsChange?.([...current, newAttachment]);
     };
     reader.readAsDataURL(file);
+  }
+}
+
+function handlePaste(e: ClipboardEvent, props: ChatProps) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  const files: File[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+
+  if (files.length > 0) {
+    e.preventDefault();
+    handleFiles(files, props);
+  }
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+
+  // Check if any of the dropped items are images
+  const hasImages = Array.from(files).some((f) => f.type.startsWith("image/"));
+  if (hasImages) {
+    e.preventDefault();
+    handleFiles(files, props);
   }
 }
 
@@ -351,6 +368,13 @@ export function renderChat(props: ChatProps) {
                 props.onDraftChange(target.value);
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              @dragover=${(e: DragEvent) => {
+                if (e.dataTransfer?.types.includes("Files")) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "copy";
+                }
+              }}
+              @drop=${(e: DragEvent) => handleDrop(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
           </label>
