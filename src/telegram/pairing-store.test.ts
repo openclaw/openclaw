@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
 import {
   approveTelegramPairingCode,
   listTelegramPairingRequests,
@@ -18,8 +16,11 @@ async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   try {
     return await fn(dir);
   } finally {
-    if (previous === undefined) delete process.env.OPENCLAW_STATE_DIR;
-    else process.env.OPENCLAW_STATE_DIR = previous;
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
     await fs.rm(dir, { recursive: true, force: true });
   }
 }

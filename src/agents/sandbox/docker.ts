@@ -1,12 +1,11 @@
 import { spawn } from "node:child_process";
-
-import { defaultRuntime } from "../../runtime.js";
+import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { defaultRuntime } from "../../runtime.js";
+import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
-import { computeSandboxConfigHash } from "./config-hash.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
@@ -38,10 +37,14 @@ export async function readDockerPort(containerName: string, port: number) {
   const result = await execDocker(["port", containerName, `${port}/tcp`], {
     allowFailure: true,
   });
-  if (result.code !== 0) return null;
+  if (result.code !== 0) {
+    return null;
+  }
   const line = result.stdout.trim().split(/\r?\n/)[0] ?? "";
   const match = line.match(/:(\d+)\s*$/);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const mapped = Number.parseInt(match[1] ?? "", 10);
   return Number.isFinite(mapped) ? mapped : null;
 }
@@ -50,7 +53,9 @@ async function dockerImageExists(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
-  if (result.code === 0) return true;
+  if (result.code === 0) {
+    return true;
+  }
   const stderr = result.stderr.trim();
   if (stderr.includes("No such image")) {
     return false;
@@ -60,7 +65,9 @@ async function dockerImageExists(image: string) {
 
 export async function ensureDockerImage(image: string) {
   const exists = await dockerImageExists(image);
-  if (exists) return;
+  if (exists) {
+    return;
+  }
   if (image === DEFAULT_SANDBOX_IMAGE) {
     await execDocker(["pull", "debian:bookworm-slim"]);
     await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
@@ -73,12 +80,16 @@ export async function dockerContainerState(name: string) {
   const result = await execDocker(["inspect", "-f", "{{.State.Running}}", name], {
     allowFailure: true,
   });
-  if (result.code !== 0) return { exists: false, running: false };
+  if (result.code !== 0) {
+    return { exists: false, running: false };
+  }
   return { exists: true, running: result.stdout.trim() === "true" };
 }
 
 function normalizeDockerLimit(value?: string | number) {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   if (typeof value === "number") {
     return Number.isFinite(value) ? String(value) : undefined;
   }
@@ -90,16 +101,24 @@ function formatUlimitValue(
   name: string,
   value: string | number | { soft?: number; hard?: number },
 ) {
-  if (!name.trim()) return null;
+  if (!name.trim()) {
+    return null;
+  }
   if (typeof value === "number" || typeof value === "string") {
     const raw = String(value).trim();
     return raw ? `${name}=${raw}` : null;
   }
   const soft = typeof value.soft === "number" ? Math.max(0, value.soft) : undefined;
   const hard = typeof value.hard === "number" ? Math.max(0, value.hard) : undefined;
-  if (soft === undefined && hard === undefined) return null;
-  if (soft === undefined) return `${name}=${hard}`;
-  if (hard === undefined) return `${name}=${soft}`;
+  if (soft === undefined && hard === undefined) {
+    return null;
+  }
+  if (soft === undefined) {
+    return `${name}=${hard}`;
+  }
+  if (hard === undefined) {
+    return `${name}=${soft}`;
+  }
   return `${name}=${soft}:${hard}`;
 }
 
@@ -120,14 +139,22 @@ export function buildSandboxCreateArgs(params: {
     args.push("--label", `openclaw.configHash=${params.configHash}`);
   }
   for (const [key, value] of Object.entries(params.labels ?? {})) {
-    if (key && value) args.push("--label", `${key}=${value}`);
+    if (key && value) {
+      args.push("--label", `${key}=${value}`);
+    }
   }
-  if (params.cfg.readOnlyRoot) args.push("--read-only");
+  if (params.cfg.readOnlyRoot) {
+    args.push("--read-only");
+  }
   for (const entry of params.cfg.tmpfs) {
     args.push("--tmpfs", entry);
   }
-  if (params.cfg.network) args.push("--network", params.cfg.network);
-  if (params.cfg.user) args.push("--user", params.cfg.user);
+  if (params.cfg.network) {
+    args.push("--network", params.cfg.network);
+  }
+  if (params.cfg.user) {
+    args.push("--user", params.cfg.user);
+  }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
   }
@@ -139,18 +166,26 @@ export function buildSandboxCreateArgs(params: {
     args.push("--security-opt", `apparmor=${params.cfg.apparmorProfile}`);
   }
   for (const entry of params.cfg.dns ?? []) {
-    if (entry.trim()) args.push("--dns", entry);
+    if (entry.trim()) {
+      args.push("--dns", entry);
+    }
   }
   for (const entry of params.cfg.extraHosts ?? []) {
-    if (entry.trim()) args.push("--add-host", entry);
+    if (entry.trim()) {
+      args.push("--add-host", entry);
+    }
   }
   if (typeof params.cfg.pidsLimit === "number" && params.cfg.pidsLimit > 0) {
     args.push("--pids-limit", String(params.cfg.pidsLimit));
   }
   const memory = normalizeDockerLimit(params.cfg.memory);
-  if (memory) args.push("--memory", memory);
+  if (memory) {
+    args.push("--memory", memory);
+  }
   const memorySwap = normalizeDockerLimit(params.cfg.memorySwap);
-  if (memorySwap) args.push("--memory-swap", memorySwap);
+  if (memorySwap) {
+    args.push("--memory-swap", memorySwap);
+  }
   if (typeof params.cfg.cpus === "number" && params.cfg.cpus > 0) {
     args.push("--cpus", String(params.cfg.cpus));
   }
@@ -158,7 +193,9 @@ export function buildSandboxCreateArgs(params: {
     [string, string | number | { soft?: number; hard?: number }]
   >) {
     const formatted = formatUlimitValue(name, value);
-    if (formatted) args.push("--ulimit", formatted);
+    if (formatted) {
+      args.push("--ulimit", formatted);
+    }
   }
   if (params.cfg.binds?.length) {
     for (const bind of params.cfg.binds) {
@@ -213,9 +250,13 @@ async function readContainerConfigHash(containerName: string): Promise<string | 
       ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
       { allowFailure: true },
     );
-    if (result.code !== 0) return null;
+    if (result.code !== 0) {
+      return null;
+    }
     const raw = result.stdout.trim();
-    if (!raw || raw === "<no value>") return null;
+    if (!raw || raw === "<no value>") {
+      return null;
+    }
     return raw;
   };
   return await readLabel("openclaw.configHash");

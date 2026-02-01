@@ -33,7 +33,9 @@ describe("agents_list", () => {
     const tool = createOpenClawTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) throw new Error("missing agents_list tool");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
 
     const result = await tool.execute("call1", {});
     expect(result.details).toMatchObject({
@@ -70,7 +72,9 @@ describe("agents_list", () => {
     const tool = createOpenClawTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) throw new Error("missing agents_list tool");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
 
     const result = await tool.execute("call2", {});
     const agents = (
@@ -110,7 +114,9 @@ describe("agents_list", () => {
     const tool = createOpenClawTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) throw new Error("missing agents_list tool");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
 
     const result = await tool.execute("call3", {});
     expect(result.details).toMatchObject({
@@ -145,7 +151,9 @@ describe("agents_list", () => {
     const tool = createOpenClawTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) throw new Error("missing agents_list tool");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
 
     const result = await tool.execute("call4", {});
     const agents = (

@@ -1,32 +1,17 @@
+import type { Command } from "commander";
 import { confirm, isCancel, select, spinner } from "@clack/prompts";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Command } from "commander";
-
+import {
+  formatUpdateAvailableHint,
+  formatUpdateOneLiner,
+  resolveUpdateAvailability,
+} from "../commands/status.update.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import {
-  checkUpdateStatus,
-  compareSemverStrings,
-  fetchNpmTagVersion,
-  resolveNpmChannelTag,
-} from "../infra/update-check.js";
+import { trimLogTail } from "../infra/restart-sentinel.js";
 import { parseSemver } from "../infra/runtime-guard.js";
-import {
-  runGatewayUpdate,
-  type UpdateRunResult,
-  type UpdateStepInfo,
-  type UpdateStepResult,
-  type UpdateStepProgress,
-} from "../infra/update-runner.js";
-import {
-  detectGlobalInstallManagerByPresence,
-  detectGlobalInstallManagerForRoot,
-  globalInstallArgs,
-  resolveGlobalPackageRoot,
-  type GlobalInstallManager,
-} from "../infra/update-global.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -35,22 +20,36 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../infra/update-channels.js";
-import { trimLogTail } from "../infra/restart-sentinel.js";
-import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { formatCliCommand } from "./command-format.js";
-import { replaceCliName, resolveCliName } from "./cli-name.js";
-import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
-import { theme } from "../terminal/theme.js";
-import { renderTable } from "../terminal/table.js";
-import { formatHelpExamples } from "./help-format.js";
 import {
-  formatUpdateAvailableHint,
-  formatUpdateOneLiner,
-  resolveUpdateAvailability,
-} from "../commands/status.update.js";
+  checkUpdateStatus,
+  compareSemverStrings,
+  fetchNpmTagVersion,
+  resolveNpmChannelTag,
+} from "../infra/update-check.js";
+import {
+  detectGlobalInstallManagerByPresence,
+  detectGlobalInstallManagerForRoot,
+  globalInstallArgs,
+  resolveGlobalPackageRoot,
+  type GlobalInstallManager,
+} from "../infra/update-global.js";
+import {
+  runGatewayUpdate,
+  type UpdateRunResult,
+  type UpdateStepInfo,
+  type UpdateStepResult,
+  type UpdateStepProgress,
+} from "../infra/update-runner.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../plugins/update.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
+import { renderTable } from "../terminal/table.js";
+import { theme } from "../terminal/theme.js";
+import { replaceCliName, resolveCliName } from "./cli-name.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatHelpExamples } from "./help-format.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -118,10 +117,16 @@ const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
 const DEFAULT_GIT_DIR = path.join(os.homedir(), ".openclaw");
 
 function normalizeTag(value?: string | null): string | null {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith("openclaw@")) return trimmed.slice("openclaw@".length);
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("openclaw@")) {
+    return trimmed.slice("openclaw@".length);
+  }
   if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
     return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
   }
@@ -134,7 +139,9 @@ function pickUpdateQuip(): string {
 
 function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
   return parseSemver(cleaned) ? cleaned : null;
 }
@@ -151,7 +158,9 @@ async function readPackageVersion(root: string): Promise<string | null> {
 
 async function resolveTargetVersion(tag: string, timeoutMs?: number): Promise<string | null> {
   const direct = normalizeVersionTag(tag);
-  if (direct) return direct;
+  if (direct) {
+    return direct;
+  }
   const res = await fetchNpmTagVersion({ tag, timeoutMs });
   return res.version ?? null;
 }
@@ -201,7 +210,9 @@ async function isEmptyDir(targetPath: string): Promise<boolean> {
 
 function resolveGitInstallDir(): string {
   const override = process.env.OPENCLAW_GIT_DIR?.trim();
-  if (override) return path.resolve(override);
+  if (override) {
+    return path.resolve(override);
+  }
   return resolveDefaultGitDir();
 }
 
@@ -211,7 +222,9 @@ function resolveDefaultGitDir(): string {
 
 function resolveNodeRunner(): string {
   const base = path.basename(process.execPath).toLowerCase();
-  if (base === "node" || base === "node.exe") return process.execPath;
+  if (base === "node" || base === "node.exe") {
+    return process.execPath;
+  }
   return "node";
 }
 
@@ -309,7 +322,9 @@ async function resolveGlobalManager(params: {
       params.root,
       params.timeoutMs,
     );
-    if (detected) return detected;
+    if (detected) {
+      return detected;
+    }
   }
   const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
   return byPresence ?? "npm";
@@ -459,7 +474,9 @@ function createUpdateProgress(enabled: boolean): ProgressController {
       currentSpinner.start(theme.accent(getStepLabel(step)));
     },
     onStepComplete: (step) => {
-      if (!currentSpinner) return;
+      if (!currentSpinner) {
+        return;
+      }
 
       const label = getStepLabel(step);
       const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
@@ -491,14 +508,20 @@ function createUpdateProgress(enabled: boolean): ProgressController {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
   const seconds = (ms / 1000).toFixed(1);
   return `${seconds}s`;
 }
 
 function formatStepStatus(exitCode: number | null): string {
-  if (exitCode === 0) return theme.success("\u2713");
-  if (exitCode === null) return theme.warn("?");
+  if (exitCode === 0) {
+    return theme.success("\u2713");
+  }
+  if (exitCode === null) {
+    return theme.warn("?");
+  }
   return theme.error("\u2717");
 }
 
@@ -657,7 +680,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         message: stylePromptMessage(message),
         initialValue: false,
       });
-      if (isCancel(ok) || ok === false) {
+      if (isCancel(ok) || !ok) {
         if (!opts.json) {
           defaultRuntime.log(theme.muted("Update cancelled."));
         }
@@ -875,7 +898,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
     if (!opts.json) {
       const summarizeList = (list: string[]) => {
-        if (list.length <= 6) return list.join(", ");
+        if (list.length <= 6) {
+          return list.join(", ");
+        }
         return `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
       };
 
@@ -907,13 +932,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         defaultRuntime.log(theme.muted("No plugin updates needed."));
       } else {
         const parts = [`${updated} updated`, `${unchanged} unchanged`];
-        if (failed > 0) parts.push(`${failed} failed`);
-        if (skipped > 0) parts.push(`${skipped} skipped`);
+        if (failed > 0) {
+          parts.push(`${failed} failed`);
+        }
+        if (skipped > 0) {
+          parts.push(`${skipped} skipped`);
+        }
         defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
       }
 
       for (const outcome of npmResult.outcomes) {
-        if (outcome.status !== "error") continue;
+        if (outcome.status !== "error") {
+          continue;
+        }
         defaultRuntime.log(theme.error(outcome.message));
       }
     }
@@ -937,7 +968,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         try {
           const { doctorCommand } = await import("../commands/doctor.js");
           const interactiveDoctor = Boolean(process.stdin.isTTY) && !opts.json && opts.yes !== true;
-          await doctorCommand(defaultRuntime, { nonInteractive: !interactiveDoctor });
+          await doctorCommand(defaultRuntime, {
+            nonInteractive: !interactiveDoctor,
+          });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
         } finally {
@@ -1082,7 +1115,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         ),
         initialValue: true,
       });
-      if (isCancel(ok) || ok === false) {
+      if (isCancel(ok) || !ok) {
         defaultRuntime.log(theme.muted("Update cancelled."));
         defaultRuntime.exit(0);
         return;
@@ -1188,7 +1221,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     )
     .action(async (opts) => {
       try {
-        await updateWizardCommand({ timeout: opts.timeout as string | undefined });
+        await updateWizardCommand({
+          timeout: opts.timeout as string | undefined,
+        });
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

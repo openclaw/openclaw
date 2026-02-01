@@ -1,12 +1,11 @@
-import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai";
+import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
-
+import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
+import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
+import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
-import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
 
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
@@ -54,10 +53,10 @@ export async function describeImageWithModel(
       },
     ],
   };
-  const message = (await complete(model, context, {
+  const message = await complete(model, context, {
     apiKey,
     maxTokens: params.maxTokens ?? 512,
-  })) as AssistantMessage;
+  });
   const text = coerceImageAssistantText({
     message,
     provider: model.provider,

@@ -1,8 +1,6 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-
 import type { OpenClawConfig } from "../../config/config.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
@@ -20,13 +18,19 @@ type ThoughtSignatureSanitizeOptions = {
 
 function isBase64Signature(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed) return false;
+  if (!trimmed) {
+    return false;
+  }
   const compact = trimmed.replace(/\s+/g, "");
-  if (!/^[A-Za-z0-9+/=_-]+$/.test(compact)) return false;
+  if (!/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
+    return false;
+  }
   const isUrl = compact.includes("-") || compact.includes("_");
   try {
     const buf = Buffer.from(compact, isUrl ? "base64url" : "base64");
-    if (buf.length === 0) return false;
+    if (buf.length === 0) {
+      return false;
+    }
     const encoded = buf.toString(isUrl ? "base64url" : "base64");
     const normalize = (input: string) => input.replace(/=+$/g, "");
     return normalize(encoded) === normalize(compact);
@@ -45,7 +49,9 @@ export function stripThoughtSignatures<T>(
   content: T,
   options?: ThoughtSignatureSanitizeOptions,
 ): T {
-  if (!Array.isArray(content)) return content;
+  if (!Array.isArray(content)) {
+    return content;
+  }
   const allowBase64Only = options?.allowBase64Only ?? false;
   const includeCamelCase = options?.includeCamelCase ?? false;
   const shouldStripSignature = (value: unknown): boolean => {
@@ -55,7 +61,9 @@ export function stripThoughtSignatures<T>(
     return typeof value !== "string" || !isBase64Signature(value);
   };
   return content.map((block) => {
-    if (!block || typeof block !== "object") return block;
+    if (!block || typeof block !== "object") {
+      return block;
+    }
     const rec = block as ContentBlockWithSignature;
     const stripSnake = shouldStripSignature(rec.thought_signature);
     const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
@@ -63,8 +71,12 @@ export function stripThoughtSignatures<T>(
       return block;
     }
     const next = { ...rec };
-    if (stripSnake) delete next.thought_signature;
-    if (stripCamel) delete next.thoughtSignature;
+    if (stripSnake) {
+      delete next.thought_signature;
+    }
+    if (stripCamel) {
+      delete next.thoughtSignature;
+    }
     return next;
   }) as T;
 }
@@ -162,7 +174,9 @@ export function buildBootstrapContextFiles(
       continue;
     }
     const trimmed = trimBootstrapContent(file.content ?? "", file.name, maxChars);
-    if (!trimmed.content) continue;
+    if (!trimmed.content) {
+      continue;
+    }
     if (trimmed.truncated) {
       opts?.warn?.(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
@@ -188,7 +202,9 @@ export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessa
   ) {
     return messages;
   }
-  if (role !== "assistant") return messages;
+  if (role !== "assistant") {
+    return messages;
+  }
 
   // Cloud Code Assist rejects histories that begin with a model turn (tool call or text).
   // Prepend a tiny synthetic user turn so the rest of the transcript can be used.

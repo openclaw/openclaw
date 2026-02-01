@@ -3,7 +3,9 @@ import type { CommandArgValues } from "./commands-registry.types.js";
 export type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
 
 function normalizeArgValue(value: unknown): string | undefined {
-  if (value == null) return undefined;
+  if (value == null) {
+    return undefined;
+  }
   let text: string;
   if (typeof value === "string") {
     text = value.trim();
@@ -24,7 +26,9 @@ const formatConfigArgs: CommandArgsFormatter = (values) => {
   const action = normalizeArgValue(values.action)?.toLowerCase();
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
-  if (!action) return undefined;
+  if (!action) {
+    return undefined;
+  }
   if (action === "show" || action === "get") {
     return path ? `${action} ${path}` : action;
   }
@@ -32,8 +36,12 @@ const formatConfigArgs: CommandArgsFormatter = (values) => {
     return path ? `${action} ${path}` : action;
   }
   if (action === "set") {
-    if (!path) return action;
-    if (!value) return `${action} ${path}`;
+    if (!path) {
+      return action;
+    }
+    if (!value) {
+      return `${action} ${path}`;
+    }
     return `${action} ${path}=${value}`;
   }
   return action;
@@ -43,7 +51,9 @@ const formatDebugArgs: CommandArgsFormatter = (values) => {
   const action = normalizeArgValue(values.action)?.toLowerCase();
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
-  if (!action) return undefined;
+  if (!action) {
+    return undefined;
+  }
   if (action === "show" || action === "reset") {
     return action;
   }
@@ -51,8 +61,12 @@ const formatDebugArgs: CommandArgsFormatter = (values) => {
     return path ? `${action} ${path}` : action;
   }
   if (action === "set") {
-    if (!path) return action;
-    if (!value) return `${action} ${path}`;
+    if (!path) {
+      return action;
+    }
+    if (!value) {
+      return `${action} ${path}`;
+    }
     return `${action} ${path}=${value}`;
   }
   return action;
@@ -64,10 +78,18 @@ const formatQueueArgs: CommandArgsFormatter = (values) => {
   const cap = normalizeArgValue(values.cap);
   const drop = normalizeArgValue(values.drop);
   const parts: string[] = [];
-  if (mode) parts.push(mode);
-  if (debounce) parts.push(`debounce:${debounce}`);
-  if (cap) parts.push(`cap:${cap}`);
-  if (drop) parts.push(`drop:${drop}`);
+  if (mode) {
+    parts.push(mode);
+  }
+  if (debounce) {
+    parts.push(`debounce:${debounce}`);
+  }
+  if (cap) {
+    parts.push(`cap:${cap}`);
+  }
+  if (drop) {
+    parts.push(`drop:${drop}`);
+  }
   return parts.length > 0 ? parts.join(" ") : undefined;
 };
 

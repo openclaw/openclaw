@@ -2,7 +2,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { installProcessWarningFilter } from "./infra/warnings.js";
@@ -20,15 +19,23 @@ if (process.argv.includes("--no-color")) {
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 
 function hasExperimentalWarningSuppressed(nodeOptions: string): boolean {
-  if (!nodeOptions) return false;
+  if (!nodeOptions) {
+    return false;
+  }
   return nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) || nodeOptions.includes("--no-warnings");
 }
 
 function ensureExperimentalWarningSuppressed(): boolean {
-  if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) return false;
-  if (isTruthyEnvValue(process.env.OPENCLAW_NODE_OPTIONS_READY)) return false;
+  if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
+    return false;
+  }
+  if (isTruthyEnvValue(process.env.OPENCLAW_NODE_OPTIONS_READY)) {
+    return false;
+  }
   const nodeOptions = process.env.NODE_OPTIONS ?? "";
-  if (hasExperimentalWarningSuppressed(nodeOptions)) return false;
+  if (hasExperimentalWarningSuppressed(nodeOptions)) {
+    return false;
+  }
 
   process.env.OPENCLAW_NODE_OPTIONS_READY = "1";
   process.env.NODE_OPTIONS = `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}`.trim();
@@ -61,8 +68,12 @@ function ensureExperimentalWarningSuppressed(): boolean {
 }
 
 function normalizeWindowsArgv(argv: string[]): string[] {
-  if (process.platform !== "win32") return argv;
-  if (argv.length < 2) return argv;
+  if (process.platform !== "win32") {
+    return argv;
+  }
+  if (argv.length < 2) {
+    return argv;
+  }
   const stripControlChars = (value: string): string => {
     let out = "";
     for (let i = 0; i < value.length; i += 1) {
@@ -83,7 +94,9 @@ function normalizeWindowsArgv(argv: string[]): string[] {
   const execPathLower = execPath.toLowerCase();
   const execBase = path.basename(execPath).toLowerCase();
   const isExecPath = (value: string | undefined): boolean => {
-    if (!value) return false;
+    if (!value) {
+      return false;
+    }
     const lower = normalizeCandidate(value).toLowerCase();
     return (
       lower === execPathLower ||
@@ -102,7 +115,9 @@ function normalizeWindowsArgv(argv: string[]): string[] {
     i += 1;
   }
   const filtered = next.filter((arg, index) => index === 0 || !isExecPath(arg));
-  if (filtered.length < 3) return filtered;
+  if (filtered.length < 3) {
+    return filtered;
+  }
   const cleaned = [...filtered];
   for (let i = 2; i < cleaned.length; ) {
     const arg = cleaned[i];

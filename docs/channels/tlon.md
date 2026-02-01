@@ -2,7 +2,9 @@
 summary: "Tlon/Urbit support status, capabilities, and configuration"
 read_when:
   - Working on Tlon/Urbit channel features
+title: "Tlon"
 ---
+
 # Tlon (plugin)
 
 Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
@@ -32,11 +34,11 @@ Details: [Plugins](/plugin)
 
 ## Setup
 
-1) Install the Tlon plugin.
-2) Gather your ship URL and login code.
-3) Configure `channels.tlon`.
-4) Restart the gateway.
-5) DM the bot or mention it in a group channel.
+1. Install the Tlon plugin.
+2. Gather your ship URL and login code.
+3. Configure `channels.tlon`.
+4. Restart the gateway.
+5. DM the bot or mention it in a group channel.
 
 Minimal config (single account):
 
@@ -47,9 +49,9 @@ Minimal config (single account):
       enabled: true,
       ship: "~sampel-palnet",
       url: "https://your-ship-host",
-      code: "lidlut-tabwed-pillex-ridrup"
-    }
-  }
+      code: "lidlut-tabwed-pillex-ridrup",
+    },
+  },
 }
 ```
 
@@ -61,12 +63,9 @@ Auto-discovery is enabled by default. You can also pin channels manually:
 {
   channels: {
     tlon: {
-      groupChannels: [
-        "chat/~host-ship/general",
-        "chat/~host-ship/support"
-      ]
-    }
-  }
+      groupChannels: ["chat/~host-ship/general", "chat/~host-ship/support"],
+    },
+  },
 }
 ```
 
@@ -76,9 +75,9 @@ Disable auto-discovery:
 {
   channels: {
     tlon: {
-      autoDiscoverChannels: false
-    }
-  }
+      autoDiscoverChannels: false,
+    },
+  },
 }
 ```
 
@@ -90,9 +89,9 @@ DM allowlist (empty = allow all):
 {
   channels: {
     tlon: {
-      dmAllowlist: ["~zod", "~nec"]
-    }
-  }
+      dmAllowlist: ["~zod", "~nec"],
+    },
+  },
 }
 ```
 
@@ -107,15 +106,15 @@ Group authorization (restricted by default):
         channelRules: {
           "chat/~host-ship/general": {
             mode: "restricted",
-            allowedShips: ["~zod", "~nec"]
+            allowedShips: ["~zod", "~nec"],
           },
           "chat/~host-ship/announcements": {
-            mode: "open"
-          }
-        }
-      }
-    }
-  }
+            mode: "open",
+          },
+        },
+      },
+    },
+  },
 }
 ```
 

@@ -2,7 +2,9 @@
 summary: "Agent runtime (embedded pi-mono), workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
+title: "Agent Runtime"
 ---
+
 # Agent Runtime 🤖
 
 OpenClaw runs a single embedded agent runtime derived from **pi-mono**.
@@ -22,6 +24,7 @@ per-session workspaces under `agents.defaults.sandbox.workspaceRoot` (see
 ## Bootstrap files (injected)
 
 Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
+
 - `AGENTS.md` — operating instructions + “memory”
 - `SOUL.md` — persona, boundaries, tone
 - `TOOLS.md` — user-maintained tool notes (e.g. `imsg`, `sag`, conventions)
@@ -48,11 +51,12 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 Core tools (read/exec/edit/write and related system tools) are always available,
 subject to tool policy. `apply_patch` is optional and gated by
 `tools.exec.applyPatch`. `TOOLS.md` does **not** control which tools exist; it’s
-guidance for how *you* want them used.
+guidance for how _you_ want them used.
 
 ## Skills
 
 OpenClaw loads skills from three locations (workspace wins on name conflict):
+
 - Bundled (shipped with the install)
 - Managed/local: `~/.openclaw/skills`
 - Workspace: `<workspace>/skills`
@@ -69,6 +73,7 @@ OpenClaw reuses pieces of the pi-mono codebase (models/tools), but **session man
 ## Sessions
 
 Session transcripts are stored as JSONL at:
+
 - `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
 The session ID is stable and chosen by OpenClaw.
@@ -109,9 +114,10 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 ## Configuration (minimal)
 
 At minimum, set:
+
 - `agents.defaults.workspace`
 - `channels.whatsapp.allowFrom` (strongly recommended)
 
 ---
 
-*Next: [Group Chats](/concepts/group-messages)* 🦞
+_Next: [Group Chats](/concepts/group-messages)_ 🦞

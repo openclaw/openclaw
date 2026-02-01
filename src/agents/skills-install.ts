@@ -1,9 +1,8 @@
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -40,19 +39,25 @@ function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
 
 function summarizeInstallOutput(text: string): string | undefined {
   const raw = text.trim();
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const lines = raw
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length === 0) return undefined;
+  if (lines.length === 0) {
+    return undefined;
+  }
 
   const preferred =
     lines.find((line) => /^error\b/i.test(line)) ??
     lines.find((line) => /\b(err!|error:|failed)\b/i.test(line)) ??
     lines.at(-1);
 
-  if (!preferred) return undefined;
+  if (!preferred) {
+    return undefined;
+  }
   const normalized = preferred.replace(/\s+/g, " ").trim();
   const maxLen = 200;
   return normalized.length > maxLen ? `${normalized.slice(0, maxLen - 1)}…` : normalized;
@@ -65,7 +70,9 @@ function formatInstallFailureMessage(result: {
 }): string {
   const code = typeof result.code === "number" ? `exit ${result.code}` : "unknown exit";
   const summary = summarizeInstallOutput(result.stderr) ?? summarizeInstallOutput(result.stdout);
-  if (!summary) return `Install failed (${code})`;
+  if (!summary) {
+    return `Install failed (${code})`;
+  }
   return `Install failed (${code}): ${summary}`;
 }
 
@@ -76,7 +83,9 @@ function resolveInstallId(spec: SkillInstallSpec, index: number): string {
 function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec | undefined {
   const specs = entry.metadata?.install ?? [];
   for (const [index, spec] of specs.entries()) {
-    if (resolveInstallId(spec, index) === installId) return spec;
+    if (resolveInstallId(spec, index) === installId) {
+      return spec;
+    }
   }
   return undefined;
 }
@@ -103,21 +112,29 @@ function buildInstallCommand(
 } {
   switch (spec.kind) {
     case "brew": {
-      if (!spec.formula) return { argv: null, error: "missing brew formula" };
+      if (!spec.formula) {
+        return { argv: null, error: "missing brew formula" };
+      }
       return { argv: ["brew", "install", spec.formula] };
     }
     case "node": {
-      if (!spec.package) return { argv: null, error: "missing node package" };
+      if (!spec.package) {
+        return { argv: null, error: "missing node package" };
+      }
       return {
         argv: buildNodeInstallCommand(spec.package, prefs),
       };
     }
     case "go": {
-      if (!spec.module) return { argv: null, error: "missing go module" };
+      if (!spec.module) {
+        return { argv: null, error: "missing go module" };
+      }
       return { argv: ["go", "install", spec.module] };
     }
     case "uv": {
-      if (!spec.package) return { argv: null, error: "missing uv package" };
+      if (!spec.package) {
+        return { argv: null, error: "missing uv package" };
+      }
       return { argv: ["uv", "tool", "install", spec.package] };
     }
     case "download": {
@@ -129,18 +146,28 @@ function buildInstallCommand(
 }
 
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
-  if (spec.targetDir?.trim()) return resolveUserPath(spec.targetDir);
+  if (spec.targetDir?.trim()) {
+    return resolveUserPath(spec.targetDir);
+  }
   const key = resolveSkillKey(entry.skill, entry);
   return path.join(CONFIG_DIR, "tools", key);
 }
 
 function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
   const explicit = spec.archive?.trim().toLowerCase();
-  if (explicit) return explicit;
+  if (explicit) {
+    return explicit;
+  }
   const lower = filename.toLowerCase();
-  if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) return "tar.gz";
-  if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2")) return "tar.bz2";
-  if (lower.endsWith(".zip")) return "zip";
+  if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
+    return "tar.gz";
+  }
+  if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2")) {
+    return "tar.bz2";
+  }
+  if (lower.endsWith(".zip")) {
+    return "zip";
+  }
   return undefined;
 }
 
@@ -220,7 +247,9 @@ async function installDownloadSpec(params: {
   } catch {
     filename = path.basename(url);
   }
-  if (!filename) filename = "download";
+  if (!filename) {
+    filename = "download";
+  }
 
   const targetDir = resolveDownloadTargetDir(entry, spec);
   await ensureDir(targetDir);
@@ -278,22 +307,30 @@ async function installDownloadSpec(params: {
 
 async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
   const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
-  if (!exe) return undefined;
+  if (!exe) {
+    return undefined;
+  }
 
   const prefixResult = await runCommandWithTimeout([exe, "--prefix"], {
     timeoutMs: Math.min(timeoutMs, 30_000),
   });
   if (prefixResult.code === 0) {
     const prefix = prefixResult.stdout.trim();
-    if (prefix) return path.join(prefix, "bin");
+    if (prefix) {
+      return path.join(prefix, "bin");
+    }
   }
 
   const envPrefix = process.env.HOMEBREW_PREFIX?.trim();
-  if (envPrefix) return path.join(envPrefix, "bin");
+  if (envPrefix) {
+    return path.join(envPrefix, "bin");
+  }
 
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
     try {
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     } catch {
       // ignore
     }
@@ -418,7 +455,9 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   let env: NodeJS.ProcessEnv | undefined;
   if (spec.kind === "go" && brewExe) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
-    if (brewBin) env = { GOBIN: brewBin };
+    if (brewBin) {
+      env = { GOBIN: brewBin };
+    }
   }
 
   const result = await (async () => {

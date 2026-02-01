@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   allocateCdpPort,
   allocateColor,
@@ -183,18 +182,18 @@ describe("color allocation", () => {
 
   it("allocates next unused color from palette", () => {
     // biome-ignore lint/style/noNonNullAssertion: Test file with known array
-    const usedColors = new Set([PROFILE_COLORS[0]!.toUpperCase()]);
+    const usedColors = new Set([PROFILE_COLORS[0].toUpperCase()]);
     expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[1]);
   });
 
   it("skips multiple used colors", () => {
     const usedColors = new Set([
       // biome-ignore lint/style/noNonNullAssertion: Test file with known array
-      PROFILE_COLORS[0]!.toUpperCase(),
+      PROFILE_COLORS[0].toUpperCase(),
       // biome-ignore lint/style/noNonNullAssertion: Test file with known array
-      PROFILE_COLORS[1]!.toUpperCase(),
+      PROFILE_COLORS[1].toUpperCase(),
       // biome-ignore lint/style/noNonNullAssertion: Test file with known array
-      PROFILE_COLORS[2]!.toUpperCase(),
+      PROFILE_COLORS[2].toUpperCase(),
     ]);
     expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[3]);
   });

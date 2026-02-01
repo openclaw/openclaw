@@ -3,7 +3,9 @@ summary: "Windows (WSL2) support + companion app status"
 read_when:
   - Installing OpenClaw on Windows
   - Looking for Windows companion app status
+title: "Windows (WSL2)"
 ---
+
 # Windows (WSL2)
 
 OpenClaw on Windows is recommended **via WSL2** (Ubuntu recommended). The
@@ -14,11 +16,13 @@ Windows installs are untested and more problematic.
 Native Windows companion apps are planned.
 
 ## Install (WSL2)
+
 - [Getting Started](/start/getting-started) (use inside WSL)
 - [Install & updates](/install/updating)
 - Official WSL2 guide (Microsoft): https://learn.microsoft.com/windows/wsl/install
 
 ## Gateway
+
 - [Gateway runbook](/gateway)
 - [Configuration](/gateway/configuration)
 
@@ -87,6 +91,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 ```
 
 Notes:
+
 - SSH from another machine targets the **Windows host IP** (example: `ssh user@windows-host -p 2222`).
 - Remote nodes must point at a **reachable** Gateway URL (not `127.0.0.1`); use
   `openclaw status --all` to confirm.

@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw models` (status/list/set/scan, aliases, fa
 read_when:
   - You want to change default models or view provider auth status
   - You want to scan available models/providers and debug auth profiles
+title: "models"
 ---
 
 # `openclaw models`
@@ -10,6 +11,7 @@ read_when:
 Model discovery, scanning, and configuration (default model, fallbacks, auth profiles).
 
 Related:
+
 - Providers + models: [Models](/providers/models)
 - Provider auth setup: [Getting started](/start/getting-started)
 
@@ -32,12 +34,15 @@ the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise th
 configured default agent.
 
 Notes:
+
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 ### `models status`
+
 Options:
+
 - `--json`
 - `--plain`
 - `--check` (exit 1=expired/missing, 2=expiring)
@@ -64,9 +69,11 @@ openclaw models auth login --provider <id>
 openclaw models auth setup-token
 openclaw models auth paste-token
 ```
+
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
 
 Notes:
+
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.

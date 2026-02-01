@@ -1,17 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import { STATE_DIR } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { logVerbose } from "../globals.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { STATE_DIR } from "../config/paths.js";
+import { logVerbose } from "../globals.js";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { resolveAutoImageModel } from "../media-understanding/runner.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
@@ -108,7 +108,7 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
   }
 
   return results
-    .sort((a, b) => b.score - a.score)
+    .toSorted((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((r) => r.sticker);
 }
@@ -130,7 +130,7 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
   if (stickers.length === 0) {
     return { count: 0 };
   }
-  const sorted = [...stickers].sort(
+  const sorted = [...stickers].toSorted(
     (a, b) => new Date(a.cachedAt).getTime() - new Date(b.cachedAt).getTime(),
   );
   return {
@@ -187,7 +187,9 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
       (entry) =>
         entry.provider.toLowerCase() === provider.toLowerCase() && modelSupportsVision(entry),
     );
-    if (entries.length === 0) return undefined;
+    if (entries.length === 0) {
+      return undefined;
+    }
     const defaultId =
       provider === "openai"
         ? "gpt-5-mini"
@@ -211,7 +213,9 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
 
   if (!resolved) {
     for (const provider of VISION_PROVIDERS) {
-      if (!(await hasProviderKey(provider))) continue;
+      if (!(await hasProviderKey(provider))) {
+        continue;
+      }
       const entry = selectCatalogModel(provider);
       if (entry) {
         resolved = { provider, model: entry.id };

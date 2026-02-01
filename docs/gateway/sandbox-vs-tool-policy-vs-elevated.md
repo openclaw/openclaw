@@ -15,7 +15,7 @@ OpenClaw has three related (but different) controls:
 
 ## Quick debug
 
-Use the inspector to see what OpenClaw is *actually* doing:
+Use the inspector to see what OpenClaw is _actually_ doing:
 
 ```bash
 openclaw sandbox explain
@@ -25,6 +25,7 @@ openclaw sandbox explain --json
 ```
 
 It prints:
+
 - effective sandbox mode/scope/workspace access
 - whether the session is currently sandboxed (main vs non-main)
 - effective sandbox tool allow/deny (and whether it came from agent/global/default)
@@ -33,6 +34,7 @@ It prints:
 ## Sandbox: where tools run
 
 Sandboxing is controlled by `agents.defaults.sandbox.mode`:
+
 - `"off"`: everything runs on the host.
 - `"non-main"`: only non-main sessions are sandboxed (common “surprise” for groups/channels).
 - `"all"`: everything is sandboxed.
@@ -41,7 +43,7 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 
 ### Bind mounts (security quick check)
 
-- `docker.binds` *pierces* the sandbox filesystem: whatever you mount is visible inside the container with the mode you set (`:ro` or `:rw`).
+- `docker.binds` _pierces_ the sandbox filesystem: whatever you mount is visible inside the container with the mode you set (`:ro` or `:rw`).
 - Default is read-write if you omit the mode; prefer `:ro` for source/secrets.
 - `scope: "shared"` ignores per-agent binds (only global binds apply).
 - Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
@@ -50,6 +52,7 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:
+
 - **Tool profile**: `tools.profile` and `agents.list[].tools.profile` (base allowlist)
 - **Provider tool profile**: `tools.byProvider[provider].profile` and `agents.list[].tools.byProvider[provider].profile`
 - **Global/per-agent tool policy**: `tools.allow`/`tools.deny` and `agents.list[].tools.allow`/`agents.list[].tools.deny`
@@ -57,11 +60,12 @@ Two layers matter:
 - **Sandbox tool policy** (only applies when sandboxed): `tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` and `agents.list[].tools.sandbox.tools.*`
 
 Rules of thumb:
+
 - `deny` always wins.
 - If `allow` is non-empty, everything else is treated as blocked.
 - Tool policy is the hard stop: `/exec` cannot override a denied `exec` tool.
 - `/exec` only changes session defaults for authorized senders; it does not grant tool access.
-Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.2`).
+  Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.2`).
 
 ### Tool groups (shorthands)
 
@@ -72,14 +76,15 @@ Tool policies (global, agent, sandbox) support `group:*` entries that expand to 
   tools: {
     sandbox: {
       tools: {
-        allow: ["group:runtime", "group:fs", "group:sessions", "group:memory"]
-      }
-    }
-  }
+        allow: ["group:runtime", "group:fs", "group:sessions", "group:memory"],
+      },
+    },
+  },
 }
 ```
 
 Available groups:
+
 - `group:runtime`: `exec`, `bash`, `process`
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
@@ -93,6 +98,7 @@ Available groups:
 ## Elevated: exec-only “run on host”
 
 Elevated does **not** grant extra tools; it only affects `exec`.
+
 - If you’re sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs on the host (approvals may still apply).
 - Use `/elevated full` to skip exec approvals for the session.
 - If you’re already running direct, elevated is effectively a no-op (still gated).
@@ -100,6 +106,7 @@ Elevated does **not** grant extra tools; it only affects `exec`.
 - `/exec` is separate from elevated. It only adjusts per-session exec defaults for authorized senders.
 
 Gates:
+
 - Enablement: `tools.elevated.enabled` (and optionally `agents.list[].tools.elevated.enabled`)
 - Sender allowlists: `tools.elevated.allowFrom.<provider>` (and optionally `agents.list[].tools.elevated.allowFrom.<provider>`)
 
@@ -110,6 +117,7 @@ See [Elevated Mode](/tools/elevated).
 ### “Tool X blocked by sandbox tool policy”
 
 Fix-it keys (pick one):
+
 - Disable sandbox: `agents.defaults.sandbox.mode=off` (or per-agent `agents.list[].sandbox.mode=off`)
 - Allow the tool inside sandbox:
   - remove it from `tools.sandbox.tools.deny` (or per-agent `agents.list[].tools.sandbox.tools.deny`)
@@ -117,4 +125,4 @@ Fix-it keys (pick one):
 
 ### “I thought this was main, why is it sandboxed?”
 
-In `"non-main"` mode, group/channel keys are *not* main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.
+In `"non-main"` mode, group/channel keys are _not_ main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.

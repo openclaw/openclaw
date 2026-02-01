@@ -1,5 +1,4 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-
 import { formatChangesDate } from "./utils.js";
 
 export async function fetchGroupChanges(
@@ -17,7 +16,9 @@ export async function fetchGroupChanges(
     }
     return null;
   } catch (error: any) {
-    runtime.log?.(`[tlon] Failed to fetch changes (falling back to full init): ${error?.message ?? String(error)}`);
+    runtime.log?.(
+      `[tlon] Failed to fetch changes (falling back to full init): ${error?.message ?? String(error)}`,
+    );
     return null;
   }
 }
@@ -64,8 +65,10 @@ export async function fetchAllChannels(
     return channels;
   } catch (error: any) {
     runtime.log?.(`[tlon] Auto-discovery failed: ${error?.message ?? String(error)}`);
-    runtime.log?.("[tlon] To monitor group channels, add them to config: channels.tlon.groupChannels");
-    runtime.log?.("[tlon] Example: [\"chat/~host-ship/channel-name\"]");
+    runtime.log?.(
+      "[tlon] To monitor group channels, add them to config: channels.tlon.groupChannels",
+    );
+    runtime.log?.('[tlon] Example: ["chat/~host-ship/channel-name"]');
     return [];
   }
 }

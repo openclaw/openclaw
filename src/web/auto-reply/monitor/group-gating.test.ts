@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { applyGroupGating } from "./group-gating.js";
 
 const baseConfig = {

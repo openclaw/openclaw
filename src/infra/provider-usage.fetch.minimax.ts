@@ -1,6 +1,6 @@
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -155,10 +155,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
     if (typeof value === "string") {
       const parsed = Number.parseFloat(value);
-      if (Number.isFinite(parsed)) return parsed;
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
     }
   }
   return undefined;
@@ -167,19 +171,25 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
 function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
   }
   return undefined;
 }
 
 function parseEpoch(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
-    if (value < 1e12) return Math.floor(value * 1000);
+    if (value < 1e12) {
+      return Math.floor(value * 1000);
+    }
     return Math.floor(value);
   }
   if (typeof value === "string" && value.trim()) {
     const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
   return undefined;
 }
@@ -190,11 +200,21 @@ function hasAny(record: Record<string, unknown>, keys: readonly string[]): boole
 
 function scoreUsageRecord(record: Record<string, unknown>): number {
   let score = 0;
-  if (hasAny(record, PERCENT_KEYS)) score += 4;
-  if (hasAny(record, TOTAL_KEYS)) score += 3;
-  if (hasAny(record, USED_KEYS) || hasAny(record, REMAINING_KEYS)) score += 2;
-  if (hasAny(record, RESET_KEYS)) score += 1;
-  if (hasAny(record, PLAN_KEYS)) score += 1;
+  if (hasAny(record, PERCENT_KEYS)) {
+    score += 4;
+  }
+  if (hasAny(record, TOTAL_KEYS)) {
+    score += 3;
+  }
+  if (hasAny(record, USED_KEYS) || hasAny(record, REMAINING_KEYS)) {
+    score += 2;
+  }
+  if (hasAny(record, RESET_KEYS)) {
+    score += 1;
+  }
+  if (hasAny(record, PLAN_KEYS)) {
+    score += 1;
+  }
   return score;
 }
 
@@ -208,15 +228,21 @@ function collectUsageCandidates(root: Record<string, unknown>): Record<string, u
 
   while (queue.length && scanned < MAX_SCAN_NODES) {
     const next = queue.shift();
-    if (!next) break;
+    if (!next) {
+      break;
+    }
     scanned += 1;
     const { value, depth } = next;
 
     if (isRecord(value)) {
-      if (seen.has(value)) continue;
+      if (seen.has(value)) {
+        continue;
+      }
       seen.add(value);
       const score = scoreUsageRecord(value);
-      if (score > 0) candidates.push({ record: value, score, depth });
+      if (score > 0) {
+        candidates.push({ record: value, score, depth });
+      }
       if (depth < MAX_SCAN_DEPTH) {
         for (const nested of Object.values(value)) {
           if (isRecord(nested) || Array.isArray(nested)) {
@@ -242,9 +268,13 @@ function collectUsageCandidates(root: Record<string, unknown>): Record<string, u
 
 function deriveWindowLabel(payload: Record<string, unknown>): string {
   const hours = pickNumber(payload, WINDOW_HOUR_KEYS);
-  if (hours && Number.isFinite(hours)) return `${hours}h`;
+  if (hours && Number.isFinite(hours)) {
+    return `${hours}h`;
+  }
   const minutes = pickNumber(payload, WINDOW_MINUTE_KEYS);
-  if (minutes && Number.isFinite(minutes)) return `${minutes}m`;
+  if (minutes && Number.isFinite(minutes)) {
+    return `${minutes}m`;
+  }
   return "5h";
 }
 
@@ -315,7 +345,7 @@ export async function fetchMinimaxUsage(
     };
   }
 
-  const baseResp = isRecord(data.base_resp) ? (data.base_resp as MinimaxBaseResp) : undefined;
+  const baseResp = isRecord(data.base_resp) ? data.base_resp : undefined;
   if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     return {
       provider: "minimax",

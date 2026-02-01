@@ -1,8 +1,6 @@
-import { Buffer } from "node:buffer";
-
-import type WebSocket from "ws";
-
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type WebSocket from "ws";
+import { Buffer } from "node:buffer";
 
 export type ResponsePrefixContext = {
   model?: string;
@@ -34,7 +32,9 @@ export function formatInboundFromLabel(params: {
 
   const directLabel = params.directLabel.trim();
   const directId = params.directId?.trim();
-  if (!directId || directId === directLabel) return directLabel;
+  if (!directId || directId === directLabel) {
+    return directLabel;
+  }
   return `${directLabel} id:${directId}`;
 }
 
@@ -67,14 +67,18 @@ export function createDedupeCache(options: { ttlMs: number; maxSize: number }): 
     }
     while (cache.size > maxSize) {
       const oldestKey = cache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
+      if (!oldestKey) {
+        break;
+      }
       cache.delete(oldestKey);
     }
   };
 
   return {
     check: (key, now = Date.now()) => {
-      if (!key) return false;
+      if (!key) {
+        return false;
+      }
       const existing = cache.get(key);
       if (existing !== undefined && (ttlMs <= 0 || now - existing < ttlMs)) {
         touch(key, now);
@@ -91,9 +95,15 @@ export function rawDataToString(
   data: WebSocket.RawData,
   encoding: BufferEncoding = "utf8",
 ): string {
-  if (typeof data === "string") return data;
-  if (Buffer.isBuffer(data)) return data.toString(encoding);
-  if (Array.isArray(data)) return Buffer.concat(data).toString(encoding);
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString(encoding);
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString(encoding);
+  }
   if (data instanceof ArrayBuffer) {
     return Buffer.from(data).toString(encoding);
   }
@@ -102,8 +112,12 @@ export function rawDataToString(
 
 function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
-  if (!trimmed) return "main";
-  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) return trimmed;
+  if (!trimmed) {
+    return "main";
+  }
+  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) {
+    return trimmed;
+  }
   return (
     trimmed
       .toLowerCase()
@@ -118,7 +132,9 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 
 function listAgents(cfg: OpenClawConfig): AgentEntry[] {
   const list = cfg.agents?.list;
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(list)) {
+    return [];
+  }
   return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
 }
 

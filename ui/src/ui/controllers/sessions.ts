@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway";
-import { toNumber } from "../format";
 import type { SessionsListResult } from "../types";
+import { toNumber } from "../format";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -30,8 +30,7 @@ export async function loadSessions(
   try {
     const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
-    const activeMinutes =
-      overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
+    const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
     const params: Record<string, unknown> = {
       includeGlobal,

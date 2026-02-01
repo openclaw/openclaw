@@ -1,7 +1,6 @@
 import MarkdownIt from "markdown-it";
-
-import { chunkText } from "../auto-reply/chunk.js";
 import type { MarkdownTableMode } from "../config/types.base.js";
+import { chunkText } from "../auto-reply/chunk.js";
 
 type ListState = {
   type: "bullet" | "ordered";
@@ -112,10 +111,14 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
 }
 
 function getAttr(token: MarkdownToken, name: string): string | null {
-  if (token.attrGet) return token.attrGet(name);
+  if (token.attrGet) {
+    return token.attrGet(name);
+  }
   if (token.attrs) {
     for (const [key, value] of token.attrs) {
-      if (key === name) return value;
+      if (key === name) {
+        return value;
+      }
     }
   }
   return null;
@@ -187,7 +190,9 @@ function resolveRenderTarget(state: RenderState): RenderTarget {
 }
 
 function appendText(state: RenderState, value: string) {
-  if (!value) return;
+  if (!value) {
+    return;
+  }
   const target = resolveRenderTarget(state);
   target.text += value;
 }
@@ -213,15 +218,21 @@ function closeStyle(state: RenderState, style: MarkdownStyle) {
 }
 
 function appendParagraphSeparator(state: RenderState) {
-  if (state.env.listStack.length > 0) return;
-  if (state.table) return; // Don't add paragraph separators inside tables
+  if (state.env.listStack.length > 0) {
+    return;
+  }
+  if (state.table) {
+    return;
+  } // Don't add paragraph separators inside tables
   state.text += "\n\n";
 }
 
 function appendListPrefix(state: RenderState) {
   const stack = state.env.listStack;
   const top = stack[stack.length - 1];
-  if (!top) return;
+  if (!top) {
+    return;
+  }
   top.index += 1;
   const indent = "  ".repeat(Math.max(0, stack.length - 1));
   const prefix = top.type === "ordered" ? `${top.index}. ` : "• ";
@@ -229,7 +240,9 @@ function appendListPrefix(state: RenderState) {
 }
 
 function renderInlineCode(state: RenderState, content: string) {
-  if (!content) return;
+  if (!content) {
+    return;
+  }
   const target = resolveRenderTarget(state);
   const start = target.text.length;
   target.text += content;
@@ -238,7 +251,9 @@ function renderInlineCode(state: RenderState, content: string) {
 
 function renderCodeBlock(state: RenderState, content: string) {
   let code = content ?? "";
-  if (!code.endsWith("\n")) code = `${code}\n`;
+  if (!code.endsWith("\n")) {
+    code = `${code}\n`;
+  }
   const target = resolveRenderTarget(state);
   const start = target.text.length;
   target.text += code;
@@ -251,9 +266,13 @@ function renderCodeBlock(state: RenderState, content: string) {
 function handleLinkClose(state: RenderState) {
   const target = resolveRenderTarget(state);
   const link = target.linkStack.pop();
-  if (!link?.href) return;
+  if (!link?.href) {
+    return;
+  }
   const href = link.href.trim();
-  if (!href) return;
+  if (!href) {
+    return;
+  }
   const start = link.labelStart;
   const end = target.text.length;
   if (end <= start) {
@@ -286,9 +305,15 @@ function trimCell(cell: TableCell): TableCell {
   const text = cell.text;
   let start = 0;
   let end = text.length;
-  while (start < end && /\s/.test(text[start] ?? "")) start += 1;
-  while (end > start && /\s/.test(text[end - 1] ?? "")) end -= 1;
-  if (start === 0 && end === text.length) return cell;
+  while (start < end && /\s/.test(text[start] ?? "")) {
+    start += 1;
+  }
+  while (end > start && /\s/.test(text[end - 1] ?? "")) {
+    end -= 1;
+  }
+  if (start === 0 && end === text.length) {
+    return cell;
+  }
   const trimmedText = text.slice(start, end);
   const trimmedLength = trimmedText.length;
   const trimmedStyles: MarkdownStyleSpan[] = [];
@@ -311,7 +336,9 @@ function trimCell(cell: TableCell): TableCell {
 }
 
 function appendCell(state: RenderState, cell: TableCell) {
-  if (!cell.text) return;
+  if (!cell.text) {
+    return;
+  }
   const start = state.text.length;
   state.text += cell.text;
   for (const span of cell.styles) {
@@ -331,12 +358,16 @@ function appendCell(state: RenderState, cell: TableCell) {
 }
 
 function renderTableAsBullets(state: RenderState) {
-  if (!state.table) return;
+  if (!state.table) {
+    return;
+  }
   const headers = state.table.headers.map(trimCell);
   const rows = state.table.rows.map((row) => row.map(trimCell));
 
   // If no headers or rows, skip
-  if (headers.length === 0 && rows.length === 0) return;
+  if (headers.length === 0 && rows.length === 0) {
+    return;
+  }
 
   // Determine if first column should be used as row labels
   // (common pattern: first column is category/feature name)
@@ -345,7 +376,9 @@ function renderTableAsBullets(state: RenderState) {
   if (useFirstColAsLabel) {
     // Format: each row becomes a section with header as row[0], then key:value pairs
     for (const row of rows) {
-      if (row.length === 0) continue;
+      if (row.length === 0) {
+        continue;
+      }
 
       const rowLabel = row[0];
       if (rowLabel?.text) {
@@ -362,7 +395,9 @@ function renderTableAsBullets(state: RenderState) {
       for (let i = 1; i < row.length; i++) {
         const header = headers[i];
         const value = row[i];
-        if (!value?.text) continue;
+        if (!value?.text) {
+          continue;
+        }
         state.text += "• ";
         if (header?.text) {
           appendCell(state, header);
@@ -381,7 +416,9 @@ function renderTableAsBullets(state: RenderState) {
       for (let i = 0; i < row.length; i++) {
         const header = headers[i];
         const value = row[i];
-        if (!value?.text) continue;
+        if (!value?.text) {
+          continue;
+        }
         state.text += "• ";
         if (header?.text) {
           appendCell(state, header);
@@ -396,23 +433,31 @@ function renderTableAsBullets(state: RenderState) {
 }
 
 function renderTableAsCode(state: RenderState) {
-  if (!state.table) return;
+  if (!state.table) {
+    return;
+  }
   const headers = state.table.headers.map(trimCell);
   const rows = state.table.rows.map((row) => row.map(trimCell));
 
   const columnCount = Math.max(headers.length, ...rows.map((row) => row.length));
-  if (columnCount === 0) return;
+  if (columnCount === 0) {
+    return;
+  }
 
   const widths = Array.from({ length: columnCount }, () => 0);
   const updateWidths = (cells: TableCell[]) => {
     for (let i = 0; i < columnCount; i += 1) {
       const cell = cells[i];
       const width = cell?.text.length ?? 0;
-      if (widths[i] < width) widths[i] = width;
+      if (widths[i] < width) {
+        widths[i] = width;
+      }
     }
   };
   updateWidths(headers);
-  for (const row of rows) updateWidths(row);
+  for (const row of rows) {
+    updateWidths(row);
+  }
 
   const codeStart = state.text.length;
 
@@ -421,9 +466,13 @@ function renderTableAsCode(state: RenderState) {
     for (let i = 0; i < columnCount; i += 1) {
       state.text += " ";
       const cell = cells[i];
-      if (cell) appendCell(state, cell);
+      if (cell) {
+        appendCell(state, cell);
+      }
       const pad = widths[i] - (cell?.text.length ?? 0);
-      if (pad > 0) state.text += " ".repeat(pad);
+      if (pad > 0) {
+        state.text += " ".repeat(pad);
+      }
       state.text += " |";
     }
     state.text += "\n";
@@ -457,7 +506,9 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
   for (const token of tokens) {
     switch (token.type) {
       case "inline":
-        if (token.children) renderTokens(token.children, state);
+        if (token.children) {
+          renderTokens(token.children, state);
+        }
         break;
       case "text":
         appendText(state, token.content ?? "");
@@ -484,10 +535,14 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         renderInlineCode(state, token.content ?? "");
         break;
       case "spoiler_open":
-        if (state.enableSpoilers) openStyle(state, "spoiler");
+        if (state.enableSpoilers) {
+          openStyle(state, "spoiler");
+        }
         break;
       case "spoiler_close":
-        if (state.enableSpoilers) closeStyle(state, "spoiler");
+        if (state.enableSpoilers) {
+          closeStyle(state, "spoiler");
+        }
         break;
       case "link_open": {
         const href = getAttr(token, "href") ?? "";
@@ -509,14 +564,20 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendParagraphSeparator(state);
         break;
       case "heading_open":
-        if (state.headingStyle === "bold") openStyle(state, "bold");
+        if (state.headingStyle === "bold") {
+          openStyle(state, "bold");
+        }
         break;
       case "heading_close":
-        if (state.headingStyle === "bold") closeStyle(state, "bold");
+        if (state.headingStyle === "bold") {
+          closeStyle(state, "bold");
+        }
         appendParagraphSeparator(state);
         break;
       case "blockquote_open":
-        if (state.blockquotePrefix) state.text += state.blockquotePrefix;
+        if (state.blockquotePrefix) {
+          state.text += state.blockquotePrefix;
+        }
         break;
       case "blockquote_close":
         state.text += "\n";
@@ -613,7 +674,9 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         state.text += "\n";
         break;
       default:
-        if (token.children) renderTokens(token.children, state);
+        if (token.children) {
+          renderTokens(token.children, state);
+        }
         break;
     }
   }
@@ -639,7 +702,9 @@ function clampStyleSpans(spans: MarkdownStyleSpan[], maxLength: number): Markdow
   for (const span of spans) {
     const start = Math.max(0, Math.min(span.start, maxLength));
     const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) clamped.push({ start, end, style: span.style });
+    if (end > start) {
+      clamped.push({ start, end, style: span.style });
+    }
   }
   return clamped;
 }
@@ -649,15 +714,21 @@ function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownL
   for (const span of spans) {
     const start = Math.max(0, Math.min(span.start, maxLength));
     const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) clamped.push({ start, end, href: span.href });
+    if (end > start) {
+      clamped.push({ start, end, href: span.href });
+    }
   }
   return clamped;
 }
 
 function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const sorted = [...spans].sort((a, b) => {
-    if (a.start !== b.start) return a.start - b.start;
-    if (a.end !== b.end) return a.end - b.end;
+  const sorted = [...spans].toSorted((a, b) => {
+    if (a.start !== b.start) {
+      return a.start - b.start;
+    }
+    if (a.end !== b.end) {
+      return a.end - b.end;
+    }
     return a.style.localeCompare(b.style);
   });
 
@@ -678,7 +749,9 @@ function sliceStyleSpans(
   start: number,
   end: number,
 ): MarkdownStyleSpan[] {
-  if (spans.length === 0) return [];
+  if (spans.length === 0) {
+    return [];
+  }
   const sliced: MarkdownStyleSpan[] = [];
   for (const span of spans) {
     const sliceStart = Math.max(span.start, start);
@@ -695,7 +768,9 @@ function sliceStyleSpans(
 }
 
 function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): MarkdownLinkSpan[] {
-  if (spans.length === 0) return [];
+  if (spans.length === 0) {
+    return [];
+  }
   const sliced: MarkdownLinkSpan[] = [];
   for (const span of spans) {
     const sliceStart = Math.max(span.start, start);
@@ -750,8 +825,12 @@ export function markdownToIRWithMeta(
   const trimmedLength = trimmedText.length;
   let codeBlockEnd = 0;
   for (const span of state.styles) {
-    if (span.style !== "code_block") continue;
-    if (span.end > codeBlockEnd) codeBlockEnd = span.end;
+    if (span.style !== "code_block") {
+      continue;
+    }
+    if (span.end > codeBlockEnd) {
+      codeBlockEnd = span.end;
+    }
   }
   const finalLength = Math.max(trimmedLength, codeBlockEnd);
   const finalText =
@@ -768,15 +847,21 @@ export function markdownToIRWithMeta(
 }
 
 export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
-  if (!ir.text) return [];
-  if (limit <= 0 || ir.text.length <= limit) return [ir];
+  if (!ir.text) {
+    return [];
+  }
+  if (limit <= 0 || ir.text.length <= limit) {
+    return [ir];
+  }
 
   const chunks = chunkText(ir.text, limit);
   const results: MarkdownIR[] = [];
   let cursor = 0;
 
   chunks.forEach((chunk, index) => {
-    if (!chunk) return;
+    if (!chunk) {
+      return;
+    }
     if (index > 0) {
       while (cursor < ir.text.length && /\s/.test(ir.text[cursor] ?? "")) {
         cursor += 1;
