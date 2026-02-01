@@ -4,6 +4,7 @@ import type { ReplyToMode } from "../../config/config.js";
 import type { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
+import type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
 
 export type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
@@ -32,6 +33,7 @@ export type DiscordMessagePreflightContext = {
   client: Client;
   message: DiscordMessageEvent["message"];
   author: User;
+  sender: DiscordSenderIdentity;
 
   channelInfo: DiscordChannelInfo | null;
   channelName?: string;

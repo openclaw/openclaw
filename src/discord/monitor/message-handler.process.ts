@@ -57,6 +57,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ackReactionScope,
     message,
     author,
+    sender,
     data,
     client,
     channelInfo,
@@ -125,12 +126,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         channelName: channelName ?? message.channelId,
         channelId: message.channelId,
       });
-  const senderTag = formatDiscordUserTag(author);
-  const senderDisplay = data.member?.nickname ?? author.globalName ?? author.username;
-  const senderLabel =
-    senderDisplay && senderTag && senderDisplay !== senderTag
-      ? `${senderDisplay} (${senderTag})`
-      : (senderDisplay ?? senderTag ?? author.id);
+  const senderLabel = sender.label;
   const isForumParent =
     threadParentType === ChannelType.GuildForum || threadParentType === ChannelType.GuildMedia;
   const forumParentSlug =

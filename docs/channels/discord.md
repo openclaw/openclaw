@@ -340,6 +340,7 @@ ack reaction after the bot replies.
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20; falls back to `messages.groupChat.historyLimit`; `0` disables).
 - `dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `dms["<user_id>"].historyLimit`.
 - `retry`: retry policy for outbound Discord API calls (attempts, minDelayMs, maxDelayMs, jitter).
+- `pluralkit`: resolve PluralKit proxied messages so system members appear as distinct senders.
 - `actions`: per-action tool gates; omit to allow all (set `false` to disable).
   - `reactions` (covers react + read reactions)
   - `stickers`, `emojiUploads`, `stickerUploads`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
@@ -354,6 +355,34 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+
+### PluralKit (PK) support
+
+Enable PK lookups so proxied messages resolve to the underlying system + member.
+When enabled, OpenClaw uses the member identity for allowlists and labels the
+sender as `Member (PK:System)` to avoid accidental Discord pings.
+
+```json5
+{
+  channels: {
+    discord: {
+      pluralkit: {
+        enabled: true,
+        token: "pk_live_..." // optional; required for private systems
+      }
+    }
+  }
+}
+```
+
+Allowlist notes (PK-enabled):
+
+- Use `pk:<memberId>` in `dm.allowFrom`, `guilds.<id>.users`, or per-channel `users`.
+- Member display names are also matched by name/slug.
+- Lookups use the **original** Discord message ID (the pre-proxy message), so
+  the PK API only resolves it within its 30-minute window.
+- If PK lookups fail (e.g., private system without a token), proxied messages
+  are treated as bot messages and are dropped unless `channels.discord.allowBots=true`.
 
 ### Tool action defaults
 
