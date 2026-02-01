@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
 - Onboarding: friendlier Windows onboarding message. (#6242) Thanks @shanselman.
 - TUI: prevent crash when searching with digits in the model selector.
+- Agents: wire before_tool_call plugin hook into tool execution. (#6570) Thanks @ryancnelson.
 - Browser: secure Chrome extension relay CDP sessions.
 - Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
