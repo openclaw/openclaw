@@ -6,6 +6,7 @@ import { makeMissingToolResult } from "./session-transcript-repair.js";
 type ToolCall = { id: string; name?: string };
 
 function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
+  if (msg.stopReason === "aborted") return [];
   const content = msg.content;
   if (!Array.isArray(content)) {
     return [];
