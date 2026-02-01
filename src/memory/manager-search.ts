@@ -32,19 +32,28 @@ export async function searchVector(params: {
     return [];
   }
   if (await params.ensureVectorReady(params.queryVec.length)) {
+    const query = vectorToBlob(params.queryVec);
     const rows = params.db
       .prepare(
-        `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
+        `WITH knn AS (\n` +
+          `  SELECT id\n` +
+          `    FROM ${params.vectorTable}\n` +
+          `   WHERE embedding MATCH ? AND k = ?\n` +
+          `)\n` +
+          `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
           `       c.source,\n` +
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
-          `  FROM ${params.vectorTable} v\n` +
-          `  JOIN chunks c ON c.id = v.id\n` +
+          `  FROM knn\n` +
+          `  JOIN chunks c ON c.id = knn.id\n` +
+          `  JOIN ${params.vectorTable} v ON v.id = knn.id\n` +
           ` WHERE c.model = ?${params.sourceFilterVec.sql}\n` +
           ` ORDER BY dist ASC\n` +
           ` LIMIT ?`,
       )
       .all(
-        vectorToBlob(params.queryVec),
+        query,
+        params.limit,
+        query,
         params.providerModel,
         ...params.sourceFilterVec.params,
         params.limit,
