@@ -85,6 +85,7 @@ export async function executeJob(
     err?: string,
     summary?: string,
     outputText?: string,
+    executionLog?: string,
   ) => {
     const endedAt = state.deps.nowMs();
     job.state.runningAtMs = undefined;
@@ -114,6 +115,8 @@ export async function executeJob(
       status,
       error: err,
       summary,
+      outputText,
+      executionLog,
       runAtMs: startedAt,
       durationMs: job.state.lastDurationMs,
       nextRunAtMs: job.state.nextRunAtMs,
@@ -134,7 +137,7 @@ export async function executeJob(
         // Prefer full agent output if available; fall back to summary.
         const maxCharsRaw = job.isolation?.postToMainMaxChars;
         const maxChars = Number.isFinite(maxCharsRaw) ? Math.max(0, maxCharsRaw as number) : 8000;
-        const fullText = (outputText ?? "").trim();
+        const fullText = (outputText ?? executionLog ?? "").trim();
         if (fullText) {
           body = fullText.length > maxChars ? `${fullText.slice(0, maxChars)}…` : fullText;
         }
@@ -213,13 +216,18 @@ export async function executeJob(
       job,
       message: job.payload.message,
     });
-    if (res.status === "ok") {
-      await finish("ok", undefined, res.summary, res.outputText);
-    } else if (res.status === "skipped") {
-      await finish("skipped", undefined, res.summary, res.outputText);
-    } else {
-      await finish("error", res.error ?? "cron job failed", res.summary, res.outputText);
-    }
+    if (res.status === "ok")
+      await finish("ok", undefined, res.summary, res.outputText, res.executionLog);
+    else if (res.status === "skipped")
+      await finish("skipped", undefined, res.summary, res.outputText, res.executionLog);
+    else
+      await finish(
+        "error",
+        res.error ?? "cron job failed",
+        res.summary,
+        res.outputText,
+        res.executionLog,
+      );
   } catch (err) {
     await finish("error", String(err));
   } finally {

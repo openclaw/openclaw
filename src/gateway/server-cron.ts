@@ -90,6 +90,8 @@ export function buildGatewayCronService(params: {
           status: evt.status,
           error: evt.error,
           summary: evt.summary,
+          outputText: evt.outputText,
+          executionLog: evt.executionLog,
           runAtMs: evt.runAtMs,
           durationMs: evt.durationMs,
           nextRunAtMs: evt.nextRunAtMs,

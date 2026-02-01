@@ -194,6 +194,51 @@ export function resolveConfiguredModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
+/**
+ * Resolves the optional "code" model ref (agents.defaults.model.codePrimary).
+ * When set, the agent can switch to this model when code intent is detected.
+ * Returns null if codePrimary is not configured.
+ */
+export function resolveCodePrimaryModelRef(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+  defaultModel: string;
+}): ModelRef | null {
+  const raw = params.cfg.agents?.defaults?.model as
+    | { primary?: string; codePrimary?: string }
+    | string
+    | undefined;
+  const codePrimary =
+    typeof raw === "object" && raw != null && typeof raw.codePrimary === "string"
+      ? raw.codePrimary.trim()
+      : "";
+  if (!codePrimary) {
+    return null;
+  }
+
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  if (!codePrimary.includes("/")) {
+    const aliasKey = normalizeAliasKey(codePrimary);
+    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return aliasMatch.ref;
+    }
+    return {
+      provider: params.defaultProvider,
+      model: normalizeProviderModelId(params.defaultProvider, codePrimary),
+    };
+  }
+  const resolved = resolveModelRefFromString({
+    raw: codePrimary,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  return resolved ? resolved.ref : null;
+}
+
 export function resolveDefaultModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId?: string;

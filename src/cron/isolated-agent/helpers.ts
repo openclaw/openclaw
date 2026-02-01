@@ -39,6 +39,22 @@ export function pickLastNonEmptyTextFromPayloads(payloads: Array<{ text?: string
   return undefined;
 }
 
+/** Build execution log from all payload texts (tool outputs, thinking, answer). */
+export function buildExecutionLogFromPayloads(
+  payloads: Array<{ text?: string | undefined }>,
+  maxChars = 8000,
+): string | undefined {
+  const parts: string[] = [];
+  for (const p of payloads) {
+    const clean = (p.text ?? "").trim();
+    if (clean) parts.push(clean);
+  }
+  if (parts.length === 0) return undefined;
+  const joined = parts.join("\n\n---\n\n");
+  if (joined.length <= maxChars) return joined;
+  return `${joined.slice(0, maxChars)}…`;
+}
+
 /**
  * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
  * Returns true if delivery should be skipped because there's no real content.

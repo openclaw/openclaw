@@ -261,6 +261,7 @@ const FIELD_LABELS: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failover Window (hours)",
   "agents.defaults.models": "Models",
   "agents.defaults.model.primary": "Primary Model",
+  "agents.defaults.model.codePrimary": "Code Model (auto when coding intent)",
   "agents.defaults.model.fallbacks": "Model Fallbacks",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
@@ -573,6 +574,8 @@ const FIELD_HELP: Record<string, string> = {
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
+  "agents.defaults.model.codePrimary":
+    "Optional model (provider/model) used when the user message looks like a coding request; otherwise primary is used.",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.imageModel.primary":

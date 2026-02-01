@@ -43,6 +43,8 @@ struct CronSettings_Previews: PreviewProvider {
                 status: "ok",
                 error: nil,
                 summary: "All good.",
+                outputText: nil,
+                executionLog: nil,
                 runAtMs: nil,
                 durationMs: 1234,
                 nextRunAtMs: nil),
@@ -95,6 +97,8 @@ extension CronSettings {
             status: "ok",
             error: nil,
             summary: "done",
+            outputText: nil,
+            executionLog: nil,
             runAtMs: 1_700_000_050_000,
             durationMs: 1200,
             nextRunAtMs: 1_700_000_200_000)

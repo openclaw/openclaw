@@ -10,6 +10,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
+import { isCodeIntent } from "../agents/code-intent.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
@@ -17,6 +18,7 @@ import {
   buildAllowedModelSet,
   isCliProvider,
   modelKey,
+  resolveCodePrimaryModelRef,
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
@@ -316,6 +318,23 @@ export async function agentCommand(
       ) {
         provider = candidateProvider;
         model = storedModelOverride;
+      }
+    }
+    // When no session override: optionally switch to code model if prompt looks like coding.
+    if (!storedModelOverride && !storedProviderOverride) {
+      const codePrimaryRef = resolveCodePrimaryModelRef({
+        cfg: cfgForModelSelection,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
+      if (
+        codePrimaryRef &&
+        isCodeIntent(body) &&
+        (allowedModelKeys.size === 0 ||
+          allowedModelKeys.has(modelKey(codePrimaryRef.provider, codePrimaryRef.model)))
+      ) {
+        provider = codePrimaryRef.provider;
+        model = codePrimaryRef.model;
       }
     }
     if (sessionEntry) {

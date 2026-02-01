@@ -71,6 +71,8 @@ struct SettingsViewSmokeTests {
                 status: "ok",
                 error: nil,
                 summary: "ok",
+                outputText: nil,
+                executionLog: nil,
                 runAtMs: 1_700_000_050_000,
                 durationMs: 123,
                 nextRunAtMs: 1_700_000_200_000),

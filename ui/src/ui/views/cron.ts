@@ -444,11 +444,38 @@ function renderJob(job: CronJob, props: CronProps) {
 }
 
 function renderRun(entry: CronRunLogEntry) {
+  const body = entry.executionLog ?? entry.outputText ?? entry.summary ?? "";
+  const hasExpandable = Boolean(
+    entry.executionLog || (entry.outputText && entry.outputText !== (entry.summary ?? "")),
+  );
   return html`
     <div class="list-item">
       <div class="list-main">
         <div class="list-title">${entry.status}</div>
-        <div class="list-sub">${entry.summary ?? ""}</div>
+        <div class="list-sub">${entry.summary ?? entry.outputText ?? ""}</div>
+        ${
+          hasExpandable && body
+            ? html`
+              <details class="cron-run-details" style="margin-top: 8px;">
+                <summary class="muted" style="cursor: pointer;">执行记录</summary>
+                <pre
+                  class="muted"
+                  style="
+                    margin-top: 6px;
+                    padding: 8px;
+                    background: var(--color-bg-muted, #f5f5f5);
+                    border-radius: 6px;
+                    font-size: 12px;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    max-height: 300px;
+                    overflow-y: auto;
+                  "
+                >${body}</pre>
+              </details>
+            `
+            : nothing
+        }
       </div>
       <div class="list-meta">
         <div>${formatMs(entry.ts)}</div>

@@ -74,7 +74,7 @@ describe("cron run log", () => {
       limit: 10,
       jobId: "a",
     });
-    expect(onlyA.map((e) => e.ts)).toEqual([1, 3]);
+    expect(onlyA.map((e) => e.ts)).toEqual([3, 1]); // newest first
 
     const lastOne = await readCronRunLogEntries(logPathA, { limit: 1 });
     expect(lastOne.map((e) => e.ts)).toEqual([3]);

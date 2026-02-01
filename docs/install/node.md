@@ -76,3 +76,20 @@ Common choices:
 - Windows: official Node installer, `winget`, or a Windows Node version manager
 
 If you use a version manager (nvm/fnm/asdf/etc), ensure it’s initialized in the shell you use day-to-day (zsh vs bash) so the PATH it sets is present when you run installers.
+
+### nvm: use Node 22+ (command is `nvm use`, not `node use`)
+
+Moltbot requires **Node >= 22**. If your default is older (e.g. 20), switch before running Moltbot:
+
+- **Correct:** `nvm use 22` or `nvm use 24.13.0` — uses nvm to switch the active Node version.
+- **Wrong:** `node use 22` — that runs the Node binary and tries to load a file named `use`; you’ll see `Cannot find module '…/use'`.
+
+To make Node 22 the default in new shells:
+
+```bash
+nvm alias default 22.21.1   # or 24.13.0, etc.
+```
+
+Then open a new terminal (or run `nvm use` again) and run `moltbot onboard --install-daemon` if onboarding failed.
+
+If the install script added Homebrew’s node@22 to your PATH in `~/.zshrc` and you prefer to rely only on nvm, remove that line and use `nvm use 22` (or set default above) when running Moltbot.

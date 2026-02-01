@@ -7,6 +7,8 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { TypingController } from "./typing.js";
+import { isCodeIntent } from "../../agents/code-intent.js";
+import { modelKey, resolveCodePrimaryModelRef } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
@@ -393,6 +395,23 @@ export async function resolveReplyDirectives(params: {
   });
   provider = modelState.provider;
   model = modelState.model;
+  const bodyForIntent = sessionCtx.BodyStripped ?? ctx.Body ?? ctx.CommandBody ?? "";
+  if (provider === defaultProvider && model === defaultModel) {
+    const codePrimaryRef = resolveCodePrimaryModelRef({
+      cfg,
+      defaultProvider,
+      defaultModel,
+    });
+    if (
+      codePrimaryRef &&
+      isCodeIntent(bodyForIntent) &&
+      (modelState.allowedModelKeys.size === 0 ||
+        modelState.allowedModelKeys.has(modelKey(codePrimaryRef.provider, codePrimaryRef.model)))
+    ) {
+      provider = codePrimaryRef.provider;
+      model = codePrimaryRef.model;
+    }
+  }
 
   let contextTokens = resolveContextTokens({
     agentCfg,

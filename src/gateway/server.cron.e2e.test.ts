@@ -316,8 +316,9 @@ describe("gateway server cron", () => {
       expect(runsRes.ok).toBe(true);
       const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
       expect(Array.isArray(entries)).toBe(true);
-      expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
-      expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
+      // entries are newest-first
+      expect((entries as Array<{ jobId?: unknown }>).at(0)?.jobId).toBe(jobId);
+      expect((entries as Array<{ summary?: unknown }>).at(0)?.summary).toBe("hello");
 
       const statusRes = await rpcReq(ws, "cron.status", {});
       expect(statusRes.ok).toBe(true);
@@ -347,7 +348,7 @@ describe("gateway server cron", () => {
         | undefined;
       expect(Array.isArray(autoEntries?.entries)).toBe(true);
       const runs = autoEntries?.entries ?? [];
-      expect(runs.at(-1)?.jobId).toBe(autoJobId);
+      expect(runs.at(0)?.jobId).toBe(autoJobId); // newest-first
     } finally {
       ws.close();
       await server.close();

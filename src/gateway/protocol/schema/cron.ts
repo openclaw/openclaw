@@ -236,6 +236,8 @@ export const CronRunLogEntrySchema = Type.Object(
     ),
     error: Type.Optional(Type.String()),
     summary: Type.Optional(Type.String()),
+    outputText: Type.Optional(Type.String()),
+    executionLog: Type.Optional(Type.String()),
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

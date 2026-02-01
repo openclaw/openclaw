@@ -196,6 +196,8 @@ struct CronRunLogEntry: Codable, Identifiable, Sendable {
     let status: String?
     let error: String?
     let summary: String?
+    let outputText: String?
+    let executionLog: String?
     let runAtMs: Int?
     let durationMs: Int?
     let nextRunAtMs: Int?

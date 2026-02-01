@@ -55,6 +55,7 @@ import {
 } from "../../security/external-content.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
+  buildExecutionLogFromPayloads,
   isHeartbeatOnlyResponse,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromOutput,
@@ -86,6 +87,8 @@ export type RunCronAgentTurnResult = {
   summary?: string;
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
+  /** Full execution log: tool outputs, thinking, answer (truncated). */
+  executionLog?: string;
   error?: string;
 };
 
@@ -419,6 +422,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const firstText = payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(payloads);
+  const executionLog = buildExecutionLogFromPayloads(payloads);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
@@ -444,6 +448,7 @@ export async function runCronIsolatedAgentTurn(params: {
           status: "error",
           summary,
           outputText,
+          executionLog,
           error: reason,
         };
       }
@@ -451,6 +456,7 @@ export async function runCronIsolatedAgentTurn(params: {
         status: "skipped",
         summary: `Delivery skipped (${reason}).`,
         outputText,
+        executionLog,
       };
     }
     try {
@@ -465,11 +471,11 @@ export async function runCronIsolatedAgentTurn(params: {
       });
     } catch (err) {
       if (!bestEffortDeliver) {
-        return { status: "error", summary, outputText, error: String(err) };
+        return { status: "error", summary, outputText, executionLog, error: String(err) };
       }
-      return { status: "ok", summary, outputText };
+      return { status: "ok", summary, outputText, executionLog };
     }
   }
 
-  return { status: "ok", summary, outputText };
+  return { status: "ok", summary, outputText, executionLog };
 }

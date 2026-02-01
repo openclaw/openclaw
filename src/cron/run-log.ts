@@ -8,6 +8,10 @@ export type CronRunLogEntry = {
   status?: "ok" | "error" | "skipped";
   error?: string;
   summary?: string;
+  /** Full agent output (isolated jobs only). */
+  outputText?: string;
+  /** Execution log: tool outputs, thinking, answer (isolated jobs only). */
+  executionLog?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
@@ -98,5 +102,6 @@ export async function readCronRunLogEntries(
       // ignore invalid lines
     }
   }
-  return parsed.toReversed();
+  // Return newest-first (descending) so UIs show latest run at top
+  return parsed;
 }

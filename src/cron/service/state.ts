@@ -9,6 +9,10 @@ export type CronEvent = {
   status?: "ok" | "error" | "skipped";
   error?: string;
   summary?: string;
+  /** Full agent output (isolated jobs only). */
+  outputText?: string;
+  /** Execution log: tool outputs, thinking, answer (isolated jobs only). */
+  executionLog?: string;
   nextRunAtMs?: number;
 };
 
@@ -32,6 +36,8 @@ export type CronServiceDeps = {
     summary?: string;
     /** Last non-empty agent text output (not truncated). */
     outputText?: string;
+    /** Full execution log: tool outputs, thinking, answer (truncated). */
+    executionLog?: string;
     error?: string;
   }>;
   onEvent?: (evt: CronEvent) => void;

@@ -174,7 +174,9 @@ extension CronSettings {
     }
 
     func runRow(_ entry: CronRunLogEntry) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let body = entry.executionLog ?? entry.outputText ?? entry.summary ?? ""
+        let hasExpandable = (entry.executionLog != nil) || (entry.outputText != nil && entry.outputText != entry.summary)
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 StatusPill(text: entry.status ?? "unknown", tint: self.statusTint(entry.status))
                 Text(entry.date.formatted(date: .abbreviated, time: .standard))
@@ -193,6 +195,20 @@ extension CronSettings {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .lineLimit(2)
+            }
+            if hasExpandable, !body.isEmpty {
+                DisclosureGroup("执行记录") {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        Text(body)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(6)
+                    }
+                    .frame(maxHeight: 200)
+                }
+                .font(.caption)
             }
             if let error = entry.error, !error.isEmpty {
                 Text(error)
