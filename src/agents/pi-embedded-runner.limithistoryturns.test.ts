@@ -159,4 +159,51 @@ describe("limitHistoryTurns", () => {
     expect(limited[0].content).toEqual([{ type: "text", text: "second" }]);
     expect(limited[1].content).toEqual([{ type: "text", text: "response" }]);
   });
+
+  it("removes orphan toolResult after truncation", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "first" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      { role: "user", content: [{ type: "text", text: "second" }] },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+      },
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ];
+    const limited = limitHistoryTurns(messages, 1);
+    // Orphan toolResult should be removed since its tool_use was truncated
+    expect(limited.filter((m) => m.role === "toolResult")).toHaveLength(0);
+    expect(limited[0].role).toBe("user");
+    expect(limited[0].content).toEqual([{ type: "text", text: "second" }]);
+  });
+
+  it("preserves valid tool pairs after truncation", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "old" }] },
+      { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      { role: "user", content: [{ type: "text", text: "new" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ];
+    const limited = limitHistoryTurns(messages, 1);
+    // Valid tool pair should be preserved
+    expect(limited.filter((m) => m.role === "toolResult")).toHaveLength(1);
+    expect(limited).toHaveLength(3); // user + assistant + toolResult
+  });
 });

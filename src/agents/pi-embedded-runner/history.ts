@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 
@@ -27,7 +28,9 @@ export function limitHistoryTurns(
     if (messages[i].role === "user") {
       userCount++;
       if (userCount > limit) {
-        return messages.slice(lastUserIndex);
+        // Clean up orphan tool_result entries that may have lost their matching
+        // tool_use after truncating older messages
+        return sanitizeToolUseResultPairing(messages.slice(lastUserIndex));
       }
       lastUserIndex = i;
     }
