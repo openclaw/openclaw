@@ -2,11 +2,13 @@ import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
+import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { setupSkills } from "../commands/onboard-skills.js";
 import { readConfigFileSnapshot, writeConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { defaultRuntime } from "../runtime.js";
 
-type WebConfigureSection = "gateway" | "web-tools" | "model-keys" | "channels";
+type WebConfigureSection = "gateway" | "web-tools" | "model-keys" | "channels" | "skills";
 
 type WizardRunOpts = OnboardOptions & { wizard?: "onboarding" | "configure" };
 
@@ -56,8 +58,13 @@ export async function runConfigureWizardWeb(
         label: "Channels",
         hint: "Discord, Telegram (basic setup)",
       },
+      {
+        value: "skills",
+        label: "Skills",
+        hint: "Install skill dependencies + API keys",
+      },
     ],
-    initialValues: ["gateway", "web-tools", "model-keys", "channels"],
+    initialValues: ["gateway", "web-tools", "model-keys", "channels", "skills"],
   });
 
   let next = structuredClone(baseConfig);
@@ -223,6 +230,21 @@ export async function runConfigureWizardWeb(
     };
   }
 
+  const parseAllowFrom = (raw: string): Array<string | number> | undefined => {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    const parts = trimmed
+      .split(/[,\n]/g)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return undefined;
+    return parts.map((p) => {
+      if (p === "*") return "*";
+      const n = Number(p);
+      return Number.isFinite(n) && String(n) === p ? n : p;
+    });
+  };
+
   if (sections.includes("channels")) {
     await prompter.note(
       [
@@ -231,21 +253,6 @@ export async function runConfigureWizardWeb(
       ].join("\n"),
       "Channels",
     );
-
-    const parseAllowFrom = (raw: string): Array<string | number> | undefined => {
-      const trimmed = raw.trim();
-      if (!trimmed) return undefined;
-      const parts = trimmed
-        .split(/[,\n]/g)
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (parts.length === 0) return undefined;
-      return parts.map((p) => {
-        if (p === "*") return "*";
-        const n = Number(p);
-        return Number.isFinite(n) && String(n) === p ? n : p;
-      });
-    };
 
     type ChannelChoice = "discord" | "telegram";
     const picks = await prompter.multiselect<ChannelChoice>({
@@ -356,6 +363,12 @@ export async function runConfigureWizardWeb(
       ...next,
       channels: nextChannels,
     };
+  }
+
+  if (sections.includes("skills")) {
+    const agentId = resolveDefaultAgentId(next);
+    const wsDir = resolveAgentWorkspaceDir(next, agentId);
+    next = await setupSkills(next, wsDir, runtime, prompter);
   }
 
   await writeConfigFile(next);
