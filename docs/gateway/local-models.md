@@ -1,5 +1,5 @@
 ---
-summary: "Run OpenClaw on local LLMs (LM Studio, vLLM, LiteLLM, custom OpenAI endpoints)"
+summary: "Run OpenClaw on local LLMs (LM Studio, vLLM, LiteLLM, Portkey, custom OpenAI endpoints)"
 read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
@@ -112,7 +112,7 @@ Swap the primary and fallback order; keep the same providers block and `models.m
 
 ## Other OpenAI-compatible local proxies
 
-vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style `/v1` endpoint. Replace the provider block above with your endpoint and model ID:
+vLLM, LiteLLM, Portkey, OAI-proxy, or custom gateways work if they expose an OpenAI-style `/v1` endpoint. Replace the provider block above with your endpoint and model ID.
 
 ```json5
 {

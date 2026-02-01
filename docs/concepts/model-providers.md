@@ -256,7 +256,7 @@ ollama pull llama3.3
 
 Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
-### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
+### Local proxies and cloud gateways (LM Studio, vLLM, LiteLLM, Portkey, etc.)
 
 Example (OpenAI‑compatible):
 
@@ -301,6 +301,36 @@ Notes:
   - `contextWindow: 200000`
   - `maxTokens: 8192`
 - Recommended: set explicit values that match your proxy/model limits.
+
+### Portkey (cloud AI gateway)
+
+[Portkey](https://portkey.ai) is a cloud-hosted AI gateway with observability, fallbacks, budget controls, and access to 1600+ models via a unified API:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "portkey/@anthropic/claude-sonnet-4-5" }
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      portkey: {
+        baseUrl: "https://api.portkey.ai/v1",
+        apiKey: "${PORTKEY_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "@anthropic/claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+          { id: "@openai/gpt-5.2", name: "GPT-5.2" }
+        ]
+      }
+    }
+  }
+}
+```
+
+See [/providers/portkey](/providers/portkey) for full setup, tracing, and enterprise governance features.
 
 ## CLI examples
 

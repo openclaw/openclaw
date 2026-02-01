@@ -2410,7 +2410,7 @@ Allowlists for remote control:
 ### `models` (custom providers + base URLs)
 
 OpenClaw uses the **pi-coding-agent** model catalog. You can add custom providers
-(LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
+(LiteLLM, Portkey, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
 `~/.openclaw/agents/<agentId>/agent/models.json` or by defining the same schema inside your
 OpenClaw config under `models.providers`.
 Provider-by-provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
